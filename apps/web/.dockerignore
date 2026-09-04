@@ -1,0 +1,8 @@
+# node_modules es reinstal.la dins de la imatge: els binaris natius de Windows
+# no serveixen a Linux.
+node_modules/
+.next/
+out/
+npm-debug.log*
+.env
+.env.local

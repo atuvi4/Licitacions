@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:cbc="urn:dgpe:names:draft:codice:schema:xsd:CommonBasicComponents-2" xmlns:cac="urn:dgpe:names:draft:codice:schema:xsd:CommonAggregateComponents-2" xmlns:cac-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonAggregateComponents-2" xmlns:cbc-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonBasicComponents-2" xmlns:at="http://purl.org/atompub/tombstones/1.0">
+  <id>https://contrataciondelestado.es/sindicacion/sindicacion_643/fixture.atom</id>
+  <title>Fixture de test</title>
+  <updated>2026-09-02T20:14:33.819+02:00</updated>
+  <link rel="self" href="https://contrataciondelestado.es/sindicacion/sindicacion_643/fixture.atom"/>
+<entry xmlns="http://www.w3.org/2005/Atom" xmlns:cac="urn:dgpe:names:draft:codice:schema:xsd:CommonAggregateComponents-2" xmlns:cac-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonAggregateComponents-2" xmlns:cbc="urn:dgpe:names:draft:codice:schema:xsd:CommonBasicComponents-2" xmlns:cbc-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonBasicComponents-2">
+        <id>https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20232857</id>
+        <link href="https://contrataciondelestado.es/wps/poc?uri=deeplink:detalle_licitacion&amp;idEvl=NSnMgN4Zp8l%2FR5QFTlaM4A%3D%3D" />
+        <summary type="text">Id licitación: AMARCO/2026/MUSEO/607BAS; Órgano de Contratación: Gerencia del Consorcio de Museos de la Comunitat Valenciana; Importe: 115148.31 EUR; Estado: RES</summary>
+        <title>Energía. Suministro de energía eléctrica para el Centre del Carme.</title>
+        <updated>2026-09-02T15:16:44.793+02:00</updated>
+        <cac-place-ext:ContractFolderStatus>
+            <cbc:ContractFolderID>AMARCO/2026/MUSEO/607BAS</cbc:ContractFolderID>
+            <cbc-place-ext:ContractFolderStatusCode languageID="es" listURI="https://contrataciondelestado.es/codice/cl/2.04/SyndicationContractFolderStatusCode-2.04.gc">RES</cbc-place-ext:ContractFolderStatusCode>
+            <cac-place-ext:LocatedContractingParty>
+                <cbc:ContractingPartyTypeCode listURI="http://contrataciondelestado.es/codice/cl/2.10/ContractingAuthorityCode-2.10.gc">2</cbc:ContractingPartyTypeCode>
+                <cbc:ActivityCode listURI="http://contrataciondelestado.es/codice/cl/2.10/ContractingAuthorityActivityCode-2.10.gc">8</cbc:ActivityCode>
+                <cbc:BuyerProfileURIID>https://contrataciondelestado.es/wps/poc?uri=deeplink:perfilContratante&amp;idBp=E60sEZQpf%2FwQK2TEfXGy%2BA%3D%3D</cbc:BuyerProfileURIID>
+                <cac:Party>
+                    <cbc:WebsiteURI>http://www.consorcidemuseus.gva.es</cbc:WebsiteURI>
+                    <cac:PartyIdentification>
+                        <cbc:ID schemeName="NIF">S9600006B</cbc:ID>
+                    </cac:PartyIdentification>
+                    <cac:PartyIdentification>
+                        <cbc:ID schemeName="ID_PLATAFORMA">20951020138862</cbc:ID>
+                    </cac:PartyIdentification>
+                    <cac:PartyName>
+                        <cbc:Name>Gerencia del Consorcio de Museos de la Comunitat Valenciana</cbc:Name>
+                    </cac:PartyName>
+                    <cac:PostalAddress>
+                        <cbc:CityName>València</cbc:CityName>
+                        <cbc:PostalZone>46003</cbc:PostalZone>
+                        <cac:AddressLine>
+                            <cbc:Line>Museu, 2</cbc:Line>
+                        </cac:AddressLine>
+                        <cac:Country>
+                            <cbc:IdentificationCode listURI="http://contrataciondelestado.es/codice/cl/2.08/CountryIdentificationCode-2.08.gc">ES</cbc:IdentificationCode>
+                            <cbc:Name>España</cbc:Name>
+                        </cac:Country>
+                    </cac:PostalAddress>
+                    <cac:Contact>
+                        <cbc:Name>Gerencia del Consorcio de Museos de la Comunitat Valenciana</cbc:Name>
+                        <cbc:Telephone>961922661</cbc:Telephone>
+                        <cbc:ElectronicMail>juridic@consorcidemuseus.es</cbc:ElectronicMail>
+                    </cac:Contact>
+                </cac:Party>
+                <cac-place-ext:ParentLocatedParty>
+                    <cac:PartyName>
+                        <cbc:Name>Consorcio de Museos de la Comunitat Valenciana</cbc:Name>
+                    </cac:PartyName>
+                    <cac-place-ext:ParentLocatedParty>
+                        <cac:PartyName>
+                            <cbc:Name>Comunidad Valenciana</cbc:Name>
+                        </cac:PartyName>
+                        <cac-place-ext:ParentLocatedParty>
+                            <cac:PartyName>
+<cbc:Name>SOCIEDADES, FUNDACIONES Y CONSORCIOS COMUNIDADES AUTÓNOMAS</cbc:Name>
+                            </cac:PartyName>
+                            <cac-place-ext:ParentLocatedParty>
+<cac:PartyName>
+    <cbc:Name>OTRAS ENTIDADES DEL SECTOR PÚBLICO</cbc:Name>
+</cac:PartyName>
+<cac-place-ext:ParentLocatedParty>
+    <cac:PartyName>
+        <cbc:Name>Sector Público</cbc:Name>
+    </cac:PartyName>
+</cac-place-ext:ParentLocatedParty>
+                            </cac-place-ext:ParentLocatedParty>
+                        </cac-place-ext:ParentLocatedParty>
+                    </cac-place-ext:ParentLocatedParty>
+                </cac-place-ext:ParentLocatedParty>
+            </cac-place-ext:LocatedContractingParty>
+            <cac:ProcurementProject>
+                <cbc:Name>Energía. Suministro de energía eléctrica para el Centre del Carme.</cbc:Name>
+                <cbc:TypeCode listURI="http://contrataciondelestado.es/codice/cl/2.08/ContractCode-2.08.gc">1</cbc:TypeCode>
+                <cbc:SubTypeCode listURI="http://contrataciondelestado.es/codice/cl/1.04/GoodsContractCode-1.04.gc">2</cbc:SubTypeCode>
+                <cbc:MixContractIndicator>false</cbc:MixContractIndicator>
+                <cac:BudgetAmount>
+                    <cbc:EstimatedOverallContractAmount currencyID="EUR">115148.31</cbc:EstimatedOverallContractAmount>
+                    <cbc:TotalAmount currencyID="EUR">139329.46</cbc:TotalAmount>
+                    <cbc:TaxExclusiveAmount currencyID="EUR">115148.31</cbc:TaxExclusiveAmount>
+                </cac:BudgetAmount>
+                <cac:RequiredCommodityClassification>
+                    <cbc:ItemClassificationCode listURI="http://contrataciondelestado.es/codice/cl/2.04/CPV2008-2.04.gc">09310000</cbc:ItemClassificationCode>
+                </cac:RequiredCommodityClassification>
+                <cac:RealizedLocation>
+                    <cbc:CountrySubentity>Valencia/València</cbc:CountrySubentity>
+                    <cbc:CountrySubentityCode listURI="http://contrataciondelestado.es/codice/cl/2.08/NUTS-2021.gc">ES523</cbc:CountrySubentityCode>
+                    <cac:Address>
+                        <cac:Country>
+                            <cbc:IdentificationCode listURI="http://contrataciondelestado.es/codice/cl/2.08/CountryIdentificationCode-2.08.gc">ES</cbc:IdentificationCode>
+                            <cbc:Name>España</cbc:Name>
+                        </cac:Country>
+                    </cac:Address>
+                </cac:RealizedLocation>
+                <cac:PlannedPeriod>
+                    <cbc:DurationMeasure unitCode="MON">12</cbc:DurationMeasure>
+                </cac:PlannedPeriod>
+            </cac:ProcurementProject>
+            <cac:TenderResult>
+                <cbc:ResultCode listURI="http://contrataciondelestado.es/codice/cl/2.09/TenderResultCode-2.09.gc">9</cbc:ResultCode>
+                <cbc:Description>Propuesta única</cbc:Description>
+                <cbc:AwardDate>2026-07-31</cbc:AwardDate>
+                <cbc:ReceivedTenderQuantity>2</cbc:ReceivedTenderQuantity>
+                <cbc:LowerTenderAmount currencyID="EUR">0</cbc:LowerTenderAmount>
+                <cbc:HigherTenderAmount currencyID="EUR">96632.03</cbc:HigherTenderAmount>
+                <cbc:StartDate>2026-08-18</cbc:StartDate>
+                <cbc:SMEsReceivedTenderQuantity>2</cbc:SMEsReceivedTenderQuantity>
+                <cbc:SMEAwardedIndicator>false</cbc:SMEAwardedIndicator>
+                <cac:Contract>
+                    <cbc:ID>AMARCO/2026/MUSEO/607BAS</cbc:ID>
+                    <cbc:IssueDate>2026-09-02</cbc:IssueDate>
+                </cac:Contract>
+                <cac:WinningParty>
+                    <cac:PartyIdentification>
+                        <cbc:ID schemeName="NIF">A81948077</cbc:ID>
+                    </cac:PartyIdentification>
+                    <cac:PartyName>
+                        <cbc:Name>Endesa Energía S.A.U.</cbc:Name>
+                    </cac:PartyName>
+                    <cac:PhysicalLocation>
+                        <cbc:CountrySubentityCode name="España" listURI="http://contrataciondelestado.es/codice/cl/2.08/NUTS-2021.gc">ES</cbc:CountrySubentityCode>
+                        <cac:Address>
+                            <cbc:CityName>Madrid</cbc:CityName>
+                            <cbc:PostalZone>28042</cbc:PostalZone>
+                            <cac:Country>
+<cbc:IdentificationCode name="España" listURI="http://contrataciondelestado.es/codice/cl/2.08/CountryIdentificationCode-2.08.gc">ES</cbc:IdentificationCode>
+                            </cac:Country>
+                        </cac:Address>
+                    </cac:PhysicalLocation>
+                </cac:WinningParty>
+                <cac:AwardedTenderedProject>
+                    <cac:LegalMonetaryTotal>
+                        <cbc:TaxExclusiveAmount currencyID="EUR">114967.95</cbc:TaxExclusiveAmount>
+                        <cbc:PayableAmount currencyID="EUR">139111.22</cbc:PayableAmount>
+                    </cac:LegalMonetaryTotal>
+                </cac:AwardedTenderedProject>
+            </cac:TenderResult>
+            <cac:TenderingTerms>
+                <cbc:RequiredCurriculaIndicator>false</cbc:RequiredCurriculaIndicator>
+                <cbc:VariantConstraintIndicator>false</cbc:VariantConstraintIndicator>
+                <cbc:FundingProgramCode name="No hay financiación con fondos de la UE" listURI="http://contrataciondelestado.es/codice/cl/2.08/FundingProgramCode-2.08.gc">NO-EU</cbc:FundingProgramCode>
+                <cbc:ProcurementNationalLegislationCode listURI="https://contrataciondelestado.es/codice/cl/2.08/ProcurementNationalLegislationCode-2.08.gc">3</cbc:ProcurementNationalLegislationCode>
+                <cbc:ReceivedAppealQuantity>0</cbc:ReceivedAppealQuantity>
+                <cac:ProcurementLegislationDocumentReference>
+                    <cbc:ID>N/A</cbc:ID>
+                </cac:ProcurementLegislationDocumentReference>
+                <cac:TenderRecipientParty>
+                    <cbc:EndpointID>https://contrataciondelestado.es</cbc:EndpointID>
+                </cac:TenderRecipientParty>
+                <cac:Language>
+                    <cbc:ID>es</cbc:ID>
+                </cac:Language>
+            </cac:TenderingTerms>
+            <cac:TenderingProcess>
+                <cbc:ProcedureCode listURI="https://contrataciondelestado.es/codice/cl/2.07/SyndicationTenderingProcessCode-2.07.gc">1</cbc:ProcedureCode>
+                <cbc:UrgencyCode listURI="http://contrataciondelestado.es/codice/cl/1.04/DiligenceTypeCode-1.04.gc">1</cbc:UrgencyCode>
+                <cbc:ContractingSystemCode listURI="http://contrataciondelestado.es/codice/cl/2.08/ContractingSystemTypeCode-2.08.gc">3</cbc:ContractingSystemCode>
+                <cbc:SubmissionMethodCode listURI="http://contrataciondelestado.es/codice/cl/1.04/TenderDeliveryCode-1.04.gc">1</cbc:SubmissionMethodCode>
+                <cbc:OverThresholdIndicator>false</cbc:OverThresholdIndicator>
+                <cac:TenderSubmissionDeadlinePeriod>
+                    <cbc:EndDate>2026-07-30</cbc:EndDate>
+                    <cbc:EndTime>19:00:00</cbc:EndTime>
+                </cac:TenderSubmissionDeadlinePeriod>
+            </cac:TenderingProcess>
+            <cac:TechnicalDocumentReference>
+                <cbc:ID>ANEXO 4 MODELO DE PETICION DE OFERTA VINCULANTE.pdf</cbc:ID>
+                <cac:Attachment>
+                    <cac:ExternalReference>
+                        <cbc:URI>https://contrataciondelestado.es/FileSystem/servlet/GetDocumentByIdServlet?cifrado=QUC1GjXXSiLkydRHJBmbpw%3D%3D&amp;DocumentIdParam=%2Bt0G6DxT8ZDT3MAMUkQ3NwFshq2/x6vFPXK3omrGn37UozjQr4GUyjYOkNM0ODy7v8f8%2BCR46tbf4VuCVz9OxdJmctexQ%2Ba68Fx1/iwoez1JOVDbGCDM%2BMigrvuVS7Rv</cbc:URI>
+                        <cbc:DocumentHash>LoOdYsURjQ5hZFrIjB3zMsNXZ6s=</cbc:DocumentHash>
+                    </cac:ExternalReference>
+                </cac:Attachment>
+            </cac:TechnicalDocumentReference>
+            <cac:AdditionalDocumentReference>
+                <cbc:ID>ANEXO 6.docx</cbc:ID>
+                <cac:Attachment>
+                    <cac:ExternalReference>
+                        <cbc:URI>https://contrataciondelestado.es/FileSystem/servlet/GetDocumentByIdServlet?cifrado=QUC1GjXXSiLkydRHJBmbpw%3D%3D&amp;DocumentIdParam=5YzAHMKHqYrBQo93DMbK1kDWVrdc3j9t4n8kFtfZ0e2imY1zfippm5v5AOIsqHmG9BkNtYtz%2BrkspAwSsqyjAaRBDH0cDEFmxHPK3Z1zUSC1aXEvq3KHa/AEHgtDrQw0</cbc:URI>
+                        <cbc:DocumentHash>qC/xixOAc1gaby6RnctswdMBpxY=</cbc:DocumentHash>
+                    </cac:ExternalReference>
+                </cac:Attachment>
+            </cac:AdditionalDocumentReference>
+            <cac-place-ext:ValidNoticeInfo>
+                <cbc-place-ext:NoticeTypeCode listURI="http://contrataciondelestado.es/codice/cl/2.11/TenderingNoticeTypeCode-2.11.gc">DOC_CAN_ADJ</cbc-place-ext:NoticeTypeCode>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>Perfil del contratante</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2026-07-31</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2026-07-31</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+            </cac-place-ext:ValidNoticeInfo>
+            <cac-place-ext:ValidNoticeInfo>
+                <cbc-place-ext:NoticeTypeCode listURI="http://contrataciondelestado.es/codice/cl/2.11/TenderingNoticeTypeCode-2.11.gc">DOC_FORM</cbc-place-ext:NoticeTypeCode>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>Perfil del contratante</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2026-09-02</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+            </cac-place-ext:ValidNoticeInfo>
+        </cac-place-ext:ContractFolderStatus>
+    </entry>
+    
+  <entry>
+    <id>https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/99999002</id>
+    <title>Entrada amb imports i dates impossibles</title>
+    <updated>no-es-una-data</updated>
+    <cac-place-ext:ContractFolderStatus>
+      <cbc:ContractFolderID>TRENCAT/2026</cbc:ContractFolderID>
+      <cbc-place-ext:ContractFolderStatusCode>CODI_INEXISTENT</cbc-place-ext:ContractFolderStatusCode>
+      <cac:ProcurementProject>
+        <cbc:Name>Entrada amb dades brutes</cbc:Name>
+        <cbc:TypeCode>999999</cbc:TypeCode>
+        <cac:BudgetAmount>
+          <cbc:TotalAmount currencyID="EUR">no-es-un-import</cbc:TotalAmount>
+        </cac:BudgetAmount>
+      </cac:ProcurementProject>
+      <cac:TenderingProcess>
+        <cbc:ProcedureCode>codi-desconegut</cbc:ProcedureCode>
+        <cac:TenderSubmissionDeadlinePeriod>
+          <cbc:EndDate>2026-02-31</cbc:EndDate>
+        </cac:TenderSubmissionDeadlinePeriod>
+      </cac:TenderingProcess>
+    </cac-place-ext:ContractFolderStatus>
+  </entry>
+  <entry>
+    <title>Entrada sense identificador: no es pot processar</title>
+    <updated>2026-09-01T10:00:00.000+02:00</updated>
+  </entry>
+</feed>

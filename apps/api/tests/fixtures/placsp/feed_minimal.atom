@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:cbc="urn:dgpe:names:draft:codice:schema:xsd:CommonBasicComponents-2" xmlns:cac="urn:dgpe:names:draft:codice:schema:xsd:CommonAggregateComponents-2" xmlns:cac-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonAggregateComponents-2" xmlns:cbc-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonBasicComponents-2" xmlns:at="http://purl.org/atompub/tombstones/1.0">
+  <id>https://contrataciondelestado.es/sindicacion/sindicacion_643/fixture.atom</id>
+  <title>Fixture de test</title>
+  <updated>2026-09-02T20:14:33.819+02:00</updated>
+  <link rel="self" href="https://contrataciondelestado.es/sindicacion/sindicacion_643/fixture.atom"/>
+  <entry>
+    <id>https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/99999001</id>
+    <title>Expedient minim sense camps opcionals</title>
+    <updated>2026-09-01T10:00:00.000+02:00</updated>
+    <cac-place-ext:ContractFolderStatus>
+      <cbc:ContractFolderID>MINIM/2026</cbc:ContractFolderID>
+      <cbc-place-ext:ContractFolderStatusCode>PUB</cbc-place-ext:ContractFolderStatusCode>
+      <cac:ProcurementProject>
+        <cbc:Name>Expedient sense imports, sense CPV, sense NUTS i sense termini</cbc:Name>
+      </cac:ProcurementProject>
+    </cac-place-ext:ContractFolderStatus>
+  </entry>
+</feed>

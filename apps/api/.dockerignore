@@ -1,0 +1,16 @@
+# Entorns virtuals de la maquina amfitriona: son binaris de Windows i no poden
+# acabar dins d'una imatge Linux.
+.venv/
+venv/
+
+# Dades locals (SQLite, storage de fitxers) del mode de desenvolupament.
+var/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.env

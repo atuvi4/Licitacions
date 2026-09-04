@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+/* -------------------------------------------------------------------------
+   Tokens de disseny. Una eina interna: densitat alta, contrast sobri,
+   accent nomes on hi ha una accio o un estat.
+   ------------------------------------------------------------------------- */
+@theme {
+  --color-canvas: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-subtle: #f2f4f7;
+  --color-border: #e3e6ea;
+  --color-border-strong: #cfd4dc;
+
+  --color-ink: #101828;
+  --color-muted: #566072;
+  --color-faint: #8c95a5;
+
+  --color-brand: #3d5afe;
+  --color-brand-strong: #2f47d6;
+  --color-brand-soft: #eef1ff;
+
+  --color-success: #0b7a4b;
+  --color-success-soft: #e6f5ee;
+  --color-warning: #9a6200;
+  --color-warning-soft: #fdf3e2;
+  --color-danger: #b42318;
+  --color-danger-soft: #fdecea;
+
+  --color-sidebar: #0f1524;
+  --color-sidebar-hover: #1b2338;
+  --color-sidebar-ink: #aab3c5;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --radius-card: 10px;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Focus visible coherent a tota l'aplicacio. */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/* Barres de desplacament discretes dins de panells. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.15s ease-out;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.animate-skeleton {
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
