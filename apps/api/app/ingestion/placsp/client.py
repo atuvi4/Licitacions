@@ -19,7 +19,9 @@ import logging
 
 import httpx
 
-from app.core.config import settings
+# Es reexporta perque la ingesta i la descarrega de plecs s'han de presentar
+# igual davant de PLACSP.
+from app.core.http import user_agent  # noqa: F401  (reexportacio intencionada)
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +45,6 @@ RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 
 class FeedFetchError(Exception):
     """No s'ha pogut obtenir el fitxer despres dels reintents."""
-
-
-def user_agent() -> str:
-    contact = getattr(settings, "INGESTION_CONTACT_EMAIL", "") or "sense-contacte"
-    return f"LicitacionsBot/0.1 (+ingesta de dades obertes; contacte: {contact})"
 
 
 class PlacspClient:

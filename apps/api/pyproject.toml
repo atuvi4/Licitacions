@@ -24,6 +24,10 @@ dependencies = [
     "httpx>=0.27",
     # Parseig XML endurit: protegeix contra XXE i expansio d'entitats.
     "defusedxml>=0.7.1",
+    # Extraccio de text de PDF. BSD-3-Clause: a diferencia de PyMuPDF (AGPL),
+    # no obliga a publicar el codi d'un servei SaaS. Python pur, sense
+    # dependencies de sistema.
+    "pypdf>=5.1",
     # Zones horaries a Windows (a Linux les aporta el sistema).
     "tzdata>=2024.1",
 ]

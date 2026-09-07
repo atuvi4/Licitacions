@@ -43,9 +43,21 @@ class DuplicateDocumentError(ConflictError):
     code = "duplicate_document"
 
 
+class ProcessingInProgressError(ConflictError):
+    """Ja hi ha una descarrega en curs per a aquest document."""
+
+    code = "document_processing_in_progress"
+
+
 class ValidationError(AppError):
     status_code = 422
     code = "validation_error"
+
+
+class NoContentToExtractError(ValidationError):
+    """S'ha demanat re-extreure text d'un document que mai s'ha descarregat be."""
+
+    code = "no_content_to_extract"
 
 
 class AuthenticationError(AppError):

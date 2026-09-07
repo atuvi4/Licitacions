@@ -284,3 +284,39 @@ class DimensionResult(StrEnum):
     PARTIAL = "partial"
     NO_MATCH = "no_match"
     UNKNOWN = "unknown"
+
+
+class DownloadStatus(StrEnum):
+    """Estat de la descarrega d'una versio de document."""
+
+    PENDING = "pending"
+    DOWNLOADING = "downloading"
+    DOWNLOADED = "downloaded"
+    FAILED = "failed"
+
+
+class ExtractionStatus(StrEnum):
+    """Estat d'una passada de parser sobre un blob."""
+
+    PENDING = "pending"
+    EXTRACTING = "extracting"
+    EXTRACTED = "extracted"
+    # El format no admet extraccio de text (XML, ZIP...). No es un error.
+    SKIPPED_UNSUPPORTED = "skipped_unsupported"
+    FAILED = "failed"
+
+
+class ExtractionQuality(StrEnum):
+    """Mesura determinista, no un score de confianca."""
+
+    GOOD = "good"
+    LOW_TEXT = "low_text"
+    EMPTY = "empty"
+    FAILED = "failed"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class PageExtractionStatus(StrEnum):
+    EXTRACTED = "extracted"
+    EMPTY = "empty"
+    FAILED = "failed"

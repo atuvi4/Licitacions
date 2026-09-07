@@ -42,6 +42,25 @@ def build_storage_key(company_id: uuid.UUID, extension: str) -> str:
     return f"companies/{company_id}/{now:%Y/%m}/{uuid.uuid4().hex}{suffix}"
 
 
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+
+
+def build_tender_document_key(sha256: str, extension: str) -> str:
+    """Clau adrecada pel contingut per als plecs publics.
+
+    S'esclafa en dos nivells de dos caracters perque un prefix unic amb desenes
+    de milers d'objectes es incomode de llistar i de migrar.
+
+    A diferencia de `build_storage_key`, aqui NO hi ha `company_id`: els plecs
+    son globals i els mateixos bytes es comparteixen entre tenants.
+    """
+    if not _SHA256_HEX.match(sha256):
+        raise StorageError("SHA-256 no valid per a la clau d'emmagatzematge.")
+    ext = re.sub(r"[^a-z0-9]", "", extension.lower().lstrip("."))[:10]
+    suffix = f".{ext}" if ext else ""
+    return f"tenders/documents/{sha256[0:2]}/{sha256[2:4]}/{sha256}{suffix}"
+
+
 def validate_storage_key(key: str) -> str:
     if not _SAFE_KEY.match(key) or ".." in key:
         raise StorageError("Clau d'emmagatzematge no valida.")

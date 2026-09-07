@@ -61,3 +61,65 @@ class TestStorageContract:
         storage = LocalFilesystemStorage(tmp_path / "s")
         with pytest.raises(StorageError):
             await storage.exists("../fora.pdf")
+
+
+def test_build_tender_document_key_is_content_addressed():
+    from app.services.storage import build_tender_document_key
+
+    sha = "a" * 64
+    key = build_tender_document_key(sha, "pdf")
+
+    assert key == f"tenders/documents/aa/aa/{sha}.pdf"
+    # Ha de quedar fora de l'espai de noms de les empreses i de la ingesta.
+    assert not key.startswith("companies/")
+    assert not key.startswith("sources/")
+
+
+def test_build_tender_document_key_validates_the_hash():
+    from app.services.storage import StorageError, build_tender_document_key
+
+    with pytest.raises(StorageError):
+        build_tender_document_key("no-es-un-hash", "pdf")
+
+
+def test_build_tender_document_key_sanitises_the_extension():
+    from app.services.storage import build_tender_document_key
+
+    sha = "b" * 64
+    assert build_tender_document_key(sha, "../evil").endswith(f"{sha}.evil")
+    assert build_tender_document_key(sha, "") == f"tenders/documents/bb/bb/{sha}"
+
+
+def test_generated_tender_document_key_passes_the_key_validator():
+    from app.services.storage import build_tender_document_key, validate_storage_key
+
+    key = build_tender_document_key("c" * 64, "pdf")
+    assert validate_storage_key(key) == key
+
+
+def test_document_settings_expose_derived_limits():
+    from app.core.config import settings
+
+    assert settings.document_max_size_bytes == settings.DOCUMENT_MAX_SIZE_MB * 1024 * 1024
+    assert "application/pdf" in settings.document_allowed_mime_types
+    assert settings.document_text_extraction_mime_types == {"application/pdf"}
+    assert settings.document_allowed_ports == {80, 443}
+
+
+def test_private_host_downloads_are_refused_in_production():
+    from app.core.config import Settings
+
+    with pytest.raises(ValueError, match="DOCUMENT_DOWNLOAD_ALLOW_PRIVATE_HOSTS"):
+        Settings(
+            ENVIRONMENT="production",
+            SECRET_KEY="x" * 48,
+            DOCUMENT_DOWNLOAD_ALLOW_PRIVATE_HOSTS=True,
+        )
+
+
+def test_user_agent_identifies_the_bot_and_the_contact():
+    from app.core.http import user_agent
+
+    agent = user_agent()
+    assert agent.startswith("LicitacionsBot/")
+    assert "contacte" in agent
