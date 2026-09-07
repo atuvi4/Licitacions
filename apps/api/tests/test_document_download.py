@@ -14,6 +14,7 @@ import pytest
 
 from app.core.config import settings
 from app.services.document_download import (
+    OLE2_MAGIC,
     DownloadError,
     download_document,
     resolve_mime_type,
@@ -299,6 +300,79 @@ async def test_rejects_an_empty_body():
             )
 
     assert caught.value.code == "invalid_content"
+
+
+async def test_accepts_an_ole2_document_declared_with_a_wrong_mime_type():
+    """Cas real de PLACSP: declara un DOCX malformat i serveix un .doc antic.
+
+    El servidor menteix dues vegades (tipus equivocat i cadena sense el guio de
+    `openxmlformats-officedocument`). Els magic bytes manen: es un OLE2, i com
+    que el format es admes, l'original s'ha de conservar.
+    """
+    declared = "application/vnd.openxmlformatsofficedocument.wordprocessingml.document"
+    body = OLE2_MAGIC + b"\x00" * 512
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=body,
+            headers={
+                "content-type": declared,
+                "content-disposition": 'inline;filename=ANEXO I.doc',
+            },
+        )
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/servlet/GetDocumentByIdServlet?id=42",
+            client=client,
+            resolver=resolver_returning(),
+        )
+
+    assert result.mime_type == "application/x-ole-storage"
+    assert result.declared_mime_type == declared
+    assert result.detected_extension == "ole"
+    assert result.detected_filename == "ANEXO I.doc"
+    assert result.sha256 == hashlib.sha256(body).hexdigest()
+
+
+async def test_a_declared_legacy_office_type_refines_the_generic_ole2_sniff():
+    """Si el servidor si que encerta el tipus, la declaracio afina el sniffing."""
+    body = OLE2_MAGIC + b"\x00" * 64
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body, headers={"content-type": "application/msword"})
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/annex", client=client, resolver=resolver_returning()
+        )
+
+    assert result.mime_type == "application/msword"
+    assert result.detected_extension == "doc"
+
+
+async def test_an_ole2_body_on_a_pdf_url_is_still_invalid_content():
+    """La guarda del PDF no s'ha relaxat: una URL .pdf que retorna OLE2 menteix."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=OLE2_MAGIC + b"\x00" * 64, headers={"content-type": "application/msword"}
+        )
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/pcap.pdf", client=client, resolver=resolver_returning()
+            )
+
+    assert caught.value.code == "invalid_content"
+
+
+def test_sniffing_recognises_ole2():
+    assert sniff_mime_type(OLE2_MAGIC + b"rest") == "application/x-ole-storage"
+    # Un prefix parcial no es una firma valida.
+    assert sniff_mime_type(b"\xd0\xcf\x11") is None
 
 
 def test_sniffing_recognises_the_formats_that_matter():

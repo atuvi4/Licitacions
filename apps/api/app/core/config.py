@@ -96,6 +96,9 @@ class Settings(BaseSettings):
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
             "application/vnd.ms-excel,"
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+            # Familia OLE2 (.doc/.xls/.ppt anteriors a 2007) quan els magic bytes
+            # no permeten afinar-ne el tipus. Es conserva l'original; no se n'extreu text.
+            "application/x-ole-storage,"
             "text/plain"
         )
     )

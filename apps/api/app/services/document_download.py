@@ -50,10 +50,27 @@ ZIP_REFINEMENTS = frozenset(
     }
 )
 
+# Signatura OLE2 (Compound File Binary): la comparteixen .doc, .xls i .ppt
+# anteriors a 2007. Els magic bytes NO permeten distingir-los entre ells, aixi
+# que el tipus generic es l'unica resposta honesta quan el servidor no l'afina.
+OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+OLE2_GENERIC = "application/x-ole-storage"
+
+# Mateix patro que ZIP_REFINEMENTS: si el servidor declara un tipus concret de
+# la familia OLE2, la declaracio no contradiu el sniffing, l'afina.
+OLE2_REFINEMENTS = frozenset(
+    {
+        "application/msword",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+    }
+)
+
 EXTRA_EXTENSIONS = {
     "application/xml": "xml",
     "text/xml": "xml",
     "text/html": "html",
+    OLE2_GENERIC: "ole",
 }
 
 _FILENAME_RE = re.compile(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)\"?", re.IGNORECASE)
@@ -93,6 +110,8 @@ def sniff_mime_type(head: bytes) -> str | None:
         return "application/pdf"
     if head.startswith(b"PK\x03\x04"):
         return "application/zip"
+    if head.startswith(OLE2_MAGIC):
+        return OLE2_GENERIC
     stripped = head.lstrip()[:512].lower()
     if stripped.startswith(b"<!doctype html") or stripped.startswith(b"<html"):
         return "text/html"
@@ -111,6 +130,8 @@ def resolve_mime_type(sniffed: str | None, declared: str | None, url: str) -> st
             "invalid_content",
         )
     if sniffed == "application/zip" and declared in ZIP_REFINEMENTS:
+        return declared
+    if sniffed == OLE2_GENERIC and declared in OLE2_REFINEMENTS:
         return declared
     if sniffed:
         return sniffed
