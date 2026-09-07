@@ -40,7 +40,12 @@ embedding ni cap similitud semàntica — el motor és determinista i reproduïb
 | Aïllament per `company_id` + tests que ho verifiquen | ✅ |
 | Smoke tests sobre tenant efímer, amb neteja verificada | ✅ |
 | Seed idempotent que repara la deriva (`--reset` per reconstruir) | ✅ |
-| Lectura de plecs, requisits, Go/No-Go, IA, RAG | ❌ (fase següent) |
+| Descàrrega de plecs amb protecció SSRF i límits centralitzats | ✅ |
+| Original immutable a S3, deduplicat per SHA-256 | ✅ |
+| Versionat de documents: contingut canviat = versió nova, l'antiga es conserva | ✅ |
+| Extracció de text per pàgina (pypdf, 1-based) amb qualitat determinista | ✅ |
+| Preview del text extret amb navegació de pàgina | ✅ |
+| Requisits, Go/No-Go, IA, RAG, OCR | ❌ (fase següent) |
 
 ---
 
@@ -68,7 +73,8 @@ Next.js (apps/web)  ──rewrite /bff/* ──►  FastAPI (apps/api)
   mida.
 
 Més detall a [`docs/architecture.md`](docs/architecture.md),
-[`docs/data-model.md`](docs/data-model.md) i [`docs/matching.md`](docs/matching.md).
+[`docs/data-model.md`](docs/data-model.md), [`docs/matching.md`](docs/matching.md) i
+[`docs/documents.md`](docs/documents.md).
 
 ---
 
