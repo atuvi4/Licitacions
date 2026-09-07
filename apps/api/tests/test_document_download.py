@@ -1,0 +1,358 @@
+"""Descarrega de documents: nomes bytes, mai base de dades.
+
+Tota la suite corre sense Internet. Els bytes venen d'un `MockTransport` i el
+DNS d'un resolutor injectat. L'unic test que aixeca un socket de veritat es el
+del tall per mida, perque un mock no demostra que el streaming s'aturi.
+"""
+
+from __future__ import annotations
+
+import hashlib
+
+import httpx
+import pytest
+
+from app.core.config import settings
+from app.services.document_download import (
+    DownloadError,
+    download_document,
+    resolve_mime_type,
+    sniff_mime_type,
+)
+
+PUBLIC_IP = "93.184.216.34"
+PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n%%EOF\n"
+
+
+@pytest.fixture(autouse=True)
+def _no_backoff(monkeypatch):
+    """Els reintents reals esperen segons. Als tests no cal esperar res."""
+    monkeypatch.setattr(settings, "DOCUMENT_DOWNLOAD_BACKOFF_SECONDS", 0.0)
+
+
+def resolver_returning(*addresses: str):
+    def _resolve(host: str, port: int) -> list[str]:
+        return list(addresses or (PUBLIC_IP,))
+
+    return _resolve
+
+
+def client_for(handler) -> httpx.AsyncClient:
+    """Client amb transport fals. `follow_redirects` s'ha de quedar desactivat."""
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
+
+
+async def test_downloads_a_valid_pdf_and_hashes_it():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=PDF_BYTES, headers={"content-type": "application/pdf"})
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/pcap.pdf", client=client, resolver=resolver_returning()
+        )
+
+    assert result.sha256 == hashlib.sha256(PDF_BYTES).hexdigest()
+    assert result.file_size == len(PDF_BYTES)
+    assert result.mime_type == "application/pdf"
+    assert result.detected_extension == "pdf"
+    assert result.original_filename == "pcap.pdf"
+    assert result.http_status == 200
+    assert result.redirect_count == 0
+
+
+async def test_reports_404_without_retrying():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(404)
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/no.pdf", client=client, resolver=resolver_returning()
+            )
+
+    assert caught.value.code == "not_found"
+    assert caught.value.http_status == 404
+    assert len(calls) == 1, "un 404 no s'ha de reintentar"
+
+
+async def test_retries_a_500_and_then_succeeds():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if len(calls) < 3:
+            return httpx.Response(500)
+        return httpx.Response(200, content=PDF_BYTES, headers={"content-type": "application/pdf"})
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/pcap.pdf", client=client, resolver=resolver_returning()
+        )
+
+    assert len(calls) == 3
+    assert result.http_status == 200
+
+
+async def test_gives_up_after_the_configured_attempts():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(503)
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/pcap.pdf", client=client, resolver=resolver_returning()
+            )
+
+    assert len(calls) == settings.DOCUMENT_DOWNLOAD_MAX_ATTEMPTS
+    assert caught.value.code == "http_error"
+
+
+async def test_reports_timeouts():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("massa lent", request=request)
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/pcap.pdf", client=client, resolver=resolver_returning()
+            )
+
+    assert caught.value.code == "timeout"
+
+
+async def test_refuses_a_declared_content_length_over_the_limit():
+    too_big = settings.document_max_size_bytes + 1
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=PDF_BYTES,
+            headers={"content-type": "application/pdf", "content-length": str(too_big)},
+        )
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/gros.pdf", client=client, resolver=resolver_returning()
+            )
+
+    assert caught.value.code == "too_large"
+
+
+async def test_refuses_a_body_over_the_limit_without_content_length(monkeypatch):
+    monkeypatch.setattr(settings, "DOCUMENT_MAX_SIZE_MB", 1)
+    payload = b"%PDF-1.4\n" + b"x" * (2 * 1024 * 1024)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=payload, headers={"content-type": "application/pdf"})
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/gros.pdf", client=client, resolver=resolver_returning()
+            )
+
+    assert caught.value.code == "too_large"
+
+
+async def test_rejects_html_pretending_to_be_a_pdf():
+    html = b"<!DOCTYPE html><html><body>Sessio caducada</body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=html, headers={"content-type": "application/pdf"})
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/pcap.pdf", client=client, resolver=resolver_returning()
+            )
+
+    assert caught.value.code == "invalid_content"
+
+
+async def test_rejects_a_mime_type_outside_the_allow_list():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"\x89PNG\r\n\x1a\n", headers={"content-type": "image/png"}
+        )
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/imatge.png", client=client, resolver=resolver_returning()
+            )
+
+    assert caught.value.code == "invalid_content"
+
+
+async def test_follows_a_valid_redirect():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/redirect":
+            return httpx.Response(302, headers={"location": "https://example.com/final.pdf"})
+        return httpx.Response(200, content=PDF_BYTES, headers={"content-type": "application/pdf"})
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/redirect", client=client, resolver=resolver_returning()
+        )
+
+    assert result.redirect_count == 1
+    assert result.final_url == "https://example.com/final.pdf"
+    assert result.mime_type == "application/pdf"
+
+
+async def test_blocks_a_redirect_towards_a_private_address():
+    """L'atac clau: la URL inicial es publica i la redireccio apunta a metadades."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            302, headers={"location": "http://169.254.169.254/latest/meta-data/"}
+        )
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/pcap.pdf", client=client, resolver=resolver_returning()
+            )
+
+    assert caught.value.code == "blocked_url"
+
+
+async def test_stops_after_too_many_redirects():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "https://example.com/una-altra"})
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/inici", client=client, resolver=resolver_returning()
+            )
+
+    assert caught.value.code == "too_many_redirects"
+
+
+async def test_reads_the_filename_from_content_disposition():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=PDF_BYTES,
+            headers={
+                "content-type": "application/pdf",
+                "content-disposition": 'attachment; filename="PCAP signat.pdf"',
+            },
+        )
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/descarrega?id=42", client=client, resolver=resolver_returning()
+        )
+
+    assert result.detected_filename == "PCAP signat.pdf"
+
+
+async def test_accepts_xml_because_placsp_publishes_it():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b'<?xml version="1.0"?><root/>', headers={"content-type": "text/xml"}
+        )
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/dades.xml", client=client, resolver=resolver_returning()
+        )
+
+    assert result.mime_type == "application/xml"
+    assert result.detected_extension == "xml"
+
+
+async def test_keeps_the_declared_ooxml_type_over_the_generic_zip_sniff():
+    declared = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"PK\x03\x04" + b"\x00" * 64, headers={"content-type": declared}
+        )
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/annex.docx", client=client, resolver=resolver_returning()
+        )
+
+    assert result.mime_type == declared
+    assert result.detected_extension == "docx"
+
+
+async def test_rejects_an_empty_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"", headers={"content-type": "application/pdf"})
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(
+                "https://example.com/buit.pdf", client=client, resolver=resolver_returning()
+            )
+
+    assert caught.value.code == "invalid_content"
+
+
+def test_sniffing_recognises_the_formats_that_matter():
+    assert sniff_mime_type(b"%PDF-1.7\n...") == "application/pdf"
+    assert sniff_mime_type(b"PK\x03\x04rest") == "application/zip"
+    assert sniff_mime_type(b"  <!DOCTYPE html><html>") == "text/html"
+    assert sniff_mime_type(b'<?xml version="1.0"?>') == "application/xml"
+    assert sniff_mime_type(b"text pla sense magic") is None
+
+
+def test_resolve_mime_type_refuses_a_pdf_url_serving_something_else():
+    with pytest.raises(DownloadError) as caught:
+        resolve_mime_type("text/html", "text/html", "https://example.com/pcap.pdf")
+    assert caught.value.code == "invalid_content"
+
+
+async def test_aborts_a_real_stream_that_exceeds_the_limit(monkeypatch):
+    """Un mock no demostra que el streaming s'aturi de veritat; un socket si.
+
+    El servidor intenta enviar 8 MB amb un limit d'1 MB. Si el tall funciona, el
+    client tanca la connexio i el servidor rep un BrokenPipe.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - firma imposada per la stdlib
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.end_headers()
+            self.wfile.write(b"%PDF-1.4\n")
+            try:
+                for _ in range(128):
+                    self.wfile.write(b"x" * 65536)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass  # el client ha tallat: exactament el que volem provar
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    monkeypatch.setattr(settings, "DOCUMENT_MAX_SIZE_MB", 1)
+    monkeypatch.setattr(settings, "DOCUMENT_DOWNLOAD_ALLOW_PRIVATE_HOSTS", True)
+    monkeypatch.setattr(settings, "DOCUMENT_DOWNLOAD_ALLOWED_PORTS", f"80,443,{port}")
+
+    try:
+        with pytest.raises(DownloadError) as caught:
+            await download_document(f"http://127.0.0.1:{port}/gros.pdf")
+        assert caught.value.code == "too_large"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
