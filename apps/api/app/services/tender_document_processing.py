@@ -189,51 +189,50 @@ async def _get_or_create_content(
 async def _store_extraction(
     session: AsyncSession, content: TenderDocumentContent, result: ExtractionResult
 ) -> TenderDocumentExtraction:
-    """Desa una extraccio i les seves pagines, i la marca com l'actual.
+    """Desa una revisio NOVA d'extraccio amb les seves pagines.
 
-    Si ja existeix una extraccio d'aquesta `parser_version`, se'n substitueixen
-    les pagines: el parser es determinista, aixi que repetir-lo nomes te sentit
-    per recuperar-se d'un error, no per generar historia.
+    Mai modifica ni esborra una extraccio anterior ni les seves pagines: son
+    l'evidencia que la fase de requisits citara, i una cita ha de continuar
+    dient el mateix demà. Repetir el mateix parser genera una revisio nova, no
+    una sobreescriptura.
+
+    La revisio nova nomes passa a `is_current` si ha acabat be. Si falla i ja hi
+    havia una extraccio vigent, aquella es queda: una reextraccio fallida no pot
+    deixar un document sense text que abans en tenia.
     """
-    extraction = await session.scalar(
-        sa.select(TenderDocumentExtraction).where(
-            TenderDocumentExtraction.content_id == content.id,
-            TenderDocumentExtraction.parser_version == result.parser_version,
+    previous = await current_extraction_for(session, content.id)
+
+    highest = await session.scalar(
+        sa.select(sa.func.max(TenderDocumentExtraction.revision_number)).where(
+            TenderDocumentExtraction.content_id == content.id
         )
     )
+    promote = result.status != ExtractionStatus.FAILED or previous is None
 
-    # Cap altra extraccio d'aquest contingut pot quedar marcada com a actual.
-    await session.execute(
-        sa.update(TenderDocumentExtraction)
-        .where(
-            TenderDocumentExtraction.content_id == content.id,
-            TenderDocumentExtraction.is_current.is_(True),
-        )
-        .values(is_current=False)
+    if promote and previous is not None:
+        # L'index unic parcial nomes admet una vigent per contingut: cal
+        # destronar l'anterior i buidar-ho abans d'inserir la nova.
+        previous.is_current = False
+        await session.flush()
+
+    extraction = TenderDocumentExtraction(
+        content_id=content.id,
+        parser_version=result.parser_version,
+        revision_number=(highest or 0) + 1,
+        status=result.status,
+        quality=result.quality,
+        page_count=result.page_count,
+        extracted_page_count=result.extracted_page_count,
+        empty_page_count=result.empty_page_count,
+        text_char_count=result.text_char_count,
+        ocr_candidate=result.ocr_candidate,
+        parse_ms=result.parse_ms,
+        error_code=result.error_code,
+        error_message=result.error_message,
+        is_current=promote,
+        completed_at=datetime.now(UTC),
     )
-
-    if extraction is None:
-        extraction = TenderDocumentExtraction(
-            content_id=content.id, parser_version=result.parser_version
-        )
-        session.add(extraction)
-    else:
-        await session.execute(
-            sa.delete(TenderDocumentPage).where(TenderDocumentPage.extraction_id == extraction.id)
-        )
-
-    extraction.status = result.status
-    extraction.quality = result.quality
-    extraction.page_count = result.page_count
-    extraction.extracted_page_count = result.extracted_page_count
-    extraction.empty_page_count = result.empty_page_count
-    extraction.text_char_count = result.text_char_count
-    extraction.ocr_candidate = result.ocr_candidate
-    extraction.parse_ms = result.parse_ms
-    extraction.error_code = result.error_code
-    extraction.error_message = result.error_message
-    extraction.is_current = True
-    extraction.completed_at = datetime.now(UTC)
+    session.add(extraction)
     await session.flush()
 
     for page in result.pages:
@@ -256,6 +255,8 @@ async def _store_extraction(
         extra={
             "content_id": str(content.id),
             "extraction_id": str(extraction.id),
+            "revision": extraction.revision_number,
+            "is_current": extraction.is_current,
             "parser_version": result.parser_version,
             "pages": result.page_count,
             # Nomes el recompte: el text dels plecs no es loguega mai.

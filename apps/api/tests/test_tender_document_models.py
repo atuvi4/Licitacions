@@ -38,10 +38,13 @@ def make_content(sha: str) -> TenderDocumentContent:
     )
 
 
-def make_extraction(content_id: uuid.UUID, version: str = "pypdf-v1") -> TenderDocumentExtraction:
+def make_extraction(
+    content_id: uuid.UUID, version: str = "pypdf-v1", revision: int = 1
+) -> TenderDocumentExtraction:
     return TenderDocumentExtraction(
         content_id=content_id,
         parser_version=version,
+        revision_number=revision,
         status=ExtractionStatus.EXTRACTED,
         quality=ExtractionQuality.GOOD,
         page_count=1,
@@ -75,17 +78,43 @@ async def test_the_same_sha256_cannot_be_stored_twice(session):
     await session.rollback()
 
 
-async def test_a_content_has_at_most_one_extraction_per_parser_version(session):
+async def test_the_same_parser_version_can_have_several_revisions(session):
+    """Repetir el parser NO sobreescriu: crea una revisio nova.
+
+    Es l'invariant que fa citable una pagina: l'evidencia d'ahir segueix sent
+    la d'ahir encara que avui es torni a extreure amb el mateix parser.
+    """
     content = make_content("b" * 64)
     session.add(content)
     await session.commit()
 
-    session.add(make_extraction(content.id))
+    session.add(make_extraction(content.id, "pypdf-v1", revision=1))
     await session.commit()
 
-    duplicate = make_extraction(content.id)
-    duplicate.is_current = False
-    session.add(duplicate)
+    second = make_extraction(content.id, "pypdf-v1", revision=2)
+    second.is_current = False
+    session.add(second)
+    await session.commit()
+
+    total = await session.scalar(
+        sa.select(sa.func.count())
+        .select_from(TenderDocumentExtraction)
+        .where(TenderDocumentExtraction.content_id == content.id)
+    )
+    assert total == 2
+
+
+async def test_a_revision_number_is_unique_within_a_content(session):
+    content = make_content("f" * 64)
+    session.add(content)
+    await session.commit()
+
+    session.add(make_extraction(content.id, "pypdf-v1", revision=1))
+    await session.commit()
+
+    clash = make_extraction(content.id, "pdfminer-v2", revision=1)
+    clash.is_current = False
+    session.add(clash)
     with pytest.raises(IntegrityError):
         await session.commit()
     await session.rollback()
@@ -96,10 +125,10 @@ async def test_a_content_has_at_most_one_current_extraction(session):
     session.add(content)
     await session.commit()
 
-    session.add(make_extraction(content.id, "pypdf-v1"))
+    session.add(make_extraction(content.id, "pypdf-v1", revision=1))
     await session.commit()
 
-    session.add(make_extraction(content.id, "pypdf-v2"))  # tambe is_current=True
+    session.add(make_extraction(content.id, "pypdf-v2", revision=2))  # tambe is_current=True
     with pytest.raises(IntegrityError):
         await session.commit()
     await session.rollback()

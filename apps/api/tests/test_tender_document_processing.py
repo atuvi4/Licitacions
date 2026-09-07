@@ -21,7 +21,8 @@ from app.models.tender_documents import (
     TenderDocumentFile,
     TenderDocumentPage,
 )
-from app.services.pdf_text import PARSER_VERSION
+from app.services.document_download import OLE2_MAGIC
+from app.services.pdf_text import PARSER_VERSION, ExtractionResult
 from app.services.tender_document_processing import process_tender_document
 from tests.fixtures.pdf_builder import build_pdf
 
@@ -197,20 +198,133 @@ async def test_a_new_parser_version_re_extracts_without_re_downloading(
     assert current.parser_version == "pypdf-v2"
 
 
-async def test_force_reextract_replaces_the_pages_of_the_same_parser_version(
+async def test_force_reextract_creates_a_new_revision_and_keeps_the_old_one(
     session, tender_document
 ):
+    """La garantia que 4B necessita: l'evidencia citada no canvia mai."""
     first = await process(session, tender_document)
+    content_id = first.file.content_id
+
+    original = await session.scalar(
+        sa.select(TenderDocumentExtraction).where(
+            TenderDocumentExtraction.content_id == content_id
+        )
+    )
+    original_id = original.id
+    original_pages = {
+        (p.page_number, p.text_hash)
+        for p in (
+            await session.scalars(
+                sa.select(TenderDocumentPage).where(
+                    TenderDocumentPage.extraction_id == original_id
+                )
+            )
+        ).all()
+    }
+    assert len(original_pages) == 3
+
     await process(session, tender_document, force_reextract=True)
 
-    extractions = await session.scalar(
-        sa.select(sa.func.count()).select_from(TenderDocumentExtraction)
-    )
-    assert extractions == 1, "el mateix parser no genera historia"
+    extractions = (
+        await session.scalars(
+            sa.select(TenderDocumentExtraction)
+            .where(TenderDocumentExtraction.content_id == content_id)
+            .order_by(TenderDocumentExtraction.revision_number)
+        )
+    ).all()
+    assert [e.revision_number for e in extractions] == [1, 2]
+    assert [e.parser_version for e in extractions] == [PARSER_VERSION, PARSER_VERSION]
 
-    pages = await session.scalar(sa.select(sa.func.count()).select_from(TenderDocumentPage))
-    assert pages == 3, "les pagines s'han de substituir, no duplicar"
-    assert first.file.content_id is not None
+    # Nomes la nova es vigent.
+    assert [e.is_current for e in extractions] == [False, True]
+
+    # La primera continua consultable, amb les MATEIXES pagines.
+    survivors = {
+        (p.page_number, p.text_hash)
+        for p in (
+            await session.scalars(
+                sa.select(TenderDocumentPage).where(
+                    TenderDocumentPage.extraction_id == original_id
+                )
+            )
+        ).all()
+    }
+    assert survivors == original_pages, "les pagines historiques no es poden tocar"
+
+    # I la revisio nova te les seves propies pagines, no les comparteix.
+    total_pages = await session.scalar(sa.select(sa.func.count()).select_from(TenderDocumentPage))
+    assert total_pages == 6
+
+    # Cap blob nou: es el mateix contingut.
+    contents = await session.scalar(sa.select(sa.func.count()).select_from(TenderDocumentContent))
+    assert contents == 1
+
+
+async def test_a_failed_reextraction_does_not_dethrone_the_working_one(
+    session, tender_document, monkeypatch
+):
+    """Si la reextraccio peta, el document no es pot quedar sense text."""
+    first = await process(session, tender_document)
+    content_id = first.file.content_id
+
+    good = await session.scalar(
+        sa.select(TenderDocumentExtraction).where(
+            TenderDocumentExtraction.content_id == content_id,
+            TenderDocumentExtraction.is_current.is_(True),
+        )
+    )
+    good_id = good.id
+
+    # El parser retorna una fallada sense llancar, com fa amb un PDF corrupte.
+    from app.services import tender_document_processing as processing
+    from app.services.pdf_text import PARSER_VERSION as REAL_VERSION
+
+    async def failing(_data):
+        return ExtractionResult(
+            parser_version=REAL_VERSION,
+            status=ExtractionStatus.FAILED,
+            quality=ExtractionQuality.FAILED,
+            pages=(),
+            page_count=0,
+            extracted_page_count=0,
+            empty_page_count=0,
+            text_char_count=0,
+            ocr_candidate=False,
+            parse_ms=1,
+            error_code="corrupt_pdf",
+            error_message="simulat",
+        )
+
+    monkeypatch.setattr(processing, "extract_pdf_text_async", failing)
+    await process(session, tender_document, force_reextract=True)
+
+    extractions = (
+        await session.scalars(
+            sa.select(TenderDocumentExtraction)
+            .where(TenderDocumentExtraction.content_id == content_id)
+            .order_by(TenderDocumentExtraction.revision_number)
+        )
+    ).all()
+    assert len(extractions) == 2, "la fallada tambe queda registrada com a revisio"
+    assert extractions[1].status == ExtractionStatus.FAILED
+    assert extractions[1].is_current is False, "una fallada no pot ser la vigent"
+
+    current = await session.scalar(
+        sa.select(TenderDocumentExtraction).where(
+            TenderDocumentExtraction.content_id == content_id,
+            TenderDocumentExtraction.is_current.is_(True),
+        )
+    )
+    assert current.id == good_id
+    assert current.page_count == 3
+
+    # Les pagines bones segueixen intactes.
+    pages = await session.scalar(
+        sa.select(sa.func.count())
+        .select_from(TenderDocumentPage)
+        .where(TenderDocumentPage.extraction_id == good_id)
+    )
+    assert pages == 3
 
 
 async def test_force_reextract_without_content_is_refused(session, tender_document):
@@ -270,6 +384,58 @@ async def test_a_non_pdf_is_stored_but_not_parsed(session, tender_document):
     assert extraction.status == ExtractionStatus.SKIPPED_UNSUPPORTED
     assert extraction.error_code == "unsupported_for_text_extraction"
     assert extraction.quality == ExtractionQuality.NOT_APPLICABLE
+
+
+async def test_an_ole2_document_is_stored_but_not_parsed(session, tender_document, storage):
+    """Cas real de PLACSP: MIME declarat incorrecte i bytes OLE2 d'un .doc antic.
+
+    L'original s'ha de conservar amb el seu hash. NO pot ser `invalid_content`
+    nomes perque el servidor declari malament el tipus.
+    """
+    from app.models.enums import TenderDocumentType
+    from app.models.tenders import TenderDocument
+
+    doc = TenderDocument(
+        tender_id=tender_document.tender_id,
+        name="ANEXO I",
+        document_type=TenderDocumentType.OTHER,
+        url="https://example.com/servlet/GetDocumentByIdServlet?id=7",
+    )
+    session.add(doc)
+    await session.commit()
+    await session.refresh(doc)
+
+    body = OLE2_MAGIC + b"\x00" * 400
+    declared = "application/vnd.openxmlformatsofficedocument.wordprocessingml.document"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body, headers={"content-type": declared})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=False
+    ) as client:
+        outcome = await process_tender_document(session, doc, client=client, resolver=resolver)
+
+    file = outcome.file
+    assert file.download_status == DownloadStatus.DOWNLOADED, "l'original s'ha de conservar"
+    assert file.error_code is None
+    assert file.content.sha256 == hashlib.sha256(body).hexdigest()
+    assert file.content.mime_type == "application/x-ole-storage"
+    assert file.content.is_text_extractable is False
+    assert file.declared_mime_type == declared
+
+    # El blob es realment a l'storage i coincideix byte a byte.
+    assert await storage.download(file.content.storage_key) == body
+
+    extraction = await session.scalar(
+        sa.select(TenderDocumentExtraction).where(
+            TenderDocumentExtraction.content_id == file.content_id
+        )
+    )
+    assert extraction.status == ExtractionStatus.SKIPPED_UNSUPPORTED
+    assert extraction.error_code == "unsupported_for_text_extraction"
+    assert extraction.quality == ExtractionQuality.NOT_APPLICABLE
+    assert extraction.revision_number == 1
 
 
 async def test_a_second_request_while_one_is_in_flight_gets_a_conflict(session, tender_document):

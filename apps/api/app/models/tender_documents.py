@@ -70,18 +70,29 @@ class TenderDocumentContent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 class TenderDocumentExtraction(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """Una passada de parser sobre un `Content`.
+    """Una passada de parser sobre un `Content`. **Immutable un cop escrita.**
 
-    `UNIQUE (content_id, parser_version)`: una versio de parser, una extraccio.
-    Un re-extract amb la mateixa versio substitueix les pagines d'aquesta fila,
-    perque el parser es determinista i repetir-lo nomes te sentit per recuperar
-    un error. Un canvi de versio, en canvi, crea una fila nova.
+    Cada execucio real d'extraccio crea una fila nova amb el seu
+    `revision_number`, encara que el `content_id` i la `parser_version` siguin
+    els mateixos. Les pagines d'una extraccio anterior no es toquen mai.
+
+        Content -> revisio 1 (pypdf-v1)   -> Pages
+                -> revisio 2 (pypdf-v1)   -> Pages
+                -> revisio 3 (pdfminer-v2)-> Pages
+
+    El motiu no es historic sino de citacio: la fase de requisits apuntara a una
+    `Extraction` i a una `Page` concretes, i aquella evidencia no pot canviar
+    sota els peus de qui l'ha citada. Per aixo `UNIQUE (content_id,
+    revision_number)` i no `(content_id, parser_version)`.
+
+    Nomes una revisio es `is_current`, i nomes hi arriba si ha acabat be: una
+    reextraccio fallida no destrona la que ja funcionava.
     """
 
     __tablename__ = "tender_document_extractions"
     __table_args__ = (
         sa.UniqueConstraint(
-            "content_id", "parser_version", name="uq_tender_document_extractions_content_parser"
+            "content_id", "revision_number", name="uq_tender_document_extractions_content_revision"
         ),
         sa.Index("ix_tender_document_extractions_content_id", "content_id"),
         sa.Index(
@@ -99,6 +110,9 @@ class TenderDocumentExtraction(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
     )
     parser_version: Mapped[str] = mapped_column(sa.String(50), nullable=False)
+    #: 1-based i monoton per `content_id`, independentment del parser. Identifica
+    #: la revisio que una cita futura podra referenciar sense ambiguitat.
+    revision_number: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1)
     status: Mapped[ExtractionStatus] = mapped_column(
         enum_column(ExtractionStatus, "extraction_status"),
         nullable=False,

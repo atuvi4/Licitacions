@@ -63,8 +63,45 @@ es serveix per un endpoint autoritzat, no per MinIO.
 PyMuPDF és AGPL-3.0 i, en un servei accessible per xarxa, obligaria a publicar
 el codi del producte o a comprar llicència comercial.
 
-Canviar de parser no destrueix res: una `parser_version` nova crea una extracció
-nova sobre els mateixos bytes i marca l'anterior `is_current=false`.
+## Extraccions immutables
+
+Una `TenderDocumentExtraction`, un cop escrita, **no canvia mai**. Cada execució
+real d'extracció crea una fila nova amb el seu `revision_number` (1-based i
+monòton per `Content`, independent del parser):
+
+```
+Content ─┬─ revisió 1 · pypdf-v1    → Pages
+         ├─ revisió 2 · pypdf-v1    → Pages
+         └─ revisió 3 · pdfminer-v2 → Pages
+```
+
+Les pàgines d'una revisió anterior no es modifiquen ni s'esborren. El motiu no
+és historicista: la fase de requisits citarà una `Extraction` i una `Page`
+concretes, i aquella evidència ha de continuar dient el mateix demà.
+
+Invariants, garantits per l'esquema:
+
+* `UNIQUE (content_id, revision_number)`.
+* Una sola revisió `is_current` per `Content` (índex únic parcial).
+* Una revisió només passa a `is_current` **si ha acabat bé**. Una reextracció
+  fallida queda registrada com a revisió pròpia però no destrona la que
+  funcionava: un document que tenia text no es pot quedar sense.
+
+## Formats OLE2 (.doc, .xls, .ppt anteriors a 2007)
+
+PLACSP serveix aquests fitxers declarant un MIME equivocat —s'ha observat
+`application/vnd.openxmlformatsofficedocument...`, sense el guionet i a més
+referit a un format que no és el real. El sniffing reconeix la signatura OLE2
+(`D0 CF 11 E0 A1 B1 1A E1`) i mana per sobre de la declaració.
+
+Com que els magic bytes no distingeixen `.doc` de `.xls` ni de `.ppt`, el tipus
+resultant és el genèric `application/x-ole-storage`, tret que el servidor
+n'afini un de concret de la família (mateix patró que els OOXML dins d'un ZIP).
+
+El comportament és: es descarrega, es calcula el hash, es conserva l'original i
+l'extracció queda `skipped_unsupported` amb `unsupported_for_text_extraction`.
+**No és `invalid_content`**: que el servidor menteixi sobre el tipus no fa
+inservible el document. No se n'extreu text en aquesta fase.
 
 ## Qualitat i OCR
 

@@ -45,6 +45,7 @@ interface FileRead {
   extraction: {
     id: string;
     parser_version: string;
+    revision_number: number;
     status: string;
     quality: string;
     page_count: number;
@@ -147,7 +148,11 @@ export default function DocumentTextPage() {
           </div>
           <div>
             <dt className="text-muted">Parser</dt>
-            <dd>{extraction?.parser_version ?? "—"}</dd>
+            <dd>
+              {extraction
+                ? `${extraction.parser_version} · revisió ${extraction.revision_number}`
+                : "—"}
+            </dd>
           </div>
           <div>
             <dt className="text-muted">Original</dt>

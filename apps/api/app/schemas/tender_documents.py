@@ -36,6 +36,9 @@ class TenderDocumentContentRead(ORMModel):
 class TenderDocumentExtractionRead(ORMModel):
     id: uuid.UUID
     parser_version: str
+    #: Revisio 1-based dins del contingut. Identifica l'evidencia de forma
+    #: estable: una extraccio, un cop escrita, no canvia mai.
+    revision_number: int
     status: ExtractionStatus
     quality: ExtractionQuality
     page_count: int
