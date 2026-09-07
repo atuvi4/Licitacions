@@ -367,7 +367,11 @@ class AwardCriterionEvidence(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "award_criterion_evidence"
     __table_args__ = (
         sa.Index("ix_award_criterion_evidence_criterion_id", "award_criterion_id"),
-        sa.CheckConstraint("page_number >= 1", name="award_evidence_page_number_is_one_based"),
+        # El nom ha de caber en els 63 caracters d'un identificador de
+        # PostgreSQL un cop aplicada la convencio `ck_<taula>_<nom>`: amb
+        # `..._page_number_is_one_based` sortien 67 i el servidor el truncava,
+        # de manera que el model i la base de dades no coincidien mai.
+        sa.CheckConstraint("page_number >= 1", name="award_evidence_page_one_based"),
     )
 
     award_criterion_id: Mapped[uuid.UUID] = mapped_column(

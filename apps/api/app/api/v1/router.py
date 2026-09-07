@@ -10,6 +10,7 @@ from fastapi import APIRouter
 from app.api.v1.routers import (
     auth,
     companies,
+    compliance,
     config,
     cpv,
     credentials,
@@ -36,6 +37,9 @@ company_scoped.include_router(projects.router)
 company_scoped.include_router(documents.router)
 company_scoped.include_router(documents.evidence_router)
 company_scoped.include_router(cpv.preferences_router)
+# Compliment: dada DE TENANT, penja de /companies/{company_id}.
+company_scoped.include_router(compliance.router)
+company_scoped.include_router(compliance.assessments_router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

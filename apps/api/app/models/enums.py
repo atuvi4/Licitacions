@@ -422,3 +422,88 @@ class AwardEvaluationType(StrEnum):
     JUDGMENT = "judgment"
     MIXED = "mixed"
     UNKNOWN = "unknown"
+
+
+class ComplianceRunStatus(StrEnum):
+    """Estat d'un calcul de compliment empresa <-> requisits."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class AssessmentResult(StrEnum):
+    """Resultat d'avaluar UN requisit contra el perfil d'una empresa.
+
+    La distincio entre `DOES_NOT_SATISFY` i `UNKNOWN` es la mes important de
+    tota la capa: la primera diu que les dades demostren un incompliment, la
+    segona que no en tenim prou. Confondre-les fabrica NO-GOs falsos.
+    """
+
+    SATISFIES = "satisfies"
+    DOES_NOT_SATISFY = "does_not_satisfy"
+    #: No hi ha prou dada corporativa per decidir.
+    UNKNOWN = "unknown"
+    #: La regla no es prou determinista; cal judici huma.
+    NEEDS_REVIEW = "needs_review"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class AssessmentMode(StrEnum):
+    """Si la regla ha pogut decidir sola o demana revisio."""
+
+    AUTOMATIC = "automatic"
+    REVIEW_REQUIRED = "review_required"
+
+
+class BlockerStatus(StrEnum):
+    """Fins a quin punt un incompliment obligatori esta confirmat.
+
+    Mentre la qualitat de l'extractor real no estigui mesurada, un requisit
+    automatic no revisat NOMES pot generar un blocador `POTENTIAL`. Un NO-GO
+    definitiu a partir d'una extraccio no verificada seria un fals negatiu amb
+    conseqüencies comercials.
+    """
+
+    NONE = "none"
+    POTENTIAL = "potential"
+    CONFIRMED = "confirmed"
+
+
+class EvidenceStrength(StrEnum):
+    """Prova documental darrere d'una dada corporativa. No es una puntuacio."""
+
+    STRONG = "strong"
+    SUPPORTING = "supporting"
+    MISSING = "missing"
+
+
+class EligibilityResult(StrEnum):
+    """Podem acreditar que complim? NO es "ens interessa" ni "guanyarem"."""
+
+    ELIGIBLE = "eligible"
+    REVIEW_REQUIRED = "review_required"
+    NO_GO = "no_go"
+
+
+class RecommendationResult(StrEnum):
+    """Recomanacio de negoci. Combina elegibilitat i pre-fit SENSE fusionar-los."""
+
+    GO_CANDIDATE = "go_candidate"
+    ELIGIBLE_LOW_FIT = "eligible_low_fit"
+    REVIEW = "review"
+    NO_GO = "no_go"
+
+
+class CompanyEvidenceKind(StrEnum):
+    """Quina dada corporativa sosté un assessment."""
+
+    FINANCIAL_YEAR = "financial_year"
+    CERTIFICATION = "certification"
+    REGISTRATION = "registration"
+    INSURANCE = "insurance"
+    PROJECT = "project"
+    PERSON = "person"
+    QUALIFICATION = "qualification"
+    DOCUMENT = "document"

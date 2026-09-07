@@ -2,6 +2,11 @@
 
 from app.db.base import Base
 from app.models.audit import AuditLog
+from app.models.compliance import (
+    AssessmentEvidence,
+    CompanyComplianceRun,
+    CompanyRequirementAssessment,
+)
 from app.models.cpv import CompanyCPVPreference, CPVCode, ServiceCPV
 from app.models.credentials import CompanyCertification, CompanyInsurance, CompanyRegistration
 from app.models.documents import Document, DocumentLink
@@ -39,6 +44,7 @@ from app.models.tenders import (
 )
 
 __all__ = [
+    "AssessmentEvidence",
     "AuditLog",
     "AwardCriterion",
     "AwardCriterionEvidence",
@@ -48,12 +54,14 @@ __all__ = [
     "Company",
     "CompanyCPVPreference",
     "CompanyCertification",
+    "CompanyComplianceRun",
     "CompanyContractPreferences",
     "CompanyFinancialYear",
     "CompanyInsurance",
     "CompanyMembership",
     "CompanyPerson",
     "CompanyProject",
+    "CompanyRequirementAssessment",
     "CompanyRegistration",
     "CompanyService",
     "CompanyTenderLotMatch",
