@@ -16,6 +16,12 @@ from app.models.profile import (
 )
 from app.models.projects import CompanyProject, ProjectCPV, project_services
 from app.models.sources import IngestionRun, Source, SourceRecord
+from app.models.tender_documents import (
+    TenderDocumentContent,
+    TenderDocumentExtraction,
+    TenderDocumentFile,
+    TenderDocumentPage,
+)
 from app.models.tenders import (
     Buyer,
     Tender,
@@ -55,6 +61,10 @@ __all__ = [
     "Tender",
     "TenderCPV",
     "TenderDocument",
+    "TenderDocumentContent",
+    "TenderDocumentExtraction",
+    "TenderDocumentFile",
+    "TenderDocumentPage",
     "TenderLot",
     "TenderLotCPV",
     "User",

@@ -69,6 +69,46 @@ async def db(session_factory) -> AsyncIterator[AsyncSession]:
         yield session
 
 
+@pytest.fixture
+async def session(db) -> AsyncSession:
+    """Alies de `db`. Els tests de la capa documental parlen de `session`."""
+    return db
+
+
+@pytest.fixture
+async def tender_document(session):
+    """Un TenderDocument minim, amb la seva Source i el seu Tender.
+
+    Els plecs son globals: aquesta fixture NO crea cap Company.
+    """
+    from app.models.enums import TenderDocumentType
+    from app.models.sources import Source
+    from app.models.tenders import Tender, TenderDocument
+
+    source = Source(code=f"test-{uuid.uuid4().hex[:8]}", name="Font de prova")
+    session.add(source)
+    await session.flush()
+
+    tender = Tender(
+        source_id=source.id,
+        external_id=f"exp-{uuid.uuid4().hex[:8]}",
+        title="Servei de manteniment integral dels equipaments municipals",
+    )
+    session.add(tender)
+    await session.flush()
+
+    document = TenderDocument(
+        tender_id=tender.id,
+        name="PCAP.pdf",
+        document_type=TenderDocumentType.OTHER,
+        url="https://example.com/pcap.pdf",
+    )
+    session.add(document)
+    await session.commit()
+    await session.refresh(document)
+    return document
+
+
 @pytest.fixture(autouse=True)
 def storage(tmp_path):
     backend = LocalFilesystemStorage(tmp_path / "storage")

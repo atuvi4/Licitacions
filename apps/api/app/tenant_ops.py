@@ -82,6 +82,12 @@ PUBLIC_TABLES = frozenset(
         "sources",
         "tender_cpvs",
         "tender_documents",
+        # La capa documental dels plecs es publica i global: els mateixos bytes
+        # es comparteixen entre tenants i no pengen de cap empresa.
+        "tender_document_contents",
+        "tender_document_extractions",
+        "tender_document_files",
+        "tender_document_pages",
         "tender_lot_cpvs",
         "tender_lots",
         "tenders",
