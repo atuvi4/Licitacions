@@ -1,0 +1,330 @@
+{
+  "dataset_id": "gold-v1",
+  "version": 1,
+  "created_at": "2026-09-07",
+  "description": "Requisits anotats a ma sobre plecs reals de PLACSP ja processats. Les cites son fragments literals de la pagina; les etiquetes (categoria, obligatorietat, operador, valor) son decisio humana. Cap sortida del model s'ha fet servir com a referencia.",
+  "revisions": [],
+  "cases": [
+    {
+      "case_id": "1-2026",
+      "expediente_number": "1/2026",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20000643",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "similitud definida per CPV"
+      ],
+      "notes": null,
+      "requirements": [
+        {
+          "gold_id": "exp-1",
+          "category": "experience",
+          "obligation": "mandatory",
+          "operator": null,
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "lookback_years": 3,
+            "cpv_codes": [
+              "34928400",
+              "45233293"
+            ],
+            "similarity_condition": "contratos similares definits per CPV"
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 5,
+          "quote": "Mediante la presentación de una relación de los principales suministros realizados de igual o similar naturaleza que los que constituyen el objeto del contrato en el curso de como máximo, los tres últimos años, en la que se indique el importe, la fecha y el destinatario, público o privado de los mismos. Se entenderá por \"contratos similares\" aquellos cuyas prestaciones se engloben en los siguientes CPV: 34928400-2 Mo",
+          "critical": null,
+          "notes": "Cas favorable: el plec defineix la similitud amb CPV explicits."
+        }
+      ],
+      "award_criteria": []
+    },
+    {
+      "case_id": "2025-04671",
+      "expediente_number": "2025-04671",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20367661",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "certificacions amb equivalents"
+      ],
+      "notes": null,
+      "requirements": [
+        {
+          "gold_id": "cert-1",
+          "category": "certification",
+          "obligation": "mandatory",
+          "operator": "one_of",
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "names": [
+              "ISO 9001",
+              "ISO 14001",
+              "IRIS"
+            ],
+            "equivalents_allowed": true
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 16,
+          "quote": "- ISO 9001 - ISO 14001 - IRIS - o Equivalentes En lo que respecta a la solvencia",
+          "critical": null,
+          "notes": "El plec admet equivalents: 4C no pot decidir equivalencies."
+        }
+      ],
+      "award_criteria": []
+    },
+    {
+      "case_id": "2026SE00013",
+      "expediente_number": "2026SE00013",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20367664",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "classificacio empresarial per referencia"
+      ],
+      "notes": null,
+      "requirements": [
+        {
+          "gold_id": "class-1",
+          "category": "business_classification",
+          "obligation": "mandatory",
+          "operator": null,
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "group": null,
+            "subgroup": null,
+            "category": null
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 11,
+          "quote": "grupo, subgrupo y categoría que, adecuados al objeto del presente contrato, se indiquen en el apartado 7.d) del cuadro de características . En ese caso el certificado se deberá acompañar de la corresp",
+          "critical": null,
+          "notes": "El plec remet a un apartat: grup i subgrup no son al text. 4C ha de demanar revisio."
+        }
+      ],
+      "award_criteria": []
+    },
+    {
+      "case_id": "300-2025-03877",
+      "expediente_number": "300/2025/03877",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20367606",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "plec molt llarg (95 pagines)",
+        "sense lots"
+      ],
+      "notes": null,
+      "requirements": [
+        {
+          "gold_id": "exp-1",
+          "category": "experience",
+          "obligation": "mandatory",
+          "operator": null,
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "lookback_years": 3,
+            "similarity_condition": "igual o similar naturaleza"
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 68,
+          "quote": "Una relación de los principales servicios o trabajos realizados de igual o similar naturaleza que los que constituyen el objeto del contrato en el curso de, como máximo los tres últimos años, en la que se indique el importe, la fecha y el destinatario, público o privado de los mismos. Requisitos mín",
+          "critical": null,
+          "notes": null
+        }
+      ],
+      "award_criteria": [
+        {
+          "gold_id": "award-1",
+          "name": "Oferta economica",
+          "points": 45.0,
+          "weight_percent": null,
+          "evaluation_type": "automatic",
+          "formula": null,
+          "document_name": "Plec de clausules administratives",
+          "page_number": 70,
+          "quote": "A la oferta económica se le otorgará una ponderación de 45 puntos. 2. El resto de criterios calculables mediante fórmula",
+          "notes": null
+        }
+      ]
+    },
+    {
+      "case_id": "422-2026",
+      "expediente_number": "422/2026",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20367629",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "PCAP + PPT",
+        "sense lots"
+      ],
+      "notes": null,
+      "requirements": [
+        {
+          "gold_id": "ins-1",
+          "category": "insurance",
+          "obligation": "mandatory",
+          "operator": "gte",
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "coverage_amount": 500000,
+            "currency": "EUR",
+            "type": "responsabilidad civil"
+          },
+          "document_name": "Plec de prescripcions tecniques",
+          "page_number": 4,
+          "quote": "El contratista vendrá obligado a mantener durante la vigencia del contrato una póliza de responsabilidad civil, al corriente de pago, por importe mínimo de 500.000,00 euros por siniestro. IX- PUBLICIDAD. - La publicidad",
+          "critical": null,
+          "notes": null
+        },
+        {
+          "gold_id": "eco-1",
+          "category": "economic_solvency",
+          "obligation": "mandatory",
+          "operator": "gte",
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "amount": 7450,
+            "currency": "EUR",
+            "period": "annual",
+            "years": 3
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 9,
+          "quote": "un volumen anua l de negocio en ese ámbito, referido al d e mayor volumen de los tres últimos, de al menos 7.450 € (50% el valor estimado del contrato). -Acre",
+          "critical": null,
+          "notes": null
+        }
+      ],
+      "award_criteria": [
+        {
+          "gold_id": "award-1",
+          "name": "Propuesta economica",
+          "points": 10.0,
+          "weight_percent": null,
+          "evaluation_type": "automatic",
+          "formula": null,
+          "document_name": "Plec de clausules administratives",
+          "page_number": 12,
+          "quote": "PROPUESTA ECONÓMICA (HASTA UN MÁXIMO DE 10 PUNTOS): La oferta económica se val orará de la for ma sig uiente: Se otorgará la puntuación máxima (10 puntos) a la oferta más económica, y la puntuación d",
+          "notes": null
+        }
+      ]
+    },
+    {
+      "case_id": "4249-2026",
+      "expediente_number": "4249/2026",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20367663",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "plec llarg",
+        "sense lots"
+      ],
+      "notes": null,
+      "requirements": [
+        {
+          "gold_id": "eco-1",
+          "category": "economic_solvency",
+          "obligation": "mandatory",
+          "operator": "gte",
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "amount": 60750,
+            "currency": "EUR",
+            "period": "annual",
+            "years": 3
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 10,
+          "quote": "Volumen anual de negocios, o bien volumen anual de negocios en el ámbito al que se refiera el contrato, referido al mejor ejercicio dentro de los tres últimos disponibles en función de las fechas de constitución o de inicio de actividades del empresario y de presentación de las ofertas por importe de una vez y medio el importe d",
+          "critical": null,
+          "notes": "L'import surt com a 1,5 x valor estimat, explicitat entre parentesis."
+        },
+        {
+          "gold_id": "exp-1",
+          "category": "experience",
+          "obligation": "mandatory",
+          "operator": null,
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "lookback_years": 3,
+            "similarity_condition": "igual o similar naturaleza"
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 10,
+          "quote": "Una relación de los principales servicios o trabajos realizados de igual o similar naturaleza que los que constituyen el objeto del contrato en el curso de, como máximo los tres últimos años, en la que se indique el importe, la fecha y el destinatario, público o privado de los mismos; cuando sea nec",
+          "critical": null,
+          "notes": "Sense minim de projectes ni import: 4C no ho pot automatitzar."
+        },
+        {
+          "gold_id": "ins-1",
+          "category": "insurance",
+          "obligation": "mandatory",
+          "operator": "gte",
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "coverage_amount": 1000000,
+            "currency": "EUR",
+            "type": "responsabilidad civil"
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 17,
+          "quote": "Justificante de la póliza de seguros de responsabilidad civil con un importe mínimo frente a terceros de 1,000.000,00 euros. Cláusula 21. Garantía provisional N",
+          "critical": null,
+          "notes": null
+        }
+      ],
+      "award_criteria": []
+    },
+    {
+      "case_id": "TSA0082096-040",
+      "expediente_number": "TSA0082096-040",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20367658",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "PPT",
+        "organisme diferent"
+      ],
+      "notes": null,
+      "requirements": [
+        {
+          "gold_id": "ins-1",
+          "category": "insurance",
+          "obligation": "mandatory",
+          "operator": "gte",
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "coverage_amount": 500000,
+            "currency": "EUR",
+            "type": "responsabilidad civil"
+          },
+          "document_name": "Plec de prescripcions tecniques",
+          "page_number": 4,
+          "quote": "El ofertante tendrá suscrito seguro de Responsabilidad Civil de Explotación con cobertura de 500.000 euros por daños materiales y personales con un sublímite por víctima de 300.000 €.",
+          "critical": null,
+          "notes": null
+        }
+      ],
+      "award_criteria": []
+    }
+  ]
+}

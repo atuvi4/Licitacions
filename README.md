@@ -50,6 +50,7 @@ embedding ni cap similitud semàntica — el motor és determinista i reproduïb
 | Validació determinista de cites: sense evidència no hi ha requisit | ✅ |
 | Compliment empresa ↔ requisits, determinista i auditable | ✅ |
 | Hard blockers (potencials i confirmats) i elegibilitat | ✅ |
+| Benchmark reproduïble de l'extractor amb gold dataset anotat a mà | ✅ |
 | Generació d'ofertes, memòries, RAG, OCR | ❌ (fase següent) |
 
 ---
@@ -80,7 +81,8 @@ Next.js (apps/web)  ──rewrite /bff/* ──►  FastAPI (apps/api)
 Més detall a [`docs/architecture.md`](docs/architecture.md),
 [`docs/data-model.md`](docs/data-model.md), [`docs/matching.md`](docs/matching.md),
 [`docs/documents.md`](docs/documents.md), [`docs/requirements.md`](docs/requirements.md)
-i [`docs/compliance.md`](docs/compliance.md).
+[`docs/compliance.md`](docs/compliance.md) i
+[`docs/evaluation.md`](docs/evaluation.md).
 
 ---
 
