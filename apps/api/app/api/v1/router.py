@@ -18,6 +18,7 @@ from app.api.v1.routers import (
     people,
     profile,
     projects,
+    tender_documents,
     tenders,
 )
 
@@ -42,6 +43,8 @@ api_router.include_router(companies.router)
 api_router.include_router(cpv.catalog_router)
 # Licitacions: dades publiques i globals, no pengen de cap empresa.
 api_router.include_router(tenders.router)
+# Plecs: tambe publics i globals. El processat es manual des de la fitxa.
+api_router.include_router(tender_documents.router)
 # Pre-fit: dada de tenant, penja de /companies/{company_id}.
 api_router.include_router(matching.router)
 api_router.include_router(company_scoped)
