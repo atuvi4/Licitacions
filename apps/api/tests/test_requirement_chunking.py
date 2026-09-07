@@ -12,7 +12,11 @@ from app.services.requirement_chunking import (
 
 
 def make_document(
-    pages: int, *, doc_id: str = "doc-1", extraction_id: str = "ext-1", dtype: str = "administrative_terms"
+    pages: int,
+    *,
+    doc_id: str = "doc-1",
+    extraction_id: str = "ext-1",
+    dtype: str = "administrative_terms",
 ) -> AnalyzableDocument:
     return AnalyzableDocument(
         tender_document_id=doc_id,

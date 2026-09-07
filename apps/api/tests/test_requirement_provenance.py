@@ -156,7 +156,10 @@ async def test_the_same_input_and_config_reuses_the_run(session, processed):
     assert second.reused is True
     assert second.run.id == first.run.id
     assert len(fake.SENT_PAYLOADS) == calls_before, "no s'ha de tornar a cridar el proveidor"
-    assert await session.scalar(sa.select(sa.func.count()).select_from(RequirementExtractionRun)) == 1
+    total = await session.scalar(
+        sa.select(sa.func.count()).select_from(RequirementExtractionRun)
+    )
+    assert total == 1
 
 
 async def test_force_creates_a_new_run(session, processed):

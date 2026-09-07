@@ -27,7 +27,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
@@ -41,11 +41,7 @@ from app.ai.prompts.requirements_v1 import (
     SYSTEM_PROMPT,
     build_user_message,
 )
-from app.ai.provider import (
-    ProviderError,
-    StructuredLLMProvider,
-    get_provider,
-)
+from app.ai.provider import ProviderError, StructuredLLMProvider, get_provider
 from app.ai.schemas import (
     SCHEMA_VERSION,
     AwardCriterionOut,
@@ -59,6 +55,7 @@ from app.core.errors import AnalysisInProgressError, NothingAnalyzableError
 from app.models.enums import (
     AnalysisRunStatus,
     ExtractionStatus,
+    RequirementCategory,
     RequirementScope,
     ReviewStatus,
 )
@@ -162,12 +159,14 @@ async def collect_analyzable_documents(
             # Seleccio automatica conservadora; la UI en pot demanar d'altres.
             continue
 
-        def skip(reason: str) -> None:
+        def skip(reason: str, *, doc=document, doc_type=document_type) -> None:
+            # Els valors es lliguen per defecte: una clausura que capturi la
+            # variable del bucle registraria el document equivocat.
             skipped.append(
                 SkippedDocument(
-                    tender_document_id=str(document.id),
-                    document_name=document.name,
-                    document_type=document_type,
+                    tender_document_id=str(doc.id),
+                    document_name=doc.name,
+                    document_type=doc_type,
                     reason=reason,
                 )
             )
@@ -551,9 +550,12 @@ async def analyze_tender_requirements(
         )
         run.chunks_completed += 1
 
+    conflicts = await check_deadline_consistency(session, run, tender)
+
     await _finalise_run(
         session=session,
         run=run,
+        conflicts=conflicts,
         tally=tally,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -746,11 +748,68 @@ def _persist_chunk(
         tally.award_criteria += 1
 
 
+#: Marca de conflicte entre el que diu el plec i el que diu la metadada de PLACSP.
+DEADLINE_CONFLICT_GROUP = "deadline_vs_tender_metadata"
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+async def check_deadline_consistency(
+    session: AsyncSession, run: RequirementExtractionRun, tender: Tender
+) -> int:
+    """Compara els terminis extrets amb `Tender.deadline_at`. Determinista.
+
+    Si divergeixen NO es substitueix la metadada: es marca el requisit com a
+    conflicte perque algu ho miri. Decidir quina de les dues dates mana es una
+    interpretacio, i aquesta capa no interpreta.
+    """
+    if tender.deadline_at is None:
+        return 0
+
+    expected = tender.deadline_at.date()
+    conflicts = 0
+    candidates = (
+        await session.scalars(
+            sa.select(Requirement).where(
+                Requirement.run_id == run.id,
+                Requirement.category == RequirementCategory.DEADLINE,
+            )
+        )
+    ).all()
+
+    for requirement in candidates:
+        value = requirement.value_json or {}
+        extracted = _parse_iso_date(value.get("date"))
+        # Nomes es compara el termini de presentacio, no una visita o una garantia.
+        if extracted is None or value.get("kind") not in (None, "submission", "deadline"):
+            continue
+        if extracted != expected:
+            requirement.has_conflict = True
+            requirement.conflict_group = DEADLINE_CONFLICT_GROUP
+            requirement.review_status = ReviewStatus.NEEDS_REVIEW
+            conflicts += 1
+
+    if conflicts:
+        logger.info(
+            "requirements.deadline.conflict",
+            extra={"run_id": str(run.id), "conflicts": conflicts, "metadata_date": str(expected)},
+        )
+    return conflicts
+
+
 async def _finalise_run(
     *,
     session: AsyncSession,
     run: RequirementExtractionRun,
     tally: _ChunkTally,
+    conflicts: int,
     input_tokens: int,
     output_tokens: int,
     request_ids: list[str],
@@ -805,6 +864,7 @@ async def _finalise_run(
             "rejected": run.requirements_rejected,
             "award_criteria": run.award_criteria_extracted,
             "evidence_rejected": run.evidence_rejected,
+            "conflicts": conflicts,
             # Mai el text dels plecs ni cap clau d'API.
             "input_tokens": run.input_tokens,
             "output_tokens": run.output_tokens,

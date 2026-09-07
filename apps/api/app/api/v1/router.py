@@ -18,6 +18,7 @@ from app.api.v1.routers import (
     people,
     profile,
     projects,
+    requirements,
     tender_documents,
     tenders,
 )
@@ -45,6 +46,8 @@ api_router.include_router(cpv.catalog_router)
 api_router.include_router(tenders.router)
 # Plecs: tambe publics i globals. El processat es manual des de la fitxa.
 api_router.include_router(tender_documents.router)
+# Analisi de plecs: derivada de documents publics, tambe global.
+api_router.include_router(requirements.router)
 # Pre-fit: dada de tenant, penja de /companies/{company_id}.
 api_router.include_router(matching.router)
 api_router.include_router(company_scoped)
