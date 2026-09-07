@@ -14,6 +14,9 @@ from pydantic import BaseModel, Field
 
 from app.models.enums import (
     ContractType,
+    DownloadStatus,
+    ExtractionQuality,
+    ExtractionStatus,
     IngestionStatus,
     ProcedureType,
     ProcessingStatus,
@@ -82,6 +85,28 @@ class TenderLotRead(ORMModel):
     cpvs: list[TenderCPVRead] = []
 
 
+class TenderDocumentFileSummary(ORMModel):
+    """Estat documental d'un document, prou per pintar una fila de la llista.
+
+    Es planer expressament: la fitxa no ha de fer una crida per document per
+    saber si un plec ja s'ha processat.
+    """
+
+    file_id: uuid.UUID
+    version_number: int
+    download_status: DownloadStatus
+    file_size: int | None = None
+    sha256: str | None = None
+    extraction_status: ExtractionStatus | None = None
+    quality: ExtractionQuality | None = None
+    page_count: int | None = None
+    text_char_count: int | None = None
+    ocr_candidate: bool = False
+    extraction_id: uuid.UUID | None = None
+    processed_at: datetime | None = None
+    error_code: str | None = None
+
+
 class TenderDocumentRead(ORMModel):
     id: uuid.UUID
     name: str
@@ -90,6 +115,8 @@ class TenderDocumentRead(ORMModel):
     url: str
     mime_type: str | None = None
     published_at: date | None = None
+    #: Versio actual descarregada, si n'hi ha cap. `None` = mai processat.
+    latest_file: TenderDocumentFileSummary | None = None
 
 
 class TenderListItem(ORMModel):

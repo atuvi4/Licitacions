@@ -171,3 +171,52 @@ class TestIngestionRuns:
         """La ingesta s'engega per CLI, no exposada a la xarxa."""
         response = await client_a.post("/api/v1/ingestion/placsp/run", json={})
         assert response.status_code in {404, 405}
+
+
+async def test_the_tender_detail_reports_the_documental_state(client_a, tender_document):
+    """Sense processar, un document no te cap fitxer: el camp ha de ser null."""
+    response = await client_a.get(f"/api/v1/tenders/{tender_document.tender_id}")
+
+    assert response.status_code == 200
+    documents = response.json()["documents"]
+    assert len(documents) == 1
+    assert documents[0]["latest_file"] is None
+
+
+async def test_the_tender_detail_summarises_a_processed_document(client_a, tender_document):
+    import httpx
+
+    from app.services import tender_document_processing as processing
+    from tests.fixtures.pdf_builder import build_pdf
+
+    pdf = build_pdf(["Plec de clausules administratives particulars. " * 8] * 2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=False
+    ) as fake:
+        original = processing.download_document
+
+        async def patched(url, *, client=None, resolver=None):
+            return await original(url, client=fake, resolver=lambda h, p: ["93.184.216.34"])
+
+        processing.download_document = patched
+        try:
+            await client_a.post(
+                f"/api/v1/tenders/{tender_document.tender_id}"
+                f"/documents/{tender_document.id}/process"
+            )
+        finally:
+            processing.download_document = original
+
+    response = await client_a.get(f"/api/v1/tenders/{tender_document.tender_id}")
+    summary = response.json()["documents"][0]["latest_file"]
+
+    assert summary["download_status"] == "downloaded"
+    assert summary["extraction_status"] == "extracted"
+    assert summary["page_count"] == 2
+    assert summary["quality"] == "good"
+    assert summary["ocr_candidate"] is False
+    assert "storage_key" not in response.text

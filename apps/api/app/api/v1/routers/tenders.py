@@ -22,6 +22,11 @@ from app.api.v1.tender_filters import TenderFilters, tender_filters
 from app.core.errors import NotFoundError
 from app.models.cpv import CPVCode
 from app.models.sources import IngestionRun, Source, SourceRecord
+from app.models.tender_documents import (
+    TenderDocumentContent,
+    TenderDocumentExtraction,
+    TenderDocumentFile,
+)
 from app.models.tenders import Buyer, Tender, TenderLot
 from app.schemas.tenders import (
     BuyerRead,
@@ -30,6 +35,7 @@ from app.schemas.tenders import (
     Page,
     TenderCPVRead,
     TenderDetail,
+    TenderDocumentFileSummary,
     TenderDocumentRead,
     TenderFacets,
     TenderLotRead,
@@ -176,6 +182,55 @@ async def _load_tender(session, tender_id: uuid.UUID) -> Tender:
     return tender
 
 
+async def _document_summaries(
+    session, document_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, TenderDocumentFileSummary]:
+    """Resum de l'estat documental de cada document, en una sola consulta.
+
+    Nomes la versio vigent: l'historial de versions es demana explicitament a
+    `/documents/{id}/files`.
+    """
+    if not document_ids:
+        return {}
+
+    rows = await session.execute(
+        sa.select(TenderDocumentFile, TenderDocumentContent, TenderDocumentExtraction)
+        .outerjoin(
+            TenderDocumentContent, TenderDocumentContent.id == TenderDocumentFile.content_id
+        )
+        .outerjoin(
+            TenderDocumentExtraction,
+            sa.and_(
+                TenderDocumentExtraction.content_id == TenderDocumentFile.content_id,
+                TenderDocumentExtraction.is_current.is_(True),
+            ),
+        )
+        .where(
+            TenderDocumentFile.tender_document_id.in_(document_ids),
+            TenderDocumentFile.is_current.is_(True),
+        )
+    )
+
+    summaries: dict[uuid.UUID, TenderDocumentFileSummary] = {}
+    for file, content, extraction in rows:
+        summaries[file.tender_document_id] = TenderDocumentFileSummary(
+            file_id=file.id,
+            version_number=file.version_number,
+            download_status=file.download_status,
+            file_size=content.file_size if content else None,
+            sha256=content.sha256 if content else None,
+            extraction_status=extraction.status if extraction else None,
+            quality=extraction.quality if extraction else None,
+            page_count=extraction.page_count if extraction else None,
+            text_char_count=extraction.text_char_count if extraction else None,
+            ocr_candidate=bool(extraction.ocr_candidate) if extraction else False,
+            extraction_id=extraction.id if extraction else None,
+            processed_at=file.downloaded_at,
+            error_code=file.error_code or (extraction.error_code if extraction else None),
+        )
+    return summaries
+
+
 @router.get("/tenders/{tender_id}", response_model=TenderDetail, summary="Fitxa de licitacio")
 async def get_tender(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
     tender = await _load_tender(session, tender_id)
@@ -195,6 +250,8 @@ async def get_tender(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
                 sa.select(SourceRecord).where(SourceRecord.id == tender.latest_source_record_id)
             )
         ).scalar_one_or_none()
+
+    summaries = await _document_summaries(session, [doc.id for doc in tender.documents])
 
     return TenderDetail(
         id=tender.id,
@@ -247,7 +304,12 @@ async def get_tender(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
             )
             for lot in tender.lots
         ],
-        documents=[TenderDocumentRead.model_validate(document) for document in tender.documents],
+        documents=[
+            TenderDocumentRead.model_validate(document).model_copy(
+                update={"latest_file": summaries.get(document.id)}
+            )
+            for document in tender.documents
+        ],
         traceability=TenderTraceability(
             source_code=source.code,
             source_name=source.name,
