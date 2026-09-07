@@ -2,15 +2,19 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
 
 import {
   Badge,
+  Button,
   Card,
   CardHeader,
+  Checkbox,
   EmptyState,
   ErrorNotice,
   PageHeader,
   Skeleton,
+  Spinner,
   Table,
   Td,
   Th,
@@ -18,12 +22,17 @@ import {
 } from "@/components/ui";
 import { PreFitBadge, PreFitPanel } from "@/components/PreFit";
 import { useSession } from "@/components/SessionProvider";
+import { api } from "@/lib/api";
 import { formatDate, formatMoney } from "@/lib/format";
 import { useResource } from "@/lib/hooks";
 import type { TenderMatch } from "@/lib/matching";
 import {
   CONTRACT_TYPE_LABELS,
   daysUntilDeadline,
+  DOCUMENT_STATE_LABELS,
+  DOCUMENT_STATE_TONES,
+  documentState,
+  formatBytes,
   formatDateTime,
   PROCEDURE_TYPE_LABELS,
   TENDER_DOCUMENT_LABELS,
@@ -53,6 +62,41 @@ export default function TenderDetailPage() {
   const match = useResource<TenderMatch>(
     companyId ? `/companies/${companyId}/matches/by-tender/${tenderId}` : null,
   );
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [processing, setProcessing] = useState<string | null>(null);
+  const [processError, setProcessError] = useState<string | null>(null);
+
+  function toggleSelected(documentId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(documentId)) next.delete(documentId);
+      else next.add(documentId);
+      return next;
+    });
+  }
+
+  async function processOne(documentId: string) {
+    setProcessing(documentId);
+    setProcessError(null);
+    try {
+      await api.post(`/tenders/${tenderId}/documents/${documentId}/process`, {});
+      await reload();
+    } catch (caught) {
+      setProcessError(caught instanceof Error ? caught.message : "No s'ha pogut processar.");
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  // Seqüencial i no en paral·lel: descarregar plecs de PLACSP en ràfega seria
+  // poc educat amb un servei públic, i el backend és síncron.
+  async function processSelected() {
+    for (const documentId of selected) {
+      await processOne(documentId);
+    }
+    setSelected(new Set());
+  }
 
   if (error) {
     return (
@@ -302,38 +346,76 @@ export default function TenderDetailPage() {
         <Card>
           <CardHeader
             title={`Documents (${data.documents.length})`}
-            description="Només enllaç i metadada: en aquesta fase no es descarrega ni s'analitza cap plec."
+            description="Processa un plec per descarregar-ne l'original i extreure'n el text per pàgina."
+            action={
+              selected.size > 0 ? (
+                <Button onClick={() => void processSelected()} disabled={processing !== null}>
+                  Processa {selected.size} document{selected.size > 1 ? "s" : ""}
+                </Button>
+              ) : null
+            }
           />
+          {processError && <ErrorNotice message={processError} />}
           {data.documents.length === 0 ? (
             <EmptyState title="Sense documents publicats" />
           ) : (
             <ul className="divide-y divide-border">
-              {data.documents.map((document) => (
-                <li
-                  key={document.id}
-                  className="flex items-center justify-between gap-4 px-5 py-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-[13px] font-medium text-ink">{document.name}</p>
-                    <p className="text-[12px] text-muted">
-                      {document.published_at ? formatDate(document.published_at) : "sense data"}
-                      {document.source_document_type_code &&
-                        ` · ${document.source_document_type_code}`}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    <Badge>{TENDER_DOCUMENT_LABELS[document.document_type]}</Badge>
-                    <a
-                      href={document.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[13px] text-brand hover:underline"
-                    >
-                      Obre ↗
-                    </a>
-                  </div>
-                </li>
-              ))}
+              {data.documents.map((document) => {
+                const file = document.latest_file;
+                const state = documentState(file);
+                const busy = processing === document.id;
+                return (
+                  <li key={document.id} className="flex items-center gap-4 px-5 py-3">
+                    <Checkbox
+                      label=""
+                      checked={selected.has(document.id)}
+                      onChange={() => toggleSelected(document.id)}
+                      aria-label={`Selecciona ${document.name}`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[13px] font-medium text-ink">{document.name}</p>
+                      <p className="text-[12px] text-muted">
+                        {TENDER_DOCUMENT_LABELS[document.document_type]}
+                        {" · "}
+                        {formatBytes(file?.file_size ?? null)}
+                        {file?.page_count ? ` · ${file.page_count} pàgines` : ""}
+                        {file?.processed_at ? ` · ${formatDate(file.processed_at)}` : ""}
+                      </p>
+                      {file?.error_code && (
+                        <p className="text-[12px] text-danger">Error: {file.error_code}</p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <Badge tone={DOCUMENT_STATE_TONES[state]}>
+                        {DOCUMENT_STATE_LABELS[state]}
+                      </Badge>
+                      {file?.extraction_id && (
+                        <Link
+                          href={`/licitacions/${data.id}/documents/${document.id}`}
+                          className="text-[13px] text-brand hover:underline"
+                        >
+                          Text
+                        </Link>
+                      )}
+                      <a
+                        href={document.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[13px] text-brand hover:underline"
+                      >
+                        Origen ↗
+                      </a>
+                      <Button
+                        variant="secondary"
+                        onClick={() => void processOne(document.id)}
+                        disabled={processing !== null}
+                      >
+                        {busy ? <Spinner /> : file ? "Reprocessa" : "Processa"}
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Card>

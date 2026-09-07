@@ -108,6 +108,33 @@ export interface TenderLot {
   cpvs: TenderCPV[];
 }
 
+export type DownloadStatus = "pending" | "downloading" | "downloaded" | "failed";
+
+export type ExtractionStatus =
+  | "pending"
+  | "extracting"
+  | "extracted"
+  | "skipped_unsupported"
+  | "failed";
+
+export type ExtractionQuality = "good" | "low_text" | "empty" | "failed" | "not_applicable";
+
+export interface TenderDocumentFileSummary {
+  file_id: string;
+  version_number: number;
+  download_status: DownloadStatus;
+  file_size: number | null;
+  sha256: string | null;
+  extraction_status: ExtractionStatus | null;
+  quality: ExtractionQuality | null;
+  page_count: number | null;
+  text_char_count: number | null;
+  ocr_candidate: boolean;
+  extraction_id: string | null;
+  processed_at: string | null;
+  error_code: string | null;
+}
+
 export interface TenderDocumentMeta {
   id: string;
   name: string;
@@ -116,6 +143,8 @@ export interface TenderDocumentMeta {
   url: string;
   mime_type: string | null;
   published_at: string | null;
+  /** Versió vigent descarregada. `null` = mai processat. */
+  latest_file: TenderDocumentFileSummary | null;
 }
 
 export interface TenderListItem {
@@ -302,4 +331,57 @@ export function buildQuery(params: Record<string, string | number | boolean | un
     search.set(key, String(value));
   }
   return search.toString();
+}
+
+
+export type DocumentState =
+  | "not_downloaded"
+  | "downloaded"
+  | "extracted"
+  | "ocr_candidate"
+  | "unsupported"
+  | "error";
+
+/**
+ * Estat visible d'un document. Es deriva al frontend perquè és pura
+ * presentació: el backend ja publica els estats crus i no li'n cal cap de
+ * combinat.
+ */
+export function documentState(file: TenderDocumentFileSummary | null): DocumentState {
+  if (!file) return "not_downloaded";
+  if (file.download_status === "failed") return "error";
+  if (file.download_status !== "downloaded") return "not_downloaded";
+  if (file.extraction_status === "failed") return "error";
+  if (file.extraction_status === "skipped_unsupported") return "unsupported";
+  if (file.extraction_status !== "extracted") return "downloaded";
+  return file.ocr_candidate ? "ocr_candidate" : "extracted";
+}
+
+export const DOCUMENT_STATE_LABELS: Record<DocumentState, string> = {
+  not_downloaded: "No descarregat",
+  downloaded: "Descarregat",
+  extracted: "Text extret",
+  ocr_candidate: "Poc text · possible escaneig",
+  unsupported: "Sense extracció de text",
+  error: "Error",
+};
+
+export const DOCUMENT_STATE_TONES: Record<
+  DocumentState,
+  "neutral" | "success" | "warning" | "danger"
+> = {
+  not_downloaded: "neutral",
+  downloaded: "neutral",
+  extracted: "success",
+  ocr_candidate: "warning",
+  unsupported: "neutral",
+  error: "danger",
+};
+
+/** Mida llegible. `null` quan encara no s'ha descarregat res. */
+export function formatBytes(bytes: number | null): string {
+  if (bytes === null || bytes === undefined) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} kB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
