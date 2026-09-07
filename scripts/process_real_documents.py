@@ -22,6 +22,7 @@ import sqlalchemy as sa  # noqa: E402
 
 from app.db.session import SessionFactory  # noqa: E402
 from app.models.tender_documents import TenderDocumentExtraction  # noqa: E402
+from app.models.enums import TenderDocumentType  # noqa: E402
 from app.models.tenders import Tender, TenderDocument  # noqa: E402
 from app.services.tender_document_processing import process_tender_document  # noqa: E402
 
@@ -29,36 +30,53 @@ from app.services.tender_document_processing import process_tender_document  # n
 HARD_LIMIT = 20
 
 
+# PLACSP no publica els plecs amb una URL acabada en `.pdf`: els serveix per un
+# servlet opac (`GetDocumentByIdServlet?cifrado=...`) i deixa `mime_type` buit.
+# Per tant NO es pot filtrar per extensio ni per MIME: el senyal utilitzable es
+# el tipus de document. El format real es decideix pels magic bytes en baixar.
+REPRESENTATIVE_TYPES = (
+    TenderDocumentType.ADMINISTRATIVE_TERMS,  # PCAP
+    TenderDocumentType.TECHNICAL_TERMS,       # PPT
+    TenderDocumentType.ADDITIONAL,            # annexos
+)
+
+
 async def pick_documents(session, limit: int) -> list[tuple[Tender, TenderDocument]]:
-    """Tria documents que semblin PDF, d'expedients diferents.
+    """Tria documents representatius, d'expedients diferents.
 
-    Un document per expedient: volem varietat d'organs i de generadors de PDF,
-    no cinc annexos del mateix plec.
+    Un document per expedient i rotant entre PCAP, PPT i annex: volem varietat
+    d'organs i de generadors de PDF, no cinc annexos del mateix plec.
     """
-    rows = (
-        await session.execute(
-            sa.select(Tender, TenderDocument)
-            .join(TenderDocument, TenderDocument.tender_id == Tender.id)
-            .where(
-                sa.or_(
-                    TenderDocument.url.ilike("%.pdf"),
-                    TenderDocument.mime_type == "application/pdf",
-                )
-            )
-            .order_by(Tender.publication_date.desc().nullslast())
-            .limit(limit * 10)
-        )
-    ).all()
-
     picked: list[tuple[Tender, TenderDocument]] = []
-    seen: set = set()
-    for tender, document in rows:
-        if tender.id in seen:
-            continue
-        seen.add(tender.id)
-        picked.append((tender, document))
-        if len(picked) >= limit:
-            break
+    seen_tenders: set = set()
+
+    # Es recorren els tipus en rotacio perque la mostra cobreixi els tres.
+    per_type = {}
+    for document_type in REPRESENTATIVE_TYPES:
+        per_type[document_type] = (
+            await session.execute(
+                sa.select(Tender, TenderDocument)
+                .join(TenderDocument, TenderDocument.tender_id == Tender.id)
+                .where(TenderDocument.document_type == document_type)
+                .order_by(Tender.publication_date.desc().nullslast())
+                .limit(limit * 4)
+            )
+        ).all()
+
+    index = 0
+    while len(picked) < limit and index < limit * 4:
+        for document_type in REPRESENTATIVE_TYPES:
+            rows = per_type[document_type]
+            if index >= len(rows):
+                continue
+            tender, document = rows[index]
+            if tender.id in seen_tenders:
+                continue
+            seen_tenders.add(tender.id)
+            picked.append((tender, document))
+            if len(picked) >= limit:
+                break
+        index += 1
     return picked
 
 
@@ -78,7 +96,10 @@ async def main() -> int:
         print(f"{len(selection)} documents seleccionats.\n")
         if args.dry_run:
             for tender, document in selection:
-                print(f"  {tender.expediente_number or tender.external_id} :: {document.name}")
+                print(
+                    f"  {tender.expediente_number or tender.external_id} "
+                    f"[{document.document_type.value}] :: {document.name}"
+                )
             return 0
 
         header = (
