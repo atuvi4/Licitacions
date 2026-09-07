@@ -109,9 +109,45 @@ async def tender_document(session):
     return document
 
 
+@pytest.fixture
+async def second_tender_document(session, tender_document):
+    """Un altre TenderDocument, del mateix Tender, amb una URL diferent."""
+    from app.models.enums import TenderDocumentType
+    from app.models.tenders import TenderDocument
+
+    document = TenderDocument(
+        tender_id=tender_document.tender_id,
+        name="PCAP-copia.pdf",
+        document_type=TenderDocumentType.OTHER,
+        url="https://example.com/altra-ruta/pcap-copia.pdf",
+    )
+    session.add(document)
+    await session.commit()
+    await session.refresh(document)
+    return document
+
+
+class CountingStorage(LocalFilesystemStorage):
+    """Storage local que porta el compte de les pujades.
+
+    Serveix per demostrar una absencia: que deduplicar per SHA-256 evita de
+    veritat una segona pujada, no nomes una segona fila a la base de dades.
+    """
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.uploads: list[str] = []
+
+    async def upload(self, key: str, data: bytes, content_type: str) -> None:
+        self.uploads.append(key)
+        await super().upload(key, data, content_type)
+
+
+# Segueix sent autouse: tots els tests han de tenir un backend temporal, tant si
+# el demanen com si no. Els que el demanen, a mes, en poden comptar les pujades.
 @pytest.fixture(autouse=True)
 def storage(tmp_path):
-    backend = LocalFilesystemStorage(tmp_path / "storage")
+    backend = CountingStorage(tmp_path / "storage")
     set_storage(backend)
     yield backend
     set_storage(None)
