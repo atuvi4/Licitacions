@@ -48,7 +48,9 @@ embedding ni cap similitud semàntica — el motor és determinista i reproduïb
 | Extracció de requisits del plec amb IA i evidència citable | ✅ |
 | Criteris d'adjudicació amb la seva font | ✅ |
 | Validació determinista de cites: sense evidència no hi ha requisit | ✅ |
-| Go/No-Go, comparació amb el perfil d'empresa, RAG, OCR | ❌ (fase següent) |
+| Compliment empresa ↔ requisits, determinista i auditable | ✅ |
+| Hard blockers (potencials i confirmats) i elegibilitat | ✅ |
+| Generació d'ofertes, memòries, RAG, OCR | ❌ (fase següent) |
 
 ---
 
@@ -77,7 +79,8 @@ Next.js (apps/web)  ──rewrite /bff/* ──►  FastAPI (apps/api)
 
 Més detall a [`docs/architecture.md`](docs/architecture.md),
 [`docs/data-model.md`](docs/data-model.md), [`docs/matching.md`](docs/matching.md),
-[`docs/documents.md`](docs/documents.md) i [`docs/requirements.md`](docs/requirements.md).
+[`docs/documents.md`](docs/documents.md), [`docs/requirements.md`](docs/requirements.md)
+i [`docs/compliance.md`](docs/compliance.md).
 
 ---
 

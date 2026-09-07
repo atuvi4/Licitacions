@@ -21,12 +21,14 @@ import {
   Tr,
 } from "@/components/ui";
 import { PreFitBadge, PreFitPanel } from "@/components/PreFit";
+import { ComplianceSection } from "@/components/ComplianceSection";
 import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
 import { useSession } from "@/components/SessionProvider";
 import { api } from "@/lib/api";
 import { formatDate, formatMoney } from "@/lib/format";
 import { useResource } from "@/lib/hooks";
 import type { TenderMatch } from "@/lib/matching";
+import type { Compliance } from "@/lib/compliance";
 import type { RequirementAnalysis } from "@/lib/requirements";
 import {
   CONTRACT_TYPE_LABELS,
@@ -67,6 +69,9 @@ export default function TenderDetailPage() {
 
   const analysis = useResource<RequirementAnalysis>(
     `/tenders/${tenderId}/analysis/requirements`,
+  );
+  const compliance = useResource<Compliance>(
+    companyId ? `/companies/${companyId}/tenders/${tenderId}/compliance` : null,
   );
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -433,6 +438,17 @@ export default function TenderDetailPage() {
           loading={analysis.loading}
           error={analysis.error}
           onReload={analysis.reload}
+        />
+
+        {/* ------------------------------------ Compliment de l'empresa --- */}
+        <ComplianceSection
+          tenderId={tenderId}
+          companyId={companyId}
+          compliance={compliance.data}
+          loading={compliance.loading}
+          error={compliance.error}
+          prefitScore={match.data?.score ?? null}
+          onReload={compliance.reload}
         />
 
         {/* --------------------------------------------------- Historial --- */}

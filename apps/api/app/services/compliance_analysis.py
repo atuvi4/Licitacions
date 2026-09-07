@@ -49,7 +49,7 @@ from app.models.enums import (
 from app.models.identity import Company
 from app.models.matching import CompanyTenderMatch
 from app.models.requirements import Requirement, RequirementExtractionRun
-from app.models.tenders import Tender
+from app.models.tenders import Tender, TenderLot
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +163,11 @@ async def analyze_company_compliance(
     )
 
     deadline = tender.deadline_at.date() if tender.deadline_at else None
+    # Si l'expedient no te lots, un abast desconegut no es ambigu.
+    lot_count = await session.scalar(
+        sa.select(sa.func.count()).select_from(TenderLot).where(TenderLot.tender_id == tender.id)
+    )
+    tender_has_lots = bool(lot_count)
     rows: list[tuple] = []
 
     for requirement in requirements:
@@ -170,7 +175,9 @@ async def analyze_company_compliance(
         if requirement.review_status == ReviewStatus.REJECTED:
             continue
 
-        applicable = applies_to_lot(requirement, tender_lot_id)
+        applicable = applies_to_lot(
+            requirement, tender_lot_id, tender_has_lots=tender_has_lots
+        )
         if applicable is False:
             outcome = not_applicable()
         elif applicable is None:

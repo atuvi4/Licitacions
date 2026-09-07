@@ -84,13 +84,20 @@ def assess_requirement(
     )
 
 
-def applies_to_lot(requirement: Any, lot_id: Any | None) -> bool | None:
-    """Diu si el requisit aplica al lot demanat. `None` = no es pot saber."""
+def applies_to_lot(
+    requirement: Any, lot_id: Any | None, *, tender_has_lots: bool = True
+) -> bool | None:
+    """Diu si el requisit aplica al lot demanat. `None` = no es pot saber.
+
+    Un abast desconegut nomes es ambigu si l'expedient te lots. Si no en te, la
+    pregunta "a quin lot aplica?" no existeix, i tractar-la com a ambigua
+    silenciaria l'avaluacio real de tots els requisits.
+    """
     scope = requirement.scope
     if scope == RequirementScope.TENDER:
         return True
     if scope == RequirementScope.UNKNOWN:
-        return None
+        return True if not tender_has_lots else None
     if requirement.tender_lot_id is None:
         # Diu que es de lot pero no s'ha pogut resoldre quin.
         return None
