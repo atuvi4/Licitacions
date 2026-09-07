@@ -38,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="directori d'informes")
     parser.add_argument("--list", action="store_true", help="llista els datasets disponibles")
+    parser.add_argument(
+        "--include-draft",
+        action="store_true",
+        help="inclou anotacions en esborrany (exploracio; NO son metriques oficials)",
+    )
     return parser
 
 
@@ -53,11 +58,26 @@ async def run(args: argparse.Namespace) -> int:
         print(f"Dataset no valid: {exc}")
         return 1
 
+    coverage = dataset.coverage()
     print(
         f"Dataset {dataset.dataset_id} v{dataset.version}: {len(dataset.cases)} casos, "
         f"{dataset.total_requirements} requisits ({dataset.total_critical} critics), "
         f"{dataset.total_award_criteria} criteris."
     )
+    print(
+        f"  Anotacions: verificades={coverage['verified']} esborrany={coverage['draft']} "
+        f"necessiten_revisio={coverage['needs_review']} rebutjades={coverage['rejected']}"
+    )
+    if coverage["verified"] == 0 and not args.include_draft:
+        # Sense cap anotacio verificada no hi ha gold truth. Retornar xifres
+        # calculades sobre esborranys seria donar per mesurat el que no ho esta.
+        print(
+            "\nCap anotacio verificada: no hi ha gold truth i les metriques\n"
+            "oficials no son calculables. Revisa el dataset amb:\n"
+            f"  python -m app.evaluation.review --dataset {dataset.dataset_id}\n"
+            "O passa --include-draft per explorar (NO son metriques oficials)."
+        )
+        return 3
 
     try:
         provider = get_provider(args.provider)
@@ -92,6 +112,7 @@ async def run(args: argparse.Namespace) -> int:
             force=args.force,
             limit=args.limit,
             only_case=args.tender,
+            include_draft=args.include_draft,
         )
 
     print()

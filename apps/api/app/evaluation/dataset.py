@@ -29,6 +29,7 @@ from app.models.enums import (
     RequirementObligation,
     RequirementOperator,
     RequirementScope,
+    StrEnum,
 )
 
 #: Els datasets viuen fora del paquet, al costat del codi, versionats a Git.
@@ -52,11 +53,43 @@ CRITICAL_CATEGORIES: frozenset[RequirementCategory] = frozenset(
 )
 
 
+class AnnotationStatus(StrEnum):
+    """Fins a quin punt una anotacio es pot considerar veritat de referencia.
+
+    Una anotacio acabada d'escriure es un ESBORRANY, per be feta que estigui.
+    Nomes despres que una persona l'hagi comparada amb la pagina original passa
+    a `VERIFIED` i entra a les metriques oficials. Dir que un esborrany es gold
+    truth es exactament la mena d'afirmacio que aquest camp existeix per evitar.
+    """
+
+    DRAFT = "draft"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+    NEEDS_REVIEW = "needs_review"
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class GoldRequirement(StrictModel):
+class AnnotatedItem(StrictModel):
+    """Procedencia de l'anotacio, compartida per requisits i criteris."""
+
+    #: Comenca sempre com a esborrany. Ningu no s'autoverifica.
+    annotation_status: AnnotationStatus = AnnotationStatus.DRAFT
+    #: Qui l'ha escrita.
+    annotated_by: str | None = None
+    #: Qui l'ha revisada contra la pagina original. Diferent d'`annotated_by`.
+    reviewed_by: str | None = None
+    reviewed_at: date | None = None
+    review_note: str | None = None
+
+    @property
+    def is_verified(self) -> bool:
+        return self.annotation_status == AnnotationStatus.VERIFIED
+
+
+class GoldRequirement(AnnotatedItem):
     """Un requisit anotat a ma sobre una pagina concreta."""
 
     gold_id: str
@@ -88,7 +121,7 @@ class GoldRequirement(StrictModel):
         )
 
 
-class GoldAwardCriterion(StrictModel):
+class GoldAwardCriterion(AnnotatedItem):
     gold_id: str
     name: str
     points: float | None = None
@@ -131,6 +164,15 @@ class GoldCase(StrictModel):
     def critical_requirements(self) -> list[GoldRequirement]:
         return [r for r in self.requirements if r.is_critical]
 
+    @property
+    def verified_requirements(self) -> list[GoldRequirement]:
+        """Les uniques que poden entrar al denominador oficial."""
+        return [r for r in self.requirements if r.is_verified]
+
+    @property
+    def verified_award_criteria(self) -> list[GoldAwardCriterion]:
+        return [c for c in self.award_criteria if c.is_verified]
+
 
 class GoldRevision(StrictModel):
     """Correccio del gold. Mai silenciosa."""
@@ -170,6 +212,28 @@ class GoldDataset(StrictModel):
     @property
     def total_award_criteria(self) -> int:
         return sum(len(case.award_criteria) for case in self.cases)
+
+    @property
+    def verified_requirements(self) -> int:
+        return sum(len(case.verified_requirements) for case in self.cases)
+
+    @property
+    def verified_award_criteria(self) -> int:
+        return sum(len(case.verified_award_criteria) for case in self.cases)
+
+    @property
+    def cases_with_verified(self) -> int:
+        return sum(1 for case in self.cases if case.verified_requirements)
+
+    def coverage(self) -> dict[str, int]:
+        """Recompte per estat. El report ho ensenya: draft NO es gold."""
+        counts = dict.fromkeys((s.value for s in AnnotationStatus), 0)
+        for case in self.cases:
+            for item in [*case.requirements, *case.award_criteria]:
+                counts[item.annotation_status.value] += 1
+        counts["cases"] = len(self.cases)
+        counts["cases_with_verified"] = self.cases_with_verified
+        return counts
 
     def case(self, case_id: str) -> GoldCase | None:
         return next((c for c in self.cases if c.case_id == case_id), None)

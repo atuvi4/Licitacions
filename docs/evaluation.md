@@ -55,6 +55,55 @@ Les cites són **fragments literals** de les pàgines reals, extrets per
 servir la producció. Les **etiquetes** (categoria, obligatorietat, operador,
 valor) són decisió humana.
 
+## Draft vs verified: què és gold truth
+
+Una anotació acabada d'escriure és un **esborrany**, per ben feta que estigui.
+Només després que una persona l'hagi comparada amb la pàgina original passa a
+`verified` i entra a les mètriques oficials.
+
+Cada anotació porta `annotation_status` (`draft` · `verified` · `rejected` ·
+`needs_review`), `annotated_by`, `reviewed_by`, `reviewed_at` i `review_note`.
+
+**Només `verified` compta al denominador de precision i recall.** Un esborrany
+pot ser correcte, però ningú no l'ha comprovat, i posar-lo a la mètrica
+convertiria una intuïció en una xifra oficial. Els esborranys es veuen al report
+—a la taula de cobertura— però no a les mètriques.
+
+Si no hi ha cap anotació verificada, el benchmark **no calcula mètriques**: surt
+amb codi 3 i diu què cal fer. `--include-draft` permet explorar, i llavors el
+report queda marcat com a **no oficial**.
+
+### Revisió humana
+
+```bash
+# 1. Genera la pàgina de revisió
+python -m app.evaluation.review --dataset gold-v1
+
+# 2. Obre-la, revisa cada anotació contra el text complet de la pàgina,
+#    prem [Verifica] / [Rebutja] / [Necessita revisió] i descarrega decisions.json
+
+# 3. Aplica les decisions i publica la versió revisada
+python -m app.evaluation.review --apply decisions.json     --reviewer "Nom Cognom" --promote gold-v1-reviewed
+```
+
+La pàgina és un fitxer HTML local: s'obre amb doble clic, no necessita servidor
+ni xarxa, i mostra cada anotació **al costat del text complet de la pàgina
+original amb la cita ressaltada** —que és l'única manera honesta de verificar-la.
+Les decisions s'acumulen al navegador i es descarreguen com un JSON.
+
+Per què en dos passos i no una aplicació amb servidor: perquè el resultat de la
+revisió ha de ser un fitxer versionable a Git, revisable en un pull request. Una
+base de dades amagaria qui va verificar què i quan.
+
+`--reviewer` és obligatori: una revisió sense signatura no és una revisió.
+
+### Versionat
+
+La revisió **no sobreescriu** `gold-v1`: en crea una versió nova
+(`gold-v1-reviewed`, versió 2). Un benchmark ha de poder dir exactament amb
+quina versió del dataset es va mesurar, i el resum en guarda `dataset_id` i
+`dataset_version`.
+
 ## Com s'aparellen predicció i gold
 
 Comparar dos conjunts de requisits té una trampa: decidir si dos enunciats són
@@ -176,9 +225,12 @@ plec. Cap `CompanyProfile`, cap pre-fit, cap compliance.
 
 ## Límits coneguts
 
-* **Mida del dataset.** 7 casos i 12 anotacions. L'objectiu són 10-15 expedients
-  i l'arquitectura escala a 30-50, però només s'anota el que es pot verificar
-  literalment sobre pàgines ja processades.
+* **Cap anotació verificada encara.** Les 16 anotacions són esborranys escrits
+  per l'assistent. Fins que una persona no les revisi, **el dataset no és gold
+  truth** i les mètriques oficials no es poden calcular.
+* **Mida del dataset.** 11 casos i 16 anotacions, dins de l'objectiu de 10-15
+  expedients. L'arquitectura escala a 30-50; només s'anota el que es pot
+  verificar literalment sobre pàgines ja processades.
 * **La similitud d'aparellament és textual**, no semàntica. Un requisit
   reformulat molt lliurement pot comptar com a no detectat. És conservador a
   propòsit.

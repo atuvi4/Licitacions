@@ -2,7 +2,7 @@
   "dataset_id": "gold-v1",
   "version": 1,
   "created_at": "2026-09-07",
-  "description": "Requisits anotats a ma sobre plecs reals de PLACSP ja processats. Les cites son fragments literals de la pagina; les etiquetes (categoria, obligatorietat, operador, valor) son decisio humana. Cap sortida del model s'ha fet servir com a referencia.",
+  "description": "Requisits anotats a ma sobre plecs reals de PLACSP ja processats. Les cites son fragments literals de la pagina; les etiquetes (categoria, obligatorietat, operador, valor) son decisio humana. Cap sortida del model s'ha fet servir com a referencia. ATENCIO: les anotacions neixen en estat 'draft'. NOMES les que una persona verifiqui contra la pagina original compten com a gold truth.",
   "revisions": [],
   "cases": [
     {
@@ -18,6 +18,11 @@
       "notes": null,
       "requirements": [
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "exp-1",
           "category": "experience",
           "obligation": "mandatory",
@@ -54,6 +59,11 @@
       "notes": null,
       "requirements": [
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "cert-1",
           "category": "certification",
           "obligation": "mandatory",
@@ -90,6 +100,11 @@
       "notes": null,
       "requirements": [
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "class-1",
           "category": "business_classification",
           "obligation": "mandatory",
@@ -111,6 +126,45 @@
       "award_criteria": []
     },
     {
+      "case_id": "26-095-3",
+      "expediente_number": "26/095/3",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20275276",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "plec de 105 pagines",
+        "transport public"
+      ],
+      "notes": null,
+      "requirements": [
+        {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
+          "gold_id": "ins-1",
+          "category": "insurance",
+          "obligation": "mandatory",
+          "operator": "gte",
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "coverage_amount": 1000000,
+            "currency": "EUR",
+            "type": "responsabilidad civil"
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 67,
+          "quote": "con un capital mínimo de 1.000.000,00 euros por siniestro y año. Se presentará certificad",
+          "critical": null,
+          "notes": null
+        }
+      ],
+      "award_criteria": []
+    },
+    {
       "case_id": "300-2025-03877",
       "expediente_number": "300/2025/03877",
       "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20367606",
@@ -124,6 +178,11 @@
       "notes": null,
       "requirements": [
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "exp-1",
           "category": "experience",
           "obligation": "mandatory",
@@ -143,6 +202,11 @@
       ],
       "award_criteria": [
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "award-1",
           "name": "Oferta economica",
           "points": 45.0,
@@ -170,6 +234,11 @@
       "notes": null,
       "requirements": [
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "ins-1",
           "category": "insurance",
           "obligation": "mandatory",
@@ -188,6 +257,11 @@
           "notes": null
         },
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "eco-1",
           "category": "economic_solvency",
           "obligation": "mandatory",
@@ -209,6 +283,11 @@
       ],
       "award_criteria": [
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "award-1",
           "name": "Propuesta economica",
           "points": 10.0,
@@ -236,6 +315,11 @@
       "notes": null,
       "requirements": [
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "eco-1",
           "category": "economic_solvency",
           "obligation": "mandatory",
@@ -255,6 +339,11 @@
           "notes": "L'import surt com a 1,5 x valor estimat, explicitat entre parentesis."
         },
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "exp-1",
           "category": "experience",
           "obligation": "mandatory",
@@ -272,6 +361,11 @@
           "notes": "Sense minim de projectes ni import: 4C no ho pot automatitzar."
         },
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "ins-1",
           "category": "insurance",
           "obligation": "mandatory",
@@ -293,6 +387,115 @@
       "award_criteria": []
     },
     {
+      "case_id": "LIC-10495",
+      "expediente_number": "LIC-10495",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/19979353",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "quadre de caracteristiques",
+        "import amb decimals"
+      ],
+      "notes": null,
+      "requirements": [
+        {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
+          "gold_id": "ins-1",
+          "category": "insurance",
+          "obligation": "mandatory",
+          "operator": "gte",
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "coverage_amount": 943736.64,
+            "currency": "EUR",
+            "type": "responsabilidad civil"
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 15,
+          "quote": "por un importe mínimo de 943.736,64 euros 34.B Otro importe",
+          "critical": null,
+          "notes": "Import amb decimals, dins d'una taula de caracteristiques."
+        }
+      ],
+      "award_criteria": []
+    },
+    {
+      "case_id": "P4107500C-2026-65",
+      "expediente_number": "P4107500C-2026/000065-PAAS",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/19879244",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "criteri economic de 75 punts"
+      ],
+      "notes": null,
+      "requirements": [],
+      "award_criteria": [
+        {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
+          "gold_id": "award-1",
+          "name": "Oferta economica",
+          "points": 75.0,
+          "weight_percent": null,
+          "evaluation_type": "automatic",
+          "formula": null,
+          "document_name": "Plec de clausules administratives",
+          "page_number": 13,
+          "quote": "Oferta económica, hasta un máximo de 75 puntos. La oferta ec",
+          "notes": null
+        }
+      ]
+    },
+    {
+      "case_id": "SER-2026-93411",
+      "expediente_number": "SER/2026/0000093411",
+      "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/19813941",
+      "title": null,
+      "buyer": null,
+      "has_lots": false,
+      "traits": [
+        "import derivat de l'anualitat mitjana"
+      ],
+      "notes": null,
+      "requirements": [
+        {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
+          "gold_id": "eco-1",
+          "category": "economic_solvency",
+          "obligation": "mandatory",
+          "operator": "gte",
+          "scope": "tender",
+          "lot_labels": [],
+          "value": {
+            "amount": 107167.83,
+            "currency": "EUR",
+            "period": "annual"
+          },
+          "document_name": "Plec de clausules administratives",
+          "page_number": 7,
+          "quote": "Se exige acreditar un volumen anual de negocios mínimo equivalente, al menos, a 107.167,83 euros, que equivale a la anualidad media del contrato. Para",
+          "critical": null,
+          "notes": "L'import es l'anualitat mitjana del contracte, explicitada al text."
+        }
+      ],
+      "award_criteria": []
+    },
+    {
       "case_id": "TSA0082096-040",
       "expediente_number": "TSA0082096-040",
       "tender_external_id": "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/20367658",
@@ -306,6 +509,11 @@
       "notes": null,
       "requirements": [
         {
+          "annotation_status": "draft",
+          "annotated_by": "assistant/4D",
+          "reviewed_by": null,
+          "reviewed_at": null,
+          "review_note": null,
           "gold_id": "ins-1",
           "category": "insurance",
           "obligation": "mandatory",

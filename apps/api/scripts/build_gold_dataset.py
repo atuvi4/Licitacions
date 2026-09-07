@@ -36,6 +36,10 @@ from app.services.evidence_validation import locate_quote  # noqa: E402
 # pagina; l'script n'extreu el text exacte al voltant.                          #
 # --------------------------------------------------------------------------- #
 
+#: Qui ha escrit les anotacions. Neixen totes com a `draft`: la verificacio
+#: es una passada humana separada (`python -m app.evaluation.review`).
+ANNOTATED_BY = "assistant/4D"
+
 ANNOTATIONS: list[dict] = [
     # ---- 4249/2026 -------------------------------------------------------
     {
@@ -197,6 +201,64 @@ ANNOTATIONS: list[dict] = [
         },
         "notes": "Cas favorable: el plec defineix la similitud amb CPV explicits.",
     },
+    # ---- 26/095/3 --------------------------------------------------------
+    {
+        "case": "26-095-3",
+        "gold_id": "ins-1",
+        "page": 67,
+        "anchor": "con un capital m",
+        "extend": 90,
+        "category": "insurance",
+        "obligation": "mandatory",
+        "operator": "gte",
+        "value": {
+            "coverage_amount": 1000000,
+            "currency": "EUR",
+            "type": "responsabilidad civil",
+        },
+    },
+    # ---- LIC-10495 -------------------------------------------------------
+    {
+        "case": "LIC-10495",
+        "gold_id": "ins-1",
+        "page": 15,
+        "anchor": "por un importe m",
+        "extend": 60,
+        "category": "insurance",
+        "obligation": "mandatory",
+        "operator": "gte",
+        "value": {
+            "coverage_amount": 943736.64,
+            "currency": "EUR",
+            "type": "responsabilidad civil",
+        },
+        "notes": "Import amb decimals, dins d'una taula de caracteristiques.",
+    },
+    # ---- SER/2026/0000093411 ---------------------------------------------
+    {
+        "case": "SER-2026-93411",
+        "gold_id": "eco-1",
+        "page": 7,
+        "anchor": "Se exige acreditar un volumen anual",
+        "extend": 150,
+        "category": "economic_solvency",
+        "obligation": "mandatory",
+        "operator": "gte",
+        "value": {"amount": 107167.83, "currency": "EUR", "period": "annual"},
+        "notes": "L'import es l'anualitat mitjana del contracte, explicitada al text.",
+    },
+    # ---- P4107500C-2026/000065-PAAS --------------------------------------
+    {
+        "case": "P4107500C-2026-65",
+        "gold_id": "award-1",
+        "page": 13,
+        "anchor": "Oferta econ",
+        "extend": 60,
+        "kind": "award",
+        "name": "Oferta economica",
+        "points": 75,
+        "evaluation_type": "automatic",
+    },
 ]
 
 CASE_META = {
@@ -207,6 +269,10 @@ CASE_META = {
     "2025-04671": ("2025-04671", ["certificacions amb equivalents"]),
     "1-2026": ("1/2026", ["similitud definida per CPV"]),
     "2026SE00013": ("2026SE00013", ["classificacio empresarial per referencia"]),
+    "26-095-3": ("26/095/3", ["plec de 105 pagines", "transport public"]),
+    "LIC-10495": ("LIC-10495", ["quadre de caracteristiques", "import amb decimals"]),
+    "SER-2026-93411": ("SER/2026/0000093411", ["import derivat de l'anualitat mitjana"]),
+    "P4107500C-2026-65": ("P4107500C-2026/000065-PAAS", ["criteri economic de 75 punts"]),
 }
 
 
@@ -272,6 +338,7 @@ async def main() -> int:
             if item.get("kind") == "award":
                 cases[case_id].award_criteria.append(
                     GoldAwardCriterion(
+                        annotated_by=ANNOTATED_BY,
                         gold_id=item["gold_id"],
                         name=item["name"],
                         points=item.get("points"),
@@ -286,6 +353,7 @@ async def main() -> int:
             else:
                 cases[case_id].requirements.append(
                     GoldRequirement(
+                        annotated_by=ANNOTATED_BY,
                         gold_id=item["gold_id"],
                         category=item["category"],
                         obligation=item["obligation"],
@@ -307,7 +375,9 @@ async def main() -> int:
             "Requisits anotats a ma sobre plecs reals de PLACSP ja processats. "
             "Les cites son fragments literals de la pagina; les etiquetes "
             "(categoria, obligatorietat, operador, valor) son decisio humana. "
-            "Cap sortida del model s'ha fet servir com a referencia."
+            "Cap sortida del model s'ha fet servir com a referencia. "
+            "ATENCIO: les anotacions neixen en estat 'draft'. NOMES les que una "
+            "persona verifiqui contra la pagina original compten com a gold truth."
         ),
         cases=sorted(cases.values(), key=lambda c: c.case_id),
     )

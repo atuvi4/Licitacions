@@ -389,3 +389,192 @@ def test_text_overlap_is_symmetric_and_bounded():
     assert text_overlap("a b c", "a b c") == 1.0
     assert text_overlap("a b", "c d") == 0.0
     assert text_overlap("", "x") == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# 4D.1 — Draft vs verified                                                      #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_new_annotation_is_a_draft_not_gold_truth():
+    """Ningu no s'autoverifica: una anotacio neix com a esborrany."""
+    from app.evaluation.dataset import AnnotationStatus
+
+    item = gold()
+
+    assert item.annotation_status == AnnotationStatus.DRAFT
+    assert item.is_verified is False
+    assert item.reviewed_by is None
+
+
+def test_the_shipped_dataset_has_no_verified_annotations_yet():
+    """Les anotacions de 4D es conserven, pero encara no son gold truth."""
+    dataset = load_dataset("gold-v1")
+    coverage = dataset.coverage()
+
+    # No es fixa el nombre exacte: el dataset creix. El que ha de ser cert es
+    # que hi ha anotacions i que cap no s'ha autoverificat.
+    assert coverage["draft"] > 0, "les anotacions de 4D es conserven"
+    assert coverage["verified"] == 0, "ningu no s'autoverifica"
+    assert dataset.verified_requirements == 0
+    assert all(
+        item.annotated_by
+        for case in dataset.cases
+        for item in [*case.requirements, *case.award_criteria]
+    ), "tota anotacio ha de dir qui l'ha escrita"
+
+
+def test_only_verified_annotations_reach_the_official_denominator():
+    """§4: una anotacio no verificada NO entra a la metrica oficial."""
+    from app.evaluation.dataset import AnnotationStatus, GoldCase
+
+    verified = gold(gold_id="v1", annotation_status=AnnotationStatus.VERIFIED)
+    draft = gold(gold_id="d1", page_number=30)
+    case = GoldCase(case_id="c1", requirements=[verified, draft])
+
+    assert [r.gold_id for r in case.verified_requirements] == ["v1"]
+    assert len(case.requirements) == 2
+
+
+@pytest.mark.parametrize(
+    "status", ["draft", "rejected", "needs_review"]
+)
+def test_an_unverified_annotation_is_never_counted(status: str):
+    from app.evaluation.dataset import AnnotationStatus, GoldCase
+
+    item = gold(annotation_status=AnnotationStatus(status))
+    case = GoldCase(case_id="c1", requirements=[item])
+
+    assert case.verified_requirements == []
+    assert case.requirements == [item], "pero segueix al dataset, no es perd"
+
+
+def test_a_missed_draft_does_not_hurt_the_official_recall():
+    """El cas que importa: un esborrany no pot inflar ni enfonsar la metrica."""
+    from app.evaluation.dataset import AnnotationStatus, GoldCase
+
+    verified = gold(gold_id="v1", annotation_status=AnnotationStatus.VERIFIED)
+    draft = gold(gold_id="d1", page_number=30)
+    case = GoldCase(case_id="c1", requirements=[verified, draft])
+
+    official = summarise_one(case.verified_requirements, [predicted()])
+    exploratory = summarise_one(case.requirements, [predicted()])
+
+    assert official.overall.recall == 1.0, "l'unica verificada s'ha detectat"
+    assert exploratory.overall.recall == 0.5, "amb esborranys la xifra seria una altra"
+
+
+def test_applying_a_decision_records_who_and_when():
+    """§1: la revisio deixa signatura. Sense signatura no es una revisio."""
+    from datetime import date as _date
+
+    from app.evaluation.dataset import AnnotationStatus, GoldCase, GoldDataset
+    from app.evaluation.review_page import apply_decisions
+
+    dataset = GoldDataset(
+        dataset_id="d", version=1, created_at=_date(2026, 9, 7), description="x",
+        cases=[GoldCase(case_id="c1", requirements=[gold()])],
+    )
+
+    updated, applied = apply_decisions(
+        dataset,
+        {"c1::g1": {"status": "verified", "note": "comprovat contra la p.27"}},
+        reviewer="Albert",
+        reviewed_on=_date(2026, 9, 8),
+    )
+
+    item = updated.cases[0].requirements[0]
+    assert item.annotation_status == AnnotationStatus.VERIFIED
+    assert item.reviewed_by == "Albert"
+    assert item.reviewed_at == _date(2026, 9, 8)
+    assert item.review_note == "comprovat contra la p.27"
+    assert applied["verified"] == 1
+
+
+def test_a_decision_for_an_unknown_id_is_reported_not_silently_ignored():
+    from datetime import date as _date
+
+    from app.evaluation.dataset import GoldCase, GoldDataset
+    from app.evaluation.review_page import apply_decisions
+
+    dataset = GoldDataset(
+        dataset_id="d", version=1, created_at=_date(2026, 9, 7), description="x",
+        cases=[GoldCase(case_id="c1", requirements=[gold()])],
+    )
+
+    _updated, applied = apply_decisions(
+        dataset, {"c1::no-existeix": {"status": "verified"}}, reviewer="Albert"
+    )
+
+    assert applied["unknown_id"] == 1
+    assert applied["verified"] == 0
+
+
+def test_review_does_not_overwrite_the_original_dataset():
+    """§6: la versio revisada es explicita, no una sobreescriptura silenciosa."""
+    from datetime import date as _date
+
+    from app.evaluation.dataset import GoldCase, GoldDataset
+    from app.evaluation.review_page import promote
+
+    dataset = GoldDataset(
+        dataset_id="gold-v1", version=1, created_at=_date(2026, 9, 7), description="x",
+        cases=[GoldCase(case_id="c1", requirements=[gold()])],
+    )
+
+    promoted = promote(dataset, "gold-v1-reviewed")
+
+    assert promoted.dataset_id == "gold-v1-reviewed"
+    assert promoted.version == 2
+    assert dataset.dataset_id == "gold-v1", "l'original no es toca"
+
+
+def test_the_report_says_when_there_is_no_gold_truth():
+    summary = summarise_one([gold()], [predicted()])
+    summary.coverage = {"verified": 0, "draft": 12, "cases": 7, "cases_with_verified": 0}
+
+    alerts = warnings_for(summary)
+
+    assert any("cap anotacio verificada" in alert.lower() for alert in alerts)
+
+
+def test_the_report_flags_incomplete_coverage():
+    summary = summarise_one([gold()], [predicted()])
+    summary.coverage = {"verified": 3, "draft": 0, "cases": 7, "cases_with_verified": 3}
+
+    alerts = warnings_for(summary)
+
+    assert any("coverage incomplete" in alert.lower() for alert in alerts)
+
+
+def test_the_report_marks_exploratory_runs_as_unofficial():
+    summary = summarise_one([gold()], [predicted()])
+    summary.include_draft = True
+    summary.coverage = {"verified": 0, "draft": 12, "cases": 7, "cases_with_verified": 0}
+
+    markdown = render_markdown(summary, [])
+
+    assert "NO son metriques oficials" in markdown
+    assert any("esborrany" in alert.lower() for alert in warnings_for(summary))
+
+
+def test_the_review_page_shows_the_full_page_text_and_the_quote():
+    from datetime import date as _date
+
+    from app.evaluation.dataset import GoldCase, GoldDataset
+    from app.evaluation.review_page import render_review_page
+
+    page_text = f"Clausula 8. Solvencia.\n{QUOTE}\nAltres coses irrellevants."
+    dataset = GoldDataset(
+        dataset_id="d", version=1, created_at=_date(2026, 9, 7), description="x",
+        cases=[GoldCase(case_id="c1", expediente_number="1/2026", requirements=[gold()])],
+    )
+
+    html = render_review_page(dataset, {("c1", "PCAP", 27): page_text})
+
+    assert "Clausula 8" in html, "el text complet de la pagina hi ha de ser"
+    assert "<mark>" in html, "el quote va ressaltat dins del text"
+    assert 'data-act="verified"' in html
+    assert 'data-act="rejected"' in html
+    assert 'data-act="needs_review"' in html
+    assert "economic_solvency" in html and "mandatory" in html

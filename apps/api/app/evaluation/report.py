@@ -25,6 +25,8 @@ from app.evaluation.metrics import EvaluationSummary
 CRITICAL_RECALL_WARN = 0.90
 EVIDENCE_WARN = 0.95
 AUTOMATABLE_WARN = 0.70
+#: Casos amb anotacions verificades per sota dels quals la cobertura es insuficient.
+MIN_CASES_FOR_COVERAGE = 10
 
 
 def build_payload(summary: EvaluationSummary, details: list[dict[str, Any]]) -> dict[str, Any]:
@@ -39,6 +41,30 @@ def build_payload(summary: EvaluationSummary, details: list[dict[str, Any]]) -> 
 def warnings_for(summary: EvaluationSummary) -> list[str]:
     """Els senyals que impedeixen posar aixo davant d'un usuari."""
     alerts: list[str] = []
+
+    coverage = summary.coverage or {}
+    verified = coverage.get("verified", 0)
+    draft = coverage.get("draft", 0)
+
+    if summary.include_draft:
+        alerts.append(
+            "S'han inclos anotacions en esborrany: aquestes NO son metriques oficials."
+        )
+    if verified == 0:
+        alerts.append(
+            f"Cap anotacio verificada ({draft} en esborrany): no hi ha gold truth i les "
+            "metriques oficials no son calculables. Revisa el dataset amb "
+            "`python -m app.evaluation.review`."
+        )
+    elif draft:
+        alerts.append(
+            f"{draft} anotacio(ns) encara en esborrany: queden fora de les metriques."
+        )
+    if coverage.get("cases_with_verified", 0) < MIN_CASES_FOR_COVERAGE and verified:
+        alerts.append(
+            f"dataset coverage incomplete: {coverage.get('cases_with_verified', 0)} cas(os) "
+            f"amb anotacions verificades, per sota dels {MIN_CASES_FOR_COVERAGE} recomanats."
+        )
 
     if summary.critical.true_positives + summary.critical.false_negatives == 0:
         alerts.append(
@@ -97,10 +123,35 @@ def render_markdown(summary: EvaluationSummary, details: list[dict[str, Any]]) -
     parts: list[str] = [
         f"# Benchmark d'extraccio de requisits — `{summary.dataset_id}`",
         "",
+        f"- Dataset: `{summary.dataset_id}` v{summary.dataset_version}",
         f"- Proveidor: `{summary.provider}` · model `{summary.model}`",
         f"- Prompt: `{summary.prompt_version}` · extractor `{summary.extractor_version}` "
         f"· schema `{summary.schema_version}`",
         f"- Generat: {datetime.now(UTC).isoformat(timespec='seconds')}",
+        "",
+    ]
+
+    coverage = summary.coverage or {}
+    parts += [
+        "## Cobertura del gold",
+        "",
+        _table(
+            [
+                ("Casos", str(coverage.get("cases", 0))),
+                ("Casos amb anotacions verificades", str(coverage.get("cases_with_verified", 0))),
+                ("**Verificades** (compten)", str(coverage.get("verified", 0))),
+                ("Esborrany (NO compten)", str(coverage.get("draft", 0))),
+                ("Necessiten revisio", str(coverage.get("needs_review", 0))),
+                ("Rebutjades", str(coverage.get("rejected", 0))),
+            ],
+            ("Mesura", "Valor"),
+        ),
+        "",
+        (
+            "> Metriques **oficials**: nomes anotacions verificades."
+            if not summary.include_draft
+            else "> ATENCIO: s'hi han inclos esborranys. NO son metriques oficials."
+        ),
         "",
     ]
 

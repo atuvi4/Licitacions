@@ -213,18 +213,29 @@ async def evaluate_dataset(
     force: bool = False,
     limit: int | None = None,
     only_case: str | None = None,
+    include_draft: bool = False,
 ) -> tuple[EvaluationSummary, list[dict[str, Any]]]:
-    """Executa el benchmark sencer i retorna el resum i el detall per cas."""
+    """Executa el benchmark i retorna el resum i el detall per cas.
+
+    Per defecte nomes compten les anotacions VERIFICADES. Un esborrany pot ser
+    correcte, pero ningu no l'ha comprovat contra la pagina original, i posar-lo
+    al denominador convertiria una intuicio en una xifra oficial.
+
+    `include_draft=True` existeix per a exploracio, i el resum ho deixa marcat.
+    """
     llm = provider or get_provider()
     started = time.monotonic()
 
     summary = EvaluationSummary(
         dataset_id=dataset.dataset_id,
+        dataset_version=dataset.version,
         provider=llm.name,
         model=llm.model,
         prompt_version=PROMPT_VERSION,
         extractor_version=EXTRACTOR_VERSION,
         schema_version=SCHEMA_VERSION,
+        coverage=dataset.coverage(),
+        include_draft=include_draft,
     )
     details: list[dict[str, Any]] = []
 
@@ -245,7 +256,9 @@ async def evaluate_dataset(
             accumulate_case(
                 summary,
                 case_id=case.case_id,
-                outcome=match_requirements(case.requirements, []),
+                outcome=match_requirements(
+                    case.requirements if include_draft else case.verified_requirements, []
+                ),
                 analysed_pages=result.analysed_pages,
             )
             continue
@@ -253,7 +266,13 @@ async def evaluate_dataset(
         run = await session.get(RequirementExtractionRun, result.run_id)
         predicted, awards = await load_predictions(session, run)
 
-        matched = match_requirements(case.requirements, predicted)
+        gold_requirements = (
+            case.requirements if include_draft else case.verified_requirements
+        )
+        gold_awards = (
+            case.award_criteria if include_draft else case.verified_award_criteria
+        )
+        matched = match_requirements(gold_requirements, predicted)
         accumulate_case(
             summary,
             case_id=case.case_id,
@@ -269,7 +288,7 @@ async def evaluate_dataset(
             )
 
         award_pairs, award_missed, award_spurious = match_award_criteria(
-            case.award_criteria, awards
+            gold_awards, awards
         )
         summary.award_criteria = DetectionMetrics(
             summary.award_criteria.true_positives + len(award_pairs),
@@ -288,7 +307,7 @@ async def evaluate_dataset(
                 "expediente_number": case.expediente_number,
                 "run_id": str(run.id),
                 "reused": result.reused,
-                "gold_requirements": len(case.requirements),
+                "gold_requirements": len(gold_requirements),
                 "predicted_requirements": len(predicted),
                 "matched": len(matched.pairs),
                 "missed": [

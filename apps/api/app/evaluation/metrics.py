@@ -177,11 +177,18 @@ class FalseBlocker:
 @dataclass(slots=True)
 class EvaluationSummary:
     dataset_id: str
-    provider: str
-    model: str
-    prompt_version: str
-    extractor_version: str
-    schema_version: str
+    #: Versio exacta del dataset amb que s'ha mesurat. Un benchmark ha de poder
+    #: dir contra que es va comparar.
+    dataset_version: int = 0
+    provider: str = ""
+    model: str = ""
+    prompt_version: str = ""
+    extractor_version: str = ""
+    schema_version: str = ""
+    #: Recompte d'anotacions per estat. Deixa veure que es gold i que es esborrany.
+    coverage: dict[str, int] = field(default_factory=dict)
+    #: Cert si s'han inclos esborranys: llavors NO son metriques oficials.
+    include_draft: bool = False
 
     overall: DetectionMetrics = field(default_factory=DetectionMetrics)
     mandatory: DetectionMetrics = field(default_factory=DetectionMetrics)
@@ -210,6 +217,10 @@ class EvaluationSummary:
     def as_dict(self) -> dict[str, Any]:
         return {
             "dataset_id": self.dataset_id,
+            "dataset_version": self.dataset_version,
+            "coverage": self.coverage,
+            "include_draft": self.include_draft,
+            "official": not self.include_draft,
             "provider": self.provider,
             "model": self.model,
             "prompt_version": self.prompt_version,
