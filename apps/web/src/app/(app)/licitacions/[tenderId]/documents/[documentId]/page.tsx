@@ -9,7 +9,7 @@
  */
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 import {
@@ -64,6 +64,13 @@ interface PageRead {
 
 export default function DocumentTextPage() {
   const params = useParams<{ tenderId: string; documentId: string }>();
+  const search = useSearchParams();
+  // Una cita apunta a una revisió CONCRETA. Si arribem des de "Veure font", cal
+  // obrir aquella, no la vigent: si el document s'ha reextret, la revisió nova
+  // pot dir una altra cosa i la cita deixaria de ser verificable.
+  const citedExtraction = search.get("extraction");
+  const citedPage = Number(search.get("page")) || null;
+
   // Les rutes van sense `/api/v1`: el proxy `/bff/*` ja hi reescriu a sobre.
   const {
     data: files,
@@ -72,10 +79,14 @@ export default function DocumentTextPage() {
   } = useResource<FileRead[]>(
     `/tenders/${params.tenderId}/documents/${params.documentId}/files`,
   );
-  const [pageNumber, setPageNumber] = useState(1);
+  const [pageNumber, setPageNumber] = useState(citedPage ?? 1);
 
-  const current = files?.find((file) => file.is_current) ?? files?.[0] ?? null;
+  const citedFile = citedExtraction
+    ? files?.find((file) => file.extraction?.id === citedExtraction)
+    : undefined;
+  const current = citedFile ?? files?.find((file) => file.is_current) ?? files?.[0] ?? null;
   const extraction = current?.extraction ?? null;
+  const showingCitedRevision = Boolean(citedExtraction && extraction?.id === citedExtraction);
 
   const { data: page, loading: pageLoading } = useResource<PageRead>(
     extraction ? `/tender-document-extractions/${extraction.id}/pages/${pageNumber}` : null,
@@ -168,6 +179,12 @@ export default function DocumentTextPage() {
             </dd>
           </div>
         </dl>
+        {showingCitedRevision && !current.is_current && (
+          <p className="border-t border-border px-5 py-3 text-[12px] text-muted">
+            Estàs veient la revisió {extraction?.revision_number} perquè és la que va originar la
+            cita. Ja no és la revisió vigent del document.
+          </p>
+        )}
         {extraction?.ocr_candidate && (
           <p className="border-t border-border px-5 py-3 text-[12px] text-muted">
             S&apos;ha extret molt poc text. Podria ser un document escanejat. No s&apos;hi ha

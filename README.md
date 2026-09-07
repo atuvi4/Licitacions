@@ -45,7 +45,10 @@ embedding ni cap similitud semàntica — el motor és determinista i reproduïb
 | Versionat de documents: contingut canviat = versió nova, l'antiga es conserva | ✅ |
 | Extracció de text per pàgina (pypdf, 1-based) amb qualitat determinista | ✅ |
 | Preview del text extret amb navegació de pàgina | ✅ |
-| Requisits, Go/No-Go, IA, RAG, OCR | ❌ (fase següent) |
+| Extracció de requisits del plec amb IA i evidència citable | ✅ |
+| Criteris d'adjudicació amb la seva font | ✅ |
+| Validació determinista de cites: sense evidència no hi ha requisit | ✅ |
+| Go/No-Go, comparació amb el perfil d'empresa, RAG, OCR | ❌ (fase següent) |
 
 ---
 
@@ -73,8 +76,8 @@ Next.js (apps/web)  ──rewrite /bff/* ──►  FastAPI (apps/api)
   mida.
 
 Més detall a [`docs/architecture.md`](docs/architecture.md),
-[`docs/data-model.md`](docs/data-model.md), [`docs/matching.md`](docs/matching.md) i
-[`docs/documents.md`](docs/documents.md).
+[`docs/data-model.md`](docs/data-model.md), [`docs/matching.md`](docs/matching.md),
+[`docs/documents.md`](docs/documents.md) i [`docs/requirements.md`](docs/requirements.md).
 
 ---
 

@@ -21,11 +21,13 @@ import {
   Tr,
 } from "@/components/ui";
 import { PreFitBadge, PreFitPanel } from "@/components/PreFit";
+import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
 import { useSession } from "@/components/SessionProvider";
 import { api } from "@/lib/api";
 import { formatDate, formatMoney } from "@/lib/format";
 import { useResource } from "@/lib/hooks";
 import type { TenderMatch } from "@/lib/matching";
+import type { RequirementAnalysis } from "@/lib/requirements";
 import {
   CONTRACT_TYPE_LABELS,
   daysUntilDeadline,
@@ -61,6 +63,10 @@ export default function TenderDetailPage() {
   // Pot no existir (404) si encara no s'ha calculat: `PreFitPanel` ho explica.
   const match = useResource<TenderMatch>(
     companyId ? `/companies/${companyId}/matches/by-tender/${tenderId}` : null,
+  );
+
+  const analysis = useResource<RequirementAnalysis>(
+    `/tenders/${tenderId}/analysis/requirements`,
   );
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -419,6 +425,15 @@ export default function TenderDetailPage() {
             </ul>
           )}
         </Card>
+
+        {/* ---------------------------------------------- Anàlisi del plec --- */}
+        <RequirementAnalysisSection
+          tenderId={tenderId}
+          analysis={analysis.data}
+          loading={analysis.loading}
+          error={analysis.error}
+          onReload={analysis.reload}
+        />
 
         {/* --------------------------------------------------- Historial --- */}
         <Card>
