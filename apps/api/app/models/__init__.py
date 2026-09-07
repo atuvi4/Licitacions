@@ -15,6 +15,13 @@ from app.models.profile import (
     CompanyTerritory,
 )
 from app.models.projects import CompanyProject, ProjectCPV, project_services
+from app.models.requirements import (
+    AwardCriterion,
+    AwardCriterionEvidence,
+    Requirement,
+    RequirementEvidence,
+    RequirementExtractionRun,
+)
 from app.models.sources import IngestionRun, Source, SourceRecord
 from app.models.tender_documents import (
     TenderDocumentContent,
@@ -33,6 +40,8 @@ from app.models.tenders import (
 
 __all__ = [
     "AuditLog",
+    "AwardCriterion",
+    "AwardCriterionEvidence",
     "Base",
     "Buyer",
     "CPVCode",
@@ -55,6 +64,9 @@ __all__ = [
     "IngestionRun",
     "PersonQualification",
     "ProjectCPV",
+    "Requirement",
+    "RequirementEvidence",
+    "RequirementExtractionRun",
     "ServiceCPV",
     "Source",
     "SourceRecord",

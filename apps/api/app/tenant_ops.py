@@ -80,6 +80,13 @@ PUBLIC_TABLES = frozenset(
         "ingestion_runs",
         "source_records",
         "sources",
+        # Els requisits i els criteris d'adjudicacio deriven de documents
+        # publics: son globals i s'extreuen una sola vegada per licitacio.
+        "award_criteria",
+        "award_criterion_evidence",
+        "requirement_evidence",
+        "requirement_extraction_runs",
+        "requirements",
         "tender_cpvs",
         "tender_documents",
         # La capa documental dels plecs es publica i global: els mateixos bytes

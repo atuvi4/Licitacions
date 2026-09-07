@@ -320,3 +320,105 @@ class PageExtractionStatus(StrEnum):
     EXTRACTED = "extracted"
     EMPTY = "empty"
     FAILED = "failed"
+
+
+class AnalysisRunStatus(StrEnum):
+    """Estat d'una passada d'extraccio de requisits sobre una licitacio."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    # Part dels chunks han fallat pero n'hi ha resultats aprofitables.
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class RequirementCategory(StrEnum):
+    """Taxonomia tancada. El model NO pot inventar categories."""
+
+    DEADLINE = "deadline"
+    ECONOMIC_SOLVENCY = "economic_solvency"
+    TECHNICAL_SOLVENCY = "technical_solvency"
+    EXPERIENCE = "experience"
+    CERTIFICATION = "certification"
+    REGISTRATION = "registration"
+    BUSINESS_CLASSIFICATION = "business_classification"
+    INSURANCE = "insurance"
+    PERSONNEL = "personnel"
+    PROFESSIONAL_QUALIFICATION = "professional_qualification"
+    EQUIPMENT_OR_RESOURCES = "equipment_or_resources"
+    ADMINISTRATIVE_DOCUMENTATION = "administrative_documentation"
+    TECHNICAL_REQUIREMENT = "technical_requirement"
+    CONTRACT_CONDITION = "contract_condition"
+    OTHER = "other"
+
+
+class RequirementObligation(StrEnum):
+    """Que fa el plec amb aquest requisit, no si l'empresa el compleix.
+
+    `MANDATORY` NO vol dir hard blocker: aixo nomes es pot decidir comparant-lo
+    amb el perfil de l'empresa, i aixo es una altra iteracio.
+    """
+
+    MANDATORY = "mandatory"
+    # "Se valorara": dona punts, no exclou.
+    SCORED = "scored"
+    INFORMATIVE = "informative"
+    UNKNOWN = "unknown"
+
+
+class RequirementOperator(StrEnum):
+    """Relacio entre el valor exigit i el de l'empresa. No tots en tenen."""
+
+    GTE = "gte"
+    GT = "gt"
+    LTE = "lte"
+    LT = "lt"
+    EQ = "eq"
+    ONE_OF = "one_of"
+    ALL_OF = "all_of"
+    CONTAINS = "contains"
+    EXISTS = "exists"
+    DATE_BEFORE = "date_before"
+    DATE_AFTER = "date_after"
+    UNKNOWN = "unknown"
+
+
+class RequirementScope(StrEnum):
+    """A que aplica el requisit dins de l'expedient."""
+
+    TENDER = "tender"
+    LOT = "lot"
+    MULTIPLE_LOTS = "multiple_lots"
+    UNKNOWN = "unknown"
+
+
+class ExtractionConfidence(StrEnum):
+    """Confianca declarada pel model. NO es una probabilitat calibrada."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class ReviewStatus(StrEnum):
+    """Revisio humana. L'output original del model no es sobreescriu mai."""
+
+    UNREVIEWED = "unreviewed"
+    VERIFIED = "verified"
+    NEEDS_REVIEW = "needs_review"
+    REJECTED = "rejected"
+
+
+class EvidenceRole(StrEnum):
+    PRIMARY = "primary"
+    SUPPORTING = "supporting"
+
+
+class AwardEvaluationType(StrEnum):
+    """Com es puntua un criteri d'adjudicacio."""
+
+    AUTOMATIC = "automatic"
+    JUDGMENT = "judgment"
+    MIXED = "mixed"
+    UNKNOWN = "unknown"

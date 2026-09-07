@@ -110,6 +110,30 @@ class Settings(BaseSettings):
     # Un processat en curs mes antic que aixo es considera mort i es pot reclamar.
     DOCUMENT_PROCESSING_STALE_SECONDS: int = 300
 
+    # --- Capa d'IA (extraccio de requisits) ---
+    # Proveidor d'inferencia. "fake" es determinista i no fa cap crida de xarxa:
+    # es el que fan servir els tests.
+    LLM_PROVIDER: str = "fake"
+    # Buida = la funcio d'analisi queda no disponible, pero l'aplicacio arrenca.
+    ANTHROPIC_API_KEY: str = ""
+    # El model NO es una decisio de domini: es configuracio.
+    LLM_MODEL: str = "claude-sonnet-5"
+    LLM_TIMEOUT_SECONDS: float = 120.0
+    LLM_MAX_RETRIES: int = 2
+    LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS: int = 8000
+
+    # --- Analisi de requisits ---
+    # Chunking per pagines: mai es parteix una pagina entre chunks.
+    REQUIREMENTS_CHUNK_PAGES: int = 6
+    # Solapament perque un requisit que travessa un salt de pagina no es perdi.
+    REQUIREMENTS_CHUNK_OVERLAP_PAGES: int = 1
+    # Sostre de pagines per execucio: evita cremar tokens amb un expedient enorme.
+    REQUIREMENTS_MAX_PAGES_PER_RUN: int = 400
+    # El model ha de citar 1-3 frases, no pagines senceres.
+    REQUIREMENTS_MAX_QUOTE_CHARS: int = 600
+    # Una analisi en curs mes antiga que aixo es considera morta i es pot reclamar.
+    REQUIREMENTS_ANALYSIS_STALE_SECONDS: int = 900
+
     # --- Regles de negoci ---
     # Dies abans de la caducitat a partir dels quals una acreditacio es "expiring_soon".
     EXPIRY_WARNING_DAYS: int = 60

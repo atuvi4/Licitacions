@@ -60,6 +60,29 @@ class NoContentToExtractError(ValidationError):
     code = "no_content_to_extract"
 
 
+class NothingAnalyzableError(ValidationError):
+    """Cap document de la licitacio te text extret per analitzar.
+
+    Un plec en OLE2 o un ZIP no son un error del sistema: simplement no hi ha
+    text. No s'inventa el contingut.
+    """
+
+    code = "nothing_analyzable"
+
+
+class AnalysisInProgressError(ConflictError):
+    """Ja hi ha una analisi de requisits en curs per a aquesta licitacio."""
+
+    code = "analysis_in_progress"
+
+
+class ProviderUnavailableError(AppError):
+    """El proveidor d'IA no esta configurat o no ha respost."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "llm_provider_unavailable"
+
+
 class AuthenticationError(AppError):
     status_code = status.HTTP_401_UNAUTHORIZED
     code = "not_authenticated"
