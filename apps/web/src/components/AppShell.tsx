@@ -124,6 +124,16 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
           </>,
         ),
       },
+      {
+        href: "/candidatures",
+        label: "Candidatures",
+        icon: icon(
+          <>
+            <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h9A1.5 1.5 0 0 1 16 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 14.5Z" />
+            <path d="m7 10 2 2 4-4.5" strokeLinecap="round" strokeLinejoin="round" />
+          </>,
+        ),
+      },
     ],
   },
   {

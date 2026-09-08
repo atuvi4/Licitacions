@@ -23,6 +23,7 @@ import {
 import { PreFitBadge, PreFitPanel } from "@/components/PreFit";
 import { ComplianceSection } from "@/components/ComplianceSection";
 import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
+import { WorkspaceLauncher } from "@/components/WorkspaceLauncher";
 import { useSession } from "@/components/SessionProvider";
 import { api } from "@/lib/api";
 import { formatDate, formatMoney } from "@/lib/format";
@@ -154,6 +155,7 @@ export default function TenderDetailPage() {
               {TENDER_STATUS_LABELS[data.status]}
             </Badge>
             {match.data && <PreFitBadge match={match.data} />}
+            {companyId && <WorkspaceLauncher companyId={companyId} tenderId={tenderId} />}
           </div>
         }
       />

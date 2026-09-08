@@ -22,6 +22,7 @@ from app.api.v1.routers import (
     requirements,
     tender_documents,
     tenders,
+    workspaces,
 )
 
 company_scoped = APIRouter(prefix="/companies/{company_id}")
@@ -40,6 +41,10 @@ company_scoped.include_router(cpv.preferences_router)
 # Compliment: dada DE TENANT, penja de /companies/{company_id}.
 company_scoped.include_router(compliance.router)
 company_scoped.include_router(compliance.assessments_router)
+# Candidatura: reuneix pre-fit, requisits i compliment i hi afegeix la decisio
+# humana. Tambe dada de tenant.
+company_scoped.include_router(workspaces.tender_router)
+company_scoped.include_router(workspaces.router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

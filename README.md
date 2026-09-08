@@ -51,6 +51,9 @@ embedding ni cap similitud semàntica — el motor és determinista i reproduïb
 | Compliment empresa ↔ requisits, determinista i auditable | ✅ |
 | Hard blockers (potencials i confirmats) i elegibilitat | ✅ |
 | Benchmark reproduïble de l'extractor amb gold dataset anotat a mà | ✅ |
+| Workspace de candidatura: checklist, tasques, responsables i notes | ✅ |
+| Go/No-Go **humà**: signat, datat, motivat i immutable | ✅ |
+| Recomanació automàtica i decisió humana sempre com a camps separats | ✅ |
 | Generació d'ofertes, memòries, RAG, OCR | ❌ (fase següent) |
 
 ---
@@ -81,8 +84,8 @@ Next.js (apps/web)  ──rewrite /bff/* ──►  FastAPI (apps/api)
 Més detall a [`docs/architecture.md`](docs/architecture.md),
 [`docs/data-model.md`](docs/data-model.md), [`docs/matching.md`](docs/matching.md),
 [`docs/documents.md`](docs/documents.md), [`docs/requirements.md`](docs/requirements.md)
-[`docs/compliance.md`](docs/compliance.md) i
-[`docs/evaluation.md`](docs/evaluation.md).
+[`docs/compliance.md`](docs/compliance.md), [`docs/evaluation.md`](docs/evaluation.md) i
+[`docs/workspace.md`](docs/workspace.md).
 
 ---
 

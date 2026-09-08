@@ -42,6 +42,13 @@ from app.models.tenders import (
     TenderLot,
     TenderLotCPV,
 )
+from app.models.workspace import (
+    BidWorkspace,
+    WorkspaceChecklistItem,
+    WorkspaceDecision,
+    WorkspaceNote,
+    WorkspaceTask,
+)
 
 __all__ = [
     "AssessmentEvidence",
@@ -49,6 +56,7 @@ __all__ = [
     "AwardCriterion",
     "AwardCriterionEvidence",
     "Base",
+    "BidWorkspace",
     "Buyer",
     "CPVCode",
     "Company",
@@ -88,5 +96,9 @@ __all__ = [
     "TenderLot",
     "TenderLotCPV",
     "User",
+    "WorkspaceChecklistItem",
+    "WorkspaceDecision",
+    "WorkspaceNote",
+    "WorkspaceTask",
     "project_services",
 ]

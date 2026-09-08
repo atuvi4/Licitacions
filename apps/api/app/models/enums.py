@@ -507,3 +507,52 @@ class CompanyEvidenceKind(StrEnum):
     PERSON = "person"
     QUALIFICATION = "qualification"
     DOCUMENT = "document"
+
+
+class WorkspaceStatus(StrEnum):
+    """On es troba una candidatura.
+
+    `GO_APPROVED`, `NO_GO_APPROVED` i `SUBMITTED` NO els pot escriure cap regla
+    automatica: son consequencia d'una accio humana registrada. La resta descriu
+    el treball, no una decisio.
+    """
+
+    ANALYSIS = "analysis"
+    NEEDS_REVIEW = "needs_review"
+    AWAITING_DECISION = "awaiting_decision"
+    GO_APPROVED = "go_approved"
+    NO_GO_APPROVED = "no_go_approved"
+    PREPARING_BID = "preparing_bid"
+    READY_FOR_FINAL_REVIEW = "ready_for_final_review"
+    SUBMITTED = "submitted"
+    WITHDRAWN = "withdrawn"
+
+
+class WorkspaceDecisionType(StrEnum):
+    """La decisio humana. Mai la pren el sistema."""
+
+    GO = "go"
+    NO_GO = "no_go"
+    DEFER = "defer"
+
+
+class ChecklistItemStatus(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    BLOCKED = "blocked"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class ChecklistItemSource(StrEnum):
+    """D'on surt l'item. Els humans no es regeneren."""
+
+    REQUIREMENT = "requirement"
+    MANUAL = "manual"
+
+
+class WorkspaceTaskStatus(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
