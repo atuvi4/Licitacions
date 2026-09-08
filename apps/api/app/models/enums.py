@@ -556,3 +556,69 @@ class WorkspaceTaskStatus(StrEnum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+
+
+class EvidenceItemStatus(StrEnum):
+    """Estat d'una peca del dossier documental.
+
+    `SUGGESTED` NO vol dir "el presentarem": vol dir que el motor de compliment
+    ja va fer servir aquest document i que per tant es un candidat. Nomes una
+    persona el converteix en `SELECTED`.
+
+    NO hi ha cap estat `expired`: la caducitat es deriva del document i del
+    termini (`DocumentValidity`) i aquella es l'unica font de veritat. Un estat
+    manual paral·lel es podria quedar enrere i dir el contrari que les dates.
+    """
+
+    SUGGESTED = "suggested"
+    SELECTED = "selected"
+    MISSING = "missing"
+    NEEDS_REVIEW = "needs_review"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class EvidenceItemSource(StrEnum):
+    """D'on surt la peca: derivada del compliment o posada a ma."""
+
+    COMPLIANCE = "compliance"
+    MANUAL = "manual"
+
+
+class DocumentValidity(StrEnum):
+    """Vigencia d'un document RESPECTE D'AQUESTA LICITACIO.
+
+    `EXPIRES_BEFORE_DEADLINE` es el cas que costa mes de veure sol: el document
+    es vigent avui i haura caducat el dia que s'ha de presentar l'oferta.
+    """
+
+    VALID = "valid"
+    EXPIRES_BEFORE_DEADLINE = "expires_before_deadline"
+    EXPIRED = "expired"
+    NO_EXPIRY = "no_expiry"
+    NO_DOCUMENT = "no_document"
+
+
+class WorkspaceReadiness(StrEnum):
+    """Si el DOSSIER esta a punt. No es el compliment ni la decisio.
+
+    `READY_FOR_FINAL_REVIEW` vol dir "sembla complet per fer la revisio humana
+    final". No vol dir `submitted` ni s'hi acosta.
+    """
+
+    NOT_STARTED = "not_started"
+    INCOMPLETE = "incomplete"
+    NEEDS_REVIEW = "needs_review"
+    READY_FOR_FINAL_REVIEW = "ready_for_final_review"
+
+
+class DossierCoverage(StrEnum):
+    """Cobertura documental d'un requisit. NO es el resultat de compliment.
+
+    Es pot complir un requisit i no tenir-ne encara el PDF: `satisfies` amb
+    `MISSING_DOCUMENT` es un estat perfectament normal i important de veure.
+    """
+
+    COVERED = "covered"
+    MISSING_DOCUMENT = "missing_document"
+    NEEDS_REVIEW = "needs_review"
+    NOT_APPLICABLE = "not_applicable"

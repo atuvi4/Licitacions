@@ -1,8 +1,9 @@
 """Workspace de candidatura: on una empresa decideix si es presenta.
 
     Company + Tender (+ Lot)  ->  BidWorkspace
-                                    |- WorkspaceDecision   (immutable, append-only)
+                                    |- WorkspaceDecision       (immutable, append-only)
                                     |- WorkspaceChecklistItem
+                                    |- WorkspaceEvidenceItem   (el dossier documental)
                                     |- WorkspaceTask
                                     |- WorkspaceNote
 
@@ -37,6 +38,9 @@ from app.db.base import Base, CompanyOwnedMixin, TimestampMixin, UUIDPrimaryKeyM
 from app.models.enums import (
     ChecklistItemSource,
     ChecklistItemStatus,
+    CompanyEvidenceKind,
+    EvidenceItemSource,
+    EvidenceItemStatus,
     RequirementCategory,
     WorkspaceDecisionType,
     WorkspaceStatus,
@@ -131,6 +135,9 @@ class BidWorkspace(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, Base)
         order_by="WorkspaceDecision.decided_at.desc()",
     )
     checklist_items: Mapped[list[WorkspaceChecklistItem]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+    evidence_items: Mapped[list[WorkspaceEvidenceItem]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"
     )
     tasks: Mapped[list[WorkspaceTask]] = relationship(
@@ -294,6 +301,10 @@ class WorkspaceTask(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, Base
     )
     title: Mapped[str] = mapped_column(sa.String(300), nullable=False)
     description: Mapped[str | None] = mapped_column(sa.Text)
+    #: Una tasca obligatoria pendent impedeix que el dossier arribi a la revisio
+    #: final. Les que neixen d'un forat del dossier sobre un requisit obligatori
+    #: ho son automaticament; la resta, nomes si algu ho diu.
+    mandatory: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     assigned_to: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
     )
@@ -337,3 +348,118 @@ class WorkspaceNote(UUIDPrimaryKeyMixin, CompanyOwnedMixin, Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<WorkspaceNote {self.workspace_id}>"
+
+
+class WorkspaceEvidenceItem(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, Base):
+    """Una peca del dossier: amb QUE acreditarem un requisit concret.
+
+    Es la baula que faltava entre "sabem que complim" (4C) i "aixo es el que
+    presentarem". Son dues coses diferents i el sistema no les ha de confondre:
+    un requisit pot estar `satisfies` i tenir el dossier `missing` perque encara
+    no s'ha preparat el PDF correcte.
+
+    Tres regles del model:
+
+    * **Un document pot cobrir N requisits i un requisit pot necessitar N
+      documents.** Per aixo aixo es una taula d'items i no un camp a
+      `WorkspaceChecklistItem`. El document NO es copia: `document_id` apunta a
+      la biblioteca corporativa que ja existeix.
+    * **`suggested` no es `selected`.** El motor pot proposar el document que ja
+      va fer servir per avaluar el requisit; nomes una persona el tria, i llavors
+      queden escrits `selected_by` i `selected_at`.
+    * **La vigencia es respecte de la licitacio, no d'avui.** Un certificat que
+      caduca abans del termini no serveix, per molt vigent que sigui ara. Aixo no
+      es persisteix: es deriva de `Document.expires_at` i del termini.
+    """
+
+    __tablename__ = "workspace_evidence_items"
+    __table_args__ = (
+        sa.Index("ix_workspace_evidence_items_workspace", "workspace_id"),
+        sa.Index("ix_workspace_evidence_items_requirement", "workspace_id", "requirement_id"),
+        sa.Index("ix_workspace_evidence_items_document", "document_id"),
+        # Un mateix document no es proposa dues vegades per al mateix requisit.
+        # Requisits diferents SI que poden compartir document: no hi ha copia.
+        sa.Index(
+            "uq_workspace_evidence_items_requirement_document",
+            "workspace_id",
+            "requirement_id",
+            "document_id",
+            unique=True,
+            postgresql_where=sa.text("document_id IS NOT NULL"),
+            sqlite_where=sa.text("document_id IS NOT NULL"),
+        ),
+        # Un sol marcador "encara no tenim document" per requisit: si no,
+        # sincronitzar dues vegades ompliria el dossier de forats repetits.
+        sa.Index(
+            "uq_workspace_evidence_items_requirement_gap",
+            "workspace_id",
+            "requirement_id",
+            unique=True,
+            postgresql_where=sa.text("document_id IS NULL AND requirement_id IS NOT NULL"),
+            sqlite_where=sa.text("document_id IS NULL AND requirement_id IS NOT NULL"),
+        ),
+    )
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey("bid_workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    #: Quin requisit del plec acredita. `None` nomes per a peces soltes.
+    requirement_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("requirements.id", ondelete="SET NULL")
+    )
+    #: L'item de checklist equivalent, quan n'hi ha. Permet passar de "cal
+    #: acreditar ISO 27001" al fitxer concret sense tornar a buscar.
+    checklist_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        # Nom explicit i curt: la convencio en generaria un de 71 caracters.
+        sa.ForeignKey(
+            "workspace_checklist_items.id",
+            ondelete="SET NULL",
+            name="fk_workspace_evidence_items_checklist_item",
+        ),
+    )
+    #: El document de la biblioteca corporativa. Referencia, mai copia.
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("documents.id", ondelete="SET NULL")
+    )
+
+    #: Quina dada corporativa sosté la peca (certificacio, polissa, projecte...).
+    #: Es el mateix parell que fa servir `AssessmentEvidence`.
+    company_evidence_type: Mapped[CompanyEvidenceKind | None] = mapped_column(
+        enum_column(CompanyEvidenceKind, "company_evidence_kind")
+    )
+    company_evidence_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True))
+    #: Text per a la interficie, calculat quan es va crear la peca.
+    label: Mapped[str] = mapped_column(sa.String(300), nullable=False, default="")
+
+    status: Mapped[EvidenceItemStatus] = mapped_column(
+        enum_column(EvidenceItemStatus, "evidence_item_status"),
+        nullable=False,
+        default=EvidenceItemStatus.SUGGESTED,
+    )
+    source: Mapped[EvidenceItemSource] = mapped_column(
+        enum_column(EvidenceItemSource, "evidence_item_source"),
+        nullable=False,
+        default=EvidenceItemSource.COMPLIANCE,
+    )
+
+    #: Qui va triar aquest document i quan. Buit mentre sigui una proposta.
+    selected_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    selected_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    notes: Mapped[str | None] = mapped_column(sa.Text)
+
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+    workspace: Mapped[BidWorkspace] = relationship(back_populates="evidence_items")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<WorkspaceEvidenceItem {self.status} doc={self.document_id}>"

@@ -54,6 +54,9 @@ embedding ni cap similitud semàntica — el motor és determinista i reproduïb
 | Workspace de candidatura: checklist, tasques, responsables i notes | ✅ |
 | Go/No-Go **humà**: signat, datat, motivat i immutable | ✅ |
 | Recomanació automàtica i decisió humana sempre com a camps separats | ✅ |
+| Dossier documental: quin document acredita cada requisit, sense duplicar-lo | ✅ |
+| Caducitat mesurada contra el termini del plec, no contra avui | ✅ |
+| Readiness del dossier amb la llista del que falta, sense cap puntuació opaca | ✅ |
 | Generació d'ofertes, memòries, RAG, OCR | ❌ (fase següent) |
 
 ---

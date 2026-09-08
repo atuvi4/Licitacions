@@ -46,6 +46,7 @@ from app.models.workspace import (
     BidWorkspace,
     WorkspaceChecklistItem,
     WorkspaceDecision,
+    WorkspaceEvidenceItem,
     WorkspaceNote,
     WorkspaceTask,
 )
@@ -98,6 +99,7 @@ __all__ = [
     "User",
     "WorkspaceChecklistItem",
     "WorkspaceDecision",
+    "WorkspaceEvidenceItem",
     "WorkspaceNote",
     "WorkspaceTask",
     "project_services",

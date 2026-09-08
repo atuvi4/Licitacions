@@ -82,6 +82,7 @@ export interface WorkspaceTask {
   title: string;
   description: string | null;
   assigned_to: string | null;
+  mandatory: boolean;
   assigned_to_name: string | null;
   due_at: string | null;
   status: TaskStatus;
@@ -165,6 +166,9 @@ export interface WorkspaceDetail {
   current_requirement_run_id: string | null;
   analysis_outdated: boolean;
   outdated_reasons: string[];
+  readiness: WorkspaceReadiness;
+  readiness_blockers: string[];
+  dossier_coverage: DossierCoverageCounters | null;
   checklist: ChecklistItem[];
   tasks: WorkspaceTask[];
   notes: WorkspaceNote[];
@@ -174,6 +178,202 @@ export interface WorkspaceDetail {
   created_at: string;
   updated_at: string;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Dossier documental (5B)                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * No hi ha cap `expired`: la caducitat es deriva del document i del termini
+ * (`DocumentValidity`), i aquella és l'única font de veritat.
+ */
+export type EvidenceItemStatus =
+  | "suggested"
+  | "selected"
+  | "missing"
+  | "needs_review"
+  | "not_applicable";
+export type EvidenceItemSource = "compliance" | "manual";
+export type DocumentValidity =
+  | "valid"
+  | "expires_before_deadline"
+  | "expired"
+  | "no_expiry"
+  | "no_document";
+export type DossierCoverageState =
+  | "covered"
+  | "missing_document"
+  | "needs_review"
+  | "not_applicable";
+export type WorkspaceReadiness =
+  | "not_started"
+  | "incomplete"
+  | "needs_review"
+  | "ready_for_final_review";
+
+export interface DossierDocument {
+  id: string;
+  name: string;
+  category: string;
+  mime_type: string;
+  file_size: number;
+  sha256: string;
+  issued_at: string | null;
+  expires_at: string | null;
+  uploaded_at: string;
+}
+
+export interface DossierItem {
+  id: string;
+  workspace_id: string;
+  requirement_id: string | null;
+  checklist_item_id: string | null;
+  requirement_title: string | null;
+  requirement_category: string | null;
+  requirement_quote: string | null;
+  /** Que en deia el compliment. Recordatori que cobertura != compliment. */
+  assessment_result: string | null;
+  mandatory: boolean;
+  label: string;
+  status: EvidenceItemStatus;
+  source: EvidenceItemSource;
+  company_evidence_type: string | null;
+  company_evidence_id: string | null;
+  document: DossierDocument | null;
+  /** Vigència respecte del TERMINI, no d'avui. */
+  validity: DocumentValidity;
+  coverage: DossierCoverageState | null;
+  selected_by: string | null;
+  selected_by_name: string | null;
+  selected_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DossierGroup {
+  group: string;
+  items: DossierItem[];
+}
+
+export interface DossierCoverageCounters {
+  mandatory_total: number;
+  covered: number;
+  missing_document: number;
+  needs_review: number;
+  not_applicable: number;
+  expired_documents: number;
+  optional_total: number;
+  optional_covered: number;
+}
+
+export interface Readiness {
+  state: WorkspaceReadiness;
+  blockers: string[];
+  /** Explícit: estar a punt per a la revisió final NO és haver presentat res. */
+  is_submitted: boolean;
+}
+
+export interface Dossier {
+  workspace_id: string;
+  workspace_status: WorkspaceStatus;
+  deadline_at: string | null;
+  coverage: DossierCoverageCounters;
+  readiness: Readiness;
+  groups: DossierGroup[];
+}
+
+export interface DossierSyncResult {
+  suggested: number;
+  gaps: number;
+  total: number;
+  dossier: Dossier;
+}
+
+export const GROUP_LABELS: Record<string, string> = {
+  economic_solvency: "Solvència econòmica",
+  experience: "Experiència i solvència tècnica",
+  certifications: "Certificacions",
+  insurances: "Assegurances",
+  team: "Equip",
+  registrations: "Registres i classificació",
+  administrative: "Documentació administrativa",
+  other: "Altres",
+};
+
+export const EVIDENCE_STATUS_LABELS: Record<EvidenceItemStatus, string> = {
+  suggested: "Proposat",
+  selected: "Seleccionat",
+  missing: "Falta",
+  needs_review: "Cal revisar",
+  not_applicable: "No aplica",
+};
+
+export const EVIDENCE_STATUS_TONES: Record<EvidenceItemStatus, Tone> = {
+  suggested: "brand",
+  selected: "success",
+  missing: "danger",
+  needs_review: "warning",
+  not_applicable: "neutral",
+};
+
+export const VALIDITY_LABELS: Record<DocumentValidity, string> = {
+  valid: "Vigent el dia del termini",
+  expires_before_deadline: "Caduca ABANS del termini",
+  expired: "Caducat",
+  no_expiry: "Sense data de caducitat",
+  no_document: "Sense document",
+};
+
+export const VALIDITY_TONES: Record<DocumentValidity, Tone> = {
+  valid: "success",
+  expires_before_deadline: "danger",
+  expired: "danger",
+  no_expiry: "warning",
+  no_document: "neutral",
+};
+
+export const COVERAGE_LABELS: Record<DossierCoverageState, string> = {
+  covered: "Cobert",
+  missing_document: "Falta document",
+  needs_review: "Cal revisar",
+  not_applicable: "No aplica",
+};
+
+export const COVERAGE_TONES: Record<DossierCoverageState, Tone> = {
+  covered: "success",
+  missing_document: "danger",
+  needs_review: "warning",
+  not_applicable: "neutral",
+};
+
+export const READINESS_LABELS: Record<WorkspaceReadiness, string> = {
+  not_started: "Sense començar",
+  incomplete: "Incomplet",
+  needs_review: "Cal revisar",
+  ready_for_final_review: "A punt per a la revisió final",
+};
+
+export const READINESS_TONES: Record<WorkspaceReadiness, Tone> = {
+  not_started: "neutral",
+  incomplete: "warning",
+  needs_review: "warning",
+  ready_for_final_review: "success",
+};
+
+/** Text de cada blocador. Derivat del codi que envia l'API, mai text lliure. */
+export const READINESS_BLOCKER_LABELS: Record<string, string> = {
+  decision_not_go: "Encara no hi ha una decisió humana de GO.",
+  mandatory_unresolved: "Hi ha requisits obligatoris sense resoldre al compliment.",
+  mandatory_checklist_blocked: "Hi ha items obligatoris de la checklist marcats com a bloquejats.",
+  mandatory_evidence_missing: "Falten documents per a requisits obligatoris.",
+  mandatory_document_expired:
+    "Algun document seleccionat caduca abans del termini de presentació.",
+  mandatory_tasks_open: "Hi ha tasques obligatòries pendents.",
+  evidence_needs_review: "Hi ha evidències marcades per revisar.",
+  analysis_outdated:
+    "Hi ha una anàlisi de requisits o un càlcul de compliment més recents: cal reconciliar el dossier.",
+};
 
 export interface WorkspaceCreateResult {
   created: boolean;

@@ -235,7 +235,14 @@ export function TasksSection({
           <tbody>
             {workspace.tasks.map((task) => (
               <Tr key={task.id}>
-                <Td>{task.title}</Td>
+                <Td>
+                  {task.title}
+                  {task.mandatory && (
+                    <Badge tone="warning" className="ml-2">
+                      Obligatòria
+                    </Badge>
+                  )}
+                </Td>
                 <Td>
                   <Select
                     value={task.status}

@@ -88,11 +88,28 @@ ALLOWED_TRANSITIONS: dict[WorkspaceStatus, frozenset[WorkspaceStatus]] = {
         {S.NO_GO_APPROVED, S.GO_APPROVED, S.AWAITING_DECISION, S.WITHDRAWN}
     ),
     S.PREPARING_BID: frozenset(
-        {S.READY_FOR_FINAL_REVIEW, S.NO_GO_APPROVED, S.AWAITING_DECISION, S.WITHDRAWN}
+        {
+            S.READY_FOR_FINAL_REVIEW,
+            # Una decisio humana nova torna el workspace a l'estat que implica,
+            # encara que sigui enrere: el que val es l'ultima cosa que ha dit una
+            # persona, no el punt mes avancat on hagi arribat la feina.
+            S.GO_APPROVED,
+            S.NO_GO_APPROVED,
+            S.AWAITING_DECISION,
+            S.WITHDRAWN,
+        }
     ),
-    # L'unic estat des del qual `submitted` es assolible.
+    # L'unic estat des del qual `submitted` es assolible. I tambe el que ha de
+    # poder RETROCEDIR: si el dossier deixa d'estar complet, `preparing_bid`.
     S.READY_FOR_FINAL_REVIEW: frozenset(
-        {S.SUBMITTED, S.PREPARING_BID, S.NO_GO_APPROVED, S.WITHDRAWN}
+        {
+            S.SUBMITTED,
+            S.PREPARING_BID,
+            S.GO_APPROVED,
+            S.NO_GO_APPROVED,
+            S.AWAITING_DECISION,
+            S.WITHDRAWN,
+        }
     ),
     # Presentada: nomes es pot retirar. No es torna a "en analisi".
     S.SUBMITTED: frozenset({S.WITHDRAWN}),
@@ -145,6 +162,16 @@ def status_for(decision: WorkspaceDecisionType) -> WorkspaceStatus:
 
 def is_human_only(status: WorkspaceStatus) -> bool:
     return status in HUMAN_ONLY_STATUSES
+
+
+def is_submitted(status: WorkspaceStatus) -> bool:
+    """Aquesta candidatura ja s'ha presentat?
+
+    Existeix perque la resta del codi no hagi d'anomenar `SUBMITTED`: qui vol
+    saber-ho pregunta aqui. Aixi el nom queda confinat en aquest modul i el test
+    estructural que ho vigila segueix sent estricte.
+    """
+    return status in FINAL_APPROVAL_STATUSES
 
 
 def can_transition(

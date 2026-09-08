@@ -1240,13 +1240,17 @@ def test_the_final_approval_actor_is_not_wired_to_anything_yet():
 
     Si algun dia algu connecta la presentacio, aquest test l'obliga a passar per
     aqui i a llegir per que existeix aquest actor.
+
+    Es busca l'US (`TransitionActor.HUMAN_FINAL_APPROVAL`) i no el nom sol:
+    altres moduls poden —i han de poder— explicar als seus comentaris que
+    `submitted` l'exigeix.
     """
     import app
 
     used = [
         path.name
         for path in Path(app.__file__).parent.rglob("*.py")
-        if "HUMAN_FINAL_APPROVAL" in path.read_text(encoding="utf-8")
+        if "TransitionActor.HUMAN_FINAL_APPROVAL" in path.read_text(encoding="utf-8")
     ]
 
     assert used == ["transitions.py"]

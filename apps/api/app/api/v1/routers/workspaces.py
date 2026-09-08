@@ -44,6 +44,7 @@ from app.schemas.workspace import (
     ComplianceCountersRead,
     DecisionRead,
     DecisionRequest,
+    DossierCoverageRead,
     NoteCreateRequest,
     NoteRead,
     PersonRead,
@@ -55,7 +56,7 @@ from app.schemas.workspace import (
     WorkspaceDetail,
     WorkspaceSummary,
 )
-from app.services import audit
+from app.services import audit, workspace_dossier
 from app.services import bid_workspace as service
 
 tender_router = APIRouter(prefix="/tenders/{tender_id}/workspace", tags=["candidatura"])
@@ -163,6 +164,13 @@ async def _detail(
     warnings = state.warnings
     can_decide = ctx.membership.role in service.DECISION_ROLES
     latest = decisions[0] if decisions else None
+    # Readiness del dossier: una tercera dimensio que tampoc no es fusiona amb
+    # el compliment ni amb la decisio. "Complim" i "tenim els papers" son coses
+    # diferents i s'han de poder llegir per separat.
+    dossier = await workspace_dossier.load_dossier(session, workspace)
+    await workspace_dossier.reconcile_readiness(
+        session, workspace, readiness=dossier.readiness
+    )
 
     return WorkspaceDetail(
         id=workspace.id,
@@ -192,6 +200,9 @@ async def _detail(
         current_requirement_run_id=workspace.current_requirement_run_id,
         analysis_outdated=state.analysis_outdated,
         outdated_reasons=list(state.outdated_reasons),
+        readiness=dossier.readiness.state,
+        readiness_blockers=list(dossier.readiness.blockers),
+        dossier_coverage=DossierCoverageRead(**asdict(dossier.counters)),
         checklist=[_checklist_read(item, names) for item in items],
         tasks=[_task_read(task, names) for task in tasks],
         notes=[_note_read(note, names) for note in notes],
@@ -434,6 +445,9 @@ async def update_checklist_item(
 
     await session.commit()
     await session.refresh(item)
+    # Bloquejar un item obligatori ha de treure el workspace de "llest".
+    workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
+    await workspace_dossier.reconcile_readiness(session, workspace)
     names = await _people_names(session, {item.assigned_to})
     return _checklist_read(item, names)
 
@@ -457,6 +471,7 @@ async def create_task(
         workspace_id=workspace.id,
         title=payload.title,
         description=payload.description,
+        mandatory=payload.mandatory,
         assigned_to=payload.assigned_to,
         due_at=payload.due_at,
         status=WorkspaceTaskStatus.PENDING,
@@ -465,6 +480,7 @@ async def create_task(
     session.add(task)
     await session.commit()
     await session.refresh(task)
+    await workspace_dossier.reconcile_readiness(session, workspace)
     names = await _people_names(session, {task.assigned_to})
     return _task_read(task, names)
 
@@ -500,6 +516,9 @@ async def update_task(
 
     await session.commit()
     await session.refresh(task)
+    # Reobrir una tasca obligatoria torna a deixar feina pendent.
+    workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
+    await workspace_dossier.reconcile_readiness(session, workspace)
     names = await _people_names(session, {task.assigned_to})
     return _task_read(task, names)
 

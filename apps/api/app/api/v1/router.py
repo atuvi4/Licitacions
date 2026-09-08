@@ -14,6 +14,7 @@ from app.api.v1.routers import (
     config,
     cpv,
     credentials,
+    dossier,
     matching,
     documents,
     people,
@@ -45,6 +46,8 @@ company_scoped.include_router(compliance.assessments_router)
 # humana. Tambe dada de tenant.
 company_scoped.include_router(workspaces.tender_router)
 company_scoped.include_router(workspaces.router)
+# Dossier documental: penja del workspace, que ja es de tenant.
+company_scoped.include_router(dossier.router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

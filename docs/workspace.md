@@ -213,6 +213,155 @@ GET    /workspaces/{id}/notes
 No hi ha cap `PATCH /workspaces/{id}`: no existeix cap manera d'escriure
 `status` que no passi per una decisió signada.
 
+## Dossier documental (5B)
+
+Després d'un GO, el workspace es converteix en un dossier operatiu:
+
+    Requirement -> què s'ha d'acreditar -> quina evidència corporativa tenim
+                -> quin document s'aportarà -> què falta -> estat de preparació
+
+### Cobertura NO és compliment
+
+És la distinció que sosté tota la iteració, i la més fàcil de perdre:
+
+| | Pregunta | Qui la respon |
+| --- | --- | --- |
+| **Compliment** (4C) | Podem acreditar que complim? | El motor de regles |
+| **Cobertura del dossier** | Tenim el document preparat? | Les peces seleccionades |
+| **Readiness** | El dossier està a punt per a la revisió final? | La derivació de 5B |
+
+Un requisit pot estar en `satisfies` amb el dossier en `missing_document`. No és
+una contradicció: saber que facturem prou no vol dir tenir els comptes anuals
+signats a la carpeta. La pantalla ensenya les dues columnes de costat.
+
+### `WorkspaceEvidenceItem`
+
+Una peça = "amb aquest document acreditarem aquest requisit".
+
+* **Un document pot cobrir N requisits** i **un requisit pot necessitar N
+  documents** — per això és una taula d'items i no un camp. El fitxer **no es
+  copia mai**: `document_id` apunta a la biblioteca corporativa que ja existeix.
+  No hi ha cap segona biblioteca.
+* **`suggested` no és `selected`.** El motor proposa el document que ell mateix
+  va fer servir per avaluar el requisit (reutilitza `AssessmentEvidence`, no
+  torna a buscar res). Només una persona el tria, i llavors s'escriuen
+  `selected_by` i `selected_at`.
+* Dos índexs únics parcials: un document no es proposa dues vegades per al
+  mateix requisit, i hi ha un sol marcador «encara no tenim document» per
+  requisit. Sincronitzar N vegades no duplica res ni trepitja cap tria humana.
+
+### Una sola font de veritat per a la caducitat
+
+`EvidenceItemStatus` **no té cap `expired`**. La caducitat es deriva sempre del
+document i del termini; un estat manual paral·lel podria quedar-se enrere i dir
+el contrari que les dates.
+
+### Vigència respecte del termini
+
+`document_validity()` és determinista i mira **el dia de presentació**, no avui:
+
+| Cas | Estat |
+| --- | --- |
+| Caduca després del termini | `valid` |
+| Vigent avui, **caduca abans del termini** | `expires_before_deadline` |
+| Ja caducat | `expired` |
+| Sense data | `no_expiry` |
+| Sense fitxer | `no_document` |
+
+`expires_before_deadline` és el cas que no es veu sol i el que fa perdre
+licitacions. Un document seleccionat que hi cau **no cobreix**: compta com a
+forat, perquè dir el contrari seria el pitjor error possible aquí.
+
+### Readiness
+
+Quatre estats — `not_started`, `incomplete`, `needs_review`,
+`ready_for_final_review` — i **cap puntuació**. Un 73 % no diu a ningú què ha de
+fer; «falten dos documents obligatoris i una tasca» sí. L'API retorna sempre la
+llista de blocadors amb codis:
+
+`decision_not_go` · `mandatory_unresolved` · `mandatory_checklist_blocked` ·
+`mandatory_evidence_missing` · `mandatory_document_expired` ·
+`mandatory_tasks_open` · `evidence_needs_review`
+
+`ready_for_final_review` només si: hi ha decisió humana de **GO**, cap requisit
+obligatori sense resoldre, cap item obligatori de checklist bloquejat, cap
+evidència obligatòria que falti, cap document obligatori caducat per a aquest
+plec i cap tasca obligatòria oberta. Un item de checklist `pending` **no**
+bloqueja: el senyal fiable de si el document hi és el dona el dossier.
+
+`evidence_needs_review` és l'únic blocador tou: si és l'únic, l'estat és
+`needs_review` i no `incomplete`. `analysis_outdated` també bloqueja: si hi ha
+una anàlisi o un càlcul més recents, el dossier ja no descriu el que el sistema
+sap ara.
+
+### Invalidació centralitzada
+
+Un workspace **no es pot quedar etiquetat com a `ready_for_final_review` quan ja
+no ho està**. `reconcile_readiness()` és l'únic lloc que el treu d'aquell estat:
+recalcula, compara i, si cal, el fa retrocedir a `preparing_bid` amb
+`set_status()` i l'actor `SYSTEM`. Cap mutació té la seva pròpia regla.
+
+El retrocés és a `preparing_bid` i no a `analysis`: la feina feta no desapareix,
+només deixa d'estar certificada com a completa.
+
+Es reconcilia després de cada mutació (evidència, tasca, checklist) **i també en
+llegir** el dossier, la readiness o el detall del workspace, de manera que la
+pantalla es corregeix sola sense que ningú hagi de recordar-se de prémer res.
+
+Casos coberts, tots pel mateix camí: es desselecciona un document obligatori ·
+un document seleccionat deixa de ser vàlid per al termini · una evidència passa
+a `missing` o a `needs_review` · es crea o es reobre una tasca obligatòria ·
+apareix un mandatory unresolved nou · hi ha una anàlisi o un compliment nous. Si
+la decisió humana deixa de ser GO, el camí és un altre i més directe: la pròpia
+decisió escriu `no_go_approved`.
+
+### L'estat guardat no és una credencial
+
+`reconcile_readiness()` només actua quan algú mira o toca el workspace. Un canvi
+extern que ningú no hagi consultat encara pot deixar l'etiqueta enrere fins a la
+següent lectura.
+
+Per això **cap codi es pot fiar de `workspace.status == ready_for_final_review`
+per presentar**. `advance_to_final_review()` ja recalcula en el moment, i
+l'aprovació final futura haurà de fer el mateix. Hi ha dos tests que ho fixen
+ara: un demostra que l'etiqueta pot quedar obsoleta mentre el càlcul ja diu que
+no, i un altre és estructural sobre el gate.
+
+### Ready no és submitted
+
+`POST /readiness/advance` porta `preparing_bid → ready_for_final_review` i **no
+es pot forçar**: si el dossier no està a punt, retorna `409 workspace_not_ready`
+amb la llista del que falta. Arribar-hi vol dir «el dossier sembla complet
+perquè una persona el revisi», res més. La resposta porta `is_submitted` explícit
+perquè la interfície no ho hagi de deduir.
+
+L'invariant de 5A segueix intacte: `submitted` exigeix `HUMAN_FINAL_APPROVAL` i
+cap codi el fa servir. El nom `SUBMITTED` només s'anomena a `enums.py` i
+`transitions.py`; qui vol saber si una candidatura s'ha presentat crida
+`transitions.is_submitted()`.
+
+### Del forat a la tasca
+
+`POST /dossier/{item_id}/task` crea la feina que tanca el forat. Títol per
+plantilla —reaprofita el de la checklist i només en canvia el verb: «Acreditar
+ISO 27001» → «Obtenir el document que acredita ISO 27001»—, **sense IA**. Si ja
+hi ha una tasca oberta amb el mateix títol no se'n crea una altra. Les que
+neixen d'un forat sobre un requisit obligatori surten amb
+`WorkspaceTask.mandatory = true`, i mentre estiguin obertes bloquegen la
+readiness.
+
+### API del dossier
+
+```
+GET    /workspaces/{id}/dossier              vista agrupada + cobertura + readiness
+POST   /workspaces/{id}/dossier/sync         proposa (idempotent, no tria)
+POST   /workspaces/{id}/dossier              afegeix una evidència a mà
+PATCH  /workspaces/{id}/dossier/{item_id}    selecciona / substitueix / descarta
+POST   /workspaces/{id}/dossier/{item_id}/task
+GET    /workspaces/{id}/readiness
+POST   /workspaces/{id}/readiness/advance    -> ready_for_final_review
+```
+
 ## Límits coneguts
 
 * **No hi ha aprovació final ni presentació.** `preparing_bid`,

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import { DecisionHistory, DecisionPanel } from "@/components/WorkspaceDecision";
+import { DossierSection } from "@/components/WorkspaceDossier";
 import {
   BlockerCounters,
   ChecklistSection,
@@ -19,6 +20,8 @@ import {
   DECISION_LABELS,
   DECISION_TONES,
   OUTDATED_LABELS,
+  READINESS_LABELS,
+  READINESS_TONES,
   WORKSPACE_STATUS_LABELS,
   WORKSPACE_STATUS_TONES,
   deadlineLabel,
@@ -134,7 +137,7 @@ export default function WorkspacePage() {
 
         {/* ------------------------------------------------- Capçalera --- */}
         <Card>
-          <div className="grid gap-4 px-5 py-5 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid gap-4 px-5 py-5 sm:grid-cols-2 lg:grid-cols-6">
             <Metric label="Termini">
               <span className="text-base">
                 {data.deadline_at ? formatDateTime(data.deadline_at) : "—"}
@@ -175,11 +178,17 @@ export default function WorkspacePage() {
                 <span className="text-warning">PENDENT</span>
               )}
             </Metric>
+            <Metric label="Dossier" hint="Tenim els papers a punt?">
+              <Badge tone={READINESS_TONES[data.readiness]}>
+                {READINESS_LABELS[data.readiness]}
+              </Badge>
+            </Metric>
           </div>
         </Card>
 
         <DecisionPanel workspace={data} onDecided={refresh} />
         <BlockerCounters workspace={data} />
+        <DossierSection workspace={data} onChange={refresh} />
         <ChecklistSection workspace={data} onChange={refresh} />
         <TasksSection workspace={data} onChange={refresh} />
         <NotesSection workspace={data} onChange={refresh} />

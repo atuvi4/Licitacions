@@ -9,17 +9,25 @@ l'usuari.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
+    AssessmentResult,
     ChecklistItemSource,
     ChecklistItemStatus,
+    CompanyEvidenceKind,
+    DocumentCategory,
+    DocumentValidity,
+    DossierCoverage,
     EligibilityResult,
+    EvidenceItemSource,
+    EvidenceItemStatus,
     RecommendationResult,
     RequirementCategory,
     WorkspaceDecisionType,
+    WorkspaceReadiness,
     WorkspaceStatus,
     WorkspaceTaskStatus,
 )
@@ -64,6 +72,7 @@ class ChecklistItemUpdateRequest(BaseModel):
 class TaskCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     description: str | None = Field(default=None, max_length=4000)
+    mandatory: bool = False
     assigned_to: uuid.UUID | None = None
     due_at: datetime | None = None
 
@@ -71,6 +80,7 @@ class TaskCreateRequest(BaseModel):
 class TaskUpdateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     description: str | None = Field(default=None, max_length=4000)
+    mandatory: bool | None = None
     status: WorkspaceTaskStatus | None = None
     assigned_to: uuid.UUID | None = None
     due_at: datetime | None = None
@@ -135,6 +145,7 @@ class TaskRead(ORMModel):
     workspace_id: uuid.UUID
     title: str
     description: str | None = None
+    mandatory: bool = False
     assigned_to: uuid.UUID | None = None
     assigned_to_name: str | None = None
     due_at: datetime | None = None
@@ -175,6 +186,19 @@ class ComplianceCountersRead(BaseModel):
     mandatory_not_applicable: int = 0
     potential_blockers: int = 0
     confirmed_blockers: int = 0
+
+
+class DossierCoverageRead(BaseModel):
+    """Cobertura DOCUMENTAL dels obligatoris. No es el compliment."""
+
+    mandatory_total: int = 0
+    covered: int = 0
+    missing_document: int = 0
+    needs_review: int = 0
+    not_applicable: int = 0
+    expired_documents: int = 0
+    optional_total: int = 0
+    optional_covered: int = 0
 
 
 class WorkspaceSummary(ORMModel):
@@ -245,6 +269,11 @@ class WorkspaceDetail(BaseModel):
     analysis_outdated: bool = False
     outdated_reasons: list[str] = Field(default_factory=list)
 
+    #: Estat del DOSSIER. Ni compliment ni decisio: si tenim els papers a punt.
+    readiness: WorkspaceReadiness = WorkspaceReadiness.NOT_STARTED
+    readiness_blockers: list[str] = Field(default_factory=list)
+    dossier_coverage: DossierCoverageRead | None = None
+
     checklist: list[ChecklistItemRead] = Field(default_factory=list)
     tasks: list[TaskRead] = Field(default_factory=list)
     notes: list[NoteRead] = Field(default_factory=list)
@@ -270,3 +299,101 @@ class ChecklistRegenerateResult(BaseModel):
     created: int
     total: int
     checklist: list[ChecklistItemRead] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Dossier documental (5B)                                                       #
+# --------------------------------------------------------------------------- #
+
+
+class EvidenceItemUpdateRequest(BaseModel):
+    """Seleccionar, substituir, descartar o marcar per revisar.
+
+    `clear_document` existeix perque `document_id: None` no es pot distingir de
+    "no toquis el document" amb `exclude_unset` sol.
+    """
+
+    status: EvidenceItemStatus | None = None
+    document_id: uuid.UUID | None = None
+    clear_document: bool = False
+    notes: str | None = Field(default=None, max_length=4000)
+
+
+class EvidenceItemCreateRequest(BaseModel):
+    requirement_id: uuid.UUID | None = None
+    document_id: uuid.UUID | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+
+
+class DossierDocumentRead(BaseModel):
+    """El fitxer, amb el que cal per decidir si serveix per a AQUEST plec."""
+
+    id: uuid.UUID
+    name: str
+    category: DocumentCategory
+    mime_type: str
+    file_size: int
+    #: SHA-256: permet saber si dos requisits fan servir literalment el mateix
+    #: fitxer sense comparar noms.
+    sha256: str
+    issued_at: date | None = None
+    expires_at: date | None = None
+    uploaded_at: datetime
+
+
+class DossierItemRead(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    requirement_id: uuid.UUID | None = None
+    checklist_item_id: uuid.UUID | None = None
+    requirement_title: str | None = None
+    requirement_category: RequirementCategory | None = None
+    requirement_quote: str | None = None
+    #: Que en deia el compliment. Recordatori que cobertura != compliment.
+    assessment_result: AssessmentResult | None = None
+    mandatory: bool = False
+    label: str
+    status: EvidenceItemStatus
+    source: EvidenceItemSource
+    company_evidence_type: CompanyEvidenceKind | None = None
+    company_evidence_id: uuid.UUID | None = None
+    document: DossierDocumentRead | None = None
+    #: Vigencia RESPECTE DEL TERMINI, no d'avui.
+    validity: DocumentValidity
+    coverage: DossierCoverage | None = None
+    selected_by: uuid.UUID | None = None
+    selected_by_name: str | None = None
+    selected_at: datetime | None = None
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DossierGroupRead(BaseModel):
+    group: str
+    items: list[DossierItemRead] = Field(default_factory=list)
+
+
+class ReadinessRead(BaseModel):
+    """Estat del dossier i, sobretot, per que. Cap puntuacio opaca."""
+
+    state: WorkspaceReadiness
+    blockers: list[str] = Field(default_factory=list)
+    #: Explicit: arribar a la revisio final NO es haver presentat res.
+    is_submitted: bool = False
+
+
+class DossierRead(BaseModel):
+    workspace_id: uuid.UUID
+    workspace_status: WorkspaceStatus
+    deadline_at: datetime | None = None
+    coverage: DossierCoverageRead
+    readiness: ReadinessRead
+    groups: list[DossierGroupRead] = Field(default_factory=list)
+
+
+class DossierSyncResult(BaseModel):
+    suggested: int
+    gaps: int
+    total: int
+    dossier: DossierRead
