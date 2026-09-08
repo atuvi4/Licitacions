@@ -20,7 +20,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "exp-1",
@@ -61,7 +61,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "cert-1",
@@ -102,7 +102,7 @@
         {
           "annotation_status": "needs_review",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": "Revisar obligatorietat: el text diu “podrá presentar” la classificació per acreditar solvència; pot ser un mitjà alternatiu i no un requisit mandatory. Grup/subgrup/categoria remesos a l’apartat 7.d.",
           "gold_id": "class-1",
@@ -141,7 +141,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "ins-1",
@@ -180,7 +180,7 @@
         {
           "annotation_status": "needs_review",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": "Falta extreure el llindar de solvència tècnica: import anual acumulat de serveis similars en l’any de major execució ≥ 70% de l’anualitat mitjana del contracte, és a dir, ≥ 21.406,71 €.",
           "gold_id": "exp-1",
@@ -204,7 +204,7 @@
         {
           "annotation_status": "needs_review",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": "Falta extreure la fórmula de puntuació de l’oferta econòmica; el plec indica explícitament que s’aplicarà una fórmula",
           "gold_id": "award-1",
@@ -236,7 +236,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "ins-1",
@@ -259,7 +259,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "eco-1",
@@ -285,7 +285,7 @@
         {
           "annotation_status": "needs_review",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": "Falta extreure la fórmula: PL = 10 × Oferta més baixa / Oferta a valorar.",
           "gold_id": "award-1",
@@ -317,7 +317,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "eco-1",
@@ -341,7 +341,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "exp-1",
@@ -363,7 +363,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "ins-1",
@@ -402,7 +402,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "ins-1",
@@ -441,7 +441,7 @@
         {
           "annotation_status": "needs_review",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": "Falta extreure la fórmula: P = 75 × (OM / OF).",
           "gold_id": "award-1",
@@ -472,7 +472,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "eco-1",
@@ -511,7 +511,7 @@
         {
           "annotation_status": "verified",
           "annotated_by": "assistant/4D",
-          "reviewed_by": "AlbertTuvi1 <alberttubert@inspladelestany.cat>",
+          "reviewed_by": "AlbertTuvi1",
           "reviewed_at": "2026-09-08",
           "review_note": null,
           "gold_id": "ins-1",

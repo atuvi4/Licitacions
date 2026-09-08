@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from app.evaluation.dataset import (
+    GoldAwardCriterion,
     GoldCase,
     GoldDataset,
     GoldRequirement,
@@ -578,3 +579,118 @@ def test_the_review_page_shows_the_full_page_text_and_the_quote():
     assert 'data-act="rejected"' in html
     assert 'data-act="needs_review"' in html
     assert "economic_solvency" in html and "mandatory" in html
+
+
+# --------------------------------------------------------------------------- #
+# 4D.1 · el report no pot dissimular el que no s'ha verificat                   #
+# --------------------------------------------------------------------------- #
+
+
+def award(**overrides) -> GoldAwardCriterion:
+    data = {
+        "gold_id": "a1",
+        "name": "Oferta economica",
+        "points": 60.0,
+        "document_name": "PCAP",
+        "page_number": 27,
+        "quote": "La oferta economica se valora con un maximo de 60 puntos",
+    }
+    data.update(overrides)
+    return GoldAwardCriterion(**data)
+
+
+def test_the_report_warns_about_annotations_that_need_review():
+    """Un `needs_review` cau de la metrica; si cau en silenci, ningu no el resol."""
+    summary = summarise_one([gold()], [predicted()])
+    summary.coverage = {
+        "verified": 11, "draft": 0, "needs_review": 5, "rejected": 0,
+        "cases": 11, "cases_with_verified": 8,
+    }
+
+    alerts = warnings_for(summary)
+
+    assert any("needs_review" in alert for alert in alerts)
+    assert any("5 anotacio(ns)" in alert for alert in alerts)
+
+
+def test_no_needs_review_no_warning():
+    summary = summarise_one([gold()], [predicted()])
+    summary.coverage = {
+        "verified": 11, "draft": 0, "needs_review": 0, "rejected": 0,
+        "cases": 11, "cases_with_verified": 11,
+    }
+
+    assert not any("needs_review" in alert for alert in warnings_for(summary))
+
+
+def test_award_metrics_are_unavailable_without_verified_gold():
+    """Zero criteris verificats no es un 0%: es que no s'ha mesurat res."""
+    from app.evaluation.report import AWARD_METRICS_UNAVAILABLE, award_metrics_available
+
+    summary = summarise_one([gold()], [predicted()])
+    summary.coverage = {
+        "verified": 11, "draft": 0, "needs_review": 5, "rejected": 0,
+        "cases": 11, "cases_with_verified": 8,
+    }
+
+    assert not award_metrics_available(summary)
+    assert AWARD_METRICS_UNAVAILABLE in warnings_for(summary)
+
+    markdown = render_markdown(summary, [])
+    award_row = next(
+        line for line in markdown.splitlines() if line.startswith("| Criteris d'adjudicacio")
+    )
+    assert "0.0%" not in award_row, "un zero es llegiria com una mesura"
+    assert award_row.count("n/d") == 3
+    assert AWARD_METRICS_UNAVAILABLE in markdown
+    assert build_payload(summary, [])["award_criteria_metrics_available"] is False
+
+
+def test_award_metrics_are_shown_when_there_is_verified_gold():
+    from app.evaluation.metrics import DetectionMetrics
+    from app.evaluation.report import AWARD_METRICS_UNAVAILABLE, award_metrics_available
+
+    summary = summarise_one([gold()], [predicted()])
+    summary.award_criteria = DetectionMetrics(2, 0, 1)
+
+    assert award_metrics_available(summary)
+    assert AWARD_METRICS_UNAVAILABLE not in warnings_for(summary)
+
+    markdown = render_markdown(summary, [])
+    award_row = next(
+        line for line in markdown.splitlines() if line.startswith("| Criteris d'adjudicacio")
+    )
+    assert "n/d" not in award_row
+    assert "66.7%" in award_row, "recall 2/3 real"
+    assert build_payload(summary, [])["award_criteria_metrics_available"] is True
+
+
+@pytest.mark.parametrize("status", ["draft", "rejected", "needs_review"])
+def test_no_unverified_annotation_reaches_the_official_denominator(status: str):
+    """Cap estat que no sigui `verified` no pot entrar al denominador oficial."""
+    from app.evaluation.dataset import AnnotationStatus, GoldCase
+
+    case = GoldCase(
+        case_id="c1",
+        requirements=[
+            gold(gold_id="v1", annotation_status=AnnotationStatus.VERIFIED),
+            gold(gold_id="x1", page_number=30, annotation_status=AnnotationStatus(status)),
+        ],
+        award_criteria=[
+            award(gold_id="ax1", annotation_status=AnnotationStatus(status)),
+        ],
+    )
+
+    assert [r.gold_id for r in case.verified_requirements] == ["v1"]
+    assert case.verified_award_criteria == [], "ni els criteris d'adjudicacio"
+
+    official = summarise_one(case.verified_requirements, [predicted()])
+    assert official.overall.true_positives == 1
+    assert official.overall.false_negatives == 0, "el no verificat no compta com a perdut"
+
+    dataset = GoldDataset(
+        dataset_id="d", version=1, created_at=date(2026, 9, 8), description="x", cases=[case]
+    )
+    assert dataset.verified_requirements == 1
+    assert dataset.verified_award_criteria == 0
+    assert dataset.coverage()[status] == 2, "pero segueixen al dataset, comptats i visibles"

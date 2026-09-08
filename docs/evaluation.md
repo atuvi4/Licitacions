@@ -218,6 +218,19 @@ El report marca explícitament, i són **blockers** per passar a producció:
 No són una porta de qualitat automàtica: no fan fallar el procés. Primer es
 mesura; posar un número abans de tenir dades seria arbitrari.
 
+El report també avisa del que **queda fora** de les mètriques, perquè caure del
+denominador en silenci és la manera més fàcil que una xifra sembli millor del
+que és:
+
+* anotacions en `draft` o en `needs_review` pendents, amb el nombre exacte;
+* menys de 10 casos amb anotacions verificades.
+
+I quan no hi ha cap criteri d'adjudicació verificat al gold, la fila de criteris
+no mostra `0,0 %` sinó `n/d`, amb el missatge
+`Award criteria metrics unavailable: no verified gold annotations`. Un zero es
+llegeix com una mesura; aquí no s'ha mesurat res. El JSON ho porta explícit a
+`award_criteria_metrics_available`.
+
 ## El benchmark no veu dades de l'empresa
 
 4B és tenant-agnostic i això també. Al proveïdor només hi va text públic del
@@ -225,9 +238,13 @@ plec. Cap `CompanyProfile`, cap pre-fit, cap compliance.
 
 ## Límits coneguts
 
-* **Cap anotació verificada encara.** Les 16 anotacions són esborranys escrits
-  per l'assistent. Fins que una persona no les revisi, **el dataset no és gold
-  truth** i les mètriques oficials no es poden calcular.
+* **Gold verificat parcial.** `gold-v1-reviewed` (v2) té 11 anotacions
+  `verified` i 5 `needs_review` de 16, revisades per AlbertTuvi1 el 2026-09-08.
+  `gold-v1` es manté intacte com a esborrany. Les 5 pendents queden fora de les
+  mètriques fins que es resolguin.
+* **Cap criteri d'adjudicació verificat.** Els 3 del dataset han quedat
+  `needs_review` (falta la fórmula de puntuació), o sigui que les mètriques de
+  criteris encara **no són calculables**.
 * **Mida del dataset.** 11 casos i 16 anotacions, dins de l'objectiu de 10-15
   expedients. L'arquitectura escala a 30-50; només s'anota el que es pot
   verificar literalment sobre pàgines ja processades.

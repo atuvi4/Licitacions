@@ -27,6 +27,20 @@ EVIDENCE_WARN = 0.95
 AUTOMATABLE_WARN = 0.70
 #: Casos amb anotacions verificades per sota dels quals la cobertura es insuficient.
 MIN_CASES_FOR_COVERAGE = 10
+#: Que es diu quan no hi ha gold verificat de criteris d'adjudicacio. Ensenyar 0%
+#: seria pitjor que no ensenyar res: un zero es llegeix com una mesura, i aqui no
+#: s'ha mesurat res.
+AWARD_METRICS_UNAVAILABLE = "Award criteria metrics unavailable: no verified gold annotations"
+
+
+def award_metrics_available(summary: EvaluationSummary) -> bool:
+    """Hi ha algun criteri d'adjudicacio al denominador del gold?
+
+    TP + FN es exactament el nombre de criteris del gold que han entrat a la
+    metrica. Si es zero no hi ha res contra que comparar, i precision/recall no
+    son 0%: no existeixen.
+    """
+    return summary.award_criteria.true_positives + summary.award_criteria.false_negatives > 0
 
 
 def build_payload(summary: EvaluationSummary, details: list[dict[str, Any]]) -> dict[str, Any]:
@@ -35,6 +49,8 @@ def build_payload(summary: EvaluationSummary, details: list[dict[str, Any]]) -> 
         "summary": summary.as_dict(),
         "cases": details,
         "warnings": warnings_for(summary),
+        # Explicit perque qui llegeixi el JSON no confongui un 0.0 amb una mesura.
+        "award_criteria_metrics_available": award_metrics_available(summary),
     }
 
 
@@ -45,6 +61,7 @@ def warnings_for(summary: EvaluationSummary) -> list[str]:
     coverage = summary.coverage or {}
     verified = coverage.get("verified", 0)
     draft = coverage.get("draft", 0)
+    needs_review = coverage.get("needs_review", 0)
 
     if summary.include_draft:
         alerts.append(
@@ -60,6 +77,13 @@ def warnings_for(summary: EvaluationSummary) -> list[str]:
         alerts.append(
             f"{draft} anotacio(ns) encara en esborrany: queden fora de les metriques."
         )
+    if needs_review:
+        alerts.append(
+            f"{needs_review} anotacio(ns) marcades com a `needs_review`: queden fora de les "
+            "metriques oficials fins que la revisio humana les resolgui."
+        )
+    if not award_metrics_available(summary):
+        alerts.append(AWARD_METRICS_UNAVAILABLE)
     if coverage.get("cases_with_verified", 0) < MIN_CASES_FOR_COVERAGE and verified:
         alerts.append(
             f"dataset coverage incomplete: {coverage.get('cases_with_verified', 0)} cas(os) "
@@ -141,8 +165,8 @@ def render_markdown(summary: EvaluationSummary, details: list[dict[str, Any]]) -
                 ("Casos amb anotacions verificades", str(coverage.get("cases_with_verified", 0))),
                 ("**Verificades** (compten)", str(coverage.get("verified", 0))),
                 ("Esborrany (NO compten)", str(coverage.get("draft", 0))),
-                ("Necessiten revisio", str(coverage.get("needs_review", 0))),
-                ("Rebutjades", str(coverage.get("rejected", 0))),
+                ("Necessiten revisio (NO compten)", str(coverage.get("needs_review", 0))),
+                ("Rebutjades (NO compten)", str(coverage.get("rejected", 0))),
             ],
             ("Mesura", "Valor"),
         ),
@@ -160,30 +184,43 @@ def render_markdown(summary: EvaluationSummary, details: list[dict[str, Any]]) -
         parts += [f"- ⚠️ {alert}" for alert in alerts]
         parts.append("")
 
+    award_available = award_metrics_available(summary)
+
+    def _detection_row(name: str, block: dict[str, Any], available: bool = True) -> tuple[str, ...]:
+        # Sense denominador no s'escriuen percentatges: un 0,0% es llegiria com
+        # una mesura, i el que passa es que no n'hi ha cap.
+        scores = (
+            (f"{block['precision']:.1%}", f"{block['recall']:.1%}", f"{block['f1']:.1%}")
+            if available
+            else ("n/d", "n/d", "n/d")
+        )
+        return (
+            name,
+            str(block["true_positives"]),
+            str(block["false_positives"]),
+            str(block["false_negatives"]),
+            *scores,
+        )
+
     parts += [
         "## Deteccio",
         "",
         _table(
             [
-                (
-                    name,
-                    str(block["true_positives"]),
-                    str(block["false_positives"]),
-                    str(block["false_negatives"]),
-                    f"{block['precision']:.1%}",
-                    f"{block['recall']:.1%}",
-                    f"{block['f1']:.1%}",
-                )
-                for name, block in (
-                    ("Global", detection["overall"]),
-                    ("Obligatoris", detection["mandatory"]),
-                    ("**Critics**", detection["critical"]),
-                    ("Criteris d'adjudicacio", detection["award_criteria"]),
-                )
+                _detection_row("Global", detection["overall"]),
+                _detection_row("Obligatoris", detection["mandatory"]),
+                _detection_row("**Critics**", detection["critical"]),
+                _detection_row(
+                    "Criteris d'adjudicacio", detection["award_criteria"], award_available
+                ),
             ],
             ("Conjunt", "TP", "FP", "FN", "Precision", "Recall", "F1"),
         ),
         "",
+    ]
+    if not award_available:
+        parts += [f"> **{AWARD_METRICS_UNAVAILABLE}**", ""]
+    parts += [
         "## Per categoria",
         "",
         _table(
