@@ -1280,3 +1280,27 @@ def test_no_endpoint_can_overwrite_the_bytes_of_a_document():
     immutable = {"storage_key", "sha256", "file_size", "mime_type", "original_filename"}
 
     assert immutable.isdisjoint(set(DocumentUpdate.model_fields))
+
+
+# --------------------------------------------------------------------------- #
+# Regressions trobades validant contra infraestructura real (5D)                #
+# --------------------------------------------------------------------------- #
+
+
+async def test_the_freeze_response_lists_the_documents_it_just_froze(db, client_a, ready):
+    """La resposta de congelar deia `document_count: 1` amb `items: []`.
+
+    Un paquet acabat de crear ja te les col·leccions inicialitzades a buides a la
+    sessio, i la consulta posterior no les sobreescrivia. La pantalla ensenyava
+    un paquet congelat sense cap document.
+    """
+    root = f"/api/v1/companies/{ready['company'].id}/workspaces/{ready['workspace'].id}"
+
+    frozen = (await client_a.post(f"{root}/packages")).json()["package"]
+
+    assert frozen["coverage"]["document_count"] == 1
+    assert len(frozen["items"]) == 1, "el que es congela s'ha de poder veure a l'acte"
+    assert frozen["items"][0]["document_sha256"] == ready["document"].sha256
+    # I ha de coincidir amb el que retorna llegir-lo despres.
+    fetched = (await client_a.get(f"{root}/packages/{frozen['id']}")).json()
+    assert [i["id"] for i in fetched["items"]] == [i["id"] for i in frozen["items"]]

@@ -101,6 +101,11 @@ async def get_package(
             SubmissionPackage.id == package_id,
             SubmissionPackage.company_id == company_id,
         )
+        # `populate_existing`: un paquet acabat de crear ja te les col·leccions
+        # inicialitzades a BUIDES a la sessio, i sense aixo la consulta no les
+        # sobreescriuria. El resultat era un paquet amb `document_count: 1` i
+        # `items: []` just despres de congelar-lo.
+        .execution_options(populate_existing=True)
     )
     if package is None:
         raise NotFoundError("Paquet no trobat.")
