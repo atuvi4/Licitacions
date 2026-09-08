@@ -4,9 +4,9 @@ import uuid
 from datetime import date
 
 import sqlalchemy as sa
-from sqlalchemy.exc import IntegrityError
 from fastapi import APIRouter, File, Form, Query, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CompanyCtx, SessionDep
 from app.api.v1.crud import apply_changes, get_owned_or_404
@@ -27,6 +27,7 @@ from app.schemas.documents import (
     EvidenceRead,
 )
 from app.services import audit
+from app.services.document_retention import assert_document_is_deletable
 from app.services.entities import assert_entity_in_company
 from app.services.files import compute_sha256, extension_for, sanitize_filename, validate_upload
 from app.services.storage import build_storage_key, get_storage
@@ -207,6 +208,10 @@ async def delete_document(
     document_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx
 ) -> Response:
     document = await get_owned_or_404(session, Document, document_id, ctx.company_id)
+    # Un document que sosté un paquet de presentacio congelat no s'esborra: sense
+    # els bytes, el SHA-256 del manifest deixaria de ser comprovable. La FK ja ho
+    # impediria; aixo hi posa un error que es pot llegir.
+    await assert_document_is_deletable(session, document.id)
     storage_key = document.storage_key
     await session.delete(document)  # els enllacos cauen per FK ON DELETE CASCADE
     await audit.record(

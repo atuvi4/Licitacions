@@ -28,6 +28,11 @@ from app.models.requirements import (
     RequirementExtractionRun,
 )
 from app.models.sources import IngestionRun, Source, SourceRecord
+from app.models.submission import (
+    SubmissionPackage,
+    SubmissionPackageApproval,
+    SubmissionPackageItem,
+)
 from app.models.tender_documents import (
     TenderDocumentContent,
     TenderDocumentExtraction,
@@ -87,6 +92,9 @@ __all__ = [
     "ServiceCPV",
     "Source",
     "SourceRecord",
+    "SubmissionPackage",
+    "SubmissionPackageApproval",
+    "SubmissionPackageItem",
     "Tender",
     "TenderCPV",
     "TenderDocument",

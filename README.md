@@ -57,6 +57,9 @@ embedding ni cap similitud semàntica — el motor és determinista i reproduïb
 | Dossier documental: quin document acredita cada requisit, sense duplicar-lo | ✅ |
 | Caducitat mesurada contra el termini del plec, no contra avui | ✅ |
 | Readiness del dossier amb la llista del que falta, sense cap puntuació opaca | ✅ |
+| Paquet de presentació immutable amb manifest determinista i SHA-256 | ✅ |
+| Aprovació humana final d'una revisió concreta, append-only i auditable | ✅ |
+| Presentació a PLACSP | ❌ (fase següent) |
 | Generació d'ofertes, memòries, RAG, OCR | ❌ (fase següent) |
 
 ---

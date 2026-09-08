@@ -1446,8 +1446,10 @@ def test_the_final_review_gate_recomputes_instead_of_trusting_the_flag():
     source = inspect.getsource(service.advance_to_final_review)
 
     assert "reconcile_readiness" in source
-    assert "if workspace.status == WorkspaceStatus.READY_FOR_FINAL_REVIEW" not in source
     assert "is_ready" in source
+    # El recalcul ha d'anar ABANS de qualsevol lectura de l'estat guardat: si
+    # mires primer l'etiqueta, ja t'hi has fiat.
+    assert source.index("reconcile_readiness") < source.index("workspace.status ==")
 
 
 def test_there_is_no_manual_expired_status():

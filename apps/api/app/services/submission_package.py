@@ -1,0 +1,487 @@
+"""Congelar el paquet i aprovar-lo. L'ultim OK abans de presentar.
+
+Aquesta capa respon una sola pregunta, i tota la seva forma en depen:
+**exactament quin paquet estem aprovant?**
+
+Per aixo l'aprovacio no apunta al workspace —que canvia— sino a una revisio
+congelada amb els documents i els seus hashos d'aquell dia. Si despres canvia
+qualsevol peca, l'aprovacio anterior segueix sent auditable i **no serveix** per
+al paquet nou: cal congelar una revisio nova i tornar a aprovar.
+
+Cap crida a cap model. Congelar es copiar i calcular un hash; aprovar es una
+persona prement un boto.
+
+No presenta res enlloc. `submitted` queda fora d'aquesta iteracio.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import uuid
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+
+import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.core.errors import ConflictError, NotFoundError
+from app.models.documents import Document
+from app.models.enums import (
+    MembershipRole,
+    PackageApprovalDecision,
+    RequirementCategory,
+    SubmissionPackageStatus,
+    WorkspaceStatus,
+)
+from app.models.identity import User
+from app.models.submission import (
+    SubmissionPackage,
+    SubmissionPackageApproval,
+    SubmissionPackageItem,
+)
+from app.models.workspace import BidWorkspace
+from app.services import bid_workspace as workspace_service
+from app.services import workspace_dossier as dossier_service
+from app.services.storage import StorageError, get_storage
+from app.workspace.dossier import UNUSABLE_VALIDITIES
+from app.workspace.transitions import TransitionActor
+
+#: Qui pot signar l'aprovacio final. La mateixa politica de 5A: no s'inventa cap
+#: RBAC nou per a aixo.
+FINAL_APPROVAL_ROLES = workspace_service.DECISION_ROLES
+
+
+class PackageNotReadyError(ConflictError):
+    """S'ha demanat congelar amb el dossier incomplet."""
+
+    code = "package_not_ready"
+
+
+class PackageImmutableError(ConflictError):
+    """S'ha intentat tocar un paquet que ja no es un esborrany."""
+
+    code = "package_immutable"
+
+
+class PackageStaleError(ConflictError):
+    """El paquet ja no descriu el que hi ha ara: cal una revisio nova."""
+
+    code = "package_stale"
+
+
+class PackageIntegrityError(ConflictError):
+    """Un fitxer del paquet ha desaparegut o ja no es el que era."""
+
+    code = "package_integrity_failed"
+
+
+class NoDocumentsError(ConflictError):
+    """No es congela un paquet buit."""
+
+    code = "package_has_no_documents"
+
+
+# --------------------------------------------------------------------------- #
+# Lectura                                                                       #
+# --------------------------------------------------------------------------- #
+
+
+async def get_package(
+    session: AsyncSession, company_id: uuid.UUID, package_id: uuid.UUID
+) -> SubmissionPackage:
+    """Sempre filtrat per empresa. 404 si es d'un altre tenant."""
+    package = await session.scalar(
+        sa.select(SubmissionPackage)
+        .options(
+            selectinload(SubmissionPackage.items),
+            selectinload(SubmissionPackage.approvals),
+        )
+        .where(
+            SubmissionPackage.id == package_id,
+            SubmissionPackage.company_id == company_id,
+        )
+    )
+    if package is None:
+        raise NotFoundError("Paquet no trobat.")
+    return package
+
+
+async def list_packages(
+    session: AsyncSession, workspace: BidWorkspace
+) -> list[SubmissionPackage]:
+    return list(
+        (
+            await session.scalars(
+                sa.select(SubmissionPackage)
+                .options(
+                    selectinload(SubmissionPackage.items),
+                    selectinload(SubmissionPackage.approvals),
+                )
+                .where(SubmissionPackage.workspace_id == workspace.id)
+                .order_by(SubmissionPackage.revision_number.desc())
+            )
+        ).all()
+    )
+
+
+async def latest_package(
+    session: AsyncSession, workspace: BidWorkspace
+) -> SubmissionPackage | None:
+    packages = await list_packages(session, workspace)
+    return packages[0] if packages else None
+
+
+def approval_of(package: SubmissionPackage) -> SubmissionPackageApproval | None:
+    """L'ultima aprovacio d'aquesta revisio, si n'hi ha cap de vigent.
+
+    Es mira `decision`, no nomes l'existencia: rebutjar despres d'aprovar afegeix
+    una entrada nova i la vigent es l'ultima.
+    """
+    latest = next(iter(package.approvals), None)
+    if latest is None or latest.decision != PackageApprovalDecision.APPROVED_FOR_SUBMISSION:
+        return None
+    return latest
+
+
+# --------------------------------------------------------------------------- #
+# Congelar                                                                      #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrityIssue:
+    document_id: uuid.UUID | None
+    filename: str
+    problem: str
+
+
+async def verify_storage_integrity(
+    items: list[SubmissionPackageItem], *, deep: bool = False
+) -> list[IntegrityIssue]:
+    """Comprova que cada fitxer segueix sent el que el paquet diu que es.
+
+    Sense `deep` no es descarrega res: nomes existencia i mida, que es el que
+    l'storage pot respondre amb una consulta de metadades. Amb `deep` es
+    recalcula el SHA-256 dels bytes.
+
+    La comprovacio superficial NO detectaria una mutacio de la mateixa mida; per
+    aixo l'aprovacio final la fa profunda i el congelat no. Congelar es barat i
+    repetible; aprovar passa una vegada i ha de ser fiable.
+    """
+    storage = get_storage()
+    issues: list[IntegrityIssue] = []
+    for item in items:
+        try:
+            if not await storage.exists(item.storage_key):
+                issues.append(
+                    IntegrityIssue(item.document_id, item.filename, "missing_from_storage")
+                )
+                continue
+            size = await storage.size(item.storage_key)
+        except (StorageError, NotImplementedError):  # pragma: no cover - backend antic
+            continue
+
+        if size is not None and size != item.file_size:
+            issues.append(IntegrityIssue(item.document_id, item.filename, "size_mismatch"))
+            continue
+        if not deep:
+            continue
+        try:
+            payload = await storage.download(item.storage_key)
+        except StorageError:
+            issues.append(
+                IntegrityIssue(item.document_id, item.filename, "missing_from_storage")
+            )
+            continue
+        if hashlib.sha256(payload).hexdigest() != item.document_sha256:
+            issues.append(IntegrityIssue(item.document_id, item.filename, "sha256_mismatch"))
+    return issues
+
+
+@dataclass(frozen=True, slots=True)
+class FreezeOutcome:
+    package: SubmissionPackage
+    created: bool
+
+
+async def freeze_package(
+    session: AsyncSession,
+    workspace: BidWorkspace,
+    *,
+    user: User,
+    role: MembershipRole,
+) -> FreezeOutcome:
+    """Congela una revisio nova amb el que hi ha ara mateix al dossier.
+
+    **Recalcula sempre la readiness.** No es mira `workspace.status`: l'estat
+    guardat es un reflex i un reflex pot quedar enrere. Si el dossier no esta a
+    punt, no es congela res i l'error diu que falta.
+
+    El paquet neix en `draft` i passa a `frozen` dins de la mateixa transaccio,
+    un cop calculat el manifest i comprovada la integritat dels fitxers. Si algo
+    falla, no queda cap revisio a mitges.
+    """
+    workspace_service.assert_can_decide(role)
+
+    readiness = await dossier_service.reconcile_readiness(session, workspace)
+    if not readiness.is_ready:
+        raise PackageNotReadyError(
+            "El dossier encara no esta a punt per congelar-lo.",
+            details={"blockers": list(readiness.blockers)},
+        )
+
+    dossier = await dossier_service.load_dossier(session, workspace)
+    state = await workspace_service.load_state(session, workspace)
+
+    previous = await latest_package(session, workspace)
+    revision_number = (previous.revision_number + 1) if previous else 1
+
+    # Una sola implementacio del manifest, compartida amb la deteccio
+    # d'obsolescencia: si congelar i comparar el construissin per separat, dos
+    # hashos diferents no voldrien dir res.
+    selected, payload, digest = await dossier_service.current_manifest(
+        session, workspace, revision_number=revision_number
+    )
+    if not selected:
+        raise NoDocumentsError("No hi ha cap document seleccionat per presentar.")
+    package = SubmissionPackage(
+        company_id=workspace.company_id,
+        workspace_id=workspace.id,
+        revision_number=revision_number,
+        status=SubmissionPackageStatus.DRAFT,
+        compliance_run_id=state.compliance_run.id if state.compliance_run else None,
+        requirement_run_id=state.requirement_run.id if state.requirement_run else None,
+        prefit_score=state.prefit_score,
+        deadline_at=state.deadline_at,
+        mandatory_total=dossier.counters.mandatory_total,
+        mandatory_covered=dossier.counters.covered,
+        document_count=len(selected),
+        created_by=user.id,
+    )
+    session.add(package)
+    await session.flush()
+
+    items: list[SubmissionPackageItem] = []
+    for position, row in enumerate(selected):
+        document = row.document
+        item = SubmissionPackageItem(
+            company_id=workspace.company_id,
+            package_id=package.id,
+            workspace_evidence_item_id=row.item.id,
+            document_id=document.id,
+            requirement_id=row.item.requirement_id,
+            # Copia deliberada: si despres es modifica el document, comparar
+            # aixo amb el que hi ha ara es el que detecta el canvi.
+            document_sha256=document.sha256,
+            storage_key=document.storage_key,
+            filename=document.name,
+            mime_type=document.mime_type,
+            file_size=document.file_size,
+            requirement_title=(
+                row.checklist_item.title
+                if row.checklist_item
+                else (row.requirement.title if row.requirement else None)
+            ),
+            category=row.requirement.category if row.requirement else RequirementCategory.OTHER,
+            position=position,
+        )
+        session.add(item)
+        items.append(item)
+
+    issues = await verify_storage_integrity(items)
+    if issues:
+        await session.rollback()
+        raise PackageIntegrityError(
+            "Algun fitxer del paquet no es al seu lloc o ja no es el mateix.",
+            details={"issues": [asdict(issue) for issue in issues]},
+        )
+
+    package.manifest_json = payload
+    package.manifest_hash = digest
+    package.status = SubmissionPackageStatus.FROZEN
+    package.frozen_at = datetime.now(UTC)
+    package.frozen_by = user.id
+
+    # Les revisions anteriors que encara no s'havien aprovat queden superades.
+    # Les APROVADES no es toquen: son historial.
+    for old in await list_packages(session, workspace):
+        if old.id != package.id and old.status == SubmissionPackageStatus.FROZEN:
+            old.status = SubmissionPackageStatus.SUPERSEDED
+
+    await session.commit()
+
+    # Congelar per a la revisio final ES posar el workspace en revisio final: ja
+    # s'ha comprovat la mateixa readiness que exigeix el gate de 5B. Si venia
+    # d'una revisio aprovada, hi torna: la revisio nova encara no ho esta.
+    if workspace.status != WorkspaceStatus.READY_FOR_FINAL_REVIEW:
+        await dossier_service.advance_to_final_review(
+            session, workspace, user=user, role=role
+        )
+
+    # Es torna a llegir amb els items carregats: despres d'un commit les
+    # col·leccions queden expirades i resoldre-les mandrosament dins d'una
+    # corutina no es possible.
+    package = await get_package(session, workspace.company_id, package.id)
+    return FreezeOutcome(package=package, created=True)
+
+
+# --------------------------------------------------------------------------- #
+# Obsolescencia                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class StaleReport:
+    """Per que aquest paquet ja no descriu el que hi ha ara."""
+
+    reasons: tuple[str, ...]
+    current_manifest_hash: str | None
+
+    @property
+    def is_stale(self) -> bool:
+        return bool(self.reasons)
+
+
+async def evaluate_staleness(
+    session: AsyncSession, workspace: BidWorkspace, package: SubmissionPackage
+) -> StaleReport:
+    """Compara el paquet amb l'estat actual. Deterministic i sense efectes.
+
+    Es recalcula el manifest amb el que hi ha ara i es compara el hash: si
+    difereix, hi ha alguna cosa que ja no es la mateixa —un document substituit,
+    un que s'ha tret, un requisit que ja no hi es— i el paquet no es pot aprovar.
+    """
+    reasons: list[str] = []
+    state = await workspace_service.load_state(session, workspace)
+
+    if state.compliance_run is not None and state.compliance_run.id != package.compliance_run_id:
+        reasons.append("compliance_run_changed")
+    if (
+        state.requirement_run is not None
+        and state.requirement_run.id != package.requirement_run_id
+    ):
+        reasons.append("requirement_run_changed")
+
+    selected, _payload, digest = await dossier_service.current_manifest(
+        session, workspace, revision_number=package.revision_number
+    )
+    if digest != package.manifest_hash:
+        reasons.append("manifest_changed")
+
+    # Un document del paquet que hagi deixat de servir per al termini invalida el
+    # paquet encara que el manifest no hagi canviat: el que ha canviat es el
+    # calendari, no el fitxer.
+    if any(row.validity in UNUSABLE_VALIDITIES for row in selected):
+        reasons.append("document_expired_for_deadline")
+
+    return StaleReport(reasons=tuple(reasons), current_manifest_hash=digest)
+
+
+# --------------------------------------------------------------------------- #
+# Aprovacio final humana                                                        #
+# --------------------------------------------------------------------------- #
+
+
+async def approve_package(
+    session: AsyncSession,
+    workspace: BidWorkspace,
+    package: SubmissionPackage,
+    *,
+    user: User,
+    role: MembershipRole,
+    decision: PackageApprovalDecision,
+    comment: str | None = None,
+    deep_integrity: bool = True,
+) -> SubmissionPackageApproval:
+    """L'aprovacio humana d'UNA revisio. **L'unic us de `HUMAN_FINAL_APPROVAL`.**
+
+    Es recalcula tot de zero abans de signar: readiness, obsolescencia i
+    integritat dels fitxers. No hi ha cap drecera que es fii de
+    `workspace.status` ni de l'estat guardat del paquet, perque entre congelar i
+    aprovar hi pot haver passat qualsevol cosa.
+
+    A diferencia del GO inicial, aqui NO s'aprova amb avisos oberts. Alla
+    s'aprovava anar-hi; aqui s'aprova exactament el que s'envia.
+
+    Aprovar **no** presenta res: deixa el workspace en `approved_for_submission`.
+    `submitted` es una altra iteracio.
+    """
+    workspace_service.assert_can_decide(role)
+
+    if package.status == SubmissionPackageStatus.SUPERSEDED:
+        raise PackageStaleError(
+            "Aquesta revisio ha quedat superada per una de posterior.",
+            details={"reasons": ["superseded"]},
+        )
+
+    if decision == PackageApprovalDecision.APPROVED_FOR_SUBMISSION:
+        readiness = await dossier_service.reconcile_readiness(session, workspace)
+        if not readiness.is_ready:
+            raise PackageNotReadyError(
+                "El dossier ja no esta a punt: no es pot aprovar aquest paquet.",
+                details={"blockers": list(readiness.blockers)},
+            )
+
+        stale = await evaluate_staleness(session, workspace, package)
+        if stale.is_stale:
+            # No s'aprova en silenci una cosa que ja no es la que es va congelar.
+            package.status = SubmissionPackageStatus.SUPERSEDED
+            await session.commit()
+            raise PackageStaleError(
+                "El paquet ja no descriu el que hi ha ara: cal congelar una revisio nova.",
+                details={"reasons": list(stale.reasons)},
+            )
+
+        issues = await verify_storage_integrity(package.items, deep=deep_integrity)
+        if issues:
+            raise PackageIntegrityError(
+                "Algun fitxer del paquet no es al seu lloc o ja no es el mateix.",
+                details={"issues": [asdict(issue) for issue in issues]},
+            )
+    else:
+        readiness = await dossier_service.evaluate_workspace_readiness(session, workspace)
+
+    approval = SubmissionPackageApproval(
+        company_id=workspace.company_id,
+        package_id=package.id,
+        # El hash aprovat, no nomes l'identificador del paquet.
+        package_manifest_hash=package.manifest_hash or "",
+        decision=decision,
+        approved_by=user.id,
+        approved_at=datetime.now(UTC),
+        comment=(comment or "").strip() or None,
+        readiness_snapshot=readiness.state,
+        blockers_snapshot=list(readiness.blockers),
+    )
+    session.add(approval)
+
+    if decision == PackageApprovalDecision.APPROVED_FOR_SUBMISSION:
+        package.status = SubmissionPackageStatus.APPROVED
+        workspace.status = workspace_service.set_status(
+            workspace,
+            WorkspaceStatus.APPROVED_FOR_SUBMISSION,
+            actor=TransitionActor.HUMAN_FINAL_APPROVAL,
+        )
+
+    await session.commit()
+    await session.refresh(approval)
+    await session.refresh(workspace)
+    # Explicit: l'identity map retorna el mateix objecte i no repoblaria una
+    # col·leccio que ja tenia carregada (buida). Qui cridi aixo ha de veure
+    # l'aprovacio que acaba de signar.
+    await session.refresh(package, attribute_names=["status", "approvals"])
+    return approval
+
+
+async def document_for_download(
+    session: AsyncSession, company_id: uuid.UUID, document_id: uuid.UUID
+) -> Document:  # pragma: no cover - utilitat per a la UI
+    document = await session.scalar(
+        sa.select(Document).where(
+            Document.id == document_id, Document.company_id == company_id
+        )
+    )
+    if document is None:
+        raise NotFoundError("Document no trobat.")
+    return document

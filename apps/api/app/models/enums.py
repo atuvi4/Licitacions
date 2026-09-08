@@ -512,7 +512,8 @@ class CompanyEvidenceKind(StrEnum):
 class WorkspaceStatus(StrEnum):
     """On es troba una candidatura.
 
-    `GO_APPROVED`, `NO_GO_APPROVED` i `SUBMITTED` NO els pot escriure cap regla
+    `GO_APPROVED`, `NO_GO_APPROVED`, `APPROVED_FOR_SUBMISSION` i `SUBMITTED` NO
+    els pot escriure cap regla
     automatica: son consequencia d'una accio humana registrada. La resta descriu
     el treball, no una decisio.
     """
@@ -524,6 +525,9 @@ class WorkspaceStatus(StrEnum):
     NO_GO_APPROVED = "no_go_approved"
     PREPARING_BID = "preparing_bid"
     READY_FOR_FINAL_REVIEW = "ready_for_final_review"
+    #: Una persona ha aprovat un paquet CONCRET per presentar. Encara no s'ha
+    #: presentat res: aixo es una altra cosa i una altra iteracio.
+    APPROVED_FOR_SUBMISSION = "approved_for_submission"
     SUBMITTED = "submitted"
     WITHDRAWN = "withdrawn"
 
@@ -622,3 +626,24 @@ class DossierCoverage(StrEnum):
     MISSING_DOCUMENT = "missing_document"
     NEEDS_REVIEW = "needs_review"
     NOT_APPLICABLE = "not_applicable"
+
+
+class SubmissionPackageStatus(StrEnum):
+    """Estat d'un paquet de presentacio.
+
+    `DRAFT` es transitori: nomes existeix mentre es construeix el paquet dins
+    d'una transaccio. A partir de `FROZEN` la fotografia es immutable; canviar
+    qualsevol peca vol dir crear una revisio nova, no editar aquesta.
+    """
+
+    DRAFT = "draft"
+    FROZEN = "frozen"
+    APPROVED = "approved"
+    SUPERSEDED = "superseded"
+
+
+class PackageApprovalDecision(StrEnum):
+    """El veredicte d'una persona sobre UN paquet concret."""
+
+    APPROVED_FOR_SUBMISSION = "approved_for_submission"
+    REJECTED = "rejected"

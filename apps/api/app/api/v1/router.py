@@ -21,6 +21,7 @@ from app.api.v1.routers import (
     profile,
     projects,
     requirements,
+    submission,
     tender_documents,
     tenders,
     workspaces,
@@ -48,6 +49,8 @@ company_scoped.include_router(workspaces.tender_router)
 company_scoped.include_router(workspaces.router)
 # Dossier documental: penja del workspace, que ja es de tenant.
 company_scoped.include_router(dossier.router)
+# Paquet de presentacio i aprovacio final humana.
+company_scoped.include_router(submission.router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

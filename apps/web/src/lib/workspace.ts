@@ -22,6 +22,7 @@ export type WorkspaceStatus =
   | "no_go_approved"
   | "preparing_bid"
   | "ready_for_final_review"
+  | "approved_for_submission"
   | "submitted"
   | "withdrawn";
 
@@ -391,6 +392,7 @@ export const WORKSPACE_STATUS_LABELS: Record<WorkspaceStatus, string> = {
   no_go_approved: "NO-GO aprovat",
   preparing_bid: "Preparant oferta",
   ready_for_final_review: "A revisió final",
+  approved_for_submission: "Aprovada per presentar",
   submitted: "Presentada",
   withdrawn: "Retirada",
 };
@@ -403,6 +405,7 @@ export const WORKSPACE_STATUS_TONES: Record<WorkspaceStatus, Tone> = {
   no_go_approved: "danger",
   preparing_bid: "brand",
   ready_for_final_review: "brand",
+  approved_for_submission: "success",
   submitted: "success",
   withdrawn: "neutral",
 };
@@ -485,3 +488,122 @@ export function deadlineTone(days: number | null): Tone {
   if (days <= 7) return "warning";
   return "neutral";
 }
+
+/* -------------------------------------------------------------------------- */
+/* Paquet de presentació (5C)                                                  */
+/* -------------------------------------------------------------------------- */
+
+export type SubmissionPackageStatus = "draft" | "frozen" | "approved" | "superseded";
+export type PackageApprovalDecision = "approved_for_submission" | "rejected";
+
+export interface PackageItem {
+  id: string;
+  document_id: string | null;
+  workspace_evidence_item_id: string | null;
+  requirement_id: string | null;
+  requirement_title: string | null;
+  category: string;
+  filename: string;
+  mime_type: string;
+  file_size: number;
+  /** El hash dels BYTES aprovats, copiat en congelar. */
+  document_sha256: string;
+  position: number;
+  validity: DocumentValidity | null;
+  document_expires_at: string | null;
+  /** Cert si el document d'ara ja no és el que es va congelar. */
+  changed_since_freeze: boolean;
+}
+
+export interface PackageApproval {
+  id: string;
+  package_id: string;
+  package_manifest_hash: string;
+  decision: PackageApprovalDecision;
+  approved_by: string;
+  approved_by_name: string | null;
+  approved_at: string;
+  comment: string | null;
+  readiness_snapshot: WorkspaceReadiness;
+  blockers_snapshot: string[];
+}
+
+export interface PackageSummary {
+  id: string;
+  workspace_id: string;
+  revision_number: number;
+  status: SubmissionPackageStatus;
+  manifest_hash: string | null;
+  manifest_hash_short: string | null;
+  document_count: number;
+  mandatory_total: number;
+  mandatory_covered: number;
+  deadline_at: string | null;
+  frozen_at: string | null;
+  created_at: string;
+  is_approved: boolean;
+  approved_at: string | null;
+  approved_by_name: string | null;
+}
+
+export interface PackageDetail {
+  id: string;
+  workspace_id: string;
+  company_id: string;
+  revision_number: number;
+  status: SubmissionPackageStatus;
+  manifest_hash: string | null;
+  manifest_hash_short: string | null;
+  tender_title: string | null;
+  expediente_number: string | null;
+  lot_number: number | null;
+  deadline_at: string | null;
+  days_remaining: number | null;
+  compliance_run_id: string | null;
+  requirement_run_id: string | null;
+  prefit_score: number | null;
+  coverage: { mandatory_total: number; mandatory_covered: number; document_count: number };
+  items: PackageItem[];
+  approvals: PackageApproval[];
+  approval: PackageApproval | null;
+  readiness: WorkspaceReadiness;
+  readiness_blockers: string[];
+  stale_reasons: string[];
+  is_stale: boolean;
+  can_approve: boolean;
+  can_sign: boolean;
+  workspace_status: WorkspaceStatus;
+  /** Aprovar el paquet NO és haver presentat res. */
+  is_submitted: boolean;
+  frozen_at: string | null;
+  created_at: string;
+}
+
+export interface FreezeResult {
+  created: boolean;
+  package: PackageDetail;
+}
+
+export const PACKAGE_STATUS_LABELS: Record<SubmissionPackageStatus, string> = {
+  draft: "Esborrany",
+  frozen: "Congelat",
+  approved: "Aprovat per presentar",
+  superseded: "Superat",
+};
+
+export const PACKAGE_STATUS_TONES: Record<SubmissionPackageStatus, Tone> = {
+  draft: "neutral",
+  frozen: "brand",
+  approved: "success",
+  superseded: "neutral",
+};
+
+/** Per què el paquet ja no descriu el que hi ha. Codis, mai text lliure. */
+export const STALE_REASON_LABELS: Record<string, string> = {
+  manifest_changed: "Els documents del paquet ja no són els que hi ha ara.",
+  compliance_run_changed: "S'ha recalculat el compliment després de congelar.",
+  requirement_run_changed: "Hi ha una anàlisi de requisits més recent.",
+  document_expired_for_deadline:
+    "Algun document del paquet ja no serà vigent el dia del termini.",
+  superseded: "Aquesta revisió ha quedat superada per una de posterior.",
+};

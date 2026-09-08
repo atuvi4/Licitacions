@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 
 import { DecisionHistory, DecisionPanel } from "@/components/WorkspaceDecision";
 import { DossierSection } from "@/components/WorkspaceDossier";
+import { SubmissionPackageSection } from "@/components/SubmissionPackage";
 import {
   BlockerCounters,
   ChecklistSection,
@@ -189,6 +190,7 @@ export default function WorkspacePage() {
         <DecisionPanel workspace={data} onDecided={refresh} />
         <BlockerCounters workspace={data} />
         <DossierSection workspace={data} onChange={refresh} />
+        <SubmissionPackageSection workspace={data} onChange={refresh} />
         <ChecklistSection workspace={data} onChange={refresh} />
         <TasksSection workspace={data} onChange={refresh} />
         <NotesSection workspace={data} onChange={refresh} />

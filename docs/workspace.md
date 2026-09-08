@@ -362,11 +362,172 @@ GET    /workspaces/{id}/readiness
 POST   /workspaces/{id}/readiness/advance    -> ready_for_final_review
 ```
 
+## Paquet de presentació (5C)
+
+Aprovar «el workspace» no vol dir res: el workspace canvia. L'aprovació humana
+final apunta a una **revisió congelada** amb els documents i els seus hashos
+d'aquell dia, i respon la pregunta que ha de poder respondre el sistema:
+**exactament quin paquet estem aprovant?**
+
+Aquesta iteració **no presenta res**. `submitted` queda fora d'abast.
+
+### Models
+
+```
+BidWorkspace -> SubmissionPackage (revisió N)
+                  |- SubmissionPackageItem      (document + SHA d'aquell dia)
+                  |- SubmissionPackageApproval  (immutable, append-only)
+```
+
+Estats del paquet: `draft` (transitori, només mentre es construeix dins de la
+transacció) · `frozen` · `approved` · `superseded`.
+
+`manifest_json` es guarda **sencer**, no només el seu hash: el hash diu si una
+cosa ha canviat, però no *què* hi havia. Per respondre «què va aprovar aquesta
+persona» d'aquí a dos anys cal el contingut, i ha de ser el d'aquell dia encara
+que després s'esborri un document.
+
+### El hash és dels bytes, no de l'identificador
+
+`SubmissionPackageItem` copia `document_sha256`, `file_size` i `storage_key`. Si
+algú substitueix el fitxer conservant el mateix `document_id`, comparar la còpia
+amb el document actual és exactament el que ho detecta. Confiar en l'id no ho
+permetria.
+
+**No es dupliquen fitxers.** Els items referencien els documents corporatius que
+ja hi ha; la immutabilitat la garanteix el parell id + SHA-256.
+
+### Manifest determinista
+
+`app/workspace/manifest.py` és pur. Serialització canònica —claus ordenades, sense
+espais superflus, dates ISO-8601, UUID com a cadena, documents ordenats per
+`position`— i després SHA-256. Mateix paquet, mateix hash; qualsevol canvi real,
+hash diferent. El format porta versió (`submission-manifest-v1`): sense això, un
+hash antic deixaria de ser reproduïble el dia que canviés la forma del manifest.
+
+### Congelar
+
+`POST /workspaces/{id}/packages` **recalcula sempre** `evaluate_workspace_readiness()`.
+No es mira `workspace.status`: l'estat guardat és un reflex i un reflex pot quedar
+enrere. Si no està a punt, `409 package_not_ready` amb els blocadors i no queda
+cap revisió a mitges.
+
+Congelar per a la revisió final *és* posar el workspace en revisió final: fa la
+transició fins a `ready_for_final_review`, que ja ha passat el mateix gate.
+
+### Immutabilitat i revisions
+
+No hi ha cap `PATCH` de paquet ni cap endpoint per afegir o treure documents d'un
+paquet congelat. **No és un oblit: no ha d'existir.** Canviar qualsevol cosa vol
+dir congelar `revision_number + 1`; l'anterior queda intacta. Les revisions
+congelades i no aprovades passen a `superseded`; **les aprovades no es toquen**.
+
+### Aprovació humana final
+
+`POST /packages/{id}/approvals` és **l'únic ús de `TransitionActor.HUMAN_FINAL_APPROVAL`**
+de tot el sistema, i hi ha un test estructural que ho vigila. Ni `SYSTEM` ni
+`HUMAN_DECISION` poden escriure `approved_for_submission`.
+
+Abans de signar es recalcula tot de zero: readiness, obsolescència i integritat
+dels fitxers. A diferència del GO inicial, aquí **no s'aprova amb avisos oberts**:
+allà s'aprovava anar-hi, aquí s'aprova exactament el que s'envia.
+
+L'aprovació guarda el `package_manifest_hash`, no només l'identificador del
+paquet, i és append-only: rebutjar després d'aprovar afegeix una entrada nova.
+
+### Obsolescència
+
+`evaluate_staleness()` recalcula el manifest amb el que hi ha ara i compara el
+hash. Motius: `manifest_changed` · `compliance_run_changed` ·
+`requirement_run_changed` · `document_expired_for_deadline` · `superseded`.
+
+Si el paquet ha quedat obsolet, **no s'aprova en silenci**: passa a `superseded` i
+l'error diu per què. Una aprovació **mai** es trasllada d'una revisió a una
+altra: seria dir que una persona ha aprovat una cosa que no ha vist.
+
+### Integritat de l'storage
+
+Superficial en congelar (existeix + mida, sense descarregar res) i **profunda en
+aprovar** (es recalcula el SHA-256 dels bytes). Congelar és barat i repetible;
+aprovar passa una vegada i ha de ser fiable. Un blob desaparegut o modificat
+atura les dues operacions.
+
+### `approved_for_submission` no pot mentir
+
+Una `SubmissionPackageApproval` és immutable i **sempre** segueix sent vàlida per
+a la revisió que va aprovar. Però l'estat del workspace vol dir una altra cosa:
+
+> «la revisió **actual** del paquet, coherent amb el dossier **actual**, està
+> aprovada»
+
+Per això la reconciliació de 5B (`reconcile_readiness`) també governa aquest
+estat, pel mateix camí i sense cap assignació directa. Si la darrera revisió ja
+no descriu el que hi ha —perquè s'ha canviat un document, ha aparegut una
+anàlisi o un compliment nous, o s'ha congelat una revisió 2— la revisió passa a
+`superseded` i el workspace torna a `ready_for_final_review` o a `preparing_bid`
+segons la readiness.
+
+L'historial **no es toca mai**: l'aprovació de la r1 segueix existint amb el seu
+manifest, el seu hash i el seu comentari.
+
+El manifest té **una sola implementació** (`workspace_dossier.current_manifest`),
+compartida per congelar i per detectar obsolescència: si es construïssin per
+separat, comparar-ne els hashos no voldria dir res.
+
+### Retenció dels bytes aprovats
+
+Un paquet aprovat ha de ser **reproduïble**, no només auditable. El manifest diu
+quin SHA-256 tenia cada fitxer; si els bytes desapareixen, aquella xifra deixa de
+poder-se comprovar i el paquet passa de ser una prova a ser una afirmació.
+
+La cadena que ha de sobreviure és `manifest hash → document SHA → bytes exactes`.
+
+* **La base de dades ho impedeix:** `submission_package_items.document_id` és
+  `ON DELETE RESTRICT`.
+* **El servei hi afegeix un error llegible:** esborrar un document retingut
+  retorna `409 document_retained_by_package` amb les revisions que el retenen,
+  en comptes d'un `IntegrityError`.
+* Hi entren **totes** les revisions congelades, també les superades: són
+  historial, i l'historial ha de seguir sent comprovable.
+* Un document que no forma part de cap paquet s'esborra com sempre.
+
+Sobre l'**overwrite**: la clau d'storage es genera amb un UUID a cada pujada i
+`DocumentUpdate` només edita metadata —el binari, el hash i la mida són
+immutables—, de manera que no hi ha cap camí que reescrigui una clau existent.
+Un test ho fixa perquè no s'hi obri sense adonar-se'n.
+
+**No es copia cap fitxer** per congelar. La immutabilitat és id + SHA-256 +
+retenció, no una segona còpia.
+
+### Aprovat no és presentat
+
+`approved_for_submission` és un estat nou entre `ready_for_final_review` i
+`submitted`. `is_submitted` a la resposta ho diu explícitament perquè la
+interfície no ho hagi de deduir. `submitted` segueix sense tenir cap codi que
+l'escrigui: el nom només s'anomena a `enums.py` i `transitions.py`.
+
+### API del paquet
+
+```
+GET    /workspaces/{id}/packages                       revisions
+POST   /workspaces/{id}/packages                       congela una revisió nova
+GET    /workspaces/{id}/packages/{pid}                 revisió final
+GET    /workspaces/{id}/packages/{pid}/manifest        manifest.json congelat
+POST   /workspaces/{id}/packages/{pid}/approvals       aprovació humana final
+GET    /workspaces/{id}/packages/{pid}/approvals       historial
+```
+
 ## Límits coneguts
 
-* **No hi ha aprovació final ni presentació.** `preparing_bid`,
-  `ready_for_final_review` i `submitted` existeixen al graf de transicions però
-  cap flux hi porta encara. És intencional: el graf ja diu com serà el camí.
+* **No hi ha presentació.** `submitted` existeix al graf però cap codi no
+  l'escriu. Presentar a PLACSP és una altra iteració.
+* **No es genera cap ZIP.** El paquet es serveix com a manifest + referències als
+  documents; empaquetar-los en un sol fitxer descarregable queda pendent.
+* **Els documents retinguts no es poden arxivar ni purgar.** La retenció és
+  permanent mentre existeixi la revisió que els referencia; no hi ha cap política
+  de caducitat ni soft delete.
+* **La comprovació superficial d'integritat no veu una mutació de la mateixa
+  mida.** Per això l'aprovació final és profunda; el congelat, no.
 * **`analysis_outdated` és una marca calculada, no un estat.** Es deriva
   comparant les referències del workspace amb el que és vigent; no s'escriu a
   `status` perquè la decisió humana no s'ha de veure alterada per un recàlcul.

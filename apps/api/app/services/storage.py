@@ -86,6 +86,15 @@ class StorageService(ABC):
     async def delete(self, key: str) -> None:
         """Esborra l'objecte. Esborrar una clau inexistent no es un error."""
 
+    async def size(self, key: str) -> int | None:
+        """Mida en bytes sense descarregar, o `None` si el backend no la sap.
+
+        Serveix per comprovar que un blob segueix sent el que el sistema creu
+        que es sense pagar una descarrega sencera. No substitueix el SHA-256:
+        una mutacio de la mateixa mida no es veuria.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     async def exists(self, key: str) -> bool:
         """Diu si la clau hi es, sense descarregar el contingut."""
@@ -123,6 +132,10 @@ class LocalFilesystemStorage(StorageService):
 
     async def exists(self, key: str) -> bool:
         return self._path(key).exists()
+
+    async def size(self, key: str) -> int | None:
+        path = self._path(key)
+        return path.stat().st_size if path.exists() else None
 
 
 class S3Storage(StorageService):
@@ -200,6 +213,25 @@ class S3Storage(StorageService):
                     return False
                 raise
             return True
+
+        try:
+            return await anyio.to_thread.run_sync(_head)
+        except Exception as exc:  # noqa: BLE001
+            raise StorageError("No s'ha pogut consultar el fitxer.") from exc
+
+    async def size(self, key: str) -> int | None:
+        validate_storage_key(key)
+
+        def _head() -> int | None:
+            from botocore.exceptions import ClientError
+
+            try:
+                head = self._client.head_object(Bucket=self.bucket, Key=key)
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+                    return None
+                raise
+            return int(head["ContentLength"])
 
         try:
             return await anyio.to_thread.run_sync(_head)

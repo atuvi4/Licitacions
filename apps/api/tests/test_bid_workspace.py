@@ -1197,11 +1197,11 @@ def test_no_automatic_process_can_write_an_approved_status(target):
 
 
 def test_submitted_is_unreachable_for_every_actor_that_exists_today():
-    """L'invariant central: cap cami actual del codi no pot presentar una oferta.
+    """L'invariant central: cap cami actual del codi no presenta una oferta.
 
-    Ni un proces automatic ni tan sols una decisio GO. Nomes
-    `HUMAN_FINAL_APPROVAL`, que es una fase futura i que ara mateix no fa servir
-    cap funcio del sistema.
+    Ni un proces automatic ni una decisio GO. `HUMAN_FINAL_APPROVAL` si que
+    existeix ara —aprova el PAQUET de presentacio— pero no escriu `submitted`
+    enlloc: aprovar per presentar i presentar son dos actes diferents.
     """
     assert is_human_only(WorkspaceStatus.SUBMITTED)
     assert WorkspaceStatus.SUBMITTED in FINAL_APPROVAL_STATUSES
@@ -1209,18 +1209,18 @@ def test_submitted_is_unreachable_for_every_actor_that_exists_today():
     for actor in (TransitionActor.SYSTEM, TransitionActor.HUMAN_DECISION):
         with pytest.raises(AutomaticTransitionForbiddenError):
             assert_transition(
-                WorkspaceStatus.READY_FOR_FINAL_REVIEW,
+                WorkspaceStatus.APPROVED_FOR_SUBMISSION,
                 WorkspaceStatus.SUBMITTED,
                 actor=actor,
             )
 
-    # I quan existeixi, nomes des de la revisio final.
+    # I quan existeixi, nomes des d'un paquet aprovat per una persona.
     origins = {
         current
         for current, targets in ALLOWED_TRANSITIONS.items()
         if WorkspaceStatus.SUBMITTED in targets
     }
-    assert origins == {WorkspaceStatus.READY_FOR_FINAL_REVIEW}
+    assert origins == {WorkspaceStatus.APPROVED_FOR_SUBMISSION}
 
 
 def test_no_human_decision_ever_maps_to_submitted():
@@ -1235,11 +1235,12 @@ def test_no_human_decision_ever_maps_to_submitted():
     assert WorkspaceStatus.SUBMITTED not in outcomes
 
 
-def test_the_final_approval_actor_is_not_wired_to_anything_yet():
-    """Reservat de veritat: cap modul de l'aplicacio no el fa servir.
+def test_the_final_approval_actor_is_used_by_exactly_one_service():
+    """L'actor mes fort del sistema no pot estar escampat.
 
-    Si algun dia algu connecta la presentacio, aquest test l'obliga a passar per
-    aqui i a llegir per que existeix aquest actor.
+    L'unic que el fa servir es l'aprovacio d'un paquet de presentacio. Si algun
+    dia se n'afegeix un altre cami —la presentacio, per exemple— aquest test
+    l'obliga a passar per aqui i a llegir per que existeix aquest actor.
 
     Es busca l'US (`TransitionActor.HUMAN_FINAL_APPROVAL`) i no el nom sol:
     altres moduls poden —i han de poder— explicar als seus comentaris que
@@ -1247,13 +1248,13 @@ def test_the_final_approval_actor_is_not_wired_to_anything_yet():
     """
     import app
 
-    used = [
+    used = sorted(
         path.name
         for path in Path(app.__file__).parent.rglob("*.py")
         if "TransitionActor.HUMAN_FINAL_APPROVAL" in path.read_text(encoding="utf-8")
-    ]
+    )
 
-    assert used == ["transitions.py"]
+    assert used == ["submission_package.py", "transitions.py"]
 
 
 def test_submitted_is_never_written_outside_the_transitions_module():

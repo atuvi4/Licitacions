@@ -16,10 +16,14 @@ Aqui hi ha dues regles, i totes dues es comproven **a cada canvi d'estat**:
 El modul es pur: no toca base de dades ni HTTP, i les seves excepcions no
 depenen de FastAPI. Qui les tradueix a codis d'error es la capa de servei.
 
-Per que `submitted` te un actor propi i no simplement "huma": perque el dia que
-s'implementi la presentacio, el cami natural sera afegir-hi codi a prop de la
-decisio de GO. Si `HUMAN_DECISION` ja pogues escriure `submitted`, aquell codi
-compilaria i passaria els tests. Amb un actor separat, no.
+Per que l'aprovacio final te un actor propi i no simplement "huma": perque el
+cami natural, quan s'implementi la presentacio, sera afegir codi a prop de la
+decisio de GO. Si `HUMAN_DECISION` pogues escriure `approved_for_submission` o
+`submitted`, aquell codi compilaria i passaria els tests. Amb un actor separat,
+no.
+
+`submitted` segueix sent inassolible: cap funcio del sistema l'escriu, i el nom
+nomes s'anomena en aquest modul i a `enums.py`.
 """
 
 from __future__ import annotations
@@ -42,16 +46,22 @@ class TransitionActor(Enum):
 
     SYSTEM = "system"
     HUMAN_DECISION = "human_decision"
-    #: Reservat. Cap cami del codi el fa servir encara: l'aprovacio final humana
-    #: es una fase futura i `submitted` queda inaccessible fins llavors.
+    #: L'aprovacio d'un PAQUET concret per presentar. Es mes estricta que una
+    #: decisio de Go/No-Go: alla s'aprova anar-hi, aqui s'aprova exactament que
+    #: s'envia. L'unica funcio que el fa servir es
+    #: `submission_package.approve_package`.
     HUMAN_FINAL_APPROVAL = "human_final_approval"
 
 
 #: Estats que NOMES pot escriure una persona. Cap actor `SYSTEM` no hi arriba.
-HUMAN_ONLY_STATUSES = frozenset({S.GO_APPROVED, S.NO_GO_APPROVED, S.SUBMITTED})
+HUMAN_ONLY_STATUSES = frozenset(
+    {S.GO_APPROVED, S.NO_GO_APPROVED, S.APPROVED_FOR_SUBMISSION, S.SUBMITTED}
+)
 
-#: Estats que exigeixen l'aprovacio final humana, mes estricta que una decisio.
-FINAL_APPROVAL_STATUSES = frozenset({S.SUBMITTED})
+#: Estats que exigeixen l'aprovacio final humana, mes estricta que una decisio de
+#: Go/No-Go. Aprovar un paquet concret per presentar i presentar-lo son dos actes
+#: diferents, i tots dos demanen aquesta signatura.
+FINAL_APPROVAL_STATUSES = frozenset({S.APPROVED_FOR_SUBMISSION, S.SUBMITTED})
 
 #: Graf de transicions. Les autotransicions que hi son son deliberades: tornar a
 #: aprovar un GO (amb un motiu nou) o ajornar dues vegades son accions reals que
@@ -99,13 +109,26 @@ ALLOWED_TRANSITIONS: dict[WorkspaceStatus, frozenset[WorkspaceStatus]] = {
             S.WITHDRAWN,
         }
     ),
-    # L'unic estat des del qual `submitted` es assolible. I tambe el que ha de
-    # poder RETROCEDIR: si el dossier deixa d'estar complet, `preparing_bid`.
+    # D'aqui se surt cap amunt aprovant un paquet, o cap enrere si el dossier
+    # deixa d'estar complet.
     S.READY_FOR_FINAL_REVIEW: frozenset(
         {
-            S.SUBMITTED,
+            S.APPROVED_FOR_SUBMISSION,
             S.PREPARING_BID,
             S.GO_APPROVED,
+            S.NO_GO_APPROVED,
+            S.AWAITING_DECISION,
+            S.WITHDRAWN,
+        }
+    ),
+    # L'unic estat des del qual `submitted` es assolible. Tambe pot retrocedir:
+    # si el paquet aprovat queda obsolet, la candidatura torna a preparar-se i
+    # cal aprovar una revisio nova. L'aprovacio antiga no es mou d'on es.
+    S.APPROVED_FOR_SUBMISSION: frozenset(
+        {
+            S.SUBMITTED,
+            S.READY_FOR_FINAL_REVIEW,
+            S.PREPARING_BID,
             S.NO_GO_APPROVED,
             S.AWAITING_DECISION,
             S.WITHDRAWN,
@@ -167,11 +190,15 @@ def is_human_only(status: WorkspaceStatus) -> bool:
 def is_submitted(status: WorkspaceStatus) -> bool:
     """Aquesta candidatura ja s'ha presentat?
 
+    NOMES `submitted`. `approved_for_submission` vol dir que una persona ha
+    aprovat un paquet concret, que es una cosa diferent i anterior; confondre-les
+    seria dir a algu que ja ha presentat una oferta que no ha sortit d'aqui.
+
     Existeix perque la resta del codi no hagi d'anomenar `SUBMITTED`: qui vol
     saber-ho pregunta aqui. Aixi el nom queda confinat en aquest modul i el test
     estructural que ho vigila segueix sent estricte.
     """
-    return status in FINAL_APPROVAL_STATUSES
+    return status is S.SUBMITTED
 
 
 def can_transition(

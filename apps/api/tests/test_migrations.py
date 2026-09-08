@@ -94,3 +94,59 @@ def test_les_migracions_son_reversibles(migration_sql):
         source = Path(revision.path).read_text(encoding="utf-8")
         body = source.split("def downgrade()")[1]
         assert "pass" not in body.split("\n")[1], f"{revision.revision} no te downgrade real"
+
+
+def _varchar_widths(ddl: str) -> dict[tuple[str, str], int]:
+    """Amplada final de cada VARCHAR segons les migracions, en ordre d'aplicacio.
+
+    Cal llegir-ho en ordre: una revisio posterior pot eixamplar una columna, i el
+    que val es l'ultima amplada.
+    """
+    widths: dict[tuple[str, str], int] = {}
+    for match in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\);", ddl, re.S):
+        table, body = match.group(1), match.group(2)
+        for raw in body.splitlines():
+            line = raw.strip().rstrip(",")
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            column = parts[0].strip('"')
+            if column.upper() in STRUCTURAL_TOKENS:
+                continue
+            size = re.match(r"VARCHAR\((\d+)\)", parts[1], re.I)
+            if size:
+                widths[(table, column)] = int(size.group(1))
+    for table, column, size in re.findall(
+        r"ALTER TABLE (\w+) ADD COLUMN (\w+) VARCHAR\((\d+)\)", ddl
+    ):
+        widths[(table, column)] = int(size)
+    for table, column, size in re.findall(
+        r"ALTER TABLE (\w+) ALTER COLUMN (\w+) TYPE VARCHAR\((\d+)\)", ddl
+    ):
+        widths[(table, column)] = int(size)
+    return widths
+
+
+def test_cap_varchar_no_es_mes_estret_que_el_del_model(migration_sql):
+    """Una columna mes estreta que el model rebutjaria valors valids.
+
+    Va passar de veritat: afegir `approved_for_submission` (23 caracters) a un
+    enum la columna del qual s'havia creat com a VARCHAR(22). El test de columnes
+    no ho veia perque el NOM de la columna no havia canviat, i l'error nomes
+    hauria sortit contra un PostgreSQL real, en intentar desar el valor.
+    """
+    import sqlalchemy as sa
+
+    widths = _varchar_widths(migration_sql)
+    narrow: list[str] = []
+
+    for table in Base.metadata.sorted_tables:
+        for column in table.columns:
+            expected = getattr(column.type, "length", None)
+            if not isinstance(column.type, sa.String) or not expected:
+                continue
+            actual = widths.get((table.name, column.name))
+            if actual is not None and actual < expected:
+                narrow.append(f"{table.name}.{column.name}: model {expected}, migracio {actual}")
+
+    assert not narrow, "columnes mes estretes que el model: " + "; ".join(narrow)

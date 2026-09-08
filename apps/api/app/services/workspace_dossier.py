@@ -35,12 +35,14 @@ from app.models.enums import (
     MembershipRole,
     RequirementCategory,
     RequirementObligation,
+    SubmissionPackageStatus,
     WorkspaceDecisionType,
     WorkspaceStatus,
     WorkspaceTaskStatus,
 )
 from app.models.identity import User
 from app.models.requirements import Requirement
+from app.models.submission import SubmissionPackage
 from app.models.workspace import (
     BidWorkspace,
     WorkspaceChecklistItem,
@@ -61,6 +63,7 @@ from app.workspace.dossier import (
     summarise_coverage,
     task_title_for_gap,
 )
+from app.workspace.manifest import ManifestDocument, ManifestInput, build_manifest
 from app.workspace.transitions import TransitionActor
 
 #: Estats de checklist que compten com a resolts.
@@ -408,6 +411,83 @@ async def load_dossier(
 
 
 # --------------------------------------------------------------------------- #
+# Manifest del que es presentaria                                               #
+# --------------------------------------------------------------------------- #
+
+
+def selected_rows(dossier: Dossier) -> list[DossierRow]:
+    """Les peces triades, en un ordre estable.
+
+    L'ordre no pot dependre de com la base de dades retorni les files: el hash
+    del manifest hi va a sobre.
+    """
+    rows = [
+        row
+        for row in dossier.rows
+        if row.item.status == EvidenceItemStatus.SELECTED and row.document is not None
+    ]
+    rows.sort(key=lambda row: (row.document.sha256, str(row.item.id)))
+    return rows
+
+
+async def current_manifest(
+    session: AsyncSession, workspace: BidWorkspace, *, revision_number: int
+) -> tuple[list[DossierRow], dict, str]:
+    """El manifest del que es presentaria ARA, amb el seu hash.
+
+    Viu aqui i no a la capa de paquets perque es el dossier qui sap descriure's;
+    el paquet nomes compara. Aixi tambe hi ha UNA sola implementacio: congelar i
+    detectar obsolescencia han de produir exactament el mateix hash o la
+    comparacio no voldria dir res.
+    """
+    state = await workspace_service.load_state(session, workspace)
+    dossier = await load_dossier(session, workspace)
+    rows = selected_rows(dossier)
+
+    documents = tuple(
+        ManifestDocument(
+            position=position,
+            document_id=row.document.id,
+            filename=row.document.name,
+            sha256=row.document.sha256,
+            file_size=row.document.file_size,
+            mime_type=row.document.mime_type,
+            category=(
+                row.requirement.category.value
+                if row.requirement
+                else RequirementCategory.OTHER.value
+            ),
+            requirement_id=row.item.requirement_id,
+            requirement_title=(
+                row.checklist_item.title
+                if row.checklist_item
+                else (row.requirement.title if row.requirement else None)
+            ),
+            expires_at=row.document.expires_at,
+        )
+        for position, row in enumerate(rows)
+    )
+    payload, digest = build_manifest(
+        ManifestInput(
+            revision_number=revision_number,
+            workspace_id=workspace.id,
+            company_id=workspace.company_id,
+            tender_id=workspace.tender_id,
+            tender_lot_id=workspace.tender_lot_id,
+            expediente_number=state.tender.expediente_number,
+            deadline_at=state.deadline_at,
+            requirement_run_id=state.requirement_run.id if state.requirement_run else None,
+            compliance_run_id=state.compliance_run.id if state.compliance_run else None,
+            prefit_score=state.prefit_score,
+            mandatory_total=dossier.counters.mandatory_total,
+            mandatory_covered=dossier.counters.covered,
+            documents=documents,
+        )
+    )
+    return rows, payload, digest
+
+
+# --------------------------------------------------------------------------- #
 # Readiness                                                                     #
 # --------------------------------------------------------------------------- #
 
@@ -501,13 +581,75 @@ async def reconcile_readiness(
     cridar `evaluate_workspace_readiness()` i no fiar-se de l'estat.
     """
     result = readiness or await evaluate_workspace_readiness(session, workspace)
-    if workspace.status == WorkspaceStatus.READY_FOR_FINAL_REVIEW and not result.is_ready:
+    target = await _reconciled_status(session, workspace, result)
+    if target is not None and target != workspace.status:
         workspace.status = workspace_service.set_status(
-            workspace, WorkspaceStatus.PREPARING_BID, actor=TransitionActor.SYSTEM
+            workspace, target, actor=TransitionActor.SYSTEM
         )
+    if session.dirty or session.new:
         await session.commit()
         await session.refresh(workspace)
     return result
+
+
+async def _reconciled_status(
+    session: AsyncSession, workspace: BidWorkspace, readiness: ReadinessResult
+) -> WorkspaceStatus | None:
+    """A quin estat ha de tornar el workspace, si es que ha de tornar a cap.
+
+    Dues etiquetes que no poden mentir:
+
+    * `ready_for_final_review` vol dir "el dossier esta complet". Si ja no ho
+      esta, cap enrere.
+    * `approved_for_submission` vol dir "la revisio ACTUAL del paquet, coherent
+      amb el dossier actual, esta aprovada". No vol dir "algun dia es va aprovar
+      alguna cosa": aixo ho diu l'historial d'aprovacions, que es immutable i no
+      es toca mai.
+    """
+    if workspace.status == WorkspaceStatus.READY_FOR_FINAL_REVIEW:
+        return None if readiness.is_ready else WorkspaceStatus.PREPARING_BID
+
+    if workspace.status != WorkspaceStatus.APPROVED_FOR_SUBMISSION:
+        return None
+
+    latest = await _latest_package(session, workspace)
+    if latest is not None and latest.status in (
+        SubmissionPackageStatus.FROZEN,
+        SubmissionPackageStatus.APPROVED,
+    ):
+        # El paquet ja no descriu el que hi ha: queda superat. L'aprovacio que
+        # tingues segueix sent valida per a AQUELLA fotografia; el que deixa de
+        # ser cert es que sigui la fotografia d'ara.
+        _rows, _payload, digest = await current_manifest(
+            session, workspace, revision_number=latest.revision_number
+        )
+        if digest != latest.manifest_hash:
+            latest.status = SubmissionPackageStatus.SUPERSEDED
+
+    approved_now = (
+        latest is not None and latest.status == SubmissionPackageStatus.APPROVED
+    )
+    if approved_now and readiness.is_ready:
+        return None
+    return (
+        WorkspaceStatus.READY_FOR_FINAL_REVIEW
+        if readiness.is_ready
+        else WorkspaceStatus.PREPARING_BID
+    )
+
+
+async def _latest_package(
+    session: AsyncSession, workspace: BidWorkspace
+) -> SubmissionPackage | None:
+    """L'ultima revisio del paquet. Es consulta el model i no el servei de
+    paquets: al reves hi hauria una dependencia circular, i qui mana sobre
+    l'estat del workspace es aquesta reconciliacio."""
+    return await session.scalar(
+        sa.select(SubmissionPackage)
+        .where(SubmissionPackage.workspace_id == workspace.id)
+        .order_by(SubmissionPackage.revision_number.desc())
+        .limit(1)
+    )
 
 
 async def advance_to_final_review(
@@ -533,6 +675,10 @@ async def advance_to_final_review(
             "El dossier encara no esta a punt per a la revisio final.",
             details={"blockers": list(readiness.blockers)},
         )
+
+    if workspace.status == WorkspaceStatus.READY_FOR_FINAL_REVIEW:
+        # Ja hi es: demanar-ho dues vegades no es un error, es el mateix estat.
+        return readiness
 
     if workspace.status == WorkspaceStatus.GO_APPROVED:
         # Pas intermedi explicit: el graf no permet saltar-se `preparing_bid`.
