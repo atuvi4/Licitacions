@@ -137,6 +137,47 @@ async def test_the_review_page_reads_the_same_tender_as_the_benchmark(session):
     assert decoy.id != target.id
 
 
+async def test_the_three_paths_resolve_the_same_tender(session):
+    """Revisio, validacio de cites i benchmark han de mirar el MATEIX plec.
+
+    Reprodueix la forma exacta del cas `1-2026`: dos organs amb el numero
+    d'expedient "1/2026" i l'evidencia nomes en un d'ells. Si els tres camins no
+    coincideixen, una anotacio es verifica contra un document i es mesura contra
+    un altre, i la xifra resultant no vol dir el que sembla.
+    """
+    from app.evaluation import runner
+    from app.evaluation.corpus import resolve_tender as canonical
+    from app.evaluation.dataset import GoldCase as Case
+
+    # 1. Una sola implementacio: el benchmark no en te una de propia.
+    assert runner.resolve_tender is canonical
+
+    shared = "1/2026"
+    decoy = await _tender(
+        session, external_id="https://font/neteja", expediente=shared, title="Neteja"
+    )
+    holder = await _tender(
+        session, external_id="https://font/retolacio", expediente=shared, title="Retolacio"
+    )
+    await _page(session, holder, "Plec de clausules administratives", 5, "suministros similares")
+    await session.commit()
+
+    case = Case(
+        case_id="1-2026",
+        expediente_number=shared,
+        tender_external_id="https://font/retolacio",
+    )
+
+    # 2. La resolucio que fa servir el benchmark.
+    from_runner = await runner.resolve_tender(session, case)
+    # 3. La que fa servir la pagina de revisio i la validacio de cites.
+    from_review = await canonical(session, case)
+
+    assert from_runner is not None
+    assert from_runner.id == from_review.id == holder.id
+    assert from_runner.id != decoy.id
+
+
 async def _page(session, tender, document_name: str, page_number: int, text: str):
     """Un document amb una pagina de text ja extreta."""
     import hashlib

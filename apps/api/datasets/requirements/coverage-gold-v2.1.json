@@ -1,0 +1,244 @@
+{
+  "dataset_id": "gold-v2.1",
+  "gold_schema_version": "gold-schema-v2",
+  "derived_from": "gold-v2",
+  "created_at": "2026-09-09",
+  "totals": {
+    "annotations": 17,
+    "requirements": 14,
+    "award_criteria": 3,
+    "cases": 11
+  },
+  "by_status": {
+    "draft": 0,
+    "verified": 15,
+    "rejected": 0,
+    "needs_review": 2,
+    "superseded": 1,
+    "counts_for_metrics": 14
+  },
+  "effective": {
+    "counts_for_metrics": 14,
+    "superseded": 1
+  },
+  "by_origin": {
+    "inherited": 11,
+    "inherited_verified": 11,
+    "proposals": 6,
+    "proposals_verified": 4
+  },
+  "refinements": [
+    {
+      "item": "TSA0082096-040::ins-2",
+      "refines": "TSA0082096-040::ins-1",
+      "status": "verified",
+      "refined_resolution": "substituida per ins-2, conservada i fora de metriques"
+    }
+  ],
+  "double_counted": [],
+  "verified_award_criteria": 2,
+  "categories": {
+    "business_classification": {
+      "verified": 0,
+      "pending": 1
+    },
+    "certification": {
+      "verified": 1,
+      "pending": 0
+    },
+    "economic_solvency": {
+      "verified": 3,
+      "pending": 0
+    },
+    "experience": {
+      "verified": 3,
+      "pending": 0
+    },
+    "insurance": {
+      "verified": 5,
+      "pending": 1
+    }
+  },
+  "dimensions": {
+    "obligation_modality": {
+      "verified": 2,
+      "pending": 1,
+      "measurable": true
+    },
+    "alternatives": {
+      "verified": 0,
+      "pending": 1,
+      "measurable": false
+    },
+    "aggregation": {
+      "verified": 1,
+      "pending": 0,
+      "measurable": true
+    },
+    "percentage_base": {
+      "verified": 1,
+      "pending": 0,
+      "measurable": true
+    },
+    "insurance_limits": {
+      "verified": 1,
+      "pending": 0,
+      "measurable": true
+    },
+    "equivalence": {
+      "verified": 1,
+      "pending": 0,
+      "measurable": true
+    },
+    "award_formula": {
+      "verified": 2,
+      "pending": 1,
+      "measurable": true
+    }
+  },
+  "quotes": {
+    "checked": 24,
+    "located": 24,
+    "not_located": [],
+    "pages_unavailable": []
+  },
+  "proposal_ids": [
+    "2026SE00013::class-1",
+    "300-2025-03877::exp-1",
+    "300-2025-03877::award-1",
+    "422-2026::award-1",
+    "P4107500C-2026-65::award-1",
+    "TSA0082096-040::ins-2"
+  ],
+  "unresolved": [
+    {
+      "item": "1-2026::exp-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "aggregation: no consta a l'anotacio v1 verificada. Es deixa sense informar en comptes de deduir-lo del quote, que canviaria el que una persona va verificar.",
+        "Llindars quantitatius (import individual o acumulat, percentatge i base): l'anotacio v1 no en portava cap.",
+        "equivalence_allowed: la v1 nomes ho deia en algun cas. `False` aqui vol dir 'no anotat', no 'el plec no admet equivalents'."
+      ]
+    },
+    {
+      "item": "2025-04671::cert-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "Valor conservat sense tipus: la forma v1 no encaixa en cap contracte tipat de la v2 sense reescriure l'anotacio."
+      ]
+    },
+    {
+      "item": "2026SE00013::class-1",
+      "notes": [
+        "El grup, el subgrup i la categoria es remeten a l'apartat 7.d) del quadre de caracteristiques: no son en aquesta pagina i no s'inventen.",
+        "L'altra branca de la disjuncio (la documentacio de l'apartat 7) es cita pero no esta anotada com a requisit propi: el grup d'alternatives te un sol membre."
+      ]
+    },
+    {
+      "item": "26-095-3::ins-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "Tipus de limit: `coverage_amount` de la v1 no distingeix total, per sinistre, per victima o agregat anual. Queda `unknown`.",
+        "Sublimits: si la pagina en te, l'anotacio v1 els va aplanar en un sol import i no es poden recuperar sense tornar a anotar el cas.",
+        "equivalence_allowed: la v1 nomes ho deia en algun cas. `False` aqui vol dir 'no anotat', no 'el plec no admet equivalents'."
+      ]
+    },
+    {
+      "item": "300-2025-03877::exp-1",
+      "notes": [
+        "El plec no dona codis CPV: diu que la similitud es determina pels tres primers digits dels codis respectius, pero no els enumera."
+      ]
+    },
+    {
+      "item": "300-2025-03877::award-1",
+      "notes": [
+        "L'EXPRESSIO de la formula no apareix al text extret: la pagina 70 acaba amb 'se aplicará la siguiente fórmula:' i la 71 comença amb les definicions de les variables. Molt probablement es una imatge que l'extraccio de text no recull.",
+        "Sense l'expressio, aquesta anotacio pot mesurar que el model conserva les variables i la frase, pero NO que reprodueixi la formula."
+      ]
+    },
+    {
+      "item": "422-2026::ins-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "Tipus de limit: `coverage_amount` de la v1 no distingeix total, per sinistre, per victima o agregat anual. Queda `unknown`.",
+        "Sublimits: si la pagina en te, l'anotacio v1 els va aplanar en un sol import i no es poden recuperar sense tornar a anotar el cas.",
+        "equivalence_allowed: la v1 nomes ho deia en algun cas. `False` aqui vol dir 'no anotat', no 'el plec no admet equivalents'."
+      ]
+    },
+    {
+      "item": "422-2026::eco-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "aggregation: no consta a l'anotacio v1 verificada. Es deixa sense informar en comptes de deduir-lo del quote, que canviaria el que una persona va verificar.",
+        "equivalence_allowed: la v1 nomes ho deia en algun cas. `False` aqui vol dir 'no anotat', no 'el plec no admet equivalents'."
+      ]
+    },
+    {
+      "item": "422-2026::award-1",
+      "notes": [
+        "La formula no defineix simbols: els operands son en llenguatge natural ('Oferta más baja', 'Oferta a valorar') i 'PL' no es defineix enlloc del text. Per aixo `formula_variables` es buida."
+      ]
+    },
+    {
+      "item": "4249-2026::eco-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "aggregation: no consta a l'anotacio v1 verificada. Es deixa sense informar en comptes de deduir-lo del quote, que canviaria el que una persona va verificar.",
+        "equivalence_allowed: la v1 nomes ho deia en algun cas. `False` aqui vol dir 'no anotat', no 'el plec no admet equivalents'."
+      ]
+    },
+    {
+      "item": "4249-2026::exp-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "aggregation: no consta a l'anotacio v1 verificada. Es deixa sense informar en comptes de deduir-lo del quote, que canviaria el que una persona va verificar.",
+        "Llindars quantitatius (import individual o acumulat, percentatge i base): l'anotacio v1 no en portava cap.",
+        "equivalence_allowed: la v1 nomes ho deia en algun cas. `False` aqui vol dir 'no anotat', no 'el plec no admet equivalents'."
+      ]
+    },
+    {
+      "item": "4249-2026::ins-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "Tipus de limit: `coverage_amount` de la v1 no distingeix total, per sinistre, per victima o agregat anual. Queda `unknown`.",
+        "Sublimits: si la pagina en te, l'anotacio v1 els va aplanar en un sol import i no es poden recuperar sense tornar a anotar el cas.",
+        "equivalence_allowed: la v1 nomes ho deia en algun cas. `False` aqui vol dir 'no anotat', no 'el plec no admet equivalents'."
+      ]
+    },
+    {
+      "item": "LIC-10495::ins-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "Tipus de limit: `coverage_amount` de la v1 no distingeix total, per sinistre, per victima o agregat anual. Queda `unknown`.",
+        "Sublimits: si la pagina en te, l'anotacio v1 els va aplanar en un sol import i no es poden recuperar sense tornar a anotar el cas.",
+        "equivalence_allowed: la v1 nomes ho deia en algun cas. `False` aqui vol dir 'no anotat', no 'el plec no admet equivalents'."
+      ]
+    },
+    {
+      "item": "SER-2026-93411::eco-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "aggregation: no consta a l'anotacio v1 verificada. Es deixa sense informar en comptes de deduir-lo del quote, que canviaria el que una persona va verificar.",
+        "equivalence_allowed: la v1 nomes ho deia en algun cas. `False` aqui vol dir 'no anotat', no 'el plec no admet equivalents'."
+      ]
+    },
+    {
+      "item": "TSA0082096-040::ins-1",
+      "notes": [
+        "modality: la v1 no distingia exigencia de via alternativa; queda `unknown`.",
+        "Tipus de limit: `coverage_amount` de la v1 no distingeix total, per sinistre, per victima o agregat anual. Queda `unknown`.",
+        "Sublimits: si la pagina en te, l'anotacio v1 els va aplanar en un sol import i no es poden recuperar sense tornar a anotar el cas.",
+        "equivalence_allowed: la v1 nomes ho deia en algun cas. `False` aqui vol dir 'no anotat', no 'el plec no admet equivalents'."
+      ]
+    },
+    {
+      "item": "TSA0082096-040::ins-2",
+      "notes": [
+        "Es la MATEIXA polissa que `TSA0082096-040::ins-1`, que ja esta verificada. Verificar aquesta sense retirar l'altra faria que el gold demanes dues assegurances on el plec en demana una.",
+        "La pagina no diu ni fins quan ha d'estar vigent la polissa ni com s'acredita: `proof` i la vigencia queden sense informar."
+      ]
+    }
+  ],
+  "model_metrics": null,
+  "model_metrics_note": "Encara no hi ha metriques de model: aquesta versio nomes prepara el gold. Cap execucio de l'extractor forma part d'aquest report."
+}
