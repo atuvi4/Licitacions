@@ -31,7 +31,7 @@ from app.compliance.insurance import assess_insurance
 from app.compliance.personnel import assess_personnel, assess_qualification, assess_registration
 from app.compliance.profile import ProfileSnapshot
 from app.compliance.rules import ExplanationCode, RuleCode, RuleOutcome, needs_review
-from app.compliance.v2_adapter import adapt
+from app.compliance.specs import is_effectively_mandatory
 from app.models.enums import (
     AssessmentMode,
     AssessmentResult,
@@ -65,39 +65,37 @@ class _AdaptedRequirement:
 
 
 def assess_requirement(
-    requirement: Any, snapshot: ProfileSnapshot, *, deadline: date | None = None
+    requirement: Any,
+    snapshot: ProfileSnapshot,
+    *,
+    deadline: date | None = None,
+    tender: Any = None,
 ) -> RuleOutcome:
     """Tria la regla segons la categoria del requisit.
 
     Una categoria sense regla determinista NO s'endevina: retorna revisio. Es
     preferible dir "aixo ho ha de mirar algu" que fabricar un veredicte.
 
-    Abans de triar cap regla es mira si el requisit porta una estructura v2 que
-    cap regla actual sap resoldre —una via alternativa, una equivalencia, "el de
-    major volum dels tres ultims", un sublimit per victima—. En aquest cas el
-    veredicte es `needs_review`, que demana una mirada humana, i mai un
-    `does_not_satisfy`, que es convertiria en un blocador fals.
-    """
-    adaptation = adapt(requirement)
-    if not adaptation.is_supported:
-        return needs_review(
-            RuleCode.V2_STRUCTURE_UNSUPPORTED,
-            adaptation.unsupported,
-            category=str(requirement.category),
-        )
-    if adaptation.value is not getattr(requirement, "value_json", None):
-        requirement = _AdaptedRequirement(requirement, adaptation.value)
+    Les regles llegeixen el requisit a traves de `specs`, que unifica la forma
+    lliure de la v1 i la tipada de la v2. El que la v2 afegeix i encara no es pot
+    resoldre —una base de percentatge que no consta a l'expedient, un sublimit
+    que la polissa no declara— surt com a `needs_review` des de la propia regla,
+    amb el detall del que falta, i mai com a `does_not_satisfy`.
 
+    El `tender` hi entra perque un llindar en percentatge nomes es comparable si
+    se'n pot llegir la base. Sense expedient, aquests requisits queden en
+    revisio en comptes de comparar-se contra una base inventada.
+    """
     category = requirement.category
 
     if category == RequirementCategory.ECONOMIC_SOLVENCY:
-        return assess_economic_solvency(requirement, snapshot)
+        return assess_economic_solvency(requirement, snapshot, deadline, tender)
     if category == RequirementCategory.CERTIFICATION:
-        return assess_certification(requirement, snapshot, deadline)
+        return assess_certification(requirement, snapshot, deadline, tender)
     if category == RequirementCategory.INSURANCE:
-        return assess_insurance(requirement, snapshot, deadline)
+        return assess_insurance(requirement, snapshot, deadline, tender)
     if category in (RequirementCategory.EXPERIENCE, RequirementCategory.TECHNICAL_SOLVENCY):
-        return assess_experience(requirement, snapshot)
+        return assess_experience(requirement, snapshot, None, tender)
     if category in (
         RequirementCategory.REGISTRATION,
         RequirementCategory.BUSINESS_CLASSIFICATION,
@@ -115,6 +113,19 @@ def assess_requirement(
         ExplanationCode.RULE_NOT_AUTOMATABLE,
         category=str(category),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _ObligationView:
+    """Nomes el que cal per decidir si una exigencia obliga de veritat.
+
+    Existeix per no duplicar la regla: `is_effectively_mandatory` es la mateixa
+    tant si se li dona un Requirement sencer com si nomes se li donen aquests
+    dos camps.
+    """
+
+    obligation: RequirementObligation
+    modality: Any = None
 
 
 def applies_to_lot(
@@ -145,16 +156,25 @@ def derive_blocker_status(
     effective_result: AssessmentResult,
     requirement_review_status: ReviewStatus,
     assessment_reviewed: bool,
+    modality: Any = None,
 ) -> BlockerStatus:
     """Quan un incompliment es un bloqueig, i de quina classe.
 
-    Nomes `mandatory` + `does_not_satisfy` bloqueja. `unknown` i `needs_review`
-    NO bloquegen mai: demanen accio, no descarten.
+    Nomes una exigencia **efectivament obligatoria** amb `does_not_satisfy`
+    bloqueja. `unknown` i `needs_review` NO bloquegen mai: demanen accio, no
+    descarten.
+
+    "Efectivament obligatoria" exclou el que la v2 sap distingir i la v1 no: una
+    via alternativa i una condicio no avaluada no obliguen per si soles, per molt
+    que l'obligatorietat digui `mandatory`. El que obliga es la disjuncio
+    sencera, i qui la resol es `alternatives.resolve_group`.
 
     Es `CONFIRMED` quan algu ha validat la font: o be el requisit esta verificat,
     o be una persona ha revisat aquest mateix assessment. Si no, `POTENTIAL`.
     """
-    if obligation != RequirementObligation.MANDATORY:
+    if not is_effectively_mandatory(
+        _ObligationView(obligation=obligation, modality=modality)
+    ):
         return BlockerStatus.NONE
     if effective_result != AssessmentResult.DOES_NOT_SATISFY:
         return BlockerStatus.NONE

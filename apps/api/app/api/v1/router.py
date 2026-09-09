@@ -14,9 +14,10 @@ from app.api.v1.routers import (
     config,
     cpv,
     credentials,
-    dossier,
-    matching,
     documents,
+    dossier,
+    insurance_limits,
+    matching,
     people,
     profile,
     projects,
@@ -34,6 +35,7 @@ company_scoped.include_router(profile.financial_years_router)
 company_scoped.include_router(credentials.certifications_router)
 company_scoped.include_router(credentials.registrations_router)
 company_scoped.include_router(credentials.insurances_router)
+company_scoped.include_router(insurance_limits.router)
 company_scoped.include_router(people.people_router)
 company_scoped.include_router(people.qualifications_router)
 company_scoped.include_router(projects.router)

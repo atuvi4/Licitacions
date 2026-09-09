@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from uuid import UUID
 
 from pydantic import Field, model_validator
 
-from app.models.enums import InsuranceType, RegistrationType, VerificationStatus
+from app.models.enums import (
+    InsuranceLimitKind,
+    InsuranceType,
+    RegistrationType,
+    VerificationStatus,
+)
 from app.schemas.common import APIModel, AuditFields, ExpirableMixin
 
 
@@ -88,6 +94,9 @@ class InsuranceBase(_DateOrderMixin):
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     starts_at: date | None = None
     expires_at: date | None = None
+    #: `None` vol dir "no consta". Un `false` per defecte convertiria un buit en
+    #: una afirmacio, i el compliment la llegiria com a incompliment.
+    additional_insured: bool | None = None
     notes: str | None = None
 
 
@@ -108,4 +117,33 @@ class InsuranceRead(AuditFields, ExpirableMixin):
     coverage_amount: Decimal | None = None
     currency: str
     starts_at: date | None = None
+    additional_insured: bool | None = None
+    notes: str | None = None
+
+
+class InsuranceLimitBase(APIModel):
+    kind: InsuranceLimitKind | None = None
+    amount: Decimal | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    notes: str | None = None
+
+
+class InsuranceLimitCreate(InsuranceLimitBase):
+    #: Sense valor per defecte a proposit: quin limit es aixo es precisament la
+    #: dada que la fitxa antiga no tenia, i triar-la per l'usuari la tornaria a
+    #: perdre.
+    kind: InsuranceLimitKind
+    amount: Decimal = Field(ge=0)
+    currency: str = Field(default="EUR", min_length=3, max_length=3)
+
+
+class InsuranceLimitUpdate(InsuranceLimitBase):
+    pass
+
+
+class InsuranceLimitRead(AuditFields):
+    insurance_id: UUID
+    kind: InsuranceLimitKind
+    amount: Decimal
+    currency: str
     notes: str | None = None

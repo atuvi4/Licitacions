@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
@@ -25,6 +25,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.compliance.alternatives import (
+    EXPLANATION_BY_OUTCOME,
+    GroupResolution,
+    effective_result,
+    resolve_groups,
+)
 from app.compliance.engine import (
     applies_to_lot,
     assess_requirement,
@@ -33,7 +39,13 @@ from app.compliance.engine import (
     summarise,
 )
 from app.compliance.profile import compute_profile_fingerprint, load_profile_snapshot
-from app.compliance.rules import RULES_VERSION, ExplanationCode, RuleCode, needs_review
+from app.compliance.rules import (
+    RULES_VERSION,
+    ExplanationCode,
+    RuleCode,
+    RuleOutcome,
+    needs_review,
+)
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.models.compliance import (
     AssessmentEvidence,
@@ -41,6 +53,7 @@ from app.models.compliance import (
     CompanyRequirementAssessment,
 )
 from app.models.enums import (
+    AssessmentMode,
     AssessmentResult,
     BlockerStatus,
     ComplianceRunStatus,
@@ -169,6 +182,8 @@ async def analyze_company_compliance(
     )
     tender_has_lots = bool(lot_count)
     rows: list[tuple] = []
+    #: (requisit, veredicte propi) abans de resoldre les disjuncions.
+    evaluated: list[tuple] = []
 
     for requirement in requirements:
         # Un requisit que una persona ha rebutjat no s'avalua.
@@ -188,13 +203,42 @@ async def analyze_company_compliance(
                 scope=str(requirement.scope),
             )
         else:
-            outcome = assess_requirement(requirement, snapshot, deadline=deadline)
+            outcome = assess_requirement(
+                requirement, snapshot, deadline=deadline, tender=tender
+            )
+
+        evaluated.append((requirement, outcome))
+
+    # Segona passada: les vies alternatives no es jutgen una a una. "A o B" es
+    # una sola exigencia, i deixar que una branca bloquegi mentre l'altra encara
+    # pot acreditar-la diria a una empresa que no es pot presentar a una
+    # licitacio a la qual si que pot.
+    groups = resolve_groups(
+        [
+            (
+                requirement.alternative_group,
+                requirement.id,
+                outcome.result,
+                getattr(requirement, "alternative_group_complete", None),
+            )
+            for requirement, outcome in evaluated
+            if getattr(requirement, "alternative_group", None)
+        ]
+    )
+
+    for requirement, outcome in evaluated:
+        group_key = getattr(requirement, "alternative_group", None)
+        resolution = groups.get(group_key) if group_key else None
+        effective = effective_result(outcome.result, resolution)
+        if resolution is not None and effective != outcome.result:
+            outcome = _with_group(outcome, group_key, resolution, effective)
 
         blocker = derive_blocker_status(
             obligation=requirement.obligation,
-            effective_result=outcome.result,
+            effective_result=effective,
             requirement_review_status=requirement.review_status,
             assessment_reviewed=False,
+            modality=getattr(requirement, "modality", None),
         )
 
         assessment = CompanyRequirementAssessment(
@@ -414,3 +458,38 @@ __all__ = [
     "load_run_or_404",
     "review_assessment",
 ]
+
+
+def _with_group(
+    outcome: RuleOutcome,
+    group_key: str,
+    resolution: GroupResolution,
+    effective: AssessmentResult,
+) -> RuleOutcome:
+    """El veredicte d'una branca, reescrit pel que ha decidit la disjuncio.
+
+    Es conserva el que deia la branca tota sola (`branch_result`): sense aixo,
+    una persona que obri l'assessment no podria saber si el requisit s'acredita
+    per aquesta via o per una altra, ni per que no bloqueja.
+    """
+    return replace(
+        outcome,
+        result=effective,
+        rule_code=RuleCode.ALTERNATIVE_GROUP,
+        explanation_code=EXPLANATION_BY_OUTCOME[resolution.outcome],
+        params={
+            **(outcome.params or {}),
+            "alternative_group": group_key,
+            "branch_result": str(outcome.result),
+            "group_outcome": resolution.outcome.value,
+            "group_branches": resolution.branches,
+            # Sense aixo, un `incomplete` no diria si es perque falta resoldre
+            # una branca o perque no consta que les tinguem totes.
+            "group_complete": resolution.complete,
+        },
+        mode=(
+            AssessmentMode.REVIEW_REQUIRED
+            if effective == AssessmentResult.NEEDS_REVIEW
+            else outcome.mode
+        ),
+    )

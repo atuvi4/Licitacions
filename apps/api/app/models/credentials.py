@@ -7,11 +7,12 @@ Nomes es guarda l'estat de verificacio (una decisio humana). L'estat
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from decimal import Decimal
 
 import sqlalchemy as sa
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import (
     ActorMixin,
@@ -21,7 +22,12 @@ from app.db.base import (
     UUIDPrimaryKeyMixin,
     enum_column,
 )
-from app.models.enums import InsuranceType, RegistrationType, VerificationStatus
+from app.models.enums import (
+    InsuranceLimitKind,
+    InsuranceType,
+    RegistrationType,
+    VerificationStatus,
+)
 
 MONEY = sa.Numeric(18, 2)
 
@@ -100,4 +106,54 @@ class CompanyInsurance(
     currency: Mapped[str] = mapped_column(sa.String(3), nullable=False, default="EUR")
     starts_at: Mapped[date | None] = mapped_column(sa.Date)
     expires_at: Mapped[date | None] = mapped_column(sa.Date)
+    #: L'organ de contractacio consta com a assegurat addicional. `None` vol dir
+    #: que no consta a la fitxa, que NO es el mateix que dir que no hi es.
+    additional_insured: Mapped[bool | None] = mapped_column(sa.Boolean)
     notes: Mapped[str | None] = mapped_column(sa.Text)
+
+    #: Els limits declarats de la polissa, cadascun amb el seu tipus.
+    limits: Mapped[list[CompanyInsuranceLimit]] = relationship(
+        back_populates="insurance", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    def limit_for(self, kind: InsuranceLimitKind) -> CompanyInsuranceLimit | None:
+        return next((limit for limit in self.limits if limit.kind == kind), None)
+
+
+class CompanyInsuranceLimit(
+    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, Base
+):
+    """Un limit concret d'una polissa: total, per sinistre, per victima...
+
+    Existeix com a taula i no com a columnes perque la seva **absencia ha de ser
+    llegible**. Amb columnes, un sublimit per victima buit seria indistingible
+    d'un sublimit desconegut, i aquesta diferencia decideix si es pot afirmar que
+    una empresa compleix una polissa o nomes que no ho sabem.
+
+    Una fila diu "aquesta polissa cobreix aixo, fins aqui". Cap fila vol dir que
+    ningu ho ha declarat.
+    """
+
+    __tablename__ = "company_insurance_limits"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "insurance_id", "kind", name="uq_company_insurance_limits_insurance_kind"
+        ),
+        sa.CheckConstraint("amount >= 0", name="insurance_limit_amount_positive"),
+    )
+
+    insurance_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("company_insurances.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[InsuranceLimitKind] = mapped_column(
+        enum_column(InsuranceLimitKind, "insurance_limit_kind"),
+        nullable=False,
+        default=InsuranceLimitKind.TOTAL,
+    )
+    amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    currency: Mapped[str] = mapped_column(sa.String(3), nullable=False, default="EUR")
+    notes: Mapped[str | None] = mapped_column(sa.Text)
+
+    insurance: Mapped[CompanyInsurance] = relationship(back_populates="limits")

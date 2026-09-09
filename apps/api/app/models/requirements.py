@@ -248,6 +248,15 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: ("mitjancant A o alternativament B"). Sense aixo, A i B semblarien dos
     #: blocadors independents.
     alternative_group: Mapped[str | None] = mapped_column(sa.String(80), index=True)
+    #: Si les vies d'aquesta disjuncio estan TOTES representades. `NULL` vol dir
+    #: que no se sap, que es el que passa quasi sempre: haver extret dues
+    #: branques no demostra que el plec no en tingui una tercera.
+    #:
+    #: Nomes pot ser `True` quan l'estructura o l'evidencia ho demostren. Mentre
+    #: no ho sigui, cap branca d'aquest grup pot generar un blocador: dir a una
+    #: empresa que no es pot presentar perque falla la via que hem vist, quan
+    #: potser n'hi ha una altra que no hem vist, es l'error mes car del sistema.
+    alternative_group_complete: Mapped[bool | None] = mapped_column(sa.Boolean)
     #: "ISO 9001 **o equivalent**". Quina certificacio hi equival NO ho decideix
     #: l'extractor: es una decisio de compliment o d'una persona.
     equivalence_allowed: Mapped[bool] = mapped_column(

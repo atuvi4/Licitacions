@@ -152,16 +152,17 @@ async def test_a_met_threshold_produces_a_satisfying_assessment(
     run = outcome.run
     assert run.overall_result == EligibilityResult.ELIGIBLE
     assert run.satisfies_count == 1
-    assert run.rules_version == "company-compliance-v1"
+    assert run.rules_version == "company-compliance-v2"
 
     assessment = await db.scalar(sa.select(CompanyRequirementAssessment))
     assert assessment.requirement_id == requirement.id
     assert assessment.automatic_result == AssessmentResult.SATISFIES
-    assert assessment.rule_code == "economic_revenue_gte_v1"
+    assert assessment.rule_code == "economic_turnover_aggregate_v2"
     assert assessment.explanation_code == "ECONOMIC_THRESHOLD_MET"
     assert assessment.explanation_params["required"] == 450000
     assert assessment.explanation_params["actual"] == 2450000
-    assert assessment.company_value_json["year"] == 2025
+    # El nou company_value diu QUINS exercicis han entrat al calcul, no nomes un.
+    assert assessment.company_value_json["years_used"] == [2025]
     assert assessment.requirement_value_json["amount"] == 450000
     assert assessment.blocker_status == BlockerStatus.NONE
     # La cadena de provenance corporativa hi es.
@@ -596,7 +597,7 @@ async def test_the_api_returns_the_full_chain(client_a, db, tenant_a, tender, ex
     assert response.status_code == 200
     body = response.json()
 
-    assert body["run"]["rules_version"] == "company-compliance-v1"
+    assert body["run"]["rules_version"] == "company-compliance-v2"
     assert body["is_stale"] is False
 
     item = body["assessments"][0]
@@ -605,7 +606,7 @@ async def test_the_api_returns_the_full_chain(client_a, db, tenant_a, tender, ex
     # ...l'empresa acredita Y...
     assert item["company_value_json"]["amount"] == 2450000
     # ...per aquesta regla Z el resultat es aquest...
-    assert item["rule_code"] == "economic_revenue_gte_v1"
+    assert item["rule_code"] == "economic_turnover_aggregate_v2"
     assert item["explanation_code"] == "ECONOMIC_THRESHOLD_MET"
     assert item["effective_result"] == "satisfies"
     # ...i aqui tens les dues evidencies.

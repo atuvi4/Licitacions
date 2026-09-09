@@ -26,6 +26,7 @@ from app.compliance.rules import (
     needs_review,
     unknown,
 )
+from app.compliance.specs import read_certification
 from app.models.enums import (
     AssessmentMode,
     AssessmentResult,
@@ -67,30 +68,61 @@ def _is_valid_at(expires_at: date | None, deadline: date | None) -> bool | None:
 
 
 def assess_certification(
-    requirement: Any, snapshot: ProfileSnapshot, deadline: date | None
+    requirement: Any,
+    snapshot: ProfileSnapshot,
+    deadline: date | None = None,
+    tender: Any = None,
 ) -> RuleOutcome:
-    value = requirement.value_json or {}
-    required_name = (value.get("name") or "").strip()
-    if not required_name:
+    """Coincidencia exacta normalitzada; l'equivalencia la decideix una persona.
+
+    Quan el plec diu "o equivalent", no tenir la certificacio exacta deixa de
+    poder ser un incompliment: pot ser que l'empresa n'acrediti una que hi
+    equivalgui, i decidir-ho es criteri juridic.
+    """
+    spec = read_certification(requirement)
+    if not spec.names:
         return needs_review(
             RuleCode.CERTIFICATION_EXACT, ExplanationCode.REQUIREMENT_VALUE_MISSING
         )
 
-    required_key = normalize_certification_name(required_name)
-    if not required_key:
+    required_keys = {
+        normalize_certification_name(name): name
+        for name in spec.names
+        if normalize_certification_name(name)
+    }
+    if not required_keys:
         return needs_review(
             RuleCode.CERTIFICATION_EXACT,
             ExplanationCode.CERTIFICATION_NAME_AMBIGUOUS,
-            required=required_name,
+            required=list(spec.names),
         )
+    required_name = spec.names[0]
 
     matches = [
         cert
         for cert in snapshot.certifications
-        if normalize_certification_name(cert.name) == required_key
+        if normalize_certification_name(cert.name) in required_keys
     ]
 
     if not matches:
+        if spec.equivalence_allowed and snapshot.certifications:
+            # "ISO 9001 o equivalent" i l'empresa en te d'altres. Quina hi
+            # equival no ho decideix una regla: no tenir l'exacta NO pot
+            # convertir-se en un incompliment quan el plec admet equivalents.
+            return needs_review(
+                RuleCode.CERTIFICATION_EXACT,
+                ExplanationCode.CERTIFICATION_EQUIVALENCE_REVIEW,
+                required=list(spec.names),
+                company_certifications=sorted(c.name for c in snapshot.certifications),
+            )
+        if spec.equivalence_allowed:
+            # Admet equivalents i l'empresa no en te cap de registrada: tampoc
+            # es pot afirmar l'incompliment sense saber que hi equivaldria.
+            return unknown(
+                RuleCode.CERTIFICATION_EXACT,
+                ExplanationCode.CERTIFICATION_EQUIVALENCE_REVIEW,
+                required=list(spec.names),
+            )
         if snapshot.is_section_complete("certifications"):
             # El perfil declara totes les certificacions i aquesta no hi es.
             return RuleOutcome(
@@ -108,7 +140,7 @@ def assess_certification(
             required=required_name,
         )
 
-    requires_validity = bool(value.get("valid_at_deadline"))
+    requires_validity = spec.valid_at_deadline
     # Es prefereix la que caduca mes tard: es la que millor acredita.
     matches.sort(key=lambda c: (c.expires_at is None, c.expires_at or date.min), reverse=True)
     best = matches[0]

@@ -31,8 +31,8 @@ from app.ai.value_schemas import (
     parse_value,
 )
 from app.compliance.engine import assess_requirement
-from app.compliance.rules import ExplanationCode, RuleCode
-from app.compliance.v2_adapter import adapt
+from app.compliance.rules import ExplanationCode
+from app.compliance.specs import is_effectively_mandatory
 from app.models.enums import (
     AggregationType,
     AssessmentResult,
@@ -256,7 +256,7 @@ def test_the_same_requirement_seen_twice_has_one_key():
 
 
 # --------------------------------------------------------------------------- #
-# 4C: prudencia davant del que no sap llegir                                    #
+# 4C: cap estructura v2 no pot generar un blocador fals                        #
 # --------------------------------------------------------------------------- #
 
 
@@ -287,7 +287,12 @@ def empty_profile():
 
 
 def test_an_alternative_is_never_assessed_alone(empty_profile):
-    """§21: 4C prefereix `needs_review` abans que un blocador incorrecte."""
+    """Una branca no decideix mai sola, tampoc quan 4C ja la sap avaluar.
+
+    Amb 4C.2 la regla si que mira la branca, pero el que compta per bloquejar es
+    el que digui la disjuncio. Aixi, la garantia que abans venia de no
+    entendre-la ara ve d'entendre-la be.
+    """
     requirement = FakeRequirement(
         category=RequirementCategory.BUSINESS_CLASSIFICATION,
         modality=RequirementModality.ALTERNATIVE,
@@ -297,9 +302,9 @@ def test_an_alternative_is_never_assessed_alone(empty_profile):
 
     outcome = assess_requirement(requirement, empty_profile)
 
-    assert outcome.result == AssessmentResult.NEEDS_REVIEW
-    assert outcome.explanation_code == ExplanationCode.V2_ALTERNATIVE_PATH
-    assert outcome.rule_code == RuleCode.V2_STRUCTURE_UNSUPPORTED
+    assert outcome.result != AssessmentResult.SATISFIES
+    # I, passi el que passi a la branca, no obliga per si sola.
+    assert not is_effectively_mandatory(requirement)
 
 
 def test_an_equivalence_is_not_decided_by_a_rule(empty_profile):
@@ -311,20 +316,28 @@ def test_an_equivalence_is_not_decided_by_a_rule(empty_profile):
 
     outcome = assess_requirement(requirement, empty_profile)
 
-    assert outcome.result == AssessmentResult.NEEDS_REVIEW
-    assert outcome.explanation_code == ExplanationCode.V2_EQUIVALENCE_ALLOWED
+    # Sense cap certificacio registrada no hi ha ni tan sols la pregunta de
+    # l'equivalencia: falta la dada. El que no pot passar mai es que l'absencia
+    # de l'exacta es converteixi en un incompliment quan el plec admet
+    # equivalents.
+    assert outcome.result == AssessmentResult.UNKNOWN
+    assert outcome.result != AssessmentResult.DOES_NOT_SATISFY
 
 
-def test_the_best_year_aggregation_is_not_guessed(empty_profile):
-    """El perfil te la facturacio any a any; combinar-la seria una altra regla."""
+def test_the_best_year_aggregation_without_data_is_not_a_failure(empty_profile):
+    """Sense facturacio registrada, "el millor dels tres" no es incompliment.
+
+    4C.2 ja sap combinar exercicis; el que no pot fer es concloure res quan no
+    n'hi ha cap. La regla ho ha de dir com el que es: falta la dada.
+    """
     requirement = FakeRequirement(
         value_json=BEST_YEAR_OF_LAST_THREE.expected_requirements[0]["value"]
     )
 
     outcome = assess_requirement(requirement, empty_profile)
 
-    assert outcome.result == AssessmentResult.NEEDS_REVIEW
-    assert outcome.explanation_code == ExplanationCode.V2_AGGREGATION_UNSUPPORTED
+    assert outcome.result == AssessmentResult.UNKNOWN
+    assert outcome.explanation_code == ExplanationCode.ECONOMIC_DATA_INCOMPLETE
 
 
 def test_a_percentage_threshold_is_not_estimated(empty_profile):
@@ -336,7 +349,9 @@ def test_a_percentage_threshold_is_not_estimated(empty_profile):
     outcome = assess_requirement(requirement, empty_profile)
 
     assert outcome.result == AssessmentResult.NEEDS_REVIEW
-    assert outcome.explanation_code == ExplanationCode.V2_PERCENTAGE_THRESHOLD
+    assert outcome.explanation_code == ExplanationCode.PERCENTAGE_BASE_UNAVAILABLE
+    # I diu QUE falta: sense la durada del contracte no hi ha anualitat mitjana.
+    assert outcome.params["unresolved_reason"] == "contract_duration_unknown"
 
 
 def test_insurance_sublimits_are_not_reduced_to_the_total(empty_profile):
@@ -348,8 +363,13 @@ def test_insurance_sublimits_are_not_reduced_to_the_total(empty_profile):
 
     outcome = assess_requirement(requirement, empty_profile)
 
-    assert outcome.result == AssessmentResult.NEEDS_REVIEW
-    assert outcome.explanation_code == ExplanationCode.V2_INSURANCE_SUBLIMITS
+    # Sense cap polissa registrada i amb el perfil incomplet: falta la dada.
+    # El que no pot passar es que el sublimit desaparegui de la comparacio.
+    assert outcome.result == AssessmentResult.UNKNOWN
+    assert [limit["kind"] for limit in outcome.params["required_limits"]] == [
+        "total",
+        "per_victim",
+    ]
 
 
 def test_no_unsupported_v2_structure_can_produce_a_blocker(empty_profile):
@@ -373,25 +393,29 @@ def test_no_unsupported_v2_structure_can_produce_a_blocker(empty_profile):
 
     for requirement in cases:
         outcome = assess_requirement(requirement, empty_profile)
-        assert outcome.result == AssessmentResult.NEEDS_REVIEW
+        assert outcome.result != AssessmentResult.DOES_NOT_SATISFY
         assert (
             derive_blocker_status(
                 obligation=RequirementObligation.MANDATORY,
                 effective_result=outcome.result,
                 requirement_review_status=ReviewStatus.VERIFIED,
                 assessment_reviewed=True,
+                modality=requirement.modality,
             )
             == BlockerStatus.NONE
         )
 
 
-def test_a_simple_v2_value_is_still_assessed(empty_profile):
-    """La prudencia no pot deixar 4C sense veredictes.
+def test_a_v2_value_is_read_with_its_full_meaning(empty_profile):
+    """El llindar, el periode i l'agregacio arriben sencers a la regla.
 
-    Un llindar v2 amb agregacio `each_year` diu exactament el mateix que el
-    valor lliure de la v1: s'ha de poder resoldre igual.
+    Es el que separa "el millor dels tres" de "cadascun dels tres": si aquesta
+    lectura els aplanes, la regla resoldria una exigencia diferent de la que hi
+    ha escrita al plec.
     """
-    adaptation = adapt(
+    from app.compliance.specs import read_economic
+
+    spec = read_economic(
         FakeRequirement(
             value_json={
                 "kind": "economic_solvency",
@@ -402,14 +426,21 @@ def test_a_simple_v2_value_is_still_assessed(empty_profile):
         )
     )
 
-    assert adaptation.is_supported
-    assert adaptation.value["amount"] == 450000
-    assert adaptation.value["currency"] == "EUR"
+    assert spec.threshold.amount == 450000
+    assert spec.threshold.currency == "EUR"
+    assert spec.years == 3
+    assert spec.aggregation.value == "each_year"
 
 
-def test_a_v1_requirement_is_untouched(empty_profile):
-    """Compatibilitat cap enrere: sense `value_schema`, res no canvia."""
-    adaptation = adapt(
+def test_a_v1_requirement_is_read_the_way_it_always_was(empty_profile):
+    """Compatibilitat cap enrere: sense `value_schema`, res no canvia.
+
+    I l'agregacio queda `unknown`, que es el que la v1 deia de veritat: no en
+    parlava. Assumir-ne una canviaria veredictes ja calculats.
+    """
+    from app.compliance.specs import read_economic
+
+    spec = read_economic(
         FakeRequirement(
             value_schema=None,
             modality=RequirementModality.UNKNOWN,
@@ -417,8 +448,10 @@ def test_a_v1_requirement_is_untouched(empty_profile):
         )
     )
 
-    assert adaptation.is_supported
-    assert adaptation.value == {"amount": 450000, "currency": "EUR", "period": "annual"}
+    assert spec.threshold.amount == 450000
+    assert spec.threshold.percentage is None
+    assert spec.aggregation.value == "unknown"
+    assert spec.period_ambiguous is False
 
 
 async def test_a_v1_requirement_still_produces_a_verdict(db, tenant_a):
@@ -922,7 +955,9 @@ async def test_an_old_v1_run_is_still_reproducible(session, v2_dataset):
     assert profile_for_run(original.run.extractor_version) is V1
     assert stored.value_schema is None
     assert stored.value_json == {"amount": 60750, "currency": "EUR", "period": "annual"}
-    assert adapt(stored).is_supported, "un requisit v1 el segueix resolent 4C"
+    from app.compliance.specs import read_economic
+
+    assert read_economic(stored) is not None, "un requisit v1 el segueix resolent 4C"
 
 
 def test_the_benchmark_profile_is_named_not_hardcoded():

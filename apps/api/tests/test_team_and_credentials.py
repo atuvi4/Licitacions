@@ -167,3 +167,115 @@ async def test_aillament_de_persones_i_titulacions(client_a, client_b, tenant_a,
         json={"name": "Titulacio injectada"},
     )
     assert creation.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Limits d'una polissa                                                          #
+# --------------------------------------------------------------------------- #
+
+
+async def _policy(client, company_id, **overrides) -> str:
+    response = await client.post(
+        f"/api/v1/companies/{company_id}/insurances",
+        json={"type": "civil_liability", "coverage_amount": "1000000", **overrides},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def test_els_limits_d_una_polissa_es_creen_i_es_llegeixen(client_a, tenant_a):
+    """Cobertura total, per sinistre, per victima i agregat anual, per separat.
+
+    Es tota la rao de ser de la taula: amb un sol import, un plec que exigeix un
+    sublimit no es podia respondre mai.
+    """
+    _, company = tenant_a
+    base = f"/api/v1/companies/{company.id}"
+    policy = await _policy(client_a, company.id)
+
+    for kind, amount in (
+        ("total", "1000000"),
+        ("per_claim", "1000000"),
+        ("per_victim", "300000"),
+        ("annual_aggregate", "2000000"),
+    ):
+        response = await client_a.post(
+            f"{base}/insurances/{policy}/limits",
+            json={"kind": kind, "amount": amount, "currency": "EUR"},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["kind"] == kind
+
+    listed = await client_a.get(f"{base}/insurances/{policy}/limits")
+    assert listed.status_code == 200
+    assert {row["kind"]: row["amount"] for row in listed.json()} == {
+        "total": "1000000.00",
+        "per_claim": "1000000.00",
+        "per_victim": "300000.00",
+        "annual_aggregate": "2000000.00",
+    }
+
+
+async def test_un_limit_es_pot_corregir_i_esborrar(client_a, tenant_a):
+    _, company = tenant_a
+    base = f"/api/v1/companies/{company.id}"
+    policy = await _policy(client_a, company.id)
+    limit = (
+        await client_a.post(
+            f"{base}/insurances/{policy}/limits",
+            json={"kind": "per_victim", "amount": "300000"},
+        )
+    ).json()["id"]
+
+    patched = await client_a.patch(
+        f"{base}/insurances/{policy}/limits/{limit}", json={"amount": "450000"}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["amount"] == "450000.00"
+
+    deleted = await client_a.delete(f"{base}/insurances/{policy}/limits/{limit}")
+    assert deleted.status_code == 204
+    assert (await client_a.get(f"{base}/insurances/{policy}/limits")).json() == []
+
+
+async def test_una_polissa_no_pot_tenir_dos_limits_del_mateix_tipus(client_a, tenant_a):
+    """Dos "per victima" diferents serien dues respostes a la mateixa pregunta."""
+    _, company = tenant_a
+    base = f"/api/v1/companies/{company.id}"
+    policy = await _policy(client_a, company.id)
+    payload = {"kind": "per_victim", "amount": "300000"}
+
+    first = await client_a.post(f"{base}/insurances/{policy}/limits", json=payload)
+    assert first.status_code == 201
+    repeated = await client_a.post(f"{base}/insurances/{policy}/limits", json=payload)
+
+    assert repeated.status_code == 409
+
+
+async def test_no_es_poden_escriure_limits_a_la_polissa_d_un_altre_tenant(
+    client_a, client_b, tenant_a, tenant_b
+):
+    """L'identificador de la polissa va a la URL: ha de comprovar-se el propietari.
+
+    Sense la comprovacio del pare, filtrar el limit per `company_id` no serveix
+    de res: el limit encara no existeix quan es decideix on escriure'l.
+    """
+    _, company_a = tenant_a
+    _, company_b = tenant_b
+    foreign = await _policy(client_b, company_b.id)
+
+    # La polissa de B, demanada sota la URL de tenant de A.
+    created = await client_a.post(
+        f"/api/v1/companies/{company_a.id}/insurances/{foreign}/limits",
+        json={"kind": "per_victim", "amount": "300000"},
+    )
+    listed = await client_a.get(
+        f"/api/v1/companies/{company_a.id}/insurances/{foreign}/limits"
+    )
+
+    assert created.status_code == 404, "404 i no 403: A no ha de saber que existeix"
+    assert listed.status_code == 404
+    # I la polissa de B segueix sense limits.
+    assert (
+        await client_b.get(f"/api/v1/companies/{company_b.id}/insurances/{foreign}/limits")
+    ).json() == []

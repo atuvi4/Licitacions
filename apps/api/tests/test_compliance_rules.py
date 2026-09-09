@@ -11,7 +11,7 @@ aquests tests impedeixen.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -30,6 +30,7 @@ from app.models.enums import (
     AssessmentResult,
     DocumentCategory,
     EvidenceStrength,
+    InsuranceLimitKind,
     InsuranceType,
     LinkedEntityType,
     ProjectStatus,
@@ -84,10 +85,23 @@ class FakeInsurance:
     coverage_amount: Decimal | None
     currency: str = "EUR"
     expires_at: date | None = None
+    #: Limits tipats de la polissa. Buit = fitxa antiga amb un sol import.
+    limits: list = field(default_factory=list)
+    #: `None` vol dir "no consta", que no es el mateix que "no hi es".
+    additional_insured: bool | None = None
     id: uuid.UUID = None
 
     def __post_init__(self):
         self.id = self.id or uuid.uuid4()
+
+
+@dataclass
+class FakeLimit:
+    """Un limit declarat d'una polissa."""
+
+    kind: InsuranceLimitKind
+    amount: Decimal
+    currency: str = "EUR"
 
 
 @dataclass
@@ -182,7 +196,7 @@ def test_revenue_above_the_threshold_satisfies():
     outcome = assess_economic_solvency(economic_requirement(), profile)
 
     assert outcome.result == AssessmentResult.SATISFIES
-    assert outcome.rule_code == "economic_revenue_gte_v1"
+    assert outcome.rule_code == "economic_turnover_aggregate_v2"
     assert outcome.explanation_code == ExplanationCode.ECONOMIC_THRESHOLD_MET
     assert outcome.params["required"] == 450000
     assert outcome.params["actual"] == 2450000
@@ -218,7 +232,9 @@ def test_the_best_year_within_the_lookback_counts():
     outcome = assess_economic_solvency(economic_requirement(years=2), profile)
 
     assert outcome.result == AssessmentResult.SATISFIES
-    assert outcome.params["year"] == 2024, "2023 queda fora de la finestra"
+    assert outcome.params["years_used"] == [2025, 2024], "2023 queda fora de la finestra"
+    assert "2023" not in outcome.params["revenue_by_year"]
+    assert outcome.params["actual"] == 900000.0
 
 
 def test_a_different_currency_is_never_converted():
@@ -393,7 +409,7 @@ def test_coverage_above_the_threshold_satisfies():
     outcome = assess_insurance(insurance_requirement(600000), profile, DEADLINE)
 
     assert outcome.result == AssessmentResult.SATISFIES
-    assert outcome.explanation_code == ExplanationCode.INSURANCE_COVERAGE_MET
+    assert outcome.explanation_code == ExplanationCode.INSURANCE_LIMITS_MET
 
 
 def test_coverage_below_the_threshold_does_not_satisfy():
@@ -404,7 +420,7 @@ def test_coverage_below_the_threshold_does_not_satisfy():
     outcome = assess_insurance(insurance_requirement(600000), profile, DEADLINE)
 
     assert outcome.result == AssessmentResult.DOES_NOT_SATISFY
-    assert outcome.explanation_code == ExplanationCode.INSURANCE_COVERAGE_NOT_MET
+    assert outcome.explanation_code == ExplanationCode.INSURANCE_LIMIT_BELOW
 
 
 def test_an_expired_policy_does_not_satisfy_even_with_enough_coverage():

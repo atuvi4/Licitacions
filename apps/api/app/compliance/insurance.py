@@ -1,15 +1,31 @@
-"""Assegurances: cobertura, moneda i vigencia.
+"""Assegurances: cada limit es una condicio, i totes han de complir-se.
 
-Com a la solvencia economica, no hi ha conversio de divisa: si el plec demana
-euros i la polissa es en una altra moneda, la resposta es revisio, no una
-estimacio.
+Una polissa que cobreix 1.000.000 en total pero 300.000 per victima no compleix
+un plec que exigeix 500.000 per victima, encara que la xifra grossa impressioni.
+La v1 aplanava els dos imports en un i es quedava amb el gran, que es el error
+mes car possible: fa semblar coberta una empresa que no ho esta.
+
+La regla d'or d'aquest modul es la que decideix els casos frontera:
+
+* limit declarat i suficient -> compleix;
+* limit declarat i insuficient -> **no compleix**, i aixo si que es un
+  incompliment demostrat;
+* limit **no declarat** -> `needs_review`. No saber quin sublimit te una polissa
+  no vol dir que no en tingui. Aqui no s'assumeix ni que compleix ni que no.
+
+Un limit de tipus `unknown` —el que produeix una fitxa v1, que nomes tenia un
+import— pot respondre el limit total, perque es el que aquell camp sempre ha
+volgut dir. No pot respondre cap sublimit: dir que un import global cobreix la
+condicio "per victima" seria exactament l'aplanament que s'esta corregint.
+
+Com sempre, sense conversio de divisa.
 """
 
 from __future__ import annotations
 
 import re
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 from app.compliance.profile import ProfileSnapshot
@@ -21,12 +37,14 @@ from app.compliance.rules import (
     needs_review,
     unknown,
 )
+from app.compliance.specs import InsuranceSpec, LimitSpec, read_insurance
 from app.models.enums import (
     AssessmentMode,
     AssessmentResult,
     CompanyEvidenceKind,
     DocumentCategory,
     EvidenceStrength,
+    InsuranceLimitKind,
     InsuranceType,
     LinkedEntityType,
 )
@@ -41,14 +59,9 @@ _TYPE_HINTS: tuple[tuple[re.Pattern[str], InsuranceType], ...] = (
     (re.compile(r"aval|surety|caucion|cauci[oó]n", re.I), InsuranceType.SURETY_BOND),
 )
 
-
-def _decimal(value: Any) -> Decimal | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return Decimal(str(value))
-    except (InvalidOperation, ValueError, TypeError):
-        return None
+#: El limit sense tipus d'una fitxa v1 nomes pot respondre el total: es el que
+#: `coverage_amount` sempre ha volgut dir.
+_ANSWERABLE_BY_UNTYPED = frozenset({InsuranceLimitKind.TOTAL, InsuranceLimitKind.UNKNOWN})
 
 
 def infer_insurance_type(raw: str | None) -> InsuranceType | None:
@@ -60,127 +73,264 @@ def infer_insurance_type(raw: str | None) -> InsuranceType | None:
     return None
 
 
+def _company_limits(policy: Any) -> dict[InsuranceLimitKind, tuple[Decimal, str]]:
+    """Els limits declarats d'una polissa, indexats pel seu tipus.
+
+    `coverage_amount` hi entra com a limit de tipus desconegut si no hi ha cap
+    fila que ja el reculli: es la dada que existeix a les fitxes d'abans i no es
+    pot ignorar sense perdre el compliment que ja funcionava.
+    """
+    limits: dict[InsuranceLimitKind, tuple[Decimal, str]] = {}
+    for limit in getattr(policy, "limits", []) or []:
+        if limit.amount is None:
+            continue
+        limits[limit.kind] = (Decimal(limit.amount), (limit.currency or "EUR").upper())
+    if policy.coverage_amount is not None and not limits:
+        limits[InsuranceLimitKind.UNKNOWN] = (
+            Decimal(policy.coverage_amount),
+            (policy.currency or "EUR").upper(),
+        )
+    return limits
+
+
+def _find(
+    declared: dict[InsuranceLimitKind, tuple[Decimal, str]], required: LimitSpec
+) -> tuple[Decimal, str] | None:
+    """El limit declarat que respon a un limit exigit, si n'hi ha cap."""
+    if required.kind in declared:
+        return declared[required.kind]
+    if required.kind in _ANSWERABLE_BY_UNTYPED:
+        return declared.get(InsuranceLimitKind.UNKNOWN) or declared.get(InsuranceLimitKind.TOTAL)
+    # Un sublimit exigit no el respon un import global.
+    return None
+
+
 def assess_insurance(
-    requirement: Any, snapshot: ProfileSnapshot, deadline: date | None
+    requirement: Any,
+    snapshot: ProfileSnapshot,
+    deadline: date | None = None,
+    tender: Any = None,
 ) -> RuleOutcome:
-    value = requirement.value_json or {}
-    required_amount = _decimal(value.get("coverage_amount") or value.get("amount"))
-    if required_amount is None:
+    spec: InsuranceSpec = read_insurance(requirement)
+    if spec.is_empty:
         return needs_review(
-            RuleCode.INSURANCE_COVERAGE_GTE, ExplanationCode.REQUIREMENT_VALUE_MISSING
+            RuleCode.INSURANCE_LIMITS, ExplanationCode.REQUIREMENT_VALUE_MISSING
         )
 
-    currency = (value.get("currency") or "EUR").strip().upper()
-    required_type = infer_insurance_type(value.get("type") or requirement.title)
-
+    required_type = spec.insurance_type or infer_insurance_type(
+        spec.type_note or getattr(requirement, "title", None)
+    )
     candidates = list(snapshot.insurances)
     if required_type is not None:
-        typed = [ins for ins in candidates if ins.type == required_type]
-        # Si el plec demana un tipus concret i no en tenim cap d'aquell tipus,
-        # no val comparar-hi una polissa d'una altra familia.
-        candidates = typed
+        candidates = [ins for ins in candidates if ins.type == required_type]
 
     if not candidates:
         if snapshot.is_section_complete("insurances"):
             return RuleOutcome(
                 result=AssessmentResult.DOES_NOT_SATISFY,
-                rule_code=RuleCode.INSURANCE_COVERAGE_GTE,
+                rule_code=RuleCode.INSURANCE_LIMITS,
                 explanation_code=ExplanationCode.INSURANCE_NOT_FOUND_PROFILE_COMPLETE,
                 params={
-                    "required_amount": float(required_amount),
-                    "currency": currency,
+                    "required_limits": _describe(spec.limits),
                     "required_type": str(required_type) if required_type else None,
                 },
                 mode=AssessmentMode.AUTOMATIC,
             )
         return unknown(
-            RuleCode.INSURANCE_COVERAGE_GTE,
+            RuleCode.INSURANCE_LIMITS,
             ExplanationCode.INSURANCE_DATA_INCOMPLETE,
-            required_amount=float(required_amount),
-            currency=currency,
+            required_limits=_describe(spec.limits),
         )
 
-    with_amount = [ins for ins in candidates if ins.coverage_amount is not None]
-    if not with_amount:
-        return unknown(
-            RuleCode.INSURANCE_COVERAGE_GTE,
-            ExplanationCode.INSURANCE_DATA_INCOMPLETE,
-            reason="no_coverage_amount",
+    # La millor polissa es la que resol mes condicions; en cap cas es combinen
+    # limits de polisses diferents, que serien contractes diferents.
+    evaluations = [(policy, _evaluate(policy, spec, deadline)) for policy in candidates]
+    evaluations.sort(key=lambda pair: pair[1].rank)
+    policy, verdict = evaluations[0]
+    return _to_outcome(snapshot, policy, spec, verdict)
+
+
+class _Verdict:
+    """El resultat de comparar una polissa amb totes les condicions del plec."""
+
+    __slots__ = (
+        "result", "explanation", "checked", "missing", "below", "expired",
+        "mismatched", "unchecked", "additional_insured",
+    )
+
+    def __init__(self) -> None:
+        self.result = AssessmentResult.SATISFIES
+        self.explanation = ExplanationCode.INSURANCE_LIMITS_MET
+        self.checked: list[dict[str, Any]] = []
+        self.missing: list[str] = []
+        self.below: list[str] = []
+        self.mismatched: list[str] = []
+        self.unchecked: list[str] = []
+        #: `None` no comprovat, `True` compleix, `False` incompleix.
+        self.additional_insured: bool | None = None
+        self.expired: bool = False
+
+    @property
+    def rank(self) -> int:
+        """Ordre de preferencia: complir, no saber, no complir."""
+        return {
+            AssessmentResult.SATISFIES: 0,
+            AssessmentResult.NEEDS_REVIEW: 1,
+            AssessmentResult.DOES_NOT_SATISFY: 2,
+        }[self.result]
+
+
+def _evaluate(policy: Any, spec: InsuranceSpec, deadline: date | None) -> _Verdict:
+    declared = _company_limits(policy)
+    verdict = _Verdict()
+
+    for required in spec.limits:
+        found = _find(declared, required)
+        entry: dict[str, Any] = {
+            "kind": str(required.kind),
+            "required": float(required.amount),
+            "currency": required.currency,
+        }
+        if found is None:
+            entry["declared"] = None
+            verdict.missing.append(str(required.kind))
+            verdict.checked.append(entry)
+            continue
+        amount, currency = found
+        entry["declared"] = float(amount)
+        entry["declared_currency"] = currency
+        if currency != required.currency:
+            # Sense conversio de divisa. Aixo no es "no ho sabem": es una
+            # polissa en una altra moneda, i qui ho resolgui ho ha de saber.
+            entry["mismatch"] = True
+            verdict.mismatched.append(str(required.kind))
+            verdict.checked.append(entry)
+            continue
+        entry["meets"] = amount >= required.amount
+        if amount < required.amount:
+            verdict.below.append(str(required.kind))
+        verdict.checked.append(entry)
+
+    if spec.additional_insured_required:
+        declared_flag = getattr(policy, "additional_insured", None)
+        verdict.additional_insured = declared_flag
+        verdict.checked.append(
+            {"kind": "additional_insured", "required": True, "declared": declared_flag}
         )
 
-    comparable = [ins for ins in with_amount if (ins.currency or "EUR").upper() == currency]
-    if not comparable:
-        return needs_review(
-            RuleCode.INSURANCE_COVERAGE_GTE,
-            ExplanationCode.INSURANCE_CURRENCY_MISMATCH,
-            required_currency=currency,
-            company_currencies=sorted({(i.currency or "EUR").upper() for i in with_amount}),
-        )
+    verdict.unchecked = list(spec.unchecked_conditions)
 
-    best = max(comparable, key=lambda i: Decimal(i.coverage_amount))
-    coverage = Decimal(best.coverage_amount)
+    # L'ordre importa i es el de la certesa. Un incompliment demostrat mana
+    # sobre qualsevol dada que falti: cap informacio futura pot desfer-lo.
+    if verdict.below:
+        verdict.result = AssessmentResult.DOES_NOT_SATISFY
+        verdict.explanation = ExplanationCode.INSURANCE_LIMIT_BELOW
+        return verdict
+    if verdict.additional_insured is False:
+        # La polissa diu explicitament que no inclou l'organ com a assegurat.
+        verdict.result = AssessmentResult.DOES_NOT_SATISFY
+        verdict.explanation = ExplanationCode.INSURANCE_ADDITIONAL_INSURED_MISSING
+        return verdict
+    if policy.expires_at is not None and deadline is not None and policy.expires_at < deadline:
+        verdict.result = AssessmentResult.DOES_NOT_SATISFY
+        verdict.explanation = ExplanationCode.INSURANCE_EXPIRED
+        verdict.expired = True
+        return verdict
 
-    documents = snapshot.documents_for(LinkedEntityType.COMPANY_INSURANCE, best.id)
-    policy = next((d for d in documents if d.category == DocumentCategory.INSURANCE), None)
-    best_document = policy or (documents[0] if documents else None)
+    # A partir d'aqui no hi ha cap incompliment demostrat, pero pot faltar
+    # informacio. Res d'aixo pot acabar en `satisfies`.
+    if verdict.mismatched:
+        verdict.result = AssessmentResult.NEEDS_REVIEW
+        verdict.explanation = ExplanationCode.INSURANCE_CURRENCY_MISMATCH
+        return verdict
+    if verdict.missing:
+        verdict.result = AssessmentResult.NEEDS_REVIEW
+        verdict.explanation = ExplanationCode.INSURANCE_LIMIT_UNKNOWN
+        return verdict
+    if spec.additional_insured_required and verdict.additional_insured is None:
+        # No consta si la polissa inclou l'organ. No consta no es "no".
+        verdict.result = AssessmentResult.NEEDS_REVIEW
+        verdict.explanation = ExplanationCode.INSURANCE_ADDITIONAL_INSURED_UNKNOWN
+        return verdict
+    if verdict.unchecked:
+        # Els imports encaixen, pero el plec imposa alguna condicio que aquesta
+        # capa no comprova. Dir `satisfies` seria afirmar mes del que s'ha mirat.
+        verdict.result = AssessmentResult.NEEDS_REVIEW
+        verdict.explanation = ExplanationCode.INSURANCE_CONDITION_NOT_CHECKED
+        return verdict
+    return verdict
+
+
+def _describe(limits: tuple[LimitSpec, ...]) -> list[dict[str, Any]]:
+    return [
+        {"kind": str(limit.kind), "amount": float(limit.amount), "currency": limit.currency}
+        for limit in limits
+    ]
+
+
+def _to_outcome(
+    snapshot: ProfileSnapshot, policy: Any, spec: InsuranceSpec, verdict: _Verdict
+) -> RuleOutcome:
+    documents = snapshot.documents_for(LinkedEntityType.COMPANY_INSURANCE, policy.id)
+    certificate = next((d for d in documents if d.category == DocumentCategory.INSURANCE), None)
+    best_document = certificate or (documents[0] if documents else None)
     strength = (
         EvidenceStrength.STRONG
-        if policy
+        if certificate
         else (EvidenceStrength.SUPPORTING if best_document else EvidenceStrength.MISSING)
     )
+    declared = _company_limits(policy)
     evidence = (
         EvidenceRef(
             kind=CompanyEvidenceKind.INSURANCE,
-            entity_id=best.id,
-            label=f"{best.type}: {coverage:.2f} {currency}",
+            entity_id=policy.id,
+            label=f"{policy.type}: "
+            + ", ".join(
+                f"{kind} {amount:.2f} {currency}"
+                for kind, (amount, currency) in declared.items()
+            )
+            or str(policy.type),
             strength=strength,
             document_id=best_document.id if best_document else None,
         ),
     )
     company_value = {
-        "type": str(best.type),
-        "coverage_amount": float(coverage),
-        "currency": currency,
-        "expires_at": str(best.expires_at) if best.expires_at else None,
+        "type": str(policy.type),
+        "limits": [
+            {"kind": str(kind), "amount": float(amount), "currency": currency}
+            for kind, (amount, currency) in declared.items()
+        ],
+        "expires_at": str(policy.expires_at) if policy.expires_at else None,
+        "additional_insured": policy.additional_insured,
     }
-    params = {
-        "required_amount": float(required_amount),
-        "actual_amount": float(coverage),
-        "currency": currency,
-        "type": str(best.type),
+    params: dict[str, Any] = {
+        "required_limits": _describe(spec.limits),
+        "checked": verdict.checked,
     }
-
-    if coverage < required_amount:
-        return RuleOutcome(
-            result=AssessmentResult.DOES_NOT_SATISFY,
-            rule_code=RuleCode.INSURANCE_COVERAGE_GTE,
-            explanation_code=ExplanationCode.INSURANCE_COVERAGE_NOT_MET,
-            params=params,
-            mode=AssessmentMode.AUTOMATIC,
-            company_value=company_value,
-            evidence=evidence,
-            strength=strength,
-        )
-
-    # La cobertura arriba; queda mirar que sigui vigent al termini.
-    if best.expires_at is not None and deadline is not None and best.expires_at < deadline:
-        return RuleOutcome(
-            result=AssessmentResult.DOES_NOT_SATISFY,
-            rule_code=RuleCode.INSURANCE_COVERAGE_GTE,
-            explanation_code=ExplanationCode.INSURANCE_EXPIRED,
-            params={**params, "expires_at": str(best.expires_at), "deadline": str(deadline)},
-            mode=AssessmentMode.AUTOMATIC,
-            company_value=company_value,
-            evidence=evidence,
-            strength=strength,
-        )
+    if verdict.missing:
+        params["undeclared_limits"] = verdict.missing
+    if verdict.mismatched:
+        params["currency_mismatch_limits"] = verdict.mismatched
+    if verdict.below:
+        params["insufficient_limits"] = verdict.below
+    if verdict.expired:
+        params["expires_at"] = str(policy.expires_at)
+    if verdict.unchecked:
+        params["unchecked_conditions"] = verdict.unchecked
+    if spec.additional_insured_required:
+        params["additional_insured_required"] = True
+        params["additional_insured_declared"] = verdict.additional_insured
 
     return RuleOutcome(
-        result=AssessmentResult.SATISFIES,
-        rule_code=RuleCode.INSURANCE_COVERAGE_GTE,
-        explanation_code=ExplanationCode.INSURANCE_COVERAGE_MET,
+        result=verdict.result,
+        rule_code=RuleCode.INSURANCE_LIMITS,
+        explanation_code=verdict.explanation,
         params=params,
-        mode=AssessmentMode.AUTOMATIC,
+        mode=(
+            AssessmentMode.REVIEW_REQUIRED
+            if verdict.result == AssessmentResult.NEEDS_REVIEW
+            else AssessmentMode.AUTOMATIC
+        ),
         company_value=company_value,
         evidence=evidence,
         strength=strength,

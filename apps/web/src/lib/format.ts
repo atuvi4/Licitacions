@@ -137,6 +137,28 @@ export const REGISTRATION_TYPE_LABELS: Record<RegistrationType, string> = {
   other: "Altres",
 };
 
+export const INSURANCE_LIMIT_KIND_LABELS: Record<string, string> = {
+  total: "Cobertura total",
+  per_claim: "Per sinistre",
+  per_victim: "Per victima",
+  annual_aggregate: "Agregat anual",
+  sublimit: "Sublimit",
+  unknown: "Sense especificar",
+};
+
+/** Els que es poden triar en crear un limit.
+ *
+ * `unknown` i `sublimit` en queden fora a proposit: el primer es el que
+ * produien les fitxes antigues i triar-lo tornaria a perdre la informacio; el
+ * segon no diu de quin sublimit es tracta.
+ */
+export const SELECTABLE_INSURANCE_LIMIT_KINDS = [
+  "total",
+  "per_claim",
+  "per_victim",
+  "annual_aggregate",
+] as const;
+
 export const INSURANCE_TYPE_LABELS: Record<InsuranceType, string> = {
   civil_liability: "Responsabilitat civil",
   professional_indemnity: "Responsabilitat professional",

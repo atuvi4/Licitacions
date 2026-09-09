@@ -71,6 +71,8 @@ class RequirementRead(ORMModel):
     modality: RequirementModality = RequirementModality.UNKNOWN
     #: Requisits amb el mateix grup son vies alternatives de la mateixa exigencia.
     alternative_group: str | None = None
+    #: `None` = no consta si totes les vies de la disjuncio hi son.
+    alternative_group_complete: bool | None = None
     equivalence_allowed: bool = False
     condition_note: str | None = None
     raw_lot_labels: list[Any] | None = None

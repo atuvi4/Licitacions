@@ -209,6 +209,28 @@ export interface Registration extends Audited {
   notes: string | null;
 }
 
+/** Els tipus de limit que una polissa pot declarar.
+ *
+ * `unknown` nomes existeix per compatibilitat amb les fitxes antigues, que
+ * tenien un sol import sense dir de quin limit parlaven. No es una opcio per
+ * triar: si es tria, el compliment no pot respondre cap sublimit.
+ */
+export type InsuranceLimitKind =
+  | "total"
+  | "per_claim"
+  | "per_victim"
+  | "annual_aggregate"
+  | "sublimit"
+  | "unknown";
+
+export interface InsuranceLimit extends Audited {
+  insurance_id: string;
+  kind: InsuranceLimitKind;
+  amount: string;
+  currency: string;
+  notes: string | null;
+}
+
 export interface Insurance extends Audited {
   type: InsuranceType;
   provider: string | null;
@@ -219,6 +241,8 @@ export interface Insurance extends Audited {
   starts_at: string | null;
   expires_at: string | null;
   temporal_status: TemporalStatus;
+  /** `null` vol dir que no consta, que no es el mateix que `false`. */
+  additional_insured: boolean | null;
   notes: string | null;
 }
 
