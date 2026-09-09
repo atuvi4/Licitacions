@@ -98,9 +98,11 @@
   },
   "quotes": {
     "checked": 24,
-    "located": 24,
+    "located": 23,
     "not_located": [],
-    "pages_unavailable": []
+    "pages_unavailable": [
+      "1-2026::exp-1"
+    ]
   },
   "proposal_ids": [
     "2026SE00013::class-1",

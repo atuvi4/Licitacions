@@ -31,6 +31,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from app.evaluation.corpus import resolve_tender
 from app.evaluation.dataset import (
     AnnotationStatus,
     GoldDataset,
@@ -533,18 +534,21 @@ def render_coverage_markdown(payload: dict[str, Any]) -> str:
 async def _page_texts(dataset: GoldDatasetV2) -> dict[tuple[str, str, int], str]:
     """Text de cada pagina citada, incloses les de l'evidencia addicional."""
     from app.db.session import SessionFactory
-    from app.evaluation.review_page import page_texts
+    from app.evaluation.review_page import page_query, page_texts
 
     async with SessionFactory() as session:
         texts = await page_texts(session, dataset)
 
-        import sqlalchemy as sa
-
         # `page_texts` nomes mira la pagina principal de cada anotacio; les
         # cites addicionals poden ser en una altra (el cas de la formula
         # repartida entre la 70 i la 71).
+        tenders = {case.case_id: await resolve_tender(session, case) for case in dataset.cases}
         for case, item in dataset.items:
-            if not case.expediente_number:
+            # Mateixa regla de resolucio que el benchmark: l'expedient no es
+            # unic i buscar-hi per expedient portaria al document d'un altre
+            # organ amb el mateix numero.
+            tender = tenders.get(case.case_id)
+            if tender is None:
                 continue
             for evidence in item.extra_evidence:
                 key = (case.case_id, evidence.document_name, evidence.page_number)
@@ -552,26 +556,7 @@ async def _page_texts(dataset: GoldDatasetV2) -> dict[tuple[str, str, int], str]
                     continue
                 row = (
                     await session.execute(
-                        sa.text(
-                            """
-                            SELECT p.text, e.revision_number
-                            FROM tender_document_pages p
-                            JOIN tender_document_extractions e
-                              ON e.id = p.extraction_id AND e.is_current
-                            JOIN tender_document_files f ON f.content_id = e.content_id
-                            JOIN tender_documents td ON td.id = f.tender_document_id
-                            JOIN tenders t ON t.id = td.tender_id
-                            WHERE t.expediente_number = :exp
-                              AND td.name = :doc
-                              AND p.page_number = :page
-                            LIMIT 1
-                            """
-                        ),
-                        {
-                            "exp": case.expediente_number,
-                            "doc": evidence.document_name,
-                            "page": evidence.page_number,
-                        },
+                        page_query(tender.id, evidence.document_name, evidence.page_number)
                     )
                 ).first()
                 if row:

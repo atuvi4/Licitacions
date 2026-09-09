@@ -53,7 +53,9 @@ Una dimensio nomes es mesurable si alguna anotacio **verificada** la fixa. Les p
 
 ## Evidencia
 
-24 de 24 cites localitzades al text real de la seva pagina.
+23 de 24 cites localitzades al text real de la seva pagina.
+
+1 anotacio(ns) amb la pagina no disponible en aquesta base de dades: no s'han pogut comprovar.
 
 ## Anotacions que n'afinen una altra
 

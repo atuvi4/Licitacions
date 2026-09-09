@@ -25,6 +25,10 @@ from sqlalchemy.orm import selectinload
 from app.ai.prompts.requirements_v1 import EXTRACTOR_VERSION, PROMPT_VERSION
 from app.ai.provider import ProviderError, StructuredLLMProvider, get_provider
 from app.ai.schemas import SCHEMA_VERSION
+
+# `resolve_tender` viu a `corpus.py`, compartit amb la pagina de revisio: el
+# gold s'ha de verificar contra EXACTAMENT el document que s'analitzara.
+from app.evaluation.corpus import resolve_tender
 from app.evaluation.dataset import GoldCase, GoldDataset
 from app.evaluation.matching import (
     PredictedAward,
@@ -44,7 +48,7 @@ from app.models.requirements import (
     RequirementExtractionRun,
 )
 from app.models.tender_documents import TenderDocumentPage
-from app.models.tenders import Tender, TenderDocument
+from app.models.tenders import TenderDocument
 from app.services.evidence_validation import quote_is_present
 from app.services.requirement_analysis import (
     analyze_tender_requirements,
@@ -60,21 +64,6 @@ class CaseOutcome:
     reused: bool = False
     skipped_reason: str | None = None
     analysed_pages: set[int] = field(default_factory=set)
-
-
-async def resolve_tender(session: AsyncSession, case: GoldCase) -> Tender | None:
-    """Troba el Tender real del cas. Per expedient o per identificador extern."""
-    if case.tender_external_id:
-        tender = await session.scalar(
-            sa.select(Tender).where(Tender.external_id == case.tender_external_id)
-        )
-        if tender is not None:
-            return tender
-    if case.expediente_number:
-        return await session.scalar(
-            sa.select(Tender).where(Tender.expediente_number == case.expediente_number)
-        )
-    return None
 
 
 async def _page_text(session: AsyncSession, page_id: uuid.UUID) -> str:

@@ -22,6 +22,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.evaluation.corpus import resolve_tender
 from app.evaluation.dataset import (
     AnnotationStatus,
     GoldDataset,
@@ -32,16 +33,32 @@ from app.evaluation.refinements import (
     check_decisions,
     check_no_double_counting,
 )
+from app.models.tender_documents import (
+    TenderDocumentExtraction,
+    TenderDocumentFile,
+    TenderDocumentPage,
+)
+from app.models.tenders import TenderDocument
 from app.services.evidence_validation import locate_quote
 
 
 async def page_texts(
     session: AsyncSession, dataset: GoldDataset
 ) -> dict[tuple[str, str, int], str]:
-    """Text complet de cada pagina citada, per (case_id, document, pagina)."""
+    """Text complet de cada pagina citada, per (case_id, document, pagina).
+
+    El tender es resol amb la MATEIXA regla que fa servir el benchmark
+    (`corpus.resolve_tender`). Abans es buscava nomes per expedient, i com que
+    l'expedient no es unic, una persona podia estar verificant una cita contra
+    un document i el benchmark mesurar-ne un altre. Si el cas apunta a un tender
+    sense pagines processades, aqui no hi ha text i es veu: es preferible que
+    salti a la vista que no pas omplir-ho amb el document d'un altre expedient
+    homonim.
+    """
     texts: dict[tuple[str, str, int], str] = {}
     for case in dataset.cases:
-        if not case.expediente_number:
+        tender = await resolve_tender(session, case)
+        if tender is None:
             continue
         wanted = {
             (item.document_name, item.page_number)
@@ -50,32 +67,42 @@ async def page_texts(
         for document_name, page_number in wanted:
             row = (
                 await session.execute(
-                    sa.text(
-                        """
-                        SELECT p.text, e.revision_number
-                        FROM tender_document_pages p
-                        JOIN tender_document_extractions e
-                          ON e.id = p.extraction_id AND e.is_current
-                        JOIN tender_document_files f ON f.content_id = e.content_id
-                        JOIN tender_documents td ON td.id = f.tender_document_id
-                        JOIN tenders t ON t.id = td.tender_id
-                        WHERE t.expediente_number = :exp
-                          AND td.name = :doc
-                          AND p.page_number = :page
-                        LIMIT 1
-                        """
-                    ),
-                    {
-                        "exp": case.expediente_number,
-                        "doc": document_name,
-                        "page": page_number,
-                    },
+                    page_query(tender.id, document_name, page_number)
                 )
             ).first()
             if row:
                 texts[(case.case_id, document_name, page_number)] = row[0]
                 texts[(case.case_id, document_name, -page_number)] = str(row[1])
     return texts
+
+
+def page_query(tender_id: Any, document_name: str, page_number: int) -> sa.Select:
+    """El text i la revisio d'una pagina concreta d'un tender concret.
+
+    Escrit amb l'ORM i no amb SQL cru perque el `tender_id` es un UUID i cada
+    dialecte el representa a la seva manera; deixar-ho al dialecte fa que la
+    mateixa consulta funcioni contra PostgreSQL i contra la base de dades dels
+    tests.
+    """
+    return (
+        sa.select(TenderDocumentPage.text, TenderDocumentExtraction.revision_number)
+        .join(
+            TenderDocumentExtraction,
+            TenderDocumentExtraction.id == TenderDocumentPage.extraction_id,
+        )
+        .join(
+            TenderDocumentFile,
+            TenderDocumentFile.content_id == TenderDocumentExtraction.content_id,
+        )
+        .join(TenderDocument, TenderDocument.id == TenderDocumentFile.tender_document_id)
+        .where(
+            TenderDocumentExtraction.is_current.is_(True),
+            TenderDocument.tender_id == tender_id,
+            TenderDocument.name == document_name,
+            TenderDocumentPage.page_number == page_number,
+        )
+        .limit(1)
+    )
 
 
 def _highlight(page_text: str, quote: str) -> str:
