@@ -132,6 +132,23 @@ class RequirementExtractionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: Documents que no s'han pogut analitzar (OLE2, ZIP, sense text...).
     skipped_documents: Mapped[list[Any] | None] = mapped_column(sa.JSON)
 
+    #: Quina qualitat tenia el text de les fonts que aquest run va llegir:
+    #: `good`, `warning`, `poor` o `unknown`. **No bloqueja l'extraccio**: el
+    #: que el model ha trobat segueix sent valid. El que permet es separar
+    #: despres "el model no ho ha vist" de "al text no hi era".
+    #:
+    #: `unknown` no es `good`. Vol dir que alguna de les fonts no ha passat mai
+    #: per la QA, i per tant que d'aquest run no se'n pot concloure que el text
+    #: fos complet. Un booleà ho hauria barrejat amb "avaluat i tot correcte", i
+    #: aquesta confusio acabaria atribuint al model errors de la font.
+    source_quality_status: Mapped[str] = mapped_column(
+        sa.String(10), nullable=False, default="unknown"
+    )
+    #: Fotografia dels codis d'issue i les pagines afectades en el moment del
+    #: run. S'hi desa i no s'hi enllaça perque una re-extraccio del document
+    #: canviaria la qualitat, i aquest run es va fer amb la d'aleshores.
+    source_quality_issues: Mapped[list[Any] | None] = mapped_column(sa.JSON)
+
     is_current: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     error_code: Mapped[str | None] = mapped_column(sa.String(50))
     error_message: Mapped[str | None] = mapped_column(sa.Text)

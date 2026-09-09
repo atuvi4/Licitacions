@@ -67,9 +67,11 @@ from app.models.tender_documents import (
     TenderDocumentExtraction,
     TenderDocumentFile,
     TenderDocumentPage,
+    TenderExtractionIssue,
 )
 from app.models.tenders import Tender, TenderDocument, TenderLot
 from app.services.evidence_validation import locate_quote
+from app.services.extraction_qa import QaStatus, combine_status
 from app.services.requirement_chunking import (
     DEFAULT_DOCUMENT_TYPES,
     AnalyzableDocument,
@@ -592,6 +594,73 @@ async def analyze_tender_requirements(
     return AnalysisOutcome(run=run, reused=False)
 
 
+async def _source_quality_snapshot(
+    session: AsyncSession, documents: list[AnalyzableDocument]
+) -> tuple[str, list[dict[str, Any]]]:
+    """Amb quina qualitat de text s'ha fet aquest run, i que s'hi va detectar.
+
+    Es una FOTOGRAFIA i no un enllaç: si el dia de dema es torna a extreure el
+    document amb un parser millor, la seva qualitat canviara, pero aquest run es
+    va fer amb el text d'ara i ha de poder dir-ho.
+
+    L'estat agregat es tan important com la llista. Si alguna de les extraccions
+    llegides no ha passat mai per la QA, el run queda `unknown`: no vol dir que
+    hi hagi problemes, vol dir que **ningu ho ha mirat**, i d'aixo no se'n pot
+    concloure que el text fos complet.
+
+    A la llista nomes hi entren les pagines que de veritat s'analitzen. Avisar
+    per una pagina que ni tan sols s'ha ensenyat al model faria que el senyal es
+    llegis com a soroll i deixes de mirar-se.
+    """
+    if not documents:
+        return QaStatus.UNKNOWN.value, []
+    wanted_pages = {
+        (document.extraction_id, page.page_number)
+        for document in documents
+        for page in document.pages
+    }
+    names = {document.extraction_id: document.document_name for document in documents}
+
+    extraction_ids = [uuid.UUID(document.extraction_id) for document in documents]
+    statuses = list(
+        (
+            await session.scalars(
+                sa.select(TenderDocumentExtraction.qa_status).where(
+                    TenderDocumentExtraction.id.in_(extraction_ids)
+                )
+            )
+        ).all()
+    )
+    # Una extraccio que no apareix a la consulta tampoc te QA.
+    statuses += [None] * (len(extraction_ids) - len(statuses))
+    status = combine_status(statuses).value
+
+    rows = (
+        await session.scalars(
+            sa.select(TenderExtractionIssue).where(
+                TenderExtractionIssue.extraction_id.in_(extraction_ids)
+            )
+        )
+    ).all()
+
+    snapshot: list[dict[str, Any]] = []
+    for issue in rows:
+        extraction_id = str(issue.extraction_id)
+        if issue.page_number is not None and (extraction_id, issue.page_number) not in wanted_pages:
+            continue
+        snapshot.append(
+            {
+                "extraction_id": extraction_id,
+                "document_name": names.get(extraction_id),
+                "page_number": issue.page_number,
+                "code": issue.code,
+            }
+        )
+    return status, sorted(
+        snapshot, key=lambda entry: (entry["document_name"] or "", entry["page_number"] or 0)
+    )
+
+
 async def _claim_run(
     session: AsyncSession,
     tender_id: uuid.UUID,
@@ -603,7 +672,10 @@ async def _claim_run(
     profile: ExtractorProfile,
 ) -> RequirementExtractionRun:
     """Reserva l'analisi. L'index unic parcial impedeix el doble clic."""
+    quality_status, quality_issues = await _source_quality_snapshot(session, documents)
     run = RequirementExtractionRun(
+        source_quality_status=quality_status,
+        source_quality_issues=quality_issues or None,
         tender_id=tender_id,
         status=AnalysisRunStatus.RUNNING,
         input_fingerprint=fingerprint,

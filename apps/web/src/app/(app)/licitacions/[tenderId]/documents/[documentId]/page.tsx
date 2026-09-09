@@ -52,8 +52,36 @@ interface FileRead {
     text_char_count: number;
     ocr_candidate: boolean;
     error_code: string | null;
+    /** `null` a les extraccions anteriors a la QA: no s'han avaluat mai. */
+    qa_status: "good" | "warning" | "poor" | null;
+    qa_issues: { page_number: number | null; code: string }[];
   } | null;
 }
+
+/** Etiquetes de la QA del text. Els codis venen del backend i son tancats. */
+const QA_LABELS: Record<string, string> = {
+  good: "Bona",
+  warning: "Avisos",
+  poor: "Pobra",
+};
+
+const QA_TONES: Record<string, "success" | "warning" | "danger"> = {
+  good: "success",
+  warning: "warning",
+  poor: "danger",
+};
+
+const QA_ISSUE_LABELS: Record<string, string> = {
+  EMPTY_PAGE: "pàgina sense text",
+  IMAGE_ONLY_PAGE: "sense text però amb imatges (possible escaneig)",
+  LOW_TEXT_DENSITY: "poc text per al conjunt del document",
+  DENSITY_DROP: "molt menys text que la resta de pàgines",
+  POSSIBLE_MISSING_FORMULA: "s'anuncia una fórmula que no apareix al text",
+  POSSIBLE_MISSING_TABLE: "s'anuncia una taula que no apareix al text",
+  POSSIBLE_TRUNCATION: "el text sembla tallat",
+  UNREADABLE_CHARACTERS: "caràcters il·legibles (codificació)",
+  PARSER_WARNING: "el parser no ha pogut llegir la pàgina",
+};
 
 interface PageRead {
   page_number: number;
@@ -158,6 +186,18 @@ export default function DocumentTextPage() {
             <dd className="truncate font-mono text-[11px]">{current.content?.sha256 ?? "—"}</dd>
           </div>
           <div>
+            <dt className="text-muted">Qualitat de l&apos;extracció</dt>
+            <dd>
+              {extraction?.qa_status ? (
+                <Badge tone={QA_TONES[extraction.qa_status]}>
+                  {QA_LABELS[extraction.qa_status]}
+                </Badge>
+              ) : (
+                <span className="text-muted">no avaluada</span>
+              )}
+            </dd>
+          </div>
+          <div>
             <dt className="text-muted">Parser</dt>
             <dd>
               {extraction
@@ -179,6 +219,27 @@ export default function DocumentTextPage() {
             </dd>
           </div>
         </dl>
+        {extraction && extraction.qa_issues.length > 0 && (
+          <div className="border-t border-border px-5 py-3">
+            <p className="text-[12px] font-medium">
+              Senyals que el text extret pot ser incomplet
+            </p>
+            <p className="mt-0.5 text-[12px] text-muted">
+              No vol dir que el document estigui malament: vol dir que en aquestes pàgines
+              podria haver-hi informació que al PDF es veu i al text no hi és.
+            </p>
+            <ul className="mt-2 space-y-1 text-[12px]">
+              {extraction.qa_issues.map((issue, index) => (
+                <li key={`${issue.code}-${issue.page_number ?? "doc"}-${index}`}>
+                  <span className="text-muted">
+                    {issue.page_number ? `Pàgina ${issue.page_number}` : "Document"}:
+                  </span>{" "}
+                  {QA_ISSUE_LABELS[issue.code] ?? issue.code}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {showingCitedRevision && !current.is_current && (
           <p className="border-t border-border px-5 py-3 text-[12px] text-muted">
             Estàs veient la revisió {extraction?.revision_number} perquè és la que va originar la

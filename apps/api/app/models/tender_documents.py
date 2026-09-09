@@ -136,12 +136,64 @@ class TenderDocumentExtraction(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
+    #: Veredicte de la QA del text: `good`, `warning` o `poor`. Pertany a
+    #: AQUESTA revisio: una re-extraccio en crea una de nova amb la seva propia
+    #: qualitat, i la d'abans es conserva tal com estava.
+    qa_status: Mapped[str | None] = mapped_column(sa.String(10))
+    #: Amb quines heuristiques s'ha avaluat. Dues qualitats calculades amb
+    #: criteris diferents no son comparables.
+    qa_version: Mapped[str | None] = mapped_column(sa.String(40))
+
     content: Mapped[TenderDocumentContent] = relationship(back_populates="extractions")
     pages: Mapped[list[TenderDocumentPage]] = relationship(
         back_populates="extraction",
         cascade="all, delete-orphan",
         order_by="TenderDocumentPage.page_number",
     )
+    qa_issues: Mapped[list[TenderExtractionIssue]] = relationship(
+        back_populates="extraction",
+        cascade="all, delete-orphan",
+        order_by="TenderExtractionIssue.page_number",
+    )
+
+
+class TenderExtractionIssue(UUIDPrimaryKeyMixin, Base):
+    """Un senyal que el text extret pot no ser complet.
+
+    No diu res del contingut juridic del plec: diu que **aquesta** passada de
+    parser potser s'ha deixat alguna cosa que al PDF es veu. El cas que ho
+    motiva: una pagina que anuncia una formula i on la formula es una imatge.
+
+    Va lligat a una `TenderDocumentExtraction` concreta i no al document, perque
+    la qualitat es una propietat de com es va llegir, no del document en si. Una
+    re-extraccio amb un parser millor genera issues nous sense esborrar els
+    antics: es el que permet dir despres si una extraccio va millorar.
+    """
+
+    __tablename__ = "tender_extraction_issues"
+    __table_args__ = (
+        sa.Index("ix_tender_extraction_issues_extraction_id", "extraction_id"),
+        sa.Index("ix_tender_extraction_issues_code", "code"),
+        sa.CheckConstraint(
+            "page_number IS NULL OR page_number >= 1", name="issue_page_is_one_based"
+        ),
+    )
+
+    extraction_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey("tender_document_extractions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    #: `NULL` quan afecta el document sencer i no una pagina concreta.
+    page_number: Mapped[int | None] = mapped_column(sa.Integer)
+    code: Mapped[str] = mapped_column(sa.String(40), nullable=False)
+    #: Les xifres que sostenen el senyal, per poder-lo explicar sense recalcular.
+    detail: Mapped[dict | None] = mapped_column(sa.JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
+    extraction: Mapped[TenderDocumentExtraction] = relationship(back_populates="qa_issues")
 
 
 class TenderDocumentPage(UUIDPrimaryKeyMixin, Base):

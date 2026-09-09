@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
     DownloadStatus,
@@ -33,6 +33,15 @@ class TenderDocumentContentRead(ORMModel):
     is_text_extractable: bool
 
 
+class TenderExtractionIssueRead(ORMModel):
+    """Un senyal que el text d'aquesta revisio pot no ser complet."""
+
+    #: `None` quan afecta el document sencer i no una pagina concreta.
+    page_number: int | None = None
+    code: str
+    detail: dict | None = None
+
+
 class TenderDocumentExtractionRead(ORMModel):
     id: uuid.UUID
     parser_version: str
@@ -48,6 +57,12 @@ class TenderDocumentExtractionRead(ORMModel):
     #: Indici de possible escaneig, no una prova que calgui OCR.
     ocr_candidate: bool
     is_current: bool
+    #: Veredicte de la QA del text: `good`, `warning` o `poor`. `None` a les
+    #: extraccions anteriors a la QA: no s'han avaluat mai, i dir-ne `good`
+    #: seria afirmar una cosa que ningu ha comprovat.
+    qa_status: str | None = None
+    qa_version: str | None = None
+    qa_issues: list[TenderExtractionIssueRead] = Field(default_factory=list)
     parse_ms: int | None = None
     error_code: str | None = None
     error_message: str | None = None

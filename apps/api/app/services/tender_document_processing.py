@@ -28,18 +28,22 @@ import httpx
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.errors import NoContentToExtractError, ProcessingInProgressError
-from app.models.enums import DownloadStatus, ExtractionStatus
+from app.models.enums import DownloadStatus, ExtractionStatus, PageExtractionStatus
 from app.models.tender_documents import (
     TenderDocumentContent,
     TenderDocumentExtraction,
     TenderDocumentFile,
     TenderDocumentPage,
+    TenderExtractionIssue,
 )
 from app.models.tenders import TenderDocument
 from app.services.document_download import DownloadError, DownloadResult, download_document
+from app.services.extraction_qa import PageInput as QaPageInput
+from app.services.extraction_qa import analyse as analyse_extraction_quality
 from app.services.pdf_text import (
     PARSER_VERSION,
     ExtractionResult,
@@ -81,7 +85,11 @@ async def current_extraction_for(
     session: AsyncSession, content_id: uuid.UUID
 ) -> TenderDocumentExtraction | None:
     return await session.scalar(
-        sa.select(TenderDocumentExtraction).where(
+        sa.select(TenderDocumentExtraction)
+        # Els avisos de qualitat viatgen amb l'extraccio: sense ells, la vista
+        # del document diria "Avisos" i no podria dir de que.
+        .options(selectinload(TenderDocumentExtraction.qa_issues))
+        .where(
             TenderDocumentExtraction.content_id == content_id,
             TenderDocumentExtraction.is_current.is_(True),
         )
@@ -244,6 +252,33 @@ async def _store_extraction(
                 char_count=page.char_count,
                 text_hash=page.text_hash,
                 status=page.status,
+            )
+        )
+
+    # La QA es calcula aqui i no despres: pertany a AQUESTA passada de parser.
+    # Si el dia de dema s'extreu el mateix document amb una biblioteca millor,
+    # la revisio nova tindra la seva propia qualitat i aquesta es conservara tal
+    # com esta, que es el que permet dir si l'extraccio ha millorat.
+    qa = analyse_extraction_quality(
+        [
+            QaPageInput(
+                page_number=page.page_number,
+                text=page.text,
+                failed=page.status == PageExtractionStatus.FAILED,
+            )
+            for page in result.pages
+        ],
+        extraction_quality=result.quality,
+    )
+    extraction.qa_status = qa.status.value
+    extraction.qa_version = qa.qa_version
+    for issue in qa.issues:
+        session.add(
+            TenderExtractionIssue(
+                extraction_id=extraction.id,
+                page_number=issue.page_number,
+                code=issue.code.value,
+                detail=issue.detail or None,
             )
         )
 

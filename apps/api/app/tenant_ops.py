@@ -95,6 +95,9 @@ PUBLIC_TABLES = frozenset(
         "tender_document_extractions",
         "tender_document_files",
         "tender_document_pages",
+        # La qualitat del text extret parla del document public, no de cap
+        # empresa: penja de l'extraccio i s'esborra amb ella.
+        "tender_extraction_issues",
         "tender_lot_cpvs",
         "tender_lots",
         "tenders",
