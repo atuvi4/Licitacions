@@ -22,7 +22,12 @@ import sys
 from pathlib import Path
 
 from app.db.session import SessionFactory
-from app.evaluation.dataset import load_dataset, save_dataset
+from app.evaluation.dataset import save_dataset
+
+# Carrega el gold sigui de la versio d'esquema que sigui: la revisio ha de
+# funcionar igual amb un dataset v1 i amb el candidat v2.
+from app.evaluation.dataset_v2 import load_gold
+from app.evaluation.refinements import RefinementConflict
 from app.evaluation.review_page import (
     apply_decisions,
     page_texts,
@@ -56,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def generate(args: argparse.Namespace) -> int:
-    dataset = load_dataset(args.dataset)
+    dataset = load_gold(args.dataset)
     async with SessionFactory() as session:
         texts = await page_texts(session, dataset)
 
@@ -96,8 +101,17 @@ def apply(args: argparse.Namespace) -> int:
     dataset_id = payload.get("dataset_id", args.dataset)
     decisions = payload.get("decisions", payload)
 
-    dataset = load_dataset(dataset_id)
-    dataset, applied = apply_decisions(dataset, decisions, reviewer=args.reviewer)
+    dataset = load_gold(dataset_id)
+    try:
+        dataset, applied = apply_decisions(dataset, decisions, reviewer=args.reviewer)
+    except RefinementConflict as conflict:
+        # No es desa res. Verificar un refinament sense dir que passa amb
+        # l'anotacio que afina deixaria el gold comptant dues vegades la mateixa
+        # exigencia, i aixo ha de bloquejar, no avisar.
+        print("No s'ha aplicat cap decisio: hi ha refinaments sense resoldre.")
+        for problem in conflict.problems:
+            print(f"  - {problem}")
+        return 1
 
     if applied["unknown_id"]:
         print(f"AVIS: {applied['unknown_id']} decision(s) amb un id que no existeix al dataset.")
@@ -109,14 +123,23 @@ def apply(args: argparse.Namespace) -> int:
         path = save_dataset(promote(dataset, target))
 
     coverage = dataset.coverage()
+    # El gold efectiu es el que compta al denominador, no el que porta l'etiqueta
+    # `verified`: una anotacio superada segueix dient que va ser verificada i ja
+    # no es compara amb res.
+    effective = coverage.get("counts_for_metrics", coverage["verified"])
     print(f"Decisions aplicades per {args.reviewer}: ", end="")
     print(", ".join(f"{k}={v}" for k, v in applied.items() if v))
     print(f"Dataset desat a {path}")
     print(
-        f"  gold efectiu: {coverage['verified']} anotacio(ns) verificada(es) "
+        f"  gold efectiu: {effective} anotacio(ns) al denominador "
         f"de {sum(coverage[k] for k in ('draft','verified','rejected','needs_review'))}"
     )
-    if coverage["verified"] == 0:
+    if coverage.get("superseded"):
+        print(
+            f"  {coverage['superseded']} anotacio(ns) substituida(es): es conserven "
+            "senceres i queden fora de les metriques."
+        )
+    if effective == 0:
         print("  ATENCIO: cap anotacio verificada. Les metriques oficials no son calculables.")
     return 0
 

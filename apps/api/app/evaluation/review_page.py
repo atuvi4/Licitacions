@@ -27,6 +27,11 @@ from app.evaluation.dataset import (
     GoldDataset,
     save_dataset,
 )
+from app.evaluation.refinements import (
+    apply_supersessions,
+    check_decisions,
+    check_no_double_counting,
+)
 from app.services.evidence_validation import locate_quote
 
 
@@ -271,10 +276,18 @@ def apply_decisions(
 
     No toca les etiquetes: canviar una categoria o un import es una correccio
     del gold i ha de passar per `revisions`, no per la revisio d'estat.
+
+    L'excepcio son els refinaments: verificar una anotacio que n'afina una altra
+    obliga a dir que passa amb l'original. Es comprova ABANS de tocar res i
+    aixeca `RefinementConflict` si no s'ha resolt, perque el resultat d'aplicar
+    decisions a mitges seria un gold que compta dues vegades el mateix.
     """
+    check_decisions(dataset, decisions or {})
+
     when = reviewed_on or date.today()
     applied = dict.fromkeys((s.value for s in AnnotationStatus), 0)
     applied["unknown_id"] = 0
+    applied["superseded"] = 0
 
     index = {
         f"{case.case_id}::{item.gold_id}": item
@@ -293,6 +306,15 @@ def apply_decisions(
         item.reviewed_at = when
         item.review_note = decision.get("note")
         applied[status.value] += 1
+
+    outcome = apply_supersessions(dataset, decisions or {}, reviewer=reviewer, when=when)
+    dataset.revisions.extend(outcome.revisions)
+    applied["superseded"] = len(outcome.superseded)
+
+    # Ultima comprovacio abans de retornar: encara que algu afegeixi un cami nou
+    # per aplicar decisions, aixo ha de seguir sent el que no deixa passar un
+    # gold que compta dues vegades la mateixa exigencia.
+    check_no_double_counting(dataset)
 
     return dataset, applied
 
