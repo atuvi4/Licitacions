@@ -17,10 +17,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
     AnalysisRunStatus,
+    AwardCriterionType,
     AwardEvaluationType,
     EvidenceRole,
     ExtractionConfidence,
     RequirementCategory,
+    RequirementModality,
     RequirementObligation,
     RequirementOperator,
     RequirementScope,
@@ -62,6 +64,15 @@ class RequirementRead(ORMModel):
     title: str
     description: str | None = None
     value_json: dict[str, Any] | None = None
+    #: Quin contracte segueix `value_json`. `None` = forma lliure de la v1.
+    value_schema: str | None = None
+    #: El matis de com obliga el plec. `obligation` en guarda la consequencia
+    #: conservadora: una alternativa mai hi arriba com a `mandatory`.
+    modality: RequirementModality = RequirementModality.UNKNOWN
+    #: Requisits amb el mateix grup son vies alternatives de la mateixa exigencia.
+    alternative_group: str | None = None
+    equivalence_allowed: bool = False
+    condition_note: str | None = None
     raw_lot_labels: list[Any] | None = None
     confidence: ExtractionConfidence
     review_status: ReviewStatus
@@ -86,6 +97,11 @@ class AwardCriterionRead(ORMModel):
     weight_percent: float | None = None
     #: NULL quan el plec no la dona. No se n'inventa cap.
     formula: str | None = None
+    #: La frase literal que la conte, per poder entendre-la i citar-la.
+    formula_text: str | None = None
+    formula_variables: list[Any] | None = None
+    tranches: list[Any] | None = None
+    criterion_type: AwardCriterionType = AwardCriterionType.UNKNOWN
     evaluation_type: AwardEvaluationType
     confidence: ExtractionConfidence
     review_status: ReviewStatus

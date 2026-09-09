@@ -31,6 +31,7 @@ from app.compliance.insurance import assess_insurance
 from app.compliance.personnel import assess_personnel, assess_qualification, assess_registration
 from app.compliance.profile import ProfileSnapshot
 from app.compliance.rules import ExplanationCode, RuleCode, RuleOutcome, needs_review
+from app.compliance.v2_adapter import adapt
 from app.models.enums import (
     AssessmentMode,
     AssessmentResult,
@@ -47,6 +48,22 @@ from app.models.enums import (
 GO_CANDIDATE_PREFIT_THRESHOLD = 60
 
 
+@dataclass(frozen=True, slots=True)
+class _AdaptedRequirement:
+    """El requisit amb el valor tradult a la forma que esperen les regles.
+
+    Es un embolcall i no una copia del model: les regles nomes llegeixen uns
+    quants atributs, i mutar el requisit real per adaptar-lo seria escriure a
+    l'objecte que despres es desa.
+    """
+
+    _wrapped: Any
+    value_json: dict[str, Any] | None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._wrapped, name)
+
+
 def assess_requirement(
     requirement: Any, snapshot: ProfileSnapshot, *, deadline: date | None = None
 ) -> RuleOutcome:
@@ -54,7 +71,23 @@ def assess_requirement(
 
     Una categoria sense regla determinista NO s'endevina: retorna revisio. Es
     preferible dir "aixo ho ha de mirar algu" que fabricar un veredicte.
+
+    Abans de triar cap regla es mira si el requisit porta una estructura v2 que
+    cap regla actual sap resoldre —una via alternativa, una equivalencia, "el de
+    major volum dels tres ultims", un sublimit per victima—. En aquest cas el
+    veredicte es `needs_review`, que demana una mirada humana, i mai un
+    `does_not_satisfy`, que es convertiria en un blocador fals.
     """
+    adaptation = adapt(requirement)
+    if not adaptation.is_supported:
+        return needs_review(
+            RuleCode.V2_STRUCTURE_UNSUPPORTED,
+            adaptation.unsupported,
+            category=str(requirement.category),
+        )
+    if adaptation.value is not getattr(requirement, "value_json", None):
+        requirement = _AdaptedRequirement(requirement, adaptation.value)
+
     category = requirement.category
 
     if category == RequirementCategory.ECONOMIC_SOLVENCY:

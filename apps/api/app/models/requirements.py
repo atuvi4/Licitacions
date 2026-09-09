@@ -30,10 +30,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column
 from app.models.enums import (
     AnalysisRunStatus,
+    AwardCriterionType,
     AwardEvaluationType,
     EvidenceRole,
     ExtractionConfidence,
     RequirementCategory,
+    RequirementModality,
     RequirementObligation,
     RequirementOperator,
     RequirementScope,
@@ -229,6 +231,31 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     has_conflict: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     conflict_group: Mapped[str | None] = mapped_column(sa.String(64))
 
+    # --- Extraccio v2 -------------------------------------------------------
+    #: Quin contracte segueix `value_json`. `None` = la forma lliure de la v1.
+    #: Sense aixo, un run antic i un de nou serien indistingibles i el motor de
+    #: compliment no sabria amb quines regles llegir el valor.
+    value_schema: Mapped[str | None] = mapped_column(sa.String(50))
+    #: El matis de com obliga el plec. `obligation` en guarda la consequencia
+    #: conservadora: una alternativa o una condicio no hi arriben mai com a
+    #: `mandatory`, perque un blocador fals es pitjor que un requisit a revisar.
+    modality: Mapped[RequirementModality] = mapped_column(
+        enum_column(RequirementModality, "requirement_modality"),
+        nullable=False,
+        default=RequirementModality.UNKNOWN,
+    )
+    #: Requisits amb el mateix grup son vies ALTERNATIVES de la mateixa exigencia
+    #: ("mitjancant A o alternativament B"). Sense aixo, A i B semblarien dos
+    #: blocadors independents.
+    alternative_group: Mapped[str | None] = mapped_column(sa.String(80), index=True)
+    #: "ISO 9001 **o equivalent**". Quina certificacio hi equival NO ho decideix
+    #: l'extractor: es una decisio de compliment o d'una persona.
+    equivalence_allowed: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False
+    )
+    #: La condicio que activa el requisit, literal ("en su caso", "si es UTE").
+    condition_note: Mapped[str | None] = mapped_column(sa.String(500))
+
     #: Clau canonica de deduplicacio, calculada pel backend.
     dedup_key: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     #: Quin chunk l'ha produit. Util per diagnosticar l'extractor.
@@ -323,7 +350,22 @@ class AwardCriterion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(sa.Text)
     points: Mapped[float | None] = mapped_column(sa.Float)
     weight_percent: Mapped[float | None] = mapped_column(sa.Float)
+    #: L'expressio tal com apareix ("P = 75 x (OM / OF)"). NULL quan el plec no
+    #: en dona cap: anotar-ne una seria inventar-la.
     formula: Mapped[str | None] = mapped_column(sa.Text)
+    #: La frase sencera i literal que la conte. `formula` sovint no s'enten sola;
+    #: aixo permet llegir-la i citar-la sense tornar al plec. (v2)
+    formula_text: Mapped[str | None] = mapped_column(sa.Text)
+    #: Que significa cada simbol, copiat del text. Mai deduit. (v2)
+    formula_variables: Mapped[list[Any] | None] = mapped_column(sa.JSON)
+    #: Trams de puntuacio quan el criteri no es una formula continua. (v2)
+    tranches: Mapped[list[Any] | None] = mapped_column(sa.JSON)
+    #: Familia del criteri (preu, qualitat, ambiental...). (v2)
+    criterion_type: Mapped[AwardCriterionType] = mapped_column(
+        enum_column(AwardCriterionType, "award_criterion_type"),
+        nullable=False,
+        default=AwardCriterionType.UNKNOWN,
+    )
     evaluation_type: Mapped[AwardEvaluationType] = mapped_column(
         enum_column(AwardEvaluationType, "award_evaluation_type"),
         nullable=False,

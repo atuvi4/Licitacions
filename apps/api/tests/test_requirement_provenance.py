@@ -178,21 +178,33 @@ async def test_force_creates_a_new_run(session, processed):
     assert second.run.is_current is True
 
 
-async def test_a_new_prompt_version_invalidates_the_cache(session, processed, monkeypatch):
+async def test_a_different_extractor_profile_invalidates_the_cache(session, processed):
+    """Dos perfils no es reaprofiten l'un a l'altre.
+
+    El `prompt_version` forma part de la clau de reus precisament perque un
+    resultat obtingut amb unes instruccions no val com a resultat d'unes altres.
+    Abans es provava suplantant una constant del modul; ara es prova amb el
+    mecanisme real, que es demanar un perfil diferent.
+    """
+    from app.ai.profiles import V1, V2
+
     extraction = await current_extraction(session)
     fake.queue_response(payload_for(extraction.id, 1))
     tender = await session.get(Tender, processed.tender_id)
-    first = await analyze_tender_requirements(session, tender)
+    first = await analyze_tender_requirements(session, tender, profile=V2)
 
-    monkeypatch.setattr(
-        "app.services.requirement_analysis.PROMPT_VERSION", "requirements-v2"
-    )
     fake.queue_response(payload_for(extraction.id, 1))
-    second = await analyze_tender_requirements(session, tender)
+    second = await analyze_tender_requirements(session, tender, profile=V1)
 
     assert second.reused is False
     assert second.run.id != first.run.id
-    assert second.run.prompt_version == "requirements-v2"
+    assert first.run.prompt_version == "requirements-v2"
+    assert second.run.prompt_version == "requirements-v1"
+
+    # I demanar altre cop el mateix perfil si que reaprofita.
+    third = await analyze_tender_requirements(session, tender, profile=V1)
+    assert third.reused is True
+    assert third.run.id == second.run.id
 
 
 async def test_a_new_extraction_revision_invalidates_the_cache(session, processed):

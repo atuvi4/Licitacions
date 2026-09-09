@@ -41,6 +41,8 @@ class RuleCode:
     PERSONNEL_COUNT = "personnel_count_v1"
     #: Cap regla determinista cobreix aquesta categoria encara.
     NOT_AUTOMATABLE = "not_automatable_v1"
+    #: El requisit ve amb una estructura v2 que cap regla actual sap llegir.
+    V2_STRUCTURE_UNSUPPORTED = "v2_structure_unsupported_v1"
     #: El requisit no aplica en aquest context (lot, abast...).
     NOT_APPLICABLE = "not_applicable_v1"
 
@@ -91,6 +93,23 @@ class ExplanationCode:
 
     #: El requisit no esta prou estructurat per decidir-lo automaticament.
     RULE_NOT_AUTOMATABLE = "RULE_NOT_AUTOMATABLE"
+
+    # --- Estructures v2 que cap regla no sap resoldre encara ----------------
+    #: Una de diverses vies d'acreditacio. Decidir-la sol seria inventar-se que
+    #: l'empresa ha triat aquesta.
+    V2_ALTERNATIVE_PATH = "V2_ALTERNATIVE_PATH"
+    #: El requisit nomes obliga si es dona una condicio que el motor no avalua.
+    V2_CONDITIONAL = "V2_CONDITIONAL"
+    #: "o equivalent": quina certificacio hi equival no ho decideix una regla.
+    V2_EQUIVALENCE_ALLOWED = "V2_EQUIVALENCE_ALLOWED"
+    #: "el de major volum dels tres ultims", mitjanes, acumulats...
+    V2_AGGREGATION_UNSUPPORTED = "V2_AGGREGATION_UNSUPPORTED"
+    #: Un llindar expressat com a percentatge d'una base del contracte.
+    V2_PERCENTAGE_THRESHOLD = "V2_PERCENTAGE_THRESHOLD"
+    #: Sublimits (per victima, per sinistre) que la regla actual no compara.
+    V2_INSURANCE_SUBLIMITS = "V2_INSURANCE_SUBLIMITS"
+    #: Valor v2 sense forma reconeguda.
+    V2_VALUE_NOT_INTERPRETABLE = "V2_VALUE_NOT_INTERPRETABLE"
     REQUIREMENT_VALUE_MISSING = "REQUIREMENT_VALUE_MISSING"
     SCOPE_NOT_APPLICABLE = "SCOPE_NOT_APPLICABLE"
     SCOPE_AMBIGUOUS = "SCOPE_AMBIGUOUS"

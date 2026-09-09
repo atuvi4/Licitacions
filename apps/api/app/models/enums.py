@@ -647,3 +647,126 @@ class PackageApprovalDecision(StrEnum):
 
     APPROVED_FOR_SUBMISSION = "approved_for_submission"
     REJECTED = "rejected"
+
+
+class RequirementModality(StrEnum):
+    """Com obliga el plec, amb mes matis que `obligation`.
+
+    Existeix a banda i no substituint `RequirementObligation` perque 4C llegeix
+    l'obligatorietat i canviar-ne el significat trencaria tot el compliment ja
+    calculat. Aqui hi va el matis; alla, la consequencia conservadora.
+
+    `ALTERNATIVE` i `CONDITIONAL` NO poden derivar en `mandatory`: una de dues
+    vies d'acreditacio no es una exigencia, i una condicio que potser no s'activa
+    tampoc. Convertir-les en obligatories fabricaria blocadors falsos.
+    """
+
+    MANDATORY = "mandatory"
+    OPTIONAL = "optional"
+    #: Una de diverses vies possibles. Va acompanyada d'`alternative_group`.
+    ALTERNATIVE = "alternative"
+    #: Nomes obliga si es dona un supost ("en su caso", "si procede").
+    CONDITIONAL = "conditional"
+    INFORMATIONAL = "informational"
+    UNKNOWN = "unknown"
+
+
+class EconomicMetric(StrEnum):
+    """Que es mesura a un requisit de solvencia economica."""
+
+    ANNUAL_TURNOVER = "annual_turnover"
+    #: Volum de negoci NOMES en l'ambit del contracte.
+    SPECIFIC_TURNOVER = "specific_turnover"
+    NET_WORTH = "net_worth"
+    WORKING_CAPITAL = "working_capital"
+    RATIO = "ratio"
+    OTHER = "other"
+
+
+class ReferencePeriodType(StrEnum):
+    LAST_N_YEARS = "last_n_years"
+    FISCAL_YEAR = "fiscal_year"
+    CONTRACT_DURATION = "contract_duration"
+    EXPLICIT_RANGE = "explicit_range"
+    UNKNOWN = "unknown"
+
+
+class AggregationType(StrEnum):
+    """Com es combinen els anys del periode de referencia.
+
+    La distincio que el gold huma va trobar a faltar: "cada un dels tres ultims
+    anys" i "el de major volum dels tres ultims" son requisits diferents, i
+    representar-los tots dos com `years: 3` els fa indistingibles.
+
+    `UNKNOWN` es el valor per defecte a proposit: si el text no ho diu, no
+    s'endevina.
+    """
+
+    #: Tots i cadascun dels anys han de superar el llindar.
+    EACH_YEAR = "each_year"
+    #: N'hi ha prou amb un any qualsevol.
+    ANY_YEAR = "any_year"
+    #: El millor/major any del periode.
+    MAX = "max"
+    AVERAGE = "average"
+    #: La suma del periode.
+    CUMULATIVE = "cumulative"
+    UNKNOWN = "unknown"
+
+
+class PercentageBase(StrEnum):
+    """Sobre que es calcula un percentatge. Sense base, un % no vol dir res."""
+
+    CONTRACT_VALUE = "contract_value"
+    #: Pressupost anual mitja del contracte ("anualidad media").
+    CONTRACT_ANNUITY = "contract_annuity"
+    BASE_BUDGET = "base_budget"
+    ESTIMATED_VALUE = "estimated_value"
+    LOT_VALUE = "lot_value"
+    OTHER = "other"
+    UNKNOWN = "unknown"
+
+
+class InsuranceLimitKind(StrEnum):
+    """Quin limit d'una polissa expressa un import.
+
+    Cobertura total i sublimit per victima son condicions DIFERENTS sobre la
+    mateixa polissa. Fusionar-les perdria la que sigui mes restrictiva.
+    """
+
+    TOTAL = "total"
+    PER_CLAIM = "per_claim"
+    PER_VICTIM = "per_victim"
+    ANNUAL_AGGREGATE = "annual_aggregate"
+    SUBLIMIT = "sublimit"
+    UNKNOWN = "unknown"
+
+
+class ProofType(StrEnum):
+    """Amb quin document s'acredita. Es la FORMA, no el requisit."""
+
+    CERTIFICATE = "certificate"
+    CERTIFICATE_OF_GOOD_EXECUTION = "certificate_of_good_execution"
+    INSURANCE_POLICY = "insurance_policy"
+    INSURANCE_CERTIFICATE = "insurance_certificate"
+    FINANCIAL_STATEMENT = "financial_statement"
+    TAX_DECLARATION = "tax_declaration"
+    REGISTRY_ENTRY = "registry_entry"
+    SWORN_STATEMENT = "sworn_statement"
+    OTHER = "other"
+    UNKNOWN = "unknown"
+
+
+class AwardCriterionType(StrEnum):
+    """Com es puntua un criteri d'adjudicacio."""
+
+    PRICE = "price"
+    QUALITY = "quality"
+    TECHNICAL = "technical"
+    ENVIRONMENTAL = "environmental"
+    SOCIAL = "social"
+    DELIVERY_TIME = "delivery_time"
+    WARRANTY = "warranty"
+    IMPROVEMENT = "improvement"
+    OTHER = "other"
+    UNKNOWN = "unknown"

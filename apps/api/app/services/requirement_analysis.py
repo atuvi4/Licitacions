@@ -35,27 +35,23 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.prompts.requirements_v1 import (
-    EXTRACTOR_VERSION,
-    PROMPT_VERSION,
-    SYSTEM_PROMPT,
-    build_user_message,
-)
+from app.ai.normalize_v2 import normalise_requirement
+from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
 from app.ai.provider import ProviderError, StructuredLLMProvider, get_provider
 from app.ai.schemas import (
-    SCHEMA_VERSION,
     AwardCriterionOut,
-    ChunkExtractionOut,
     EvidenceOut,
     RequirementOut,
-    chunk_output_json_schema,
 )
 from app.core.config import settings
 from app.core.errors import AnalysisInProgressError, NothingAnalyzableError
 from app.models.enums import (
     AnalysisRunStatus,
+    AwardCriterionType,
+    EvidenceRole,
     ExtractionStatus,
     RequirementCategory,
+    RequirementModality,
     RequirementScope,
     ReviewStatus,
 )
@@ -260,15 +256,26 @@ def _canonical_value(value: dict[str, Any] | None) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
 
 
-def requirement_dedup_key(item: RequirementOut, evidence: list[EvidenceOut]) -> str:
+def requirement_dedup_key(
+    item: RequirementOut, evidence: list[EvidenceOut], *, include_pages: bool = True
+) -> str:
     """Clau canonica d'un requisit.
 
     Deliberadament CONSERVADORA: inclou categoria, operador, abast i valor
     estructurat. Dos requisits que difereixin en qualsevol d'aquests camps es
     conserven tots dos. Val mes un duplicat visible que fusionar dues exigencies
-    diferents, i per aixo no s'hi fa servir cap similitud semantica.
+    diferents, i per aixo no s'hi fa servir cap similitud semantica. Aixo es el
+    que fa que una cobertura total i un sublimit per victima —valors diferents—
+    no es fusionin mai.
+
+    `include_pages` es la diferencia entre les dues versions, i te un motiu:
+
+    * v1 hi posava les pagines, aixi que el mateix requisit citat a dues pagines
+      es desava dues vegades. Es conserva perque els runs v1 no canviin.
+    * v2 les treu, de manera que les cites de pagines diferents s'acumulen al
+      MATEIX requisit. Es el que permet que el requisit general, l'import i la
+      forma d'acreditar-lo visquin junts sense duplicar el blocador.
     """
-    pages = sorted({f"{e.extraction_id}:{e.page_number}" for e in evidence})
     parts = [
         str(item.category),
         str(item.operator or ""),
@@ -277,8 +284,16 @@ def requirement_dedup_key(item: RequirementOut, evidence: list[EvidenceOut]) -> 
         _canonical_value(item.value),
         # El titol normalitzat desempata quan no hi ha valor estructurat.
         " ".join(item.title.split()).casefold(),
-        "|".join(pages),
+        # Camps v2: una alternativa i una exigencia amb el mateix text NO son el
+        # mateix requisit, i fusionar-les perdria justament el matis.
+        str(getattr(item, "modality", "")),
+        str(getattr(item, "alternative_group", "") or ""),
+        "eq" if getattr(item, "equivalence_allowed", False) else "",
     ]
+    if include_pages:
+        parts.append(
+            "|".join(sorted({f"{e.extraction_id}:{e.page_number}" for e in evidence}))
+        )
     return hashlib.sha256("␟".join(parts).encode("utf-8")).hexdigest()[:64]
 
 
@@ -434,6 +449,7 @@ async def _find_reusable_run(
     tender_id: uuid.UUID,
     fingerprint: str,
     provider: StructuredLLMProvider,
+    profile: ExtractorProfile,
 ) -> RequirementExtractionRun | None:
     """Un run completat amb la mateixa entrada i la mateixa configuracio."""
     return await session.scalar(
@@ -441,9 +457,9 @@ async def _find_reusable_run(
         .where(
             RequirementExtractionRun.tender_id == tender_id,
             RequirementExtractionRun.input_fingerprint == fingerprint,
-            RequirementExtractionRun.extractor_version == EXTRACTOR_VERSION,
-            RequirementExtractionRun.prompt_version == PROMPT_VERSION,
-            RequirementExtractionRun.schema_version == SCHEMA_VERSION,
+            RequirementExtractionRun.extractor_version == profile.extractor_version,
+            RequirementExtractionRun.prompt_version == profile.prompt_version,
+            RequirementExtractionRun.schema_version == profile.schema_version,
             RequirementExtractionRun.provider == provider.name,
             RequirementExtractionRun.model == provider.model,
             RequirementExtractionRun.status.in_(
@@ -468,11 +484,16 @@ async def analyze_tender_requirements(
     force: bool = False,
     document_ids: list[uuid.UUID] | None = None,
     provider: StructuredLLMProvider | None = None,
+    profile: ExtractorProfile = DEFAULT_PROFILE,
 ) -> AnalysisOutcome:
     """Extreu els requisits d'una licitacio a partir dels plecs ja processats.
 
     Viu separada de l'endpoint HTTP a proposit: mes endavant la podra executar
     un worker sense tocar-ne ni una linia.
+
+    El `profile` decideix amb quin prompt i quin contracte s'extreu, i les seves
+    versions es desen al Run: dos runs de perfils diferents no es reaprofiten
+    l'un a l'altre ni es poden comparar per accident.
     """
     started = time.monotonic()
     llm = provider or get_provider()
@@ -492,12 +513,14 @@ async def analyze_tender_requirements(
     fingerprint = compute_input_fingerprint(documents)
 
     if not force:
-        reusable = await _find_reusable_run(session, tender.id, fingerprint, llm)
+        reusable = await _find_reusable_run(session, tender.id, fingerprint, llm, profile)
         if reusable is not None:
             return AnalysisOutcome(run=reusable, reused=True)
 
     chunks = build_chunks(documents)
-    run = await _claim_run(session, tender.id, fingerprint, llm, documents, chunks, skipped)
+    run = await _claim_run(
+        session, tender.id, fingerprint, llm, documents, chunks, skipped, profile
+    )
 
     lots = list(
         (await session.scalars(sa.select(TenderLot).where(TenderLot.tender_id == tender.id))).all()
@@ -506,13 +529,15 @@ async def analyze_tender_requirements(
     tally = _ChunkTally()
     input_tokens = output_tokens = 0
     request_ids: list[str] = []
-    seen_requirements: set[str] = set()
+    # Mapa i no conjunt: a la v2, retrobar una clau vol dir acumular-hi les
+    # cites noves, no descartar-les.
+    seen_requirements: dict[str, Requirement] = {}
     seen_awards: set[str] = set()
     last_error: str | None = None
 
     for chunk in chunks:
         try:
-            result = await _run_chunk(llm, chunk)
+            result = await _run_chunk(llm, chunk, profile)
         except ProviderError as exc:
             tally.validation_errors += 1
             run.chunks_failed += 1
@@ -547,6 +572,7 @@ async def analyze_tender_requirements(
             tally=tally,
             seen_requirements=seen_requirements,
             seen_awards=seen_awards,
+            profile=profile,
         )
         run.chunks_completed += 1
 
@@ -574,15 +600,16 @@ async def _claim_run(
     documents: list[AnalyzableDocument],
     chunks: list[Chunk],
     skipped: list[SkippedDocument],
+    profile: ExtractorProfile,
 ) -> RequirementExtractionRun:
     """Reserva l'analisi. L'index unic parcial impedeix el doble clic."""
     run = RequirementExtractionRun(
         tender_id=tender_id,
         status=AnalysisRunStatus.RUNNING,
         input_fingerprint=fingerprint,
-        extractor_version=EXTRACTOR_VERSION,
-        prompt_version=PROMPT_VERSION,
-        schema_version=SCHEMA_VERSION,
+        extractor_version=profile.extractor_version,
+        prompt_version=profile.prompt_version,
+        schema_version=profile.schema_version,
         provider=llm.name,
         model=llm.model,
         started_at=datetime.now(UTC),
@@ -613,19 +640,19 @@ async def _claim_run(
 
 
 async def _run_chunk(
-    llm: StructuredLLMProvider, chunk: Chunk
-) -> tuple[ChunkExtractionOut | None, Any]:
-    """Crida el proveidor i valida la sortida contra l'esquema."""
+    llm: StructuredLLMProvider, chunk: Chunk, profile: ExtractorProfile
+) -> tuple[Any | None, Any]:
+    """Crida el proveidor i valida la sortida contra l'esquema del perfil."""
     from app.ai.provider import Usage
 
     response = await llm.extract_structured(
-        system=SYSTEM_PROMPT,
-        user_content=build_user_message(render_chunk(chunk)),
-        json_schema=chunk_output_json_schema(),
+        system=profile.system_prompt,
+        user_content=profile.build_user_message(render_chunk(chunk)),
+        json_schema=profile.json_schema(),
         max_output_tokens=settings.LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS,
     )
     try:
-        parsed = ChunkExtractionOut.model_validate(response.data)
+        parsed = profile.parse(response.data)
     except PydanticValidationError as exc:
         logger.warning(
             "requirements.chunk.schema_invalid",
@@ -635,17 +662,47 @@ async def _run_chunk(
     return parsed, response.usage
 
 
+def _append_new_evidence(requirement: Requirement, validated: list[ValidatedEvidence]) -> None:
+    """Afegeix nomes les cites que el requisit encara no te.
+
+    Un requisit pot estar descrit en diverses pagines —l'exigencia a una,
+    l'import a una altra, la forma d'acreditar-lo a una tercera— i totes tres
+    cites el sostenen. El que NO ha de passar es que la mateixa cita hi entri
+    dues vegades perque dos chunks se solapen.
+    """
+    known = {(e.extraction_id, e.page_number, e.quote) for e in requirement.evidence}
+    for item in validated:
+        if (item.extraction_id, item.page_number, item.quote) in known:
+            continue
+        requirement.evidence.append(
+            RequirementEvidence(
+                extraction_id=item.extraction_id,
+                page_id=item.page_id,
+                tender_document_id=item.tender_document_id,
+                page_number=item.page_number,
+                quote=item.quote,
+                char_start=item.char_start,
+                char_end=item.char_end,
+                section=item.section,
+                # Una cita que arriba despres reforca el requisit; la primaria
+                # segueix sent la que el va crear.
+                evidence_role=EvidenceRole.SUPPORTING,
+            )
+        )
+
+
 def _persist_chunk(
     *,
     session: AsyncSession,
     run: RequirementExtractionRun,
     tender: Tender,
     chunk: Chunk,
-    parsed: ChunkExtractionOut,
+    parsed: Any,
     lots: list[TenderLot],
     tally: _ChunkTally,
-    seen_requirements: set[str],
+    seen_requirements: dict[str, Requirement],
     seen_awards: set[str],
+    profile: ExtractorProfile,
 ) -> None:
     for item in parsed.requirements:
         evidence, rejected = validate_evidence(item.evidence, chunk)
@@ -655,28 +712,46 @@ def _persist_chunk(
             tally.rejected += 1
             continue
 
-        key = requirement_dedup_key(item, item.evidence)
-        if key in seen_requirements:
-            # Solapament de chunks: el mateix requisit vist dues vegades.
+        key = requirement_dedup_key(
+            item, item.evidence, include_pages=not profile.structured_values
+        )
+        existing = seen_requirements.get(key)
+        if existing is not None:
+            if not profile.structured_values:
+                # v1: solapament de chunks, el mateix requisit vist dues vegades.
+                continue
+            # v2: el mateix requisit citat en una altra pagina. Les cites
+            # s'acumulen en comptes de duplicar el requisit —i el seu blocador—.
+            _append_new_evidence(existing, evidence)
             continue
-        seen_requirements.add(key)
 
         lot_id, needs_review = resolve_lot(item.lot_labels, lots)
         scope = item.scope
         if lot_id is not None and scope == RequirementScope.UNKNOWN:
             scope = RequirementScope.LOT
 
+        normalised = (
+            normalise_requirement(item, run_id=run.id, chunk_index=chunk.index)
+            if profile.structured_values
+            else None
+        )
+
         requirement = Requirement(
             run_id=run.id,
             tender_id=tender.id,
             tender_lot_id=lot_id,
             category=item.category,
-            obligation=item.obligation,
+            obligation=normalised.obligation if normalised else item.obligation,
             operator=item.operator,
             scope=scope,
             title=item.title[:500],
             description=item.description,
-            value_json=item.value,
+            value_json=normalised.value_json if normalised else item.value,
+            value_schema=normalised.value_schema if normalised else None,
+            modality=normalised.modality if normalised else RequirementModality.UNKNOWN,
+            alternative_group=normalised.alternative_group if normalised else None,
+            equivalence_allowed=bool(normalised.equivalence_allowed) if normalised else False,
+            condition_note=normalised.condition_note if normalised else None,
             raw_lot_labels=item.lot_labels or None,
             confidence=item.confidence,
             review_status=ReviewStatus.NEEDS_REVIEW if needs_review else ReviewStatus.UNREVIEWED,
@@ -684,6 +759,7 @@ def _persist_chunk(
             source_chunk_index=chunk.index,
         )
         session.add(requirement)
+        seen_requirements[key] = requirement
         # Les evidencies pengen per relacio: el cascade les desa amb el commit.
         for validated in evidence:
             requirement.evidence.append(
@@ -724,6 +800,15 @@ def _persist_chunk(
             points=item.points,
             weight_percent=item.weight_percent,
             formula=item.formula,
+            # v2: la frase sencera, el significat dels simbols i els trams. Es
+            # conserven tal com venen; aqui no s'executa cap formula.
+            formula_text=getattr(item, "formula_text", None),
+            formula_variables=[
+                v.model_dump() for v in getattr(item, "formula_variables", []) or []
+            ]
+            or None,
+            tranches=[t.model_dump() for t in getattr(item, "tranches", []) or []] or None,
+            criterion_type=getattr(item, "criterion_type", AwardCriterionType.UNKNOWN),
             evaluation_type=item.evaluation_type,
             confidence=item.confidence,
             review_status=ReviewStatus.NEEDS_REVIEW if needs_review else ReviewStatus.UNREVIEWED,

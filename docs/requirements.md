@@ -194,19 +194,114 @@ LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS=8000
 La sortida estructurada es demana amb una *tool* amb `input_schema`, no
 parsejant text lliure amb expressions regulars.
 
-## Prompts versionats
+## Prompts versionats i perfils d'extracció
 
-`app/ai/prompts/requirements_v1.py`:
+Un **perfil** (`app/ai/profiles.py`) agrupa prompt, esquema de sortida i versió
+de l'extractor. Van junts perquè es desen junts a cada run: barrejar-los faria
+que dos resultats incomparables semblessin comparables.
 
-```
-PROMPT_VERSION    = "requirements-v1"
-EXTRACTOR_VERSION = "tender-requirements-v1"
-SCHEMA_VERSION    = "requirements-schema-v1"
-```
+| Perfil | `prompt_version` | `schema_version` | `extractor_version` |
+| --- | --- | --- | --- |
+| **`V1`** (per defecte) | `requirements-v1` | `requirements-schema-v1` | `tender-requirements-v1` |
+| `V2` (explícit) | `requirements-v2` | `requirements-schema-v2` | `tender-requirements-v2` |
 
-**No s'editen en silenci.** El `prompt_version` es desa a cada run i forma part
-de la clau de cache: canviar el text sense pujar la versió faria que resultats
-incomparables semblessin comparables. Si canvia el significat, es crea `v2`.
+**Implementada no vol dir promoguda.** El perfil per defecte
+(`DEFAULT_PROFILE`) segueix sent la **v1**, i no és un descuit: la v2 està
+implementada però la seva qualitat amb un model real encara no s'ha mesurat.
+Posar-la per defecte ara faria que qualsevol extracció nova canviés de
+comportament sense que ningú ho hagués demanat ni comprovat.
+
+Qui la vulgui, la demana: `analyze_tender_requirements(..., profile=V2)`. És el
+que fan els runs de benchmark, que s'hi refereixen per `BENCHMARK_PROFILE` en
+comptes d'escriure la versió a mà. Quan **4D.2** mesuri la v2 i passi els
+criteris d'acceptació, el defecte passarà a `V2` en un commit a part: la
+promoció és una decisió, i ha de ser visible com a tal.
+
+**No s'editen en silenci.** El `prompt_version` forma part de la clau de cache;
+canviar-ne el text sense pujar la versió faria que resultats incomparables
+semblessin comparables. Com que el perfil sencer entra a la clau, els runs v1
+antics segueixen sent reproduibles i es reaprofiten en comptes de re-executar-se
+amb regles noves.
+
+## Requisits v2
+
+La revisió humana del gold (`gold-v1-reviewed`) va trobar cinc coses que la v1
+**no podia representar**. No es van resoldre amb condicionals per expedient sinó
+canviant l'esquema, el prompt, la normalització i la validació.
+
+### El valor deixa de ser lliure
+
+`app/ai/value_schemas.py` dona forma tipada al `value_json`, i
+`Requirement.value_schema` diu quin contracte segueix. `None` = la forma lliure
+de la v1, que segueix sent llegible.
+
+| Cas | Què faltava | Com es representa ara |
+| --- | --- | --- |
+| «el de major volum dels tres últims» | `years: 3` no distingia «cadascun» de «el millor» | `reference_period.years` + **`aggregation`** (`each_year` · `any_year` · `max` · `average` · `cumulative` · `unknown`) |
+| «≥ 70 % de l'anualitat mitjana» | Un percentatge sense base no vol dir res | `percentage` + **`percentage_base`** (`contract_annuity`, `contract_value`…) |
+| «RC 1.000.000 amb sublímit 300.000 per víctima» | S'aplanaven en un sol import | `limits[]` amb `kind` (`total`, `per_claim`, **`per_victim`**, `annual_aggregate`, `sublimit`) |
+| «podrà acreditar-se mitjançant classificació…» | Es convertia en un requisit obligatori | `modality: alternative` + `alternative_group` |
+| «ISO 9001 **o equivalent**» | Es llegia com «exactament ISO 9001» | `equivalence_allowed = true` |
+
+**`unknown` no és un valor per defecte, és informació.** Si el plec no diu
+l'agregació, s'hi queda: endevinar-la seria inventar el requisit.
+
+### Modalitat i obligatorietat
+
+`modality` (mandatory · optional · **alternative** · **conditional** ·
+informational · unknown) és un camp nou **al costat** d'`obligation`, no un
+substitut: 4C llegeix l'obligatorietat i canviar-ne el significat invalidaria
+tot el compliment ja calculat.
+
+`obligation` en guarda la conseqüència conservadora, i la derivació **només
+baixa mai puja** (`app/ai/normalize_v2.py`):
+
+* `alternative` o `conditional` + `mandatory` → **`unknown`**
+* `optional` + `mandatory` → `scored`
+* `informational` + `mandatory` → `informative`
+
+«Podrà» tot sol no demostra obligatorietat. Una via d'acreditació marcada com a
+exigència fabricaria un blocador fals, que és l'error més car del sistema.
+
+### Criteris d'adjudicació
+
+`formula` (l'expressió), `formula_text` (la frase literal que la conté),
+`formula_variables` (què vol dir cada símbol, copiat) i `tranches`. **No
+s'executa cap fórmula**: només es conserva.
+
+### Evidència multi-pàgina
+
+Un requisit pot estar descrit en diverses pàgines —l'exigència a una, l'import a
+una altra, la forma d'acreditar-lo a una tercera— i les tres cites el sostenen.
+La clau de dedup v2 **no inclou les pàgines**, de manera que les cites
+s'acumulen al mateix requisit en comptes de duplicar-lo i duplicar-ne el
+blocador. La v1 les hi incloïa i es conserva tal com era.
+
+La regla d'evidència **no es relaxa**: sense cita literal verificable no hi ha
+requisit, tampoc a la v2.
+
+### Deduplicació
+
+Segueix sent conservadora i ara distingeix també modalitat, grup d'alternatives i
+equivalència. Una cobertura total i un sublímit per víctima tenen valors
+diferents i **no es fusionen mai**.
+
+## Compatibilitat amb 4C
+
+`app/compliance/v2_adapter.py` és la frontera, escrita en un sol lloc i no
+repartida en condicionals dins de cada regla. Fa dues coses:
+
+* **Tradueix el que sí que és equivalent.** Un llindar v2 amb agregació
+  `each_year` diu exactament el mateix que el valor lliure v1, i es resol igual.
+  Sense això, activar la v2 hauria deixat el compliment sense veredictes.
+* **Bloqueja el que cap regla sap resoldre** i retorna `needs_review` amb un codi:
+  `V2_ALTERNATIVE_PATH` · `V2_CONDITIONAL` · `V2_EQUIVALENCE_ALLOWED` ·
+  `V2_AGGREGATION_UNSUPPORTED` · `V2_PERCENTAGE_THRESHOLD` ·
+  `V2_INSURANCE_SUBLIMITS` · `V2_VALUE_NOT_INTERPRETABLE`.
+
+`needs_review` no genera blocador, així que **una alternativa no verificada no
+pot descartar una licitació**. Hi ha un test que ho fixa per als cinc patrons.
+
 
 ## Prompt injection
 
@@ -238,8 +333,15 @@ loguegen claus d'API ni el text dels plecs**, només recomptes.
   separada d'HTTP, així que moure-la a un worker no requerirà tocar-la. No s'han
   fet servir `BackgroundTasks` com a falsa cua durable.
 * **Sense OCR.** Un plec escanejat no té text i queda fora de l'anàlisi.
-* **Valor estructurat lliure.** `value_json` es valida per esquema quan la
-  categoria ho permet; no s'ha perseguit una ontologia perfecta a l'MVP.
+* **4C encara no resol les estructures v2 riques.** Agregacions (`max`,
+  `average`, `cumulative`), llindars en percentatge, sublímits d'assegurança,
+  alternatives i equivalències arriben com a `needs_review`. És deliberat i
+  conservador, però vol dir que un plec amb aquests patrons demanarà més revisió
+  humana fins que hi hagi regles noves.
+* **Cap fórmula s'executa.** Es conserva; puntuar una oferta és una altra fase.
+* **La qualitat del model amb la v2 no està mesurada.** Aquesta iteració fixa que
+  la canonada pugui representar-ho; el benchmark real és la següent. Per això la
+  v2 **no és el perfil per defecte**: s'ha de demanar explícitament.
 * **Deduplicació entre runs.** La clau única és per run: dos runs diferents poden
   contenir requisits equivalents. És intencionat, perquè cada run és una
   fotografia immutable.
