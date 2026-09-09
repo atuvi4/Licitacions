@@ -869,6 +869,108 @@ def test_the_committed_candidate_is_reproducible(source, committed):
     assert fresh.dataset.model_dump(mode="json") == committed.model_dump(mode="json")
 
 
+# --------------------------------------------------------------------------- #
+# El gold v2 ja revisat, tal com queda al repositori                            #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def reviewed():
+    """`gold-v2`: el resultat de la revisio humana, versionat."""
+    return load_dataset_v2("gold-v2")
+
+
+def test_the_reviewed_gold_has_no_pending_drafts(reviewed):
+    """Una proposta que ningu ha resolt no hauria d'arribar a un gold publicat."""
+    counts = reviewed.status_counts()
+    assert counts["draft"] == 0
+    assert counts["verified"] == 15
+    assert counts["needs_review"] == 2
+    assert counts["rejected"] == 0
+    assert len(reviewed.items) == 17
+
+
+def test_the_reviewed_gold_counts_fourteen_annotations(reviewed):
+    """15 verificades, 14 al denominador: la diferencia es la superada.
+
+    Es la xifra que un benchmark ha de citar. Confondre-la amb el recompte
+    d'etiquetes faria que el denominador comptes dues vegades la polissa de
+    `TSA0082096-040`.
+    """
+    assert reviewed.status_counts()["counts_for_metrics"] == 14
+    assert reviewed.verified_requirements + reviewed.verified_award_criteria == 14
+
+    ins1 = _item(reviewed, REFINED)
+    assert ins1.annotation_status == AnnotationStatus.VERIFIED
+    assert ins1.superseded_by == "ins-2"
+    assert not ins1.counts_for_metrics
+    assert ins1.reviewed_by == "AlbertTuvi1"
+    assert reviewed.double_counted() == []
+
+
+def test_the_reviewed_gold_keeps_exactly_two_open_questions(reviewed):
+    """Les dues que el text no permetia tancar, i cap mes.
+
+    `class-1` perque l'altra branca de l'alternativa no es a la pagina;
+    `award-1` de Madrid perque l'expressio de la formula no es al text extret.
+    Deixar-les obertes es el resultat correcte, no un deute.
+    """
+    open_ones = sorted(
+        f"{case.case_id}::{item.gold_id}"
+        for case, item in reviewed.items
+        if item.annotation_status == AnnotationStatus.NEEDS_REVIEW
+    )
+    assert open_ones == ["2026SE00013::class-1", "300-2025-03877::award-1"]
+
+
+def test_the_reviewed_gold_can_measure_what_v2_added(reviewed):
+    """El motiu de tota la iteracio, comprovat sobre el fitxer publicat."""
+    coverage = reviewed.dimension_coverage()
+
+    for dimension in ("aggregation", "percentage_base", "insurance_limits"):
+        assert coverage[dimension]["verified"] == 1, dimension
+    assert coverage["award_formula"]["verified"] == 2
+    assert coverage["obligation_modality"]["verified"] == 2
+    assert coverage["equivalence"]["verified"] == 1
+
+    # Segueix sense denominador: nomes en depen el cas que ha quedat obert.
+    assert coverage["alternatives"]["verified"] == 0
+    assert coverage["alternatives"]["pending"] == 1
+
+
+def test_the_reviewed_gold_verified_award_criteria_are_the_two_with_a_formula(reviewed):
+    awards = sorted(
+        f"{case.case_id}::{item.gold_id}"
+        for case in reviewed.cases
+        for item in case.verified_award_criteria
+    )
+    assert awards == ["422-2026::award-1", "P4107500C-2026-65::award-1"]
+    assert reviewed.verified_award_criteria == 2
+
+
+def test_the_reviewed_gold_did_not_touch_the_v1_dataset(reviewed):
+    """La revisio del v2 no pot haver reescrit la versio que la sosté."""
+    v1 = load_dataset(SOURCE_DATASET)
+    statuses = [
+        item.annotation_status
+        for case in v1.cases
+        for item in [*case.requirements, *case.award_criteria]
+    ]
+    assert statuses.count(AnnotationStatus.VERIFIED) == 11
+    assert statuses.count(AnnotationStatus.NEEDS_REVIEW) == 5
+
+
+def test_every_reviewed_annotation_is_signed(reviewed):
+    """Una anotacio decidida sense signatura no es una revisio."""
+    for _, item in reviewed.items:
+        if item.annotation_status in (
+            AnnotationStatus.VERIFIED,
+            AnnotationStatus.NEEDS_REVIEW,
+        ):
+            assert item.reviewed_by, f"{item.gold_id} sense revisor"
+            assert item.reviewed_at, f"{item.gold_id} sense data"
+
+
 def test_the_committed_candidate_declares_its_schema_and_origin(committed):
     assert committed.gold_schema_version == GOLD_SCHEMA_VERSION
     assert committed.derived_from == SOURCE_DATASET

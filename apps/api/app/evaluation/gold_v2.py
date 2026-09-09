@@ -243,6 +243,25 @@ def check_quotes(
 # --------------------------------------------------------------------------- #
 
 
+def _resolution(case: GoldCaseV2, gold_id: str | None) -> str:
+    """En quin estat ha quedat l'anotacio que un refinament afina."""
+    refined = next(
+        (
+            item
+            for item in [*case.requirements, *case.award_criteria]
+            if item.gold_id == gold_id
+        ),
+        None,
+    )
+    if refined is None:
+        return "no existeix"
+    if refined.is_superseded:
+        return f"substituida per {refined.superseded_by}, conservada i fora de metriques"
+    if refined.counts_for_metrics:
+        return "segueix comptant: conflicte SENSE resoldre"
+    return f"fora de metriques ({refined.annotation_status.value})"
+
+
 def coverage_payload(dataset: GoldDatasetV2, checks: list[QuoteCheck]) -> dict[str, Any]:
     status = dataset.status_counts()
     inherited = dataset.inherited()
@@ -261,6 +280,15 @@ def coverage_payload(dataset: GoldDatasetV2, checks: list[QuoteCheck]) -> dict[s
             "cases": len(dataset.cases),
         },
         "by_status": status,
+        "effective": {
+            # `verified` es el recompte per ETIQUETA; aixo es el que de veritat
+            # entra al denominador. Una anotacio superada surt d'aqui sense
+            # desapareixer del fitxer.
+            "counts_for_metrics": sum(
+                1 for _, item in dataset.items if item.counts_for_metrics
+            ),
+            "superseded": sum(1 for _, item in dataset.items if item.is_superseded),
+        },
         "by_origin": {
             "inherited": len(inherited),
             "inherited_verified": sum(1 for _, item in inherited if item.is_verified),
@@ -272,6 +300,9 @@ def coverage_payload(dataset: GoldDatasetV2, checks: list[QuoteCheck]) -> dict[s
                 "item": f"{case.case_id}::{item.gold_id}",
                 "refines": f"{case.case_id}::{item.refines}",
                 "status": item.annotation_status.value,
+                # Que li ha passat a l'anotacio afinada: es el que diu si el
+                # conflicte esta resolt o encara esta obert.
+                "refined_resolution": _resolution(case, item.refines),
             }
             for case, item in dataset.items
             if item.refines
@@ -345,6 +376,16 @@ def render_coverage_markdown(payload: dict[str, Any]) -> str:
         f"| needs_review | {status['needs_review']} |",
         f"| rejected | {status['rejected']} |",
         "",
+        f"**Al denominador de les metriques: {payload['effective']['counts_for_metrics']}** "
+        f"de {payload['totals']['annotations']}"
+        + (
+            f", perque {payload['effective']['superseded']} anotacio(ns) verificada(es) "
+            "ha(n) estat substituida(es) per una versio afinada. Es conserven senceres "
+            "i segueixen sent auditables."
+            if payload["effective"]["superseded"]
+            else "."
+        ),
+        "",
         "| Origen | Total | Verificades |",
         "| --- | ---: | ---: |",
         f"| Heretades de la v1 | {origin['inherited']} | {origin['inherited_verified']} |",
@@ -403,16 +444,19 @@ def render_coverage_markdown(payload: dict[str, Any]) -> str:
             "",
             "## Anotacions que n'afinen una altra",
             "",
-            "Descriuen **la mateixa exigencia** amb mes detall que una anotacio ja "
-            "verificada, que es queda intacta. Si totes dues acabessin verificades, el "
-            "gold demanaria dues coses on el plec en demana una: decidir quina es queda "
-            "forma part de la revisio.",
+            "Descriuen **la mateixa exigencia** amb mes detall que una anotacio "
+            "anterior. Les dues no poden comptar alhora: el gold demanaria dues coses "
+            "on el plec en demana una. Substituir no esborra res —l'anotacio original "
+            "conserva text, cita, revisor i data— nomes la treu del denominador.",
             "",
-            "| Anotacio | Afina | Estat |",
-            "| --- | --- | --- |",
+            "| Anotacio | Estat | Afina | Com ha quedat l'afinada |",
+            "| --- | --- | --- | --- |",
         ]
         for entry in payload["refinements"]:
-            lines.append(f"| {entry['item']} | {entry['refines']} | {entry['status']} |")
+            lines.append(
+                f"| {entry['item']} | {entry['status']} | {entry['refines']} | "
+                f"{entry['refined_resolution']} |"
+            )
         if payload["double_counted"]:
             lines += [
                 "",
@@ -538,8 +582,42 @@ async def _page_texts(dataset: GoldDatasetV2) -> dict[tuple[str, str, int], str]
     return texts
 
 
+def write_reports(dataset: GoldDatasetV2, payload: dict[str, Any], output: Path) -> Path:
+    output.mkdir(parents=True, exist_ok=True)
+    (output / f"coverage-{dataset.dataset_id}.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    path = output / f"coverage-{dataset.dataset_id}.md"
+    path.write_text(render_coverage_markdown(payload), encoding="utf-8")
+    return path
+
+
+async def report_only(args: argparse.Namespace) -> int:
+    """Cobertura d'un gold v2 que ja existeix, sense tornar-lo a construir.
+
+    Un dataset ja revisat no es regenera: es llegeix. Que el seu report surti
+    de la mateixa ordre que el del candidat es el que fa que les dues xifres
+    siguin comparables.
+    """
+    dataset = load_dataset_v2(args.report)
+    payload = coverage_payload(dataset, check_quotes(dataset, await _page_texts(dataset)))
+    path = write_reports(dataset, payload, args.output)
+
+    status = payload["by_status"]
+    print(f"Report de {dataset.dataset_id}: {path}")
+    print(f"  {payload['totals']['annotations']} anotacions · ", end="")
+    print(", ".join(f"{key}={value}" for key, value in status.items() if value))
+    print(f"  al denominador: {payload['effective']['counts_for_metrics']}")
+    measurable = [name for name, entry in payload["dimensions"].items() if entry["measurable"]]
+    print(f"  dimensions mesurables: {', '.join(measurable) or 'cap'}")
+    return 0
+
+
 async def generate(args: argparse.Namespace) -> int:
     from app.evaluation.gold_v2_page import render_candidate_page, write_candidate_page
+
+    if args.report:
+        return await report_only(args)
 
     source = load_dataset(args.source)
     result = build_candidate(source)
@@ -561,13 +639,7 @@ async def generate(args: argparse.Namespace) -> int:
     path = save_dataset(dataset)
     payload = coverage_payload(dataset, checks)
 
-    args.output.mkdir(parents=True, exist_ok=True)
-    report_json = args.output / f"coverage-{dataset.dataset_id}.json"
-    report_md = args.output / f"coverage-{dataset.dataset_id}.md"
-    report_json.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    report_md.write_text(render_coverage_markdown(payload), encoding="utf-8")
+    report_md = write_reports(dataset, payload, args.output)
 
     page = write_candidate_page(
         dataset, render_candidate_page(dataset, source, texts), args.output
@@ -592,6 +664,12 @@ async def generate(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m app.evaluation.gold_v2", description=__doc__)
     parser.add_argument("--source", default=SOURCE_DATASET)
+    parser.add_argument(
+        "--report",
+        default=None,
+        metavar="DATASET",
+        help="nomes el report de cobertura d'un gold v2 existent, sense construir res",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
         "--force",
