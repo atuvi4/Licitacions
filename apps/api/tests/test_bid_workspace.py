@@ -125,6 +125,24 @@ async def add_extraction_run(db, tender, *, current: bool = True) -> Requirement
     return run
 
 
+
+@pytest.fixture
+async def workspace_with_analysis(db, tenant_a, tender, extraction_run):
+    """Una candidatura amb una analisi de SIMULACIO al darrere.
+
+    El proveidor `fixture` es el que fa que hi hagi un avis obert de veritat
+    quan es decideix, que es el que aquests tests han de veure desat.
+    """
+    user, company = tenant_a
+    extraction_run.provider = "fixture"
+    extraction_run.model = "fixture-plec-v1"
+    await db.commit()
+    outcome = await service.create_workspace(
+        db, company_id=company.id, tender=tender, user_id=user.id
+    )
+    return outcome.workspace, user
+
+
 async def add_requirement(
     db,
     run,
@@ -1384,3 +1402,79 @@ async def test_a_submitted_workspace_refuses_a_new_go(db, tenant_a, tender, extr
 
     assert caught.value.details["current"] == "submitted"
     assert caught.value.details["target"] == "go_approved"
+
+
+# --------------------------------------------------------------------------- #
+# La decisio conserva els avisos que la persona va acceptar (N4)                #
+# --------------------------------------------------------------------------- #
+
+
+async def test_una_decisio_desa_els_avisos_que_hi_havia(db, workspace_with_analysis):
+    """L'historial ha de poder dir "es va aprovar sabent que era una simulacio".
+
+    Els comptadors de bloquejos no basten: els tres zeros que ensenyava
+    l'historial eren certs i no explicaven el que de veritat pesava a la
+    pantalla.
+    """
+    workspace, user = workspace_with_analysis
+
+    decision = await service.record_decision(
+        db,
+        workspace,
+        decision=WorkspaceDecisionType.GO,
+        user=user,
+        role=MembershipRole.OWNER,
+        reason="Endavant tot i la simulacio.",
+    )
+
+    assert decision.open_warnings is not None
+    assert "unreliable_analysis" in decision.open_warnings
+
+
+async def test_la_fotografia_no_canvia_quan_canvia_lestat(db, workspace_with_analysis):
+    """Es una fotografia, no una consulta.
+
+    Si l'historial reconstruis els avisos a partir de l'estat d'avui,
+    explicaria la decisio amb informacio que qui la va prendre no tenia.
+    """
+    workspace, user = workspace_with_analysis
+    decision = await service.record_decision(
+        db,
+        workspace,
+        decision=WorkspaceDecisionType.GO,
+        user=user,
+        role=MembershipRole.OWNER,
+        reason="Endavant tot i la simulacio.",
+    )
+    desats = list(decision.open_warnings or [])
+
+    # L'analisi passa a ser real DESPRES de decidir.
+    run = await db.scalar(
+        sa.select(RequirementExtractionRun).where(
+            RequirementExtractionRun.tender_id == workspace.tender_id
+        )
+    )
+    run.provider = "anthropic"
+    await db.commit()
+    await db.refresh(decision)
+
+    assert list(decision.open_warnings or []) == desats
+
+
+async def test_una_decisio_antiga_diu_que_no_es_va_registrar(db, workspace_with_analysis):
+    """`NULL` vol dir "no es va anotar", no "no hi havia cap avis"."""
+    workspace, user = workspace_with_analysis
+    decision = await service.record_decision(
+        db,
+        workspace,
+        decision=WorkspaceDecisionType.GO,
+        user=user,
+        role=MembershipRole.OWNER,
+        reason="Endavant.",
+    )
+    # Com quedaria una decisio anterior a la columna.
+    decision.open_warnings = None
+    await db.commit()
+    await db.refresh(decision)
+
+    assert decision.open_warnings is None

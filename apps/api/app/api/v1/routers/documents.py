@@ -231,6 +231,14 @@ async def delete_document(
 
 @router.get("/{document_id}/download", summary="Descarrega el fitxer")
 async def download_document(document_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
+    """Excepcio INTENCIONADA a "un GET no escriu".
+
+    Descarregar no modifica cap estat de negoci (ni el document, ni cap
+    workspace, paquet o artefacte): nomes deixa constancia de l'acces a
+    `audit_logs`. Saber qui s'ha endut un fitxer d'evidencies es una garantia de
+    seguretat, no un canvi d'estat. `test_documents.py` exigeix que aquesta fila
+    d'auditoria sigui l'unica escriptura.
+    """
     document = await get_owned_or_404(session, Document, document_id, ctx.company_id)
     content = await get_storage().download(document.storage_key)
     await audit.record(

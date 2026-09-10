@@ -817,6 +817,39 @@ class TestProveidorDeSimulacio:
             600000,
         ]
 
+    async def test_els_dos_limits_arriben_a_la_checklist_amb_noms_diferents(
+        self, session, corpus
+    ):
+        """La cita diu "limite total" i "sublimite por victima": el titol tambe.
+
+        Aixo no es cosmetica. Les dues files de la checklist deien "Aportar
+        polissa RC >= ..." i nomes es distingien per la xifra, que es exactament
+        com algu acaba buscant dues polisses per una sola exigencia. El tipus de
+        limit surt del valor estructurat, no d'endevinar-lo del titol.
+        """
+        from app.ai.providers.fixture import FixtureProvider
+        from app.models.enums import RequirementCategory
+        from app.workspace.checklist import checklist_title
+
+        tender = await tender_of(session, corpus["document"])
+        run = (
+            await analyze_tender_requirements(session, tender, provider=FixtureProvider())
+        ).run
+
+        insurance = (
+            await session.scalars(
+                sa.select(Requirement).where(
+                    Requirement.run_id == run.id,
+                    Requirement.category == RequirementCategory.INSURANCE,
+                )
+            )
+        ).all()
+        titles = {checklist_title(r) for r in insurance}
+
+        assert len(titles) == 2
+        assert any("limit total" in t for t in titles)
+        assert any("sublimit per victima" in t for t in titles)
+
     async def test_el_run_diu_que_es_una_simulacio(self, session, corpus):
         from app.ai.providers.fixture import FixtureProvider
         from app.models.enums import AnalysisBasis

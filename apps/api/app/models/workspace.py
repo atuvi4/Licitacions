@@ -219,6 +219,19 @@ class WorkspaceDecision(UUIDPrimaryKeyMixin, CompanyOwnedMixin, Base):
     mandatory_needs_review: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
     #: Que recomanava el sistema quan la persona va decidir. Nomes context.
     automated_recommendation: Mapped[str | None] = mapped_column(sa.String(40))
+    #: Els avisos que hi havia OBERTS a la pantalla quan es va decidir, amb els
+    #: seus codis. Els comptadors de sota diuen quants bloquejos hi havia; aixo
+    #: diu la resta: que l'analisi era una simulacio, que no hi havia motor
+    #: configurat, que l'elegibilitat estava indeterminada o que el que es veia
+    #: descrivia un estat anterior de la licitacio.
+    #:
+    #: Es una FOTOGRAFIA, no una consulta: l'historial l'ha de llegir tal com es
+    #: va desar. Reconstruir-la a partir de l'estat d'avui explicaria una decisio
+    #: amb informacio que qui la va prendre no tenia.
+    #:
+    #: `NULL` a les decisions anteriors a aquest camp vol dir "no es va
+    #: registrar", que NO es el mateix que "no hi havia cap avis".
+    open_warnings: Mapped[list[str] | None] = mapped_column(sa.JSON)
     deadline_passed: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
 
     workspace: Mapped[BidWorkspace] = relationship(back_populates="decisions")
@@ -458,6 +471,30 @@ class WorkspaceEvidenceItem(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMix
     )
     selected_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(sa.Text)
+
+    # --- Confirmacio humana de la PERTINENÇA ------------------------------- #
+    #
+    # Triar un document i confirmar que es el document adequat son dues
+    # afirmacions diferents. La segona nomes la pot fer una persona quan el
+    # sistema no pot establir la vinculacio tot sol, i queda lligada al requisit
+    # i al document concrets: substituir el document o canviar materialment el
+    # requisit no l'hereta.
+    relevance_confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    relevance_confirmed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True)
+    )
+    #: Per que aquest paper acredita aquesta exigencia. Obligatori per confirmar.
+    relevance_note: Mapped[str | None] = mapped_column(sa.Text)
+    #: Sobre quin document es va signar. Si el document canvia, la confirmacio
+    #: deixa de valer encara que la fila segueixi aqui.
+    relevance_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    #: Empremta del requisit tal com era en confirmar-lo. Si el plec canvia el
+    #: que demana, ningu no ha signat aixo.
+    relevance_requirement_fingerprint: Mapped[str | None] = mapped_column(sa.String(64))
 
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")

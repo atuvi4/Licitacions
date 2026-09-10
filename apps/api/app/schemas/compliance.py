@@ -86,6 +86,10 @@ class AssessmentRead(ORMModel):
     review_status: ReviewStatus
     review_note: str | None = None
     reviewed_at: datetime | None = None
+    #: Qui va revisar. Un veredicte huma sense signatura no es un veredicte
+    #: huma: es un resultat que ha canviat i ningu sap per obra de qui.
+    reviewed_by: uuid.UUID | None = None
+    reviewed_by_name: str | None = None
     calculated_at: datetime
 
     evidence: list[CompanyEvidenceRead] = Field(default_factory=list)

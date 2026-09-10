@@ -123,6 +123,10 @@ class DecisionRead(ORMModel):
     mandatory_needs_review: int = 0
     automated_recommendation: str | None = None
     deadline_passed: bool = False
+    #: Els avisos oberts en el moment de decidir, tal com es van desar. `None`
+    #: vol dir que la decisio es anterior a aquest registre: no es va anotar,
+    #: que NO es el mateix que dir que no n'hi havia cap.
+    open_warnings: list[str] | None = None
 
 
 class ChecklistItemRead(ORMModel):
@@ -322,6 +326,12 @@ class WorkspaceCreateResult(BaseModel):
 
 class ChecklistRegenerateResult(BaseModel):
     created: int
+    #: Items que ja hi eren i que ara pengen del requisit vigent equivalent, amb
+    #: tot el que portaven a sobre.
+    carried: int = 0
+    #: Quants items han quedat fora del que el plec demana ara. Es un estat, no
+    #: un efecte d'aquesta crida: qui els va deixar enrere va ser la reanalisi.
+    historic: int = 0
     total: int
     #: Per que no s'ha creat res, quan `created` es 0. Un 200 sense cap efecte i
     #: sense cap explicacio es indistingible d'una accio que no ha funcionat:
@@ -391,12 +401,26 @@ class DossierItemRead(BaseModel):
     #: Vigencia RESPECTE DEL TERMINI, no d'avui.
     validity: DocumentValidity
     coverage: DossierCoverage | None = None
+    #: Per que aquest document acredita —o encara no acredita— el requisit.
+    #: Codi; el text el posa la interficie. Triar un paper i confirmar que es
+    #: l'adequat son dues afirmacions diferents i la fila les ha de separar.
+    relevance: str = "relevance_unproven"
     selected_by: uuid.UUID | None = None
     selected_by_name: str | None = None
     selected_at: datetime | None = None
+    #: La confirmacio humana de pertinença, quan n'hi ha i encara val.
+    relevance_confirmed_by_name: str | None = None
+    relevance_confirmed_at: datetime | None = None
+    relevance_note: str | None = None
     notes: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class RelevanceConfirmRequest(BaseModel):
+    """Confirmar que un document acredita un requisit. Sempre amb motiu."""
+
+    note: str = Field(min_length=1, max_length=2000)
 
 
 class DossierGroupRead(BaseModel):
@@ -420,6 +444,10 @@ class DossierRead(BaseModel):
     coverage: DossierCoverageRead
     readiness: ReadinessRead
     groups: list[DossierGroupRead] = Field(default_factory=list)
+    #: Files que pengen d'una extraccio superada. No es llisten —no son feina
+    #: pendent— pero tampoc s'amaguen en silenci: si el plec ha canviat, qui
+    #: hi havia treballat ha de saber que aquella feina segueix desada.
+    superseded_count: int = 0
 
 
 class DossierSyncResult(BaseModel):

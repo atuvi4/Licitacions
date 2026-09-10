@@ -71,16 +71,24 @@ async def seed(tender_id: uuid.UUID) -> None:
         session.add(document)
         await session.flush()
 
-        content = TenderDocumentContent(
-            sha256=sha,
-            storage_key=f"fixture/{CORPUS_ID}.txt",
-            file_size=len(text.encode("utf-8")),
-            mime_type="application/pdf",
-            detected_extension="pdf",
-            is_text_extractable=True,
+        # El contingut es deduplica per SHA-256 a tot el sistema: dues
+        # licitacions amb el mateix plec comparteixen fila. Si el corpus ja hi
+        # es —perque una altra licitacio de desenvolupament l'ha sembrat abans—
+        # es reaprofita, que es exactament el que fa el cami real de descarrega.
+        content = await session.scalar(
+            sa.select(TenderDocumentContent).where(TenderDocumentContent.sha256 == sha)
         )
-        session.add(content)
-        await session.flush()
+        if content is None:
+            content = TenderDocumentContent(
+                sha256=sha,
+                storage_key=f"fixture/{CORPUS_ID}.txt",
+                file_size=len(text.encode("utf-8")),
+                mime_type="application/pdf",
+                detected_extension="pdf",
+                is_text_extractable=True,
+            )
+            session.add(content)
+            await session.flush()
 
         session.add(
             TenderDocumentFile(
@@ -91,6 +99,20 @@ async def seed(tender_id: uuid.UUID) -> None:
                 download_status=DownloadStatus.DOWNLOADED,
             )
         )
+
+        existing_extraction = await session.scalar(
+            sa.select(TenderDocumentExtraction).where(
+                TenderDocumentExtraction.content_id == content.id
+            )
+        )
+        if existing_extraction is not None:
+            # Mateix contingut, mateixa extraccio: les pagines ja hi son.
+            await session.commit()
+            print(
+                f"Corpus '{CORPUS_ID}' afegit com a document {document.id} "
+                "(contingut i pagines reaprofitats)."
+            )
+            return
 
         extraction = TenderDocumentExtraction(
             content_id=content.id,

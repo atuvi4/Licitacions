@@ -74,14 +74,19 @@ async def company_summary(
     return await build_summary(session, ctx.company, alert_window_days=alert_window_days)
 
 
-async def _get_or_create_preferences(session, company_id) -> CompanyContractPreferences:
-    prefs = (
+async def _find_preferences(session, company_id) -> CompanyContractPreferences | None:
+    return (
         await session.execute(
             sa.select(CompanyContractPreferences).where(
                 CompanyContractPreferences.company_id == company_id
             )
         )
     ).scalar_one_or_none()
+
+
+async def _get_or_create_preferences(session, company_id) -> CompanyContractPreferences:
+    """Nomes des d'una escriptura explicita: crear la fila es una mutacio."""
+    prefs = await _find_preferences(session, company_id)
     if prefs is None:
         prefs = CompanyContractPreferences(company_id=company_id)
         session.add(prefs)
@@ -90,15 +95,29 @@ async def _get_or_create_preferences(session, company_id) -> CompanyContractPref
     return prefs
 
 
+def _default_preferences(company_id) -> ContractPreferencesRead:
+    """Els valors per defecte del domini, en memoria. Sense fila, sense identificador.
+
+    Els defaults surten del model mateix, perque no puguin divergir del que es
+    desaria a la primera escriptura.
+    """
+    currency = CompanyContractPreferences.__table__.c.currency.default.arg
+    return ContractPreferencesRead(company_id=company_id, currency=currency)
+
+
 @router.get(
     "/companies/{company_id}/contract-preferences",
     response_model=ContractPreferencesRead,
     summary="Capacitat i preferencies contractuals",
 )
-async def get_contract_preferences(
-    session: SessionDep, ctx: CompanyCtx
-) -> CompanyContractPreferences:
-    return await _get_or_create_preferences(session, ctx.company_id)
+async def get_contract_preferences(session: SessionDep, ctx: CompanyCtx):
+    """Consultar no crea res: si encara no s'han desat, es retornen els defaults.
+
+    Abans la primera lectura inseria la fila. Un GET que escriu es exactament el
+    que no pot passar: la fila neix a la primera escriptura (`PUT`).
+    """
+    prefs = await _find_preferences(session, ctx.company_id)
+    return prefs if prefs is not None else _default_preferences(ctx.company_id)
 
 
 @router.put(

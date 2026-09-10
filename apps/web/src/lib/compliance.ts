@@ -85,6 +85,9 @@ export interface Assessment {
   review_status: ReviewStatus;
   review_note: string | null;
   reviewed_at: string | null;
+  /** Qui va revisar. Un veredicte humà sense signatura no és un veredicte humà. */
+  reviewed_by: string | null;
+  reviewed_by_name: string | null;
   calculated_at: string;
   evidence: CompanyEvidence[];
   requirement: RequirementSource | null;

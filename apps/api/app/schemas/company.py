@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from pydantic import Field, field_validator
 
-from app.schemas.common import APIModel, AuditFields, ORMModel
+from app.schemas.common import APIModel, ORMModel
 
 _TAX_ID = re.compile(r"^[A-Za-z0-9\-\. ]{4,64}$")
 
@@ -98,7 +98,19 @@ class ContractPreferencesUpdate(ContractPreferencesBase):
     currency: str | None = Field(default=None, min_length=3, max_length=3)
 
 
-class ContractPreferencesRead(AuditFields):
+class ContractPreferencesRead(ORMModel):
+    """Les preferencies d'una empresa, o els valors per defecte si mai no s'han desat.
+
+    `id`, `created_at` i `updated_at` son `None` mentre no hi ha fila: consultar-les
+    no la crea (un GET no escriu), i un identificador inventat faria creure que
+    existeix un registre que no hi es. La primera escriptura explicita la crea.
+    """
+
+    id: uuid.UUID | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    created_by: uuid.UUID | None = None
+    updated_by: uuid.UUID | None = None
     company_id: uuid.UUID
     minimum_interesting_contract: Decimal | None = None
     preferred_contract_min: Decimal | None = None

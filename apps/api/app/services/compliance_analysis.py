@@ -360,7 +360,15 @@ async def _claim_run(
 async def is_run_stale(
     session: AsyncSession, run: CompanyComplianceRun, company: Company
 ) -> bool:
-    """Cert si el perfil o els requisits han canviat des del calcul."""
+    """Cert si el perfil, els requisits o les REGLES han canviat des del calcul.
+
+    Les regles hi entren perque canviar-les canvia el veredicte sense que ningu
+    hagi tocat cap dada: un run calculat amb una versio anterior pot dir
+    "compleix" alla on la versio d'ara diria "cal revisar". El run historic no
+    es reescriu —es el que algu va veure— pero deixa de poder passar per vigent.
+    """
+    if run.rules_version != RULES_VERSION:
+        return True
     snapshot = await load_profile_snapshot(session, company)
     if compute_profile_fingerprint(snapshot) != run.company_profile_fingerprint:
         return True
@@ -392,7 +400,21 @@ async def review_assessment(
 
     Recalcula el bloqueig: una revisio humana SI que pot confirmar-lo, perque
     ara hi ha algu que respon del veredicte.
+
+    Canviar el veredicte del motor **exigeix motiu**. Confirmar el que ja deia
+    no: alla la persona no contradiu res. Pero dir "compleix" alla on el sistema
+    deia "no ho puc comprovar" es una afirmacio nova, i qui la fa n'ha de deixar
+    la rao escrita al costat.
     """
+    if (
+        reviewed_result is not None
+        and reviewed_result != assessment.automatic_result
+        and not (note or "").strip()
+    ):
+        raise ValidationError(
+            "Cal escriure el motiu: aquesta revisio canvia el que deia el sistema."
+        )
+
     assessment.reviewed_result = reviewed_result
     assessment.review_status = review_status
     assessment.review_note = note

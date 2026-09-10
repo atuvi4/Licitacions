@@ -35,6 +35,7 @@ from app.compliance.experience import assess_experience
 from app.compliance.insurance import assess_insurance
 from app.compliance.profile import ProfileSnapshot
 from app.compliance.rules import ExplanationCode
+from app.compliance.specs import read_insurance
 from app.models.enums import (
     AssessmentResult,
     BlockerStatus,
@@ -47,6 +48,7 @@ from app.models.enums import (
     RequirementOperator,
     ReviewStatus,
 )
+from app.workspace.checklist import checklist_title
 
 VALUE_V2 = "requirements-value-v2"
 
@@ -1003,3 +1005,214 @@ def test_every_structured_insurance_condition_is_either_checked_or_reported():
     assert declared <= checked | reported, (
         f"condicions sense decidir: {sorted(declared - checked - reported)}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Un import sense tipus no acredita un sublimit (N3)                            #
+# --------------------------------------------------------------------------- #
+
+
+def v1_insurance(amount: float, type_note: str | None = None) -> FakeRequirement:
+    """Un requisit d'assegurança amb la forma EXACTA del contracte v1.
+
+    La v1 no tenia camp per al tipus de limit; quan hi era, viatjava dins de
+    `type`. Es la forma que va originar N3 i el perfil per defecte segueix sent
+    aquest, aixi que es aqui on la regressio ha de viure.
+    """
+    return FakeRequirement(
+        category=RequirementCategory.INSURANCE,
+        value_schema=None,
+        value_json={"coverage_amount": amount, "currency": "EUR", "type": type_note},
+    )
+
+
+class TestSublimitSenseTipus:
+    """El cas de l'auditoria: 1.000.000 «unknown» davant d'un sublimit de 150.000.
+
+    La polissa declarava una xifra sola i sense tipus; el plec demanava un
+    sublimit **per victima**. El sistema comparava els dos numeros i deia
+    "compleix". Podia ser perfectament el limit total contra un sublimit, que es
+    la comparacio que fa semblar coberta una empresa que no ho esta.
+    """
+
+    def test_el_cas_exacte_de_lauditoria_ja_no_diu_compleix(self):
+        # Tal com estava a la base de dades: un sol import, sense tipus.
+        policy = FakeInsurance(coverage_amount=Decimal("1000000"))
+        profile = snapshot(insurances=[policy])
+
+        outcome = assess_insurance(
+            v1_insurance(150000, "civil_liability_per_victim"), profile
+        )
+
+        assert outcome.result == AssessmentResult.NEEDS_REVIEW
+
+    def test_el_qualificador_del_camp_legacy_es_conserva(self):
+        """`civil_liability_per_victim` diu de quin limit parla. No es perd."""
+        spec = read_insurance(v1_insurance(150000, "civil_liability_per_victim"))
+
+        assert [limit.kind for limit in spec.limits] == [InsuranceLimitKind.PER_VICTIM]
+
+    def test_un_sublimit_explicit_i_suficient_si_que_compleix(self):
+        """La correccio no pot fer-nos cecs al cas que si que s'acredita."""
+        policy = FakeInsurance(
+            limits=[
+                FakeLimit(InsuranceLimitKind.TOTAL, Decimal("1000000")),
+                FakeLimit(InsuranceLimitKind.PER_VICTIM, Decimal("300000")),
+            ]
+        )
+        profile = snapshot(insurances=[policy])
+
+        outcome = assess_insurance(
+            v1_insurance(150000, "civil_liability_per_victim"), profile
+        )
+
+        assert outcome.result == AssessmentResult.SATISFIES
+
+    def test_un_sublimit_explicit_i_insuficient_es_un_incompliment(self):
+        """Aixo si que es demostrable: consta, i no arriba."""
+        policy = FakeInsurance(
+            limits=[FakeLimit(InsuranceLimitKind.PER_VICTIM, Decimal("50000"))]
+        )
+        profile = snapshot(insurances=[policy])
+
+        outcome = assess_insurance(
+            v1_insurance(150000, "civil_liability_per_victim"), profile
+        )
+
+        assert outcome.result == AssessmentResult.DOES_NOT_SATISFY
+
+    def test_un_sublimit_que_no_sabem_mapar_no_es_compara_amb_res(self):
+        """El plec parla "por cada victima" i el patro no ho sap mapar.
+
+        Aquest es el cas que de veritat es perillos: el qualificador hi es —el
+        plec NO parla de la xifra global— pero no el sabem llegir. Comparar-lo
+        contra el total de la polissa seria l'aplanament de sempre, amb una capa
+        de pintura. Es demana revisio i s'hi diu per que.
+        """
+        policy = FakeInsurance(coverage_amount=Decimal("1000000"))
+        profile = snapshot(insurances=[policy])
+
+        outcome = assess_insurance(
+            v1_insurance(150000, "responsabilidad civil por cada victima"), profile
+        )
+
+        assert outcome.result == AssessmentResult.NEEDS_REVIEW
+        assert outcome.explanation_code == ExplanationCode.INSURANCE_LIMIT_KIND_AMBIGUOUS
+
+    def test_la_xifra_global_de_sempre_segueix_responent_la_xifra_global(self):
+        """Compatibilitat: quan cap dels dos costats parla de sublimits.
+
+        `coverage_amount` vol dir el mateix als dos costats des de la v1. Aqui no
+        s'esta comparant un total contra un sublimit: s'esta comparant la
+        cobertura amb la cobertura, i degradar-ho a revisio seria soroll a
+        l'unic cas d'assegurança que es dona sempre.
+        """
+        policy = FakeInsurance(coverage_amount=Decimal("1000000"))
+        profile = snapshot(insurances=[policy])
+
+        outcome = assess_insurance(
+            v1_insurance(600000, "responsabilidad civil"), profile
+        )
+
+        assert outcome.result == AssessmentResult.SATISFIES
+
+    def test_un_total_declarat_si_que_respon_un_import_sense_tipus(self):
+        """Si la polissa s'ha molestat a dir "total", ja no estem endevinant."""
+        policy = FakeInsurance(
+            limits=[FakeLimit(InsuranceLimitKind.TOTAL, Decimal("1000000"))]
+        )
+        profile = snapshot(insurances=[policy])
+
+        outcome = assess_insurance(v1_insurance(150000, "civil_liability"), profile)
+
+        assert outcome.result == AssessmentResult.SATISFIES
+
+    def test_un_sublimit_que_no_sabem_llegir_demana_revisio(self):
+        """El plec anuncia un sublimit i no diu de quin: no s'endevina."""
+        policy = FakeInsurance(
+            limits=[FakeLimit(InsuranceLimitKind.TOTAL, Decimal("1000000"))]
+        )
+        profile = snapshot(insurances=[policy])
+
+        outcome = assess_insurance(v1_insurance(150000, "sublimite especial"), profile)
+
+        assert outcome.result == AssessmentResult.NEEDS_REVIEW
+        assert outcome.explanation_code == ExplanationCode.INSURANCE_LIMIT_KIND_AMBIGUOUS
+
+    def test_el_cas_tipat_v2_es_comporta_igual(self):
+        """Mateixa semantica pel cami v2, perque no en divergeixin dos."""
+        policy = FakeInsurance(coverage_amount=Decimal("1000000"))
+        profile = snapshot(insurances=[policy])
+
+        outcome = assess_insurance(insurance_requirement(("per_victim", 150000)), profile)
+
+        assert outcome.result == AssessmentResult.NEEDS_REVIEW
+
+    def test_no_es_combinen_imports_de_polisses_diferents(self):
+        """Dues polisses no es sumen per fabricar-ne una que compleixi."""
+        total_only = FakeInsurance(
+            limits=[FakeLimit(InsuranceLimitKind.TOTAL, Decimal("1000000"))]
+        )
+        victim_only = FakeInsurance(
+            limits=[FakeLimit(InsuranceLimitKind.PER_VICTIM, Decimal("300000"))]
+        )
+        profile = snapshot(insurances=[total_only, victim_only])
+
+        outcome = assess_insurance(
+            insurance_requirement(("total", 900000), ("per_victim", 200000)), profile
+        )
+
+        # Cap de les dues polisses respon les dues condicions tota sola.
+        assert outcome.result == AssessmentResult.NEEDS_REVIEW
+
+
+# --------------------------------------------------------------------------- #
+# Els titols derivats conserven el qualificador (N5)                            #
+# --------------------------------------------------------------------------- #
+
+
+def _insurance(amount: int, type_note: str | None) -> FakeRequirement:
+    return FakeRequirement(
+        category=RequirementCategory.INSURANCE,
+        value_json={"coverage_amount": amount, "currency": "EUR", "type": type_note},
+        operator=RequirementOperator.GTE,
+    )
+
+
+class TestQualificadorsAlsTitols:
+    """Un limit total i un sublimit per victima son condicions de la MATEIXA
+    polissa. Anomenar-los tots dos "Aportar polissa RC >= X" els convertia en
+    dues polisses d'imports diferents, i qui llegis la checklist aniria a buscar
+    dos contractes en comptes d'un.
+    """
+
+    def test_el_sublimit_per_victima_es_diu_pel_seu_nom(self):
+        title = checklist_title(_insurance(150000, "civil_liability_per_victim"))
+
+        assert "sublimit per victima" in title
+        assert "150.000" in title
+
+    def test_el_limit_total_tambe(self):
+        title = checklist_title(_insurance(600000, "responsabilidad civil limite total"))
+
+        assert "limit total" in title
+
+    def test_els_dos_titols_no_es_confonen(self):
+        """El cas exacte de l'auditoria: dues files identiques tret de la xifra."""
+        total = checklist_title(_insurance(600000, "responsabilidad civil limite total"))
+        victim = checklist_title(_insurance(150000, "civil_liability_per_victim"))
+
+        assert total != victim
+        assert "sublimit" not in total
+        assert "sublimit" in victim
+
+    def test_sense_qualificador_no_se_nhi_inventa_cap(self):
+        """Si el tipus segueix sent desconegut, el titol calla."""
+        title = checklist_title(_insurance(600000, "civil_liability"))
+
+        assert title == "Aportar polissa RC " + chr(0x2265) + " 600.000 " + chr(0x20AC)
+
+    def test_un_sublimit_illegible_es_diu_que_esta_per_determinar(self):
+        title = checklist_title(_insurance(90000, "responsabilidad civil por cada victima"))
+
+        assert "per determinar" in title

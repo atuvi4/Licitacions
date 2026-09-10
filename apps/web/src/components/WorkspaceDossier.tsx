@@ -11,6 +11,8 @@ import { useMutation } from "@/lib/hooks";
 import {
   COVERAGE_LABELS,
   reconciliationMessage,
+  RELEVANCE_HINTS,
+  RELEVANCE_LABELS,
   COVERAGE_TONES,
   EVIDENCE_STATUS_LABELS,
   EVIDENCE_STATUS_TONES,
@@ -94,6 +96,22 @@ export function DossierSection({
     if (ok) await onChange();
   }
 
+  async function confirmRelevance(itemId: string) {
+    // Confirmar la pertinença és una afirmació humana i porta motiu. El
+    // demanem abans de res: sense el perquè, la confirmació no val.
+    const note = window.prompt(
+      "Per què aquest document acredita aquest requisit? " +
+        "Quedarà registrat amb el teu nom i la data.",
+    );
+    if (note === null || !note.trim()) return;
+    const ok = await mutation.run(async () => {
+      setDossier(
+        await api.post<Dossier>(`${base}/dossier/${itemId}/relevance`, { note: note.trim() }),
+      );
+    });
+    if (ok) await onChange();
+  }
+
   async function createTask(itemId: string) {
     const ok = await mutation.run(async () => {
       await api.post(`${base}/dossier/${itemId}/task`, {});
@@ -169,6 +187,14 @@ export function DossierSection({
             del termini
           </p>
         )}
+        {/* Si el plec s'ha reanalitzat, la feina feta sobre les exigències
+            d'abans deixa de sortir a la llista. No desapareix, i dir-ho aquí
+            evita que sembli que s'ha perdut. */}
+        {dossier.superseded_count > 0 && (
+          <p className="text-sm text-muted">
+            {dossier.superseded_count} a l&apos;històric (el plec ja no ho demana)
+          </p>
+        )}
       </div>
 
       {readiness.blockers.length > 0 && (
@@ -221,6 +247,7 @@ export function DossierSection({
                   saving={mutation.saving}
                   onPatch={patch}
                   onCreateTask={createTask}
+                  onConfirmRelevance={confirmRelevance}
                 />
               ))}
             </ul>
@@ -238,6 +265,7 @@ function DossierRow({
   saving,
   onPatch,
   onCreateTask,
+  onConfirmRelevance,
 }: {
   item: DossierItem;
   workspace: WorkspaceDetail;
@@ -245,6 +273,7 @@ function DossierRow({
   saving: boolean;
   onPatch: (itemId: string, body: Record<string, unknown>) => Promise<void>;
   onCreateTask: (itemId: string) => Promise<void>;
+  onConfirmRelevance: (itemId: string) => Promise<void>;
 }) {
   const result = item.assessment_result as AssessmentResult | null;
 
@@ -303,6 +332,45 @@ function DossierRow({
             <p className="mt-0.5 text-[12px] text-faint">
               Triat per {item.selected_by_name} · {formatDate(item.selected_at)}
             </p>
+          )}
+
+          {/* Triar un paper i confirmar que és el paper adequat són dues
+              afirmacions diferents. La fila les separa: si ningú no ha dit la
+              segona, el dossier no compta aquest document com a cobertura. */}
+          {item.document && (
+            <div className="mt-2">
+              {item.relevance === "human_confirmed" ? (
+                <p className="text-[12px] text-muted">
+                  <Badge tone="success">Pertinença confirmada</Badge>{" "}
+                  {item.relevance_confirmed_by_name}
+                  {item.relevance_confirmed_at &&
+                    ` · ${formatDate(item.relevance_confirmed_at)}`}
+                  {item.relevance_note && (
+                    <span className="block text-faint">“{item.relevance_note}”</span>
+                  )}
+                </p>
+              ) : item.relevance === "linked_evidence" ? (
+                <p className="text-[12px] text-muted">
+                  {RELEVANCE_HINTS[item.relevance]}
+                </p>
+              ) : (
+                <div className="rounded-md border border-warning/30 bg-warning-soft px-3 py-2">
+                  <p className="text-[12px] font-medium text-warning">
+                    {RELEVANCE_LABELS[item.relevance]}
+                  </p>
+                  <p className="text-[12px] text-muted">{RELEVANCE_HINTS[item.relevance]}</p>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="mt-1.5"
+                    disabled={saving}
+                    onClick={() => onConfirmRelevance(item.id)}
+                  >
+                    Confirma que acredita el requisit
+                  </Button>
+                </div>
+              )}
+            </div>
           )}
         </div>
 

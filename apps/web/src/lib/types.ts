@@ -159,7 +159,16 @@ export interface FinancialYear extends Audited {
   notes: string | null;
 }
 
-export interface ContractPreferences extends Audited {
+/**
+ * Mentre l'empresa no les ha desades mai, l'API retorna els valors per defecte
+ * sense crear cap fila: per això `id`, `created_at` i `updated_at` són `null`.
+ */
+export interface ContractPreferences {
+  id: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  created_by: string | null;
+  updated_by: string | null;
   company_id: string;
   minimum_interesting_contract: string | null;
   preferred_contract_min: string | null;

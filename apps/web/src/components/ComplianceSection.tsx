@@ -17,6 +17,7 @@ import { useState } from "react";
 
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorNotice, Spinner } from "@/components/ui";
 import { api } from "@/lib/api";
+import { formatDate } from "@/lib/format";
 import {
   BLOCKER_LABELS,
   COMPLIANCE_DISCLAIMER,
@@ -61,16 +62,31 @@ function AssessmentRow({
   assessment,
   onReview,
   busy,
+  failure,
 }: {
   tenderId: string;
   companyId: string;
   assessment: Assessment;
-  onReview: (id: string, result: AssessmentResult | null) => void;
+  onReview: (
+    id: string,
+    result: AssessmentResult | null,
+    note: string | null,
+  ) => Promise<boolean>;
   busy: boolean;
+  failure: string | null;
 }) {
   const source = assessment.requirement;
   const result = assessment.effective_result;
   const blocked = assessment.blocker_status !== "none";
+  //: `undefined` = cap revisió a mig escriure; `null` = confirmar el que ja deia
+  //: el sistema; un resultat = contradir-lo, i llavors cal motiu.
+  const [pending, setPending] = useState<AssessmentResult | null | undefined>(undefined);
+  const [note, setNote] = useState("");
+
+  function openReview(next: AssessmentResult | null) {
+    setPending(next);
+    setNote("");
+  }
 
   return (
     <li className="px-5 py-4">
@@ -83,7 +99,9 @@ function AssessmentRow({
                 {BLOCKER_LABELS[assessment.blocker_status]}
               </Badge>
             )}
-            {assessment.reviewed_result && <Badge tone="neutral">Revisat</Badge>}
+            {assessment.reviewed_result && (
+              <Badge tone="neutral">Revisat per una persona</Badge>
+            )}
           </div>
           <p className="mt-1.5 text-[13px] font-medium text-ink">
             {source?.title ?? "Requisit"}
@@ -98,10 +116,51 @@ function AssessmentRow({
               <dd className="text-ink">{valueLine(assessment.company_value_json)}</dd>
             </div>
           </dl>
-          <p className="mt-1 text-[12px] text-muted">
-            {explanationText(assessment.explanation_code)}
-          </p>
-          <p className="mt-0.5 font-mono text-[11px] text-muted">{assessment.rule_code}</p>
+          {/* Que el sistema no pugui decidir i una persona ho confirmi després
+              és coherent. El que no ho és: ensenyar el veredicte humà amb
+              l'explicació automàtica que diu el contrari, com si ho hagués
+              decidit el motor. Primer qui ho ha dit; a sota, què deia el
+              sistema. El resultat automàtic no s'esborra mai. */}
+          {assessment.reviewed_result ? (
+            <div className="mt-1.5 space-y-1">
+              <p className="text-[12px] text-ink">
+                <span className="text-muted">Origen:</span> revisió humana
+                {assessment.reviewed_by_name && ` · ${assessment.reviewed_by_name}`}
+                {assessment.reviewed_at && ` · ${formatDate(assessment.reviewed_at)}`}
+              </p>
+              <p className="text-[12px] text-muted">
+                {assessment.review_note ? (
+                  <>“{assessment.review_note}”</>
+                ) : (
+                  <span className="italic">Motiu no registrat.</span>
+                )}
+              </p>
+              <div className="rounded-md border border-border bg-subtle px-3 py-2">
+                <p className="text-[12px] text-muted">
+                  Resultat automàtic original:{" "}
+                  <span className="text-ink">
+                    {RESULT_ICONS[assessment.automatic_result]}{" "}
+                    {RESULT_LABELS[assessment.automatic_result]}
+                  </span>
+                </p>
+                <p className="text-[12px] text-muted">
+                  {explanationText(assessment.explanation_code)}
+                </p>
+                <p className="mt-0.5 font-mono text-[11px] text-faint">
+                  {assessment.rule_code}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p className="mt-1 text-[12px] text-muted">
+                {explanationText(assessment.explanation_code)}
+              </p>
+              <p className="mt-0.5 font-mono text-[11px] text-muted">
+                {assessment.rule_code}
+              </p>
+            </>
+          )}
         </div>
 
         <Badge tone={RESULT_TONES[result]}>
@@ -135,34 +194,84 @@ function AssessmentRow({
         )}
       </div>
 
-      <div className="mt-2 flex items-center gap-3 text-[12px]">
-        <span className="text-muted">Revisió:</span>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onReview(assessment.id, null)}
-          className="text-brand hover:underline disabled:text-muted disabled:no-underline"
-        >
-          Confirma
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onReview(assessment.id, "satisfies")}
-          className="text-brand hover:underline disabled:text-muted disabled:no-underline"
-        >
-          Marca compleix
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onReview(assessment.id, "does_not_satisfy")}
-          className="text-brand hover:underline disabled:text-muted disabled:no-underline"
-        >
-          Marca no compleix
-        </button>
-        {companyId && null}
-      </div>
+      {/* Contradir el motor és una afirmació nova i el backend n'exigeix el
+          motiu. Sense un lloc on escriure'l, prémer «Marca compleix» tornava un
+          422 i no passava res: la regla existia i el producte no la deixava
+          complir. El motiu es demana aquí, abans d'enviar res. */}
+      {pending === undefined ? (
+        <div className="mt-2 flex items-center gap-3 text-[12px]">
+          <span className="text-muted">Revisió:</span>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => openReview(null)}
+            className="text-brand hover:underline disabled:text-muted disabled:no-underline"
+          >
+            Confirma
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => openReview("satisfies")}
+            className="text-brand hover:underline disabled:text-muted disabled:no-underline"
+          >
+            Marca compleix
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => openReview("does_not_satisfy")}
+            className="text-brand hover:underline disabled:text-muted disabled:no-underline"
+          >
+            Marca no compleix
+          </button>
+          {companyId && null}
+        </div>
+      ) : (
+        <div className="mt-2 space-y-1.5 text-[12px]">
+          <p className="text-muted">
+            {pending === null
+              ? "Confirmes el que diu el sistema. El motiu és opcional."
+              : `Registres «${RESULT_LABELS[pending]}» per sobre del resultat automàtic. Escriu per què.`}
+          </p>
+          <textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            rows={2}
+            placeholder="Per què aquest requisit queda així"
+            className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-[12px] text-ink"
+          />
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              disabled={busy || (pending !== null && !note.trim())}
+              onClick={() => {
+                void onReview(assessment.id, pending, note.trim() || null).then((saved) => {
+                  if (!saved) return;
+                  setPending(undefined);
+                  setNote("");
+                });
+              }}
+              className="text-brand hover:underline disabled:text-muted disabled:no-underline"
+            >
+              Desa la revisió
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPending(undefined);
+                setNote("");
+              }}
+              className="text-muted hover:underline"
+            >
+              Cancel·la
+            </button>
+          </div>
+        </div>
+      )}
+      {/* El banner de dalt queda a desenes de requisits de distancia. Si la
+          revisio falla, ha de dir-ho aqui, on s'ha premut. */}
+      {failure && <p className="mt-1.5 text-[12px] text-danger">{failure}</p>}
     </li>
   );
 }
@@ -186,6 +295,7 @@ export function ComplianceSection({
 }) {
   const [running, setRunning] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [failedReview, setFailedReview] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<string | null>(null);
 
   const run = compliance?.run ?? null;
@@ -204,18 +314,27 @@ export function ComplianceSection({
     }
   }
 
-  async function review(id: string, result: AssessmentResult | null) {
-    if (!companyId) return;
+  async function review(
+    id: string,
+    result: AssessmentResult | null,
+    note: string | null,
+  ): Promise<boolean> {
+    if (!companyId) return false;
     setReviewing(id);
     setActionError(null);
+    setFailedReview(null);
     try {
       await api.post(`/companies/${companyId}/assessments/${id}/review`, {
         review_status: "verified",
         reviewed_result: result,
+        note,
       });
       await onReload();
+      return true;
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : "No s'ha pogut desar la revisió.");
+      setFailedReview(id);
+      return false;
     } finally {
       setReviewing(null);
     }
@@ -342,6 +461,7 @@ export function ComplianceSection({
                 companyId={companyId}
                 assessment={assessment}
                 busy={reviewing === assessment.id}
+                failure={failedReview === assessment.id ? actionError : null}
                 onReview={review}
               />
             ))}

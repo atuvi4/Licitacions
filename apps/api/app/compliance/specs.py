@@ -19,6 +19,7 @@ veredictes.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -272,6 +273,67 @@ class LimitSpec:
     currency: str = "EUR"
 
 
+#: Com anomena un plec cada TIPUS DE LIMIT. No es el tipus de polissa: una
+#: mateixa responsabilitat civil te un limit total i sublimits per victima o per
+#: sinistre, i confondre'ls es el que feia semblar coberta una empresa que
+#: nomes tenia una xifra global.
+#:
+#: Llista tancada i inequivoca a proposit. El que no hi encaixi NO es converteix
+#: en cobertura generica en silenci: es marca com a ambigu i acaba en revisio.
+_LIMIT_KIND_HINTS: tuple[tuple[re.Pattern[str], InsuranceLimitKind], ...] = (
+    (
+        re.compile(r"per[_\s-]*v[ií]ctim|por[_\s-]*v[ií]ctim|per[_\s-]*victim", re.I),
+        InsuranceLimitKind.PER_VICTIM,
+    ),
+    (
+        re.compile(r"per[_\s-]*sinistr|por[_\s-]*siniestr|per[_\s-]*claim", re.I),
+        InsuranceLimitKind.PER_CLAIM,
+    ),
+    (
+        re.compile(r"agregat[_\s-]*anual|agregado[_\s-]*anual|annual[_\s-]*aggregate", re.I),
+        InsuranceLimitKind.ANNUAL_AGGREGATE,
+    ),
+    (
+        re.compile(r"l[ií]mit[_\s-]*total|limite[_\s-]*total|total[_\s-]*limit|\btotal\b", re.I),
+        InsuranceLimitKind.TOTAL,
+    ),
+)
+
+#: Text que anuncia un limit PER UNITAT sense que cap patro de sobre l'hagi
+#: sabut llegir. Es el cas perillos: el qualificador hi es —el plec no parla de
+#: la xifra global— pero no el podem mapar, i tractar-lo com a cobertura
+#: generica el compararia contra el total de la polissa.
+#:
+#: Es deliberadament ample: val mes demanar una revisio de mes que deixar passar
+#: un sublimit disfressat de cobertura total.
+_SUBLIMIT_HINT = re.compile(
+    r"sub[_\s-]*l[ií]mit"
+    r"|sublimite"
+    r"|\bpor\s+(?:cada\s+)?(?:v[ií]ctima|siniestro|asegurado|ocurrencia)"
+    r"|\bper\s+(?:cada\s+)?(?:v[ií]ctima|sinistre|assegurat)"
+    r"|\bper\s+(?:victim|claim|occurrence)",
+    re.I,
+)
+
+
+def read_limit_kind(raw: str | None) -> tuple[InsuranceLimitKind, bool]:
+    """El tipus de limit que declara un text lliure, i si ha quedat ambigu.
+
+    Retorna `(kind, ambiguous)`. `ambiguous` cert vol dir que el text anuncia un
+    sublimit pero no diu quin: llavors no es pot comparar amb res i el veredicte
+    honest es demanar revisio, no assumir que parlem del limit total.
+    """
+    if not raw:
+        return InsuranceLimitKind.UNKNOWN, False
+    text = str(raw)
+    for pattern, kind in _LIMIT_KIND_HINTS:
+        if pattern.search(text):
+            return kind, False
+    if _SUBLIMIT_HINT.search(text):
+        return InsuranceLimitKind.UNKNOWN, True
+    return InsuranceLimitKind.UNKNOWN, False
+
+
 @dataclass(frozen=True, slots=True)
 class InsuranceSpec:
     limits: tuple[LimitSpec, ...] = ()
@@ -284,6 +346,10 @@ class InsuranceSpec:
     #: importa es que NO se'n pugui perdre cap: si en queda una sense mirar, el
     #: veredicte no pot ser `satisfies` per molt que els imports encaixin.
     unchecked_conditions: tuple[str, ...] = ()
+    #: El plec parla d'un sublimit pero no diu de quin. No es pot comparar amb
+    #: cap limit declarat, i convertir-ho en cobertura generica seria justament
+    #: l'aplanament que aquest modul existeix per evitar.
+    ambiguous_limit: str | None = None
 
     @property
     def is_empty(self) -> bool:
@@ -319,16 +385,23 @@ def read_insurance(requirement: Any) -> InsuranceSpec:
     amount = to_decimal(value.get("coverage_amount") or value.get("amount"))
     if amount is None:
         return InsuranceSpec(type_note=value.get("type"))
+
+    # La v1 no tenia camp per al tipus de limit, pero el qualificador sovint hi
+    # es igualment, escrit dins de `type` o de `limit_kind`
+    # ("civil_liability_per_victim"). Perdre'l era el que feia que un sublimit
+    # per victima es compares contra la xifra global de la polissa.
+    raw_kind = value.get("limit_kind") or value.get("kind") or value.get("type")
+    kind, ambiguous = read_limit_kind(raw_kind)
     return InsuranceSpec(
-        # La v1 no deia de quin limit parlava: `unknown` i no `total`.
         limits=(
             LimitSpec(
-                kind=InsuranceLimitKind.UNKNOWN,
+                kind=kind,
                 amount=amount,
                 currency=_currency(value.get("currency")),
             ),
         ),
         type_note=value.get("type"),
+        ambiguous_limit=str(raw_kind) if ambiguous else None,
     )
 
 

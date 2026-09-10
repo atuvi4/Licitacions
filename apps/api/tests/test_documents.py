@@ -54,6 +54,55 @@ async def test_descarrega_retorna_el_contingut(client_a, tenant_a):
     assert "attachment" in response.headers["content-disposition"]
 
 
+async def test_descarregar_nomes_deixa_constancia_a_l_auditoria(client_a, tenant_a, engine, db):
+    """L'unica excepcio a "un GET no escriu", i ha de continuar sent nomes aixo.
+
+    Descarregar registra QUI s'ha endut el fitxer; no pot tocar el document ni
+    cap altra fila de negoci.
+    """
+    import uuid
+
+    import sqlalchemy as sa
+
+    from app.models.audit import AuditLog
+    from app.models.documents import Document
+    from tests.dml import DmlRecorder
+
+    _, company = tenant_a
+    document_id = (
+        await client_a.post(
+            f"/api/v1/companies/{company.id}/documents",
+            files={"file": ("doc.pdf", PDF, "application/pdf")},
+        )
+    ).json()["id"]
+    doc_uuid = uuid.UUID(document_id)
+    before = (
+        await db.execute(sa.select(Document.__table__).where(Document.id == doc_uuid))
+    ).one()
+
+    with DmlRecorder(engine) as dml:
+        for _ in range(2):
+            response = await client_a.get(
+                f"/api/v1/companies/{company.id}/documents/{document_id}/download"
+            )
+            assert response.status_code == 200
+
+    assert len(dml.statements) == 2
+    assert all(
+        s.upper().startswith("INSERT INTO AUDIT_LOGS") for s in dml.statements
+    ), dml.statements
+    after = (
+        await db.execute(sa.select(Document.__table__).where(Document.id == doc_uuid))
+    ).one()
+    assert after == before, "el document no canvia"
+    downloads = await db.scalar(
+        sa.select(sa.func.count()).select_from(AuditLog).where(
+            AuditLog.entity_id == doc_uuid, AuditLog.action == "download"
+        )
+    )
+    assert downloads == 2
+
+
 async def test_evidencia_dun_projecte(client_a, tenant_a):
     _, company = tenant_a
     base = f"/api/v1/companies/{company.id}"

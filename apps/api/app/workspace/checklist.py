@@ -16,7 +16,13 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
-from app.models.enums import RequirementCategory, RequirementObligation, RequirementOperator
+from app.compliance.specs import read_limit_kind
+from app.models.enums import (
+    InsuranceLimitKind,
+    RequirementCategory,
+    RequirementObligation,
+    RequirementOperator,
+)
 
 #: Simbol per operador. Els que no son comparacions no en tenen.
 OPERATOR_SYMBOLS: dict[RequirementOperator, str] = {
@@ -97,6 +103,35 @@ def _insurance_label(value: dict[str, Any]) -> str:
     return "responsabilitat civil"
 
 
+#: Com es diu cada tipus de limit a la tasca. Un total i un sublimit per victima
+#: son condicions diferents de la MATEIXA polissa, i anomenar-los tots dos
+#: "Aportar polissa RC ≥ X" els convertia en dues polisses d'imports diferents:
+#: qui llegis la checklist aniria a buscar dos contractes en comptes d'un.
+_LIMIT_QUALIFIERS: dict[InsuranceLimitKind, str] = {
+    InsuranceLimitKind.TOTAL: "amb limit total",
+    InsuranceLimitKind.PER_VICTIM: "amb sublimit per victima",
+    InsuranceLimitKind.PER_CLAIM: "amb sublimit per sinistre",
+    InsuranceLimitKind.ANNUAL_AGGREGATE: "amb agregat anual",
+}
+
+
+def _limit_qualifier(value: dict[str, Any]) -> str:
+    """De quin limit parla el requisit, si es pot saber.
+
+    Es llegeix amb `read_limit_kind`, la MATEIXA interpretacio que fa servir el
+    motor de compliment: si algun dia el motor aprengues a llegir un
+    qualificador nou, el text el diria tot sol. Quan el tipus segueix sent
+    desconegut no s'inventa: es calla.
+    """
+    raw = value.get("limit_kind") or value.get("kind") or value.get("type")
+    kind, ambiguous = read_limit_kind(raw)
+    if ambiguous:
+        # El plec anuncia un sublimit que no sabem llegir. Dir-ne "total" seria
+        # mentir; dir-ne res, amagar-ho.
+        return "amb un sublimit per determinar"
+    return _LIMIT_QUALIFIERS.get(kind, "")
+
+
 def checklist_title(requirement: RequirementLike) -> str:
     """El text de la tasca. Mateixa entrada, mateixa sortida, sempre."""
     value = requirement.value_json or {}
@@ -110,9 +145,8 @@ def checklist_title(requirement: RequirementLike) -> str:
     if category == RequirementCategory.INSURANCE:
         threshold = _threshold(value, requirement.operator)
         label = _insurance_label(value)
-        if threshold:
-            return f"Aportar polissa {label} {threshold}"
-        return f"Aportar polissa {label}"
+        parts = ["Aportar polissa", label, _limit_qualifier(value), threshold or ""]
+        return " ".join(part for part in parts if part)
 
     if category == RequirementCategory.ECONOMIC_SOLVENCY:
         threshold = _threshold(value, requirement.operator)

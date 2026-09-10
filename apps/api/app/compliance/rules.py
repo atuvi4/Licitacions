@@ -29,7 +29,7 @@ from app.models.enums import (
 #: v2: les regles entenen agregacions, percentatges amb base, limits
 #: d'assegurança separats, vies alternatives i equivalencies. Un resultat
 #: calculat amb la v1 no es comparable amb un d'ara.
-RULES_VERSION = "company-compliance-v2"
+RULES_VERSION = "company-compliance-v3"
 
 
 class RuleCode:
@@ -98,6 +98,8 @@ class ExplanationCode:
     #: La polissa no declara un dels limits que el plec exigeix. No saber-lo no
     #: es incomplir-lo.
     INSURANCE_LIMIT_UNKNOWN = "INSURANCE_LIMIT_UNKNOWN"
+    #: El plec anuncia un sublimit i no diu de quin.
+    INSURANCE_LIMIT_KIND_AMBIGUOUS = "INSURANCE_LIMIT_KIND_AMBIGUOUS"
     #: Un limit declarat es inferior al que demana el plec.
     INSURANCE_LIMIT_BELOW = "INSURANCE_LIMIT_BELOW"
     INSURANCE_LIMITS_MET = "INSURANCE_LIMITS_MET"

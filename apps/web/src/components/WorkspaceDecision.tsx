@@ -310,6 +310,27 @@ export function DecisionHistory({ workspace }: { workspace: WorkspaceDetail }) {
               {entry.automated_recommendation && ` · el sistema deia ${entry.automated_recommendation}`}
               {entry.deadline_passed && " · amb el termini ja tancat"}
             </p>
+
+            {/* Els comptadors diuen quants bloquejos hi havia. Això diu la
+                resta: que l'anàlisi era una simulació, que no hi havia motor,
+                que l'elegibilitat estava indeterminada. Sense això, l'historial
+                explicava la decisió amb tres zeros i cap dels motius que de
+                debò pesaven. */}
+            {entry.open_warnings === null ? (
+              <p className="mt-1 text-[12px] italic text-faint">
+                Els avisos d&apos;aquell moment no es van registrar.
+              </p>
+            ) : entry.open_warnings.length > 0 ? (
+              <ul className="mt-1.5 space-y-0.5">
+                {entry.open_warnings.map((code) => (
+                  <li key={code} className="text-[12px] text-warning">
+                    ⚠ Es va decidir sabent-ho: {WARNING_LABELS[code] ?? code}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-1 text-[12px] text-faint">Sense cap avís obert.</p>
+            )}
           </li>
         ))}
       </ol>

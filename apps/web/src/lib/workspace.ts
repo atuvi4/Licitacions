@@ -62,6 +62,12 @@ export interface WorkspaceDecisionEntry {
   mandatory_needs_review: number;
   automated_recommendation: string | null;
   deadline_passed: boolean;
+  /**
+   * Els avisos que hi havia oberts quan es va decidir, tal com es van desar.
+   * `null` vol dir que la decisió és anterior a aquest registre: no es va
+   * anotar, que NO és el mateix que dir que no n'hi havia cap.
+   */
+  open_warnings: string[] | null;
 }
 
 export interface ChecklistItem {
@@ -266,13 +272,63 @@ export interface DossierItem {
   /** Vigència respecte del TERMINI, no d'avui. */
   validity: DocumentValidity;
   coverage: DossierCoverageState | null;
+  /**
+   * Si aquest document acredita —o encara no acredita— el requisit. Triar un
+   * paper i confirmar que és l'adequat són dues afirmacions diferents.
+   */
+  relevance: RelevanceState;
   selected_by: string | null;
   selected_by_name: string | null;
   selected_at: string | null;
+  relevance_confirmed_by_name: string | null;
+  relevance_confirmed_at: string | null;
+  relevance_note: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
 }
+
+/** Com de sostinguda està la pertinença d'un document per a un requisit. */
+export type RelevanceState =
+  | "linked_evidence"
+  | "human_confirmed"
+  | "relevance_unproven"
+  | "category_incompatible"
+  | "category_unknown"
+  | "insufficient_set";
+
+export const RELEVANCE_LABELS: Record<RelevanceState, string> = {
+  linked_evidence: "Vinculat a l'evidència del compliment",
+  human_confirmed: "Pertinença confirmada",
+  relevance_unproven: "Pertinença per acreditar",
+  category_incompatible: "Aquest tipus de document no acredita això",
+  category_unknown: "No sabem què acredita aquest requisit",
+  insufficient_set: "Falten documents per al conjunt",
+};
+
+/**
+ * Per què cada estat és el que és. La frase importa més que l'etiqueta: el que
+ * ha d'entendre qui ho llegeix és que ningú no ha dit encara que aquest paper
+ * serveixi, no que el sistema hagi trobat un error.
+ */
+export const RELEVANCE_HINTS: Record<RelevanceState, string> = {
+  linked_evidence:
+    "El document penja de la mateixa dada corporativa que el compliment va fer servir.",
+  human_confirmed: "Una persona ha confirmat que aquest document acredita el requisit.",
+  relevance_unproven:
+    "La categoria encaixa, però res no lliga aquest document amb aquest requisit. Confirma-ho si és el correcte.",
+  category_incompatible:
+    "La categoria del document no correspon al que demana el plec. Revisa-ho abans de comptar-lo.",
+  category_unknown:
+    "El sistema no sap quina mena de document acredita aquest requisit: ho ha de dir una persona.",
+  insufficient_set: "El plec en demana més d'un i encara no hi són tots.",
+};
+
+/** Els estats que donen cobertura documental. La resta demana una persona. */
+export const RELEVANCE_ESTABLISHED: ReadonlySet<RelevanceState> = new Set<RelevanceState>([
+  "linked_evidence",
+  "human_confirmed",
+]);
 
 export interface DossierGroup {
   group: string;
@@ -304,6 +360,8 @@ export interface Dossier {
   coverage: DossierCoverageCounters;
   readiness: Readiness;
   groups: DossierGroup[];
+  /** Files que pengen d'una extracció superada: desades, però ja no pendents. */
+  superseded_count: number;
 }
 
 export interface DossierSyncResult {
@@ -317,6 +375,11 @@ export interface DossierSyncResult {
 
 export interface ChecklistRegenerateResult {
   created: number;
+  /** Items que ja hi eren i que ara pengen del requisit vigent equivalent. */
+  carried: number;
+  /** Quants items han quedat fora del que el plec demana ara. És un estat, no
+   *  un efecte d'aquesta crida: qui els va deixar enrere va ser la reanàlisi. */
+  historic: number;
   total: number;
   reason: string | null;
 }
@@ -402,6 +465,8 @@ export const READINESS_BLOCKER_LABELS: Record<string, string> = {
     "Algun document seleccionat caduca abans del termini de presentació.",
   mandatory_tasks_open: "Hi ha tasques obligatòries pendents.",
   evidence_needs_review: "Hi ha evidències marcades per revisar.",
+  mandatory_relevance_unproven:
+    "Hi ha documents triats per a requisits obligatoris sense que ningú hagi confirmat que els acrediten.",
   analysis_outdated:
     "Hi ha una anàlisi de requisits o un càlcul de compliment més recents: cal reconciliar el dossier.",
 };
@@ -699,6 +764,46 @@ export const NOTHING_TO_DO_LABELS: Record<string, string> = {
     "No hi ha cap requisit analitzat en aquest plec: no hi ha res d'on derivar-ho.",
   already_in_sync: "Ja estava al dia: no hi havia res de nou per incorporar.",
 };
+
+/**
+ * Què ha passat en reconciliar la checklist amb l'anàlisi vigent.
+ *
+ * Crear items nous no és l'única cosa que pot passar, i durant molt temps era
+ * l'única que es deia: una reconciliació pot moure feina d'abans al requisit
+ * equivalent d'ara i pot deixar-ne d'altra com a història. Qui prem el botó ha
+ * de saber què li ha passat als seus papers, no només quants forats nous té.
+ */
+export function checklistReconciliationMessage(
+  result: ChecklistRegenerateResult,
+): { message: string; detail?: string; tone: "info" | "success" } {
+  const parts: string[] = [];
+  if (result.created > 0) {
+    parts.push(`${result.created} ${result.created === 1 ? "item nou" : "items nous"}`);
+  }
+  if (result.carried > 0) {
+    parts.push(
+      `${result.carried} ${result.carried === 1 ? "item conservat" : "items conservats"}`,
+    );
+  }
+  // L'històric no és una cosa que hagi passat en prémer el botó: són items que
+  // el plec ja no demana des que es va reanalitzar. Va al detall, mai al
+  // recompte del que s'acaba de fer, perquè si no cada premuda diria el mateix
+  // com si tornés a passar.
+  const detail =
+    result.historic > 0
+      ? `${result.historic} ${result.historic === 1 ? "item queda" : "items queden"} a l'històric: ` +
+        "el plec ja no ho demana. No s'han esborrat."
+      : undefined;
+
+  if (parts.length === 0) {
+    return {
+      message: "Cap canvi: la checklist ja treballa contra l'anàlisi vigent.",
+      detail: detail ?? (result.reason ? NOTHING_TO_DO_LABELS[result.reason] ?? result.reason : undefined),
+      tone: "info",
+    };
+  }
+  return { message: `${parts.join(" · ")}.`, detail, tone: "success" };
+}
 
 export function reconciliationMessage(
   created: number,

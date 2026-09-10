@@ -60,8 +60,19 @@ _TYPE_HINTS: tuple[tuple[re.Pattern[str], InsuranceType], ...] = (
 )
 
 #: El limit sense tipus d'una fitxa v1 nomes pot respondre el total: es el que
-#: `coverage_amount` sempre ha volgut dir.
-_ANSWERABLE_BY_UNTYPED = frozenset({InsuranceLimitKind.TOTAL, InsuranceLimitKind.UNKNOWN})
+#: `coverage_amount` sempre ha volgut dir. Mai un sublimit.
+_ANSWERABLE_BY_UNTYPED = frozenset({InsuranceLimitKind.TOTAL})
+
+#: Limits que NO pot respondre mai un import sense tipus. Existeix com a llista
+#: explicita i no com a "tot el que no sigui total" perque afegir un tipus de
+#: sublimit nou sense decidir que se'n fa el deixaria caure al costat permissiu.
+_SUBLIMIT_KINDS = frozenset(
+    {
+        InsuranceLimitKind.PER_VICTIM,
+        InsuranceLimitKind.PER_CLAIM,
+        InsuranceLimitKind.ANNUAL_AGGREGATE,
+    }
+)
 
 
 def infer_insurance_type(raw: str | None) -> InsuranceType | None:
@@ -93,16 +104,61 @@ def _company_limits(policy: Any) -> dict[InsuranceLimitKind, tuple[Decimal, str]
     return limits
 
 
+class _Match:
+    """El limit declarat que respon —o no— a un limit exigit."""
+
+    __slots__ = ("amount", "currency")
+
+    def __init__(self, amount: Decimal | None, currency: str = "EUR") -> None:
+        self.amount = amount
+        self.currency = currency
+
+
 def _find(
     declared: dict[InsuranceLimitKind, tuple[Decimal, str]], required: LimitSpec
-) -> tuple[Decimal, str] | None:
-    """El limit declarat que respon a un limit exigit, si n'hi ha cap."""
-    if required.kind in declared:
-        return declared[required.kind]
+) -> _Match:
+    """El limit declarat que respon a un limit exigit, si n'hi ha cap.
+
+    Quatre regles, i totes son la mateixa idea:
+
+    * un tipus exigit el respon **el mateix tipus declarat**;
+    * un **sublimit** exigit no el respon mai un import global, digui el que
+      digui la xifra;
+    * el **total** exigit si que el respon la xifra unica d'una fitxa antiga:
+      `coverage_amount` sempre ha volgut dir aixo;
+    * quan el PLEC tampoc diu de quin limit parla, la xifra global de la polissa
+      el respon. Aqui **no** s'esta comparant un total contra un sublimit: el
+      cas perillos es un sublimit disfressat de xifra global, i aquell no arriba
+      mai fins aqui —`read_limit_kind` el marca com a ambigu i el requisit acaba
+      en revisio abans de comparar cap import—. El que queda es cobertura contra
+      cobertura, que es l'unica forma que tenia la v1 i segueix sent el cas
+      d'assegurança mes frequent: degradar-lo a revisio seria soroll.
+    """
+    if required.kind != InsuranceLimitKind.UNKNOWN and required.kind in declared:
+        # Els dos costats diuen el mateix tipus. `unknown` queda fora a
+        # proposit: coincidir en "no ho sabem" no es coincidir.
+        amount, currency = declared[required.kind]
+        return _Match(amount, currency)
+    if required.kind in _SUBLIMIT_KINDS:
+        # Un sublimit exigit no el respon mai un import global.
+        return _Match(None)
     if required.kind in _ANSWERABLE_BY_UNTYPED:
-        return declared.get(InsuranceLimitKind.UNKNOWN) or declared.get(InsuranceLimitKind.TOTAL)
-    # Un sublimit exigit no el respon un import global.
-    return None
+        # El total exigit si que el respon la xifra unica d'una fitxa antiga:
+        # es exactament el que aquell camp ha volgut dir sempre.
+        found = declared.get(InsuranceLimitKind.UNKNOWN) or declared.get(
+            InsuranceLimitKind.TOTAL
+        )
+        if found is not None:
+            return _Match(found[0], found[1])
+        return _Match(None)
+    # Queda el cas en que el PLEC tampoc diu de quin limit parla: cobertura
+    # contra cobertura (veure el docstring).
+    found = declared.get(InsuranceLimitKind.TOTAL) or declared.get(
+        InsuranceLimitKind.UNKNOWN
+    )
+    if found is not None:
+        return _Match(found[0], found[1])
+    return _Match(None)
 
 
 def assess_insurance(
@@ -115,6 +171,14 @@ def assess_insurance(
     if spec.is_empty:
         return needs_review(
             RuleCode.INSURANCE_LIMITS, ExplanationCode.REQUIREMENT_VALUE_MISSING
+        )
+    if spec.ambiguous_limit:
+        # El plec anuncia un sublimit i no diu de quin. Comparar-lo amb el que
+        # sigui seria inventar-se quina condicio s'esta comprovant.
+        return needs_review(
+            RuleCode.INSURANCE_LIMITS,
+            ExplanationCode.INSURANCE_LIMIT_KIND_AMBIGUOUS,
+            declared_kind=spec.ambiguous_limit,
         )
 
     required_type = spec.insurance_type or infer_insurance_type(
@@ -191,12 +255,12 @@ def _evaluate(policy: Any, spec: InsuranceSpec, deadline: date | None) -> _Verdi
             "required": float(required.amount),
             "currency": required.currency,
         }
-        if found is None:
+        if found.amount is None:
             entry["declared"] = None
             verdict.missing.append(str(required.kind))
             verdict.checked.append(entry)
             continue
-        amount, currency = found
+        amount, currency = found.amount, found.currency
         entry["declared"] = float(amount)
         entry["declared_currency"] = currency
         if currency != required.currency:

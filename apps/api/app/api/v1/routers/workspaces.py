@@ -144,7 +144,7 @@ async def _detail(
     session: SessionDep, ctx: CompanyCtx, workspace: BidWorkspace
 ) -> WorkspaceDetail:
     state = await service.load_state(session, workspace)
-    items = await service.checklist_items(session, workspace.id)
+    items = await workspace_dossier.active_checklist_items(session, workspace)
     tasks = await service.workspace_tasks(session, workspace.id)
     notes = await service.workspace_notes(session, workspace.id)
     decisions = await service.decision_history(session, workspace.id)
@@ -171,7 +171,9 @@ async def _detail(
     # el compliment ni amb la decisio. "Complim" i "tenim els papers" son coses
     # diferents i s'han de poder llegir per separat.
     dossier = await workspace_dossier.load_dossier(session, workspace)
-    await workspace_dossier.reconcile_readiness(
+    # Una lectura respon amb l'estat EFECTIU pero no el desa: el guardat nomes
+    # el canvien les mutacions, que reconcilien abans de cridar aquesta funcio.
+    plan = await workspace_dossier.plan_readiness(
         session, workspace, readiness=dossier.readiness
     )
 
@@ -182,7 +184,7 @@ async def _detail(
         tender_lot_id=workspace.tender_lot_id,
         lot_number=state.lot.lot_number if state.lot else None,
         lot_title=state.lot.title if state.lot else None,
-        status=workspace.status,
+        status=plan.status,
         tender_title=state.tender.title,
         expediente_number=state.tender.expediente_number,
         buyer_name=buyer_name,
@@ -355,6 +357,9 @@ async def decide(
         summary=f"Decisio {decision.decision.value} sobre la candidatura",
     )
     await session.commit()
+    # Mutacio explicita: es desa l'estat reconciliat. Abans ho feia, de retruc,
+    # la lectura del workspace que es retorna.
+    await workspace_dossier.reconcile_readiness(session, workspace)
     return await _detail(session, ctx, workspace)
 
 
@@ -382,17 +387,28 @@ async def list_decisions(workspace_id: uuid.UUID, session: SessionDep, ctx: Comp
     summary="Reconcilia la checklist amb l'analisi vigent",
 )
 async def regenerate_checklist(workspace_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
-    """Afegeix el que falta. No esborra ni sobreescriu res del que ja hi havia."""
+    """Posa la candidatura a treballar contra l'analisi vigent.
+
+    Abans nomes afegia el que faltava, i per aixo la checklist podia quedar
+    sencera penjada d'una extraccio superada mentre el workspace ja es declarava
+    reconciliat. Ara primer es mou el que es pot moure —la feina humana el
+    requisit de la qual segueix demanant el mateix—, despres es crea el que
+    falta, i el que ja no te equivalent passa a historia.
+    """
     workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
-    created = await service.regenerate_checklist(session, workspace, user_id=ctx.user.id)
-    items = await service.checklist_items(session, workspace.id)
+    outcome = await workspace_dossier.reconcile_with_current_analysis(
+        session, workspace, user_id=ctx.user.id
+    )
+    items = await workspace_dossier.active_checklist_items(session, workspace)
     names = await _people_names(session, {item.assigned_to for item in items})
     run = await service.current_requirement_run(session, workspace.tender_id)
     return ChecklistRegenerateResult(
-        created=created,
+        created=outcome.created_checklist,
+        carried=outcome.carried,
+        historic=outcome.historic,
         total=len(items),
         reason=nothing_to_do_reason(
-            created=created,
+            created=outcome.created_checklist + outcome.carried,
             requirements_available=run.requirements_extracted if run else 0,
         ),
         checklist=[_checklist_read(item, names) for item in items],

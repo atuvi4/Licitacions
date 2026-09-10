@@ -207,7 +207,9 @@ async def test_reviewing_a_requirement_preserves_the_model_output(client_a, anal
     tender_id = analyzable["document"].tender_id
     await client_a.post(f"/api/v1/tenders/{tender_id}/analysis/requirements")
 
-    requirement = await session.scalar(sa.select(Requirement))
+    requirement = await session.scalar(
+        sa.select(Requirement).where(Requirement.tender_id == tender_id)
+    )
     original_title = requirement.title
     original_value = dict(requirement.value_json)
 
@@ -235,7 +237,9 @@ async def test_rejecting_a_requirement_keeps_it_auditable(client_a, analyzable, 
     fake.queue_response(payload(analyzable["extraction"].id))
     tender_id = analyzable["document"].tender_id
     await client_a.post(f"/api/v1/tenders/{tender_id}/analysis/requirements")
-    requirement = await session.scalar(sa.select(Requirement))
+    requirement = await session.scalar(
+        sa.select(Requirement).where(Requirement.tender_id == tender_id)
+    )
 
     response = await client_a.post(
         f"/api/v1/requirements/{requirement.id}/review",

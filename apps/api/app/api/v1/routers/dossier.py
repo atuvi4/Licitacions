@@ -31,6 +31,7 @@ from app.schemas.workspace import (
     EvidenceItemCreateRequest,
     EvidenceItemUpdateRequest,
     ReadinessRead,
+    RelevanceConfirmRequest,
     TaskRead,
 )
 from app.services import audit
@@ -106,11 +107,16 @@ async def _dossier_read(
     session: SessionDep, ctx: CompanyCtx, workspace
 ) -> DossierRead:
     dossier = await service.load_dossier(session, workspace)
-    # Autocuracio en llegir: si l'estat guardat deia "llest" i ja no ho es, es
-    # corregeix abans de respondre. Es reaprofita la readiness ja calculada.
-    await service.reconcile_readiness(session, workspace, readiness=dossier.readiness)
+    # Una lectura no escriu: es respon amb l'estat EFECTIU, calculat, pero el
+    # guardat nomes el canvien les mutacions (que reconcilien abans de cridar
+    # aquesta funcio). Es reaprofita la readiness ja calculada.
+    plan = await service.plan_readiness(session, workspace, readiness=dossier.readiness)
     requirement_ids = {row.item.requirement_id for row in dossier.rows if row.item.requirement_id}
-    names = await _selector_names(session, {row.item.selected_by for row in dossier.rows})
+    names = await _selector_names(
+        session,
+        {row.item.selected_by for row in dossier.rows}
+        | {row.item.relevance_confirmed_by for row in dossier.rows},
+    )
     results = await _assessment_results(session, ctx.company_id, requirement_ids)
     quotes = await _quotes(session, requirement_ids)
 
@@ -150,9 +156,13 @@ async def _dossier_read(
                         ),
                         validity=row.validity,
                         coverage=dossier.coverage_by_requirement.get(row.item.requirement_id),
+                        relevance=row.relevance,
                         selected_by=row.item.selected_by,
                         selected_by_name=names.get(row.item.selected_by),
                         selected_at=row.item.selected_at,
+                        relevance_confirmed_by_name=names.get(row.item.relevance_confirmed_by),
+                        relevance_confirmed_at=row.item.relevance_confirmed_at,
+                        relevance_note=row.item.relevance_note,
                         notes=row.item.notes,
                         created_at=row.item.created_at,
                         updated_at=row.item.updated_at,
@@ -164,7 +174,7 @@ async def _dossier_read(
 
     return DossierRead(
         workspace_id=workspace.id,
-        workspace_status=workspace.status,
+        workspace_status=plan.status,
         deadline_at=dossier.deadline,
         coverage=DossierCoverageRead(
             mandatory_total=dossier.counters.mandatory_total,
@@ -176,18 +186,19 @@ async def _dossier_read(
             optional_total=dossier.counters.optional_total,
             optional_covered=dossier.counters.optional_covered,
         ),
-        readiness=_readiness_read(dossier.readiness, workspace),
+        readiness=_readiness_read(dossier.readiness, plan.status),
         groups=groups,
+        superseded_count=len(dossier.superseded),
     )
 
 
-def _readiness_read(readiness, workspace) -> ReadinessRead:
+def _readiness_read(readiness, status) -> ReadinessRead:
     return ReadinessRead(
         state=readiness.state,
         blockers=list(readiness.blockers),
         # Explicit a la resposta: estar a punt per a la revisio final no vol dir
         # haver presentat res, i la interficie no ho ha de deduir.
-        is_submitted=is_submitted(workspace.status),
+        is_submitted=is_submitted(status),
     )
 
 
@@ -209,6 +220,9 @@ async def sync_dossier(workspace_id: uuid.UUID, session: SessionDep, ctx: Compan
     await service.start_bid_preparation(session, workspace)
     await session.commit()
     await session.refresh(workspace)
+    # Mutacio explicita: aqui si que es desa l'estat reconciliat. Abans ho feia,
+    # de retruc, la lectura del dossier que es retorna a sota.
+    await service.reconcile_readiness(session, workspace)
     run = await workspace_service.current_requirement_run(session, workspace.tender_id)
     return DossierSyncResult(
         suggested=outcome.suggested,
@@ -220,6 +234,42 @@ async def sync_dossier(workspace_id: uuid.UUID, session: SessionDep, ctx: Compan
         ),
         dossier=await _dossier_read(session, ctx, workspace),
     )
+
+
+
+@router.post(
+    "/dossier/{item_id}/relevance",
+    response_model=DossierRead,
+    summary="Confirma que aquest document acredita el requisit",
+)
+async def confirm_relevance(
+    workspace_id: uuid.UUID,
+    item_id: uuid.UUID,
+    payload: RelevanceConfirmRequest,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Seleccionar un document i confirmar que es l'adequat son coses diferents.
+
+    El sistema sap que la categoria encaixa; no sap que aquest sigui EL document
+    que el plec demana. Quan no ho pot establir tot sol, ho pregunta, i el que
+    respon una persona queda amb el seu nom, la seva data i el seu motiu.
+    """
+    workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    item = await service.get_item(session, workspace, item_id)
+    await service.confirm_relevance(
+        session, workspace, item, note=payload.note, user=ctx.user
+    )
+    await audit.record(
+        session,
+        company_id=ctx.company_id,
+        user_id=ctx.user.id,
+        action=AuditAction.UPDATE,
+        entity_type="workspace_evidence_item",
+        entity_id=item.id,
+    )
+    await session.commit()
+    return await _dossier_read(session, ctx, workspace)
 
 
 @router.post("/dossier", response_model=DossierRead, summary="Afegeix una evidencia")
@@ -283,8 +333,9 @@ async def create_task(
 @router.get("/readiness", response_model=ReadinessRead, summary="Estat del dossier")
 async def get_readiness(workspace_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
-    readiness = await service.reconcile_readiness(session, workspace)
-    return _readiness_read(readiness, workspace)
+    # Calcula l'estat efectiu; no el desa. Llegir no pot moure cap etiqueta.
+    plan = await service.plan_readiness(session, workspace)
+    return _readiness_read(plan.readiness, plan.status)
 
 
 @router.post(
@@ -312,4 +363,4 @@ async def advance(workspace_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx)
         summary="Dossier passat a revisio final",
     )
     await session.commit()
-    return _readiness_read(readiness, workspace)
+    return _readiness_read(readiness, workspace.status)

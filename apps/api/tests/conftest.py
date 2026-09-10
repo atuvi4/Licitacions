@@ -1,41 +1,123 @@
 """Configuracio de la suite de tests.
 
-Els tests corren sobre SQLite en memoria (cap dependencia de Docker) i amb el
-backend d'storage local en un directori temporal. Aixo es possible perque el
-model nomes fa servir tipus SQLAlchemy portables.
+Per defecte els tests corren sobre SQLite en memoria (cap dependencia de Docker)
+i amb el backend d'storage local en un directori temporal. Aixo es possible
+perque el model nomes fa servir tipus SQLAlchemy portables.
+
+Amb `--postgres` corren contra PostgreSQL, i nomes contra la base de test
+(`TEST_DATABASE_URL`, que ha de ser `licitacions_test`): cada test en un schema
+propi que es crea i s'esborra al seu voltant. Les regles son a `pg_harness.py`.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator
 
+# La base de desenvolupament de qui executa els tests, si n'hi ha. Nomes es
+# guarda per poder-la REFUSAR: els tests no hi poden apuntar mai.
+_DEVELOPER_DATABASE_URL = os.environ.get("DATABASE_URL")
+
 # Ha d'anar ABANS d'importar res de `app`: la configuracio es cacheja.
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+# L'aplicacio dels tests no ha de veure MAI una base real, encara que l'entorn
+# de qui els executa en tingui una configurada: per aixo es sobreescriu, no es
+# posa per defecte. Els tests treballen amb el motor de la fixture `engine`.
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-used-in-production")
 os.environ.setdefault("STORAGE_BACKEND", "local")
 os.environ.setdefault("ENVIRONMENT", "test")
 
 import pytest  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
 import sqlalchemy as sa  # noqa: E402
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
+from app.core.config import settings  # noqa: E402
+from app.core.security import hash_password  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import get_session  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models.identity import Company, CompanyMembership, User  # noqa: E402
-from app.core.security import hash_password  # noqa: E402
 from app.models.enums import MembershipRole  # noqa: E402
+from app.models.identity import Company, CompanyMembership, User  # noqa: E402
 from app.services.storage import LocalFilesystemStorage, set_storage  # noqa: E402
+from tests.pg_harness import (  # noqa: E402
+    DEFAULT_TEST_DATABASE,
+    UnsafeTestDatabaseError,
+    isolated_schema_engine,
+    validate_test_database_url,
+    verify_test_database,
+)
 
 TEST_PASSWORD = "TestPassw0rd!"
 
+#: La DSN de la base de test ja validada. Nomes existeix amb `--postgres`.
+PG_TEST_URL = pytest.StashKey[object]()
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--postgres",
+        action="store_true",
+        default=False,
+        help="Executa la suite contra PostgreSQL (TEST_DATABASE_URL, nomes licitacions_test).",
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "postgres: nomes te sentit contra PostgreSQL; s'omet sense --postgres"
+    )
+    if not config.getoption("--postgres"):
+        return
+    expected = os.environ.get("TEST_DATABASE_NAME", DEFAULT_TEST_DATABASE)
+    try:
+        url = validate_test_database_url(
+            os.environ.get("TEST_DATABASE_URL"),
+            expected=expected,
+            developer_urls=[_DEVELOPER_DATABASE_URL],
+            forbidden=[settings.POSTGRES_DB],
+        )
+        # Nomes lectura: confirma la base abans que cap test hi pugui escriure.
+        asyncio.run(verify_test_database(url, expected))
+    except UnsafeTestDatabaseError as exc:
+        raise pytest.UsageError(f"PostgreSQL de test refusat: {exc}") from None
+    except Exception as exc:  # connexio impossible: fallar, mai caure a SQLite
+        raise pytest.UsageError(
+            f"No es pot connectar a la base de test PostgreSQL: {type(exc).__name__}: {exc}"
+        ) from None
+    config.stash[PG_TEST_URL] = (url, expected)
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--postgres"):
+        return
+    skip = pytest.mark.skip(reason="nomes amb --postgres")
+    for item in items:
+        if item.get_closest_marker("postgres") is not None:
+            item.add_marker(skip)
+
 
 @pytest.fixture
-async def engine():
+async def engine(request):
+    pg = request.config.stash.get(PG_TEST_URL, None)
+    if request.config.getoption("--postgres"):
+        # Sense cap cami de retorn a SQLite: si s'ha demanat PostgreSQL i no hi
+        # ha una base validada, el test falla.
+        assert pg is not None, "--postgres sense base de test validada"
+        url, expected = pg
+        async with isolated_schema_engine(
+            url, expected=expected, metadata=Base.metadata
+        ) as pg_engine:
+            yield pg_engine
+        return
+
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},

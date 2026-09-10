@@ -21,12 +21,14 @@ from decimal import Decimal
 import pytest
 import sqlalchemy as sa
 
+from app.core.errors import ValidationError
 from app.models.compliance import AssessmentEvidence, CompanyRequirementAssessment
 from app.models.credentials import CompanyCertification, CompanyInsurance
 from app.models.documents import Document, DocumentLink
 from app.models.enums import (
     AnalysisRunStatus,
     AssessmentResult,
+    ChecklistItemStatus,
     DocumentCategory,
     DocumentValidity,
     DossierCoverage,
@@ -56,6 +58,7 @@ from app.models.workspace import WorkspaceEvidenceItem, WorkspaceTask
 from app.services import bid_workspace as workspace_service
 from app.services import workspace_dossier as service
 from app.services.compliance_analysis import analyze_company_compliance
+from app.workspace.checklist import checklist_title
 from app.workspace.dossier import (
     BLOCKER_ANALYSIS_OUTDATED,
     BLOCKER_DECISION_NOT_GO,
@@ -69,6 +72,14 @@ from app.workspace.dossier import (
     document_validity,
     evaluate_readiness,
     task_title_for_gap,
+)
+from app.workspace.lineage import ItemFacts, human_weight, plan_migration
+from app.workspace.relevance import (
+    ESTABLISHED,
+    RelevanceInput,
+    RelevanceState,
+    relevance_of,
+    required_document_count,
 )
 from app.workspace.transitions import TransitionActor
 
@@ -304,7 +315,20 @@ def test_a_tender_without_deadline_only_checks_todays_expiry():
 # --------------------------------------------------------------------------- #
 
 
-def piece(status, validity=DocumentValidity.VALID, has_document=True):
+def piece(
+    status,
+    validity=DocumentValidity.VALID,
+    has_document=True,
+    relevance=RelevanceState.LINKED,
+    required_pieces=1,
+):
+    """Una peca del dossier.
+
+    La pertinença per defecte es `LINKED` perque aquests tests parlen de la
+    MECANICA de la cobertura —triat, caducat, per revisar— i no de si el
+    document acredita res. El cas contrari te els seus tests a
+    `TestPertinenciaDocumental`.
+    """
     return EvidenceView(
         item_id=uuid.uuid4(),
         requirement_id=uuid.uuid4(),
@@ -312,6 +336,8 @@ def piece(status, validity=DocumentValidity.VALID, has_document=True):
         validity=validity,
         has_document=has_document,
         mandatory=True,
+        relevance=relevance,
+        required_pieces=required_pieces,
     )
 
 
@@ -342,7 +368,7 @@ def test_one_piece_marked_for_review_holds_the_whole_requirement():
 
 
 def test_a_requirement_with_several_documents_needs_only_one_usable():
-    """§10: tres certificats de bona execucio; amb un de triat ja hi ha cobertura."""
+    """§10: quan el plec no diu quants en calen, amb un de triat ja n'hi ha prou."""
     assert coverage_for_requirement(
         [
             piece(EvidenceItemStatus.SUGGESTED),
@@ -437,6 +463,18 @@ def test_a_task_title_reuses_the_checklist_template():
 # --------------------------------------------------------------------------- #
 
 
+async def item_of(db, workspace) -> WorkspaceEvidenceItem:
+    """La peca del dossier d'AQUEST workspace.
+
+    Mai `select(WorkspaceEvidenceItem)` sense filtre abans de modificar res: en una
+    base compartida retorna la primera fila de qualsevol workspace, i el test hi
+    escriu. Aixi es van modificar sis files reals el 10/09/2026.
+    """
+    return await db.scalar(
+        sa.select(WorkspaceEvidenceItem).where(WorkspaceEvidenceItem.workspace_id == workspace.id)
+    )
+
+
 async def test_the_dossier_reuses_the_document_compliance_already_used(db, certified):
     """§2: no es torna a buscar res. El que 4C va fer servir, es la proposta."""
     workspace = certified["workspace"]
@@ -474,7 +512,7 @@ async def test_selecting_a_document_records_who_and_when(db, certified):
     workspace, user = certified["workspace"], certified["user"]
     await service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await item_of(db, workspace)
 
     updated = await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
@@ -495,7 +533,7 @@ async def test_replacing_a_document_keeps_one_piece_and_a_fresh_signature(db, ce
     workspace, user = certified["workspace"], certified["user"]
     await service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await item_of(db, workspace)
     await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
@@ -519,7 +557,7 @@ async def test_deselecting_clears_the_signature(db, certified):
     workspace, user = certified["workspace"], certified["user"]
     await service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await item_of(db, workspace)
     await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
@@ -575,7 +613,7 @@ async def test_syncing_twice_does_not_duplicate_or_overwrite(db, certified):
     workspace, user = certified["workspace"], certified["user"]
     await service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await item_of(db, workspace)
     await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
@@ -705,7 +743,7 @@ async def test_a_document_expiring_before_the_deadline_breaks_the_coverage(
     await approve(db, workspace, user)
     await service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await item_of(db, workspace)
     await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
@@ -790,7 +828,7 @@ async def test_readiness_is_needs_review_when_someone_asked_to_look_at_it(db, ce
     await approve(db, workspace, user)
     await service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await item_of(db, workspace)
     await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.NEEDS_REVIEW, user=user
     )
@@ -806,7 +844,7 @@ async def test_readiness_becomes_ready_when_everything_is_in_place(db, certified
     await approve(db, workspace, user)
     await service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await item_of(db, workspace)
     await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
@@ -823,7 +861,7 @@ async def test_ready_for_final_review_is_not_submitted(db, certified):
     await approve(db, workspace, user)
     await service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await item_of(db, workspace)
     await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
@@ -918,7 +956,7 @@ async def test_a_document_from_another_company_cannot_be_selected(db, certified,
     foreign = await add_document(db, company_b.id, name="Secret.pdf")
     await service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await item_of(db, workspace)
 
     with pytest.raises(service.DocumentNotAvailableError):
         await service.update_item(
@@ -1108,14 +1146,37 @@ async def test_the_full_dossier_workflow(db, client_a, tenant_a, tender, extract
     )
     assert attached.status_code == 200, attached.text
 
-    # 6. El dossier esta a punt per a la revisio final.
+    # 6. Triar el document NO es dir que acredita el requisit. La categoria
+    #    encaixa, pero res no lliga aquesta polissa amb aquesta exigencia: el
+    #    dossier ho diu i no dona la cobertura per bona.
+    pending = (await client_a.get(f"{base}/readiness")).json()
+    assert pending["state"] == "incomplete"
+    assert "mandatory_relevance_unproven" in pending["blockers"]
+
+    # 7. Ho confirma una persona, amb el seu motiu.
+    confirmed = await client_a.post(
+        f"{base}/dossier/{rc_item['id']}/relevance",
+        json={"note": "Es la polissa vigent que cobreix aquest contracte."},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    row = next(
+        item
+        for group in confirmed.json()["groups"]
+        for item in group["items"]
+        if item["id"] == rc_item["id"]
+    )
+    assert row["relevance"] == "human_confirmed"
+    assert row["relevance_confirmed_by_name"]
+    assert row["relevance_note"]
+
+    # 8. Ara si: el dossier esta a punt per a la revisio final.
     readiness = (await client_a.get(f"{base}/readiness")).json()
     assert readiness["state"] == "ready_for_final_review", readiness["blockers"]
 
     advanced = (await client_a.post(f"{base}/readiness/advance")).json()
     assert advanced["state"] == "ready_for_final_review"
 
-    # 7. I encara NO s'ha presentat res.
+    # 9. I encara NO s'ha presentat res.
     assert advanced["is_submitted"] is False
     detail = (await client_a.get(base)).json()
     assert detail["status"] == "ready_for_final_review"
@@ -1206,7 +1267,7 @@ async def make_ready(db, certified) -> WorkspaceEvidenceItem:
     await approve(db, workspace, user)
     await service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await item_of(db, workspace)
     await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
@@ -1368,22 +1429,33 @@ async def test_a_new_compliance_run_stops_the_dossier_from_claiming_to_be_ready(
     assert workspace.status == WorkspaceStatus.PREPARING_BID
 
 
-async def test_reading_the_dossier_repairs_a_stale_label(db, client_a, certified, tender):
-    """Nomes mirar-ho ja el corregeix: no cal recordar-se de premer res."""
+async def test_reading_the_dossier_shows_the_real_state_without_writing_it(
+    db, client_a, certified, tender
+):
+    """Mirar-ho diu la veritat; nomes una mutacio explicita la desa.
+
+    Abans la lectura del dossier corregia l'etiqueta guardada. Aixo va fer que
+    una simple comprovacio de lectura degradés un workspace real. Ara la
+    resposta ensenya l'estat efectiu, la fila no es toca, i es la reconciliacio
+    explicita la que el persisteix.
+    """
     workspace, company = certified["workspace"], certified["company"]
     await make_ready(db, certified)
     await new_extraction_run(db, tender)
+    base = f"/api/v1/companies/{company.id}/workspaces/{workspace.id}"
 
-    body = (
-        await client_a.get(
-            f"/api/v1/companies/{company.id}/workspaces/{workspace.id}/dossier"
-        )
-    ).json()
+    body = (await client_a.get(f"{base}/dossier")).json()
 
-    assert body["workspace_status"] == "preparing_bid"
+    assert body["workspace_status"] == "preparing_bid", "la resposta diu l'estat efectiu"
     assert body["readiness"]["state"] == "incomplete"
     await db.refresh(workspace)
-    assert workspace.status == WorkspaceStatus.PREPARING_BID
+    assert workspace.status == WorkspaceStatus.READY_FOR_FINAL_REVIEW, "llegir no escriu"
+
+    # Sincronitzar el dossier es una mutacio explicita que no resol la causa
+    # (l'analisi segueix endarrerida): la reconciliacio que fa si que es desa.
+    assert (await client_a.post(f"{base}/dossier/sync")).status_code == 200
+    await db.refresh(workspace)
+    assert workspace.status == WorkspaceStatus.PREPARING_BID, "la mutacio explicita si"
 
 
 async def test_invalidation_goes_through_the_transition_graph(db, certified):
@@ -1472,3 +1544,1016 @@ def test_there_is_no_manual_expired_status():
         "not_applicable",
     }
     assert not hasattr(EvidenceItemStatus, "EXPIRED")
+
+
+# --------------------------------------------------------------------------- #
+# Seleccionat no vol dir documentalment cobert (N1)                             #
+# --------------------------------------------------------------------------- #
+
+
+class TestPertinenciaDocumental:
+    """Triar un paper i confirmar que es el paper adequat son dues afirmacions.
+
+    L'auditoria va assignar un titol universitari per acreditar una xifra anual
+    de negoci. El dossier va dir «Cobert», la readiness va passar a «a punt» i
+    el paquet es va congelar sense una sola friccio.
+
+    La categoria es un **filtre, no una prova**: que un document sigui de la
+    categoria correcta no vol dir que sigui EL document que el plec demana. La
+    cobertura exigeix o be un enllaç amb l'evidencia que el compliment va citar,
+    o be que una persona ho confirmi amb el seu nom i el seu motiu.
+    """
+
+    def test_una_categoria_incompatible_no_cobreix_res(self):
+        """El cas exacte: un titol universitari per acreditar facturacio."""
+        state = relevance_of(
+            RelevanceInput(
+                requirement_category=RequirementCategory.ECONOMIC_SOLVENCY,
+                document_category=DocumentCategory.CV,
+            )
+        )
+
+        assert state == RelevanceState.INCOMPATIBLE
+        assert state not in ESTABLISHED
+
+    def test_la_categoria_correcta_tota_sola_tampoc_basta(self):
+        """Hi ha cinc certificats a la biblioteca i el plec en demana un."""
+        state = relevance_of(
+            RelevanceInput(
+                requirement_category=RequirementCategory.CERTIFICATION,
+                document_category=DocumentCategory.CERTIFICATION,
+            )
+        )
+
+        assert state == RelevanceState.UNPROVEN
+        assert state not in ESTABLISHED
+
+    def test_lenllac_amb_levidencia_del_compliment_si_que_acredita(self):
+        """El document penja de la mateixa entitat que el motor va citar."""
+        state = relevance_of(
+            RelevanceInput(
+                requirement_category=RequirementCategory.INSURANCE,
+                document_category=DocumentCategory.INSURANCE,
+                linked_to_compliance_evidence=True,
+            )
+        )
+
+        assert state == RelevanceState.LINKED
+        assert state in ESTABLISHED
+
+    def test_una_confirmacio_humana_mana_sobre_qualsevol_filtre(self):
+        """Pot haver-hi una rao legitima que el sistema no coneix."""
+        state = relevance_of(
+            RelevanceInput(
+                requirement_category=RequirementCategory.ECONOMIC_SOLVENCY,
+                document_category=DocumentCategory.CV,
+                human_confirmed=True,
+            )
+        )
+
+        assert state == RelevanceState.CONFIRMED
+        assert state in ESTABLISHED
+
+    def test_una_familia_de_requisit_que_no_sabem_que_acredita_demana_revisio(self):
+        """El que no es a la taula no queda "permes per defecte"."""
+        state = relevance_of(
+            RelevanceInput(
+                requirement_category=RequirementCategory.CONTRACT_CONDITION,
+                document_category=DocumentCategory.LEGAL,
+            )
+        )
+
+        assert state == RelevanceState.UNKNOWN_CATEGORY
+
+    def test_un_document_triat_sense_pertinença_deixa_el_requisit_en_revisio(self):
+        """La regla, aplicada a la cobertura: es el que va fallar a l'auditoria."""
+        assert coverage_for_requirement(
+            [piece(EvidenceItemStatus.SELECTED, relevance=RelevanceState.UNPROVEN)]
+        ) == DossierCoverage.NEEDS_REVIEW
+
+    def test_un_requisit_que_demana_tres_documents_no_es_cobreix_amb_un(self):
+        """§: tenir-ne un de la categoria correcta no cobreix una exigencia de tres."""
+        assert coverage_for_requirement(
+            [
+                piece(
+                    EvidenceItemStatus.SELECTED,
+                    relevance=RelevanceState.LINKED,
+                    required_pieces=3,
+                )
+            ]
+        ) == DossierCoverage.NEEDS_REVIEW
+
+    def test_amb_els_tres_documents_si_que_queda_cobert(self):
+        pieces = [
+            piece(
+                EvidenceItemStatus.SELECTED,
+                relevance=RelevanceState.LINKED,
+                required_pieces=3,
+            )
+            for _ in range(3)
+        ]
+
+        assert coverage_for_requirement(pieces) == DossierCoverage.COVERED
+
+    def test_quants_documents_demana_el_requisit_es_llegeix_del_valor(self):
+        assert required_document_count({"minimum_projects": 3}) == 3
+        assert required_document_count({"count": 2}) == 2
+        # Sense xifra explicita no s'inventa: un.
+        assert required_document_count({"amount": 250000}) == 1
+        assert required_document_count(None) == 1
+
+
+class TestPertinenciaContraLaBaseDeDades:
+    """El mateix, pero pel cami real: dossier, confirmacio i readiness."""
+
+    async def test_un_document_incompatible_no_dona_cobertura(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        """Titol universitari (CV) per acreditar solvencia economica."""
+        user, company = tenant_a
+        requirement = await add_requirement(
+            db,
+            extraction_run,
+            tender,
+            category=RequirementCategory.ECONOMIC_SOLVENCY,
+            value={"amount": 250000, "currency": "EUR"},
+            title="Volum de negoci",
+        )
+        document = await add_document(
+            db, company.id, name="Titol universitari.pdf", category=DocumentCategory.CV
+        )
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        item = WorkspaceEvidenceItem(
+            company_id=company.id,
+            workspace_id=workspace.id,
+            requirement_id=requirement.id,
+            label="Volum de negoci",
+            status=EvidenceItemStatus.MISSING,
+            source=EvidenceItemSource.MANUAL,
+        )
+        db.add(item)
+        await db.commit()
+
+        await service.update_item(
+            db,
+            workspace,
+            item,
+            document_id=document.id,
+            status=EvidenceItemStatus.SELECTED,
+            user=user,
+        )
+        dossier = await service.load_dossier(db, workspace)
+
+        assert dossier.coverage_by_requirement[requirement.id] == (
+            DossierCoverage.NEEDS_REVIEW
+        )
+        row = next(r for r in dossier.rows if r.item.id == item.id)
+        assert row.relevance == RelevanceState.INCOMPATIBLE
+
+    async def test_una_confirmacio_humana_el_cobreix_i_deixa_rastre(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        user, company = tenant_a
+        requirement = await add_requirement(
+            db,
+            extraction_run,
+            tender,
+            category=RequirementCategory.ECONOMIC_SOLVENCY,
+            value={"amount": 250000, "currency": "EUR"},
+            title="Volum de negoci",
+        )
+        document = await add_document(
+            db, company.id, name="Comptes 2025.pdf", category=DocumentCategory.FINANCIAL
+        )
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        item = WorkspaceEvidenceItem(
+            company_id=company.id,
+            workspace_id=workspace.id,
+            requirement_id=requirement.id,
+            label="Volum de negoci",
+            status=EvidenceItemStatus.MISSING,
+            source=EvidenceItemSource.MANUAL,
+        )
+        db.add(item)
+        await db.commit()
+        await service.update_item(
+            db,
+            workspace,
+            item,
+            document_id=document.id,
+            status=EvidenceItemStatus.SELECTED,
+            user=user,
+        )
+
+        # Categoria compatible, pero res no lliga aquest document amb el requisit.
+        dossier = await service.load_dossier(db, workspace)
+        assert dossier.coverage_by_requirement[requirement.id] == (
+            DossierCoverage.NEEDS_REVIEW
+        )
+
+        await service.confirm_relevance(
+            db, workspace, item, note="Son els comptes de l'exercici que acredita.", user=user
+        )
+        dossier = await service.load_dossier(db, workspace)
+
+        assert dossier.coverage_by_requirement[requirement.id] == DossierCoverage.COVERED
+        row = next(r for r in dossier.rows if r.item.id == item.id)
+        assert row.relevance == RelevanceState.CONFIRMED
+        assert row.item.relevance_confirmed_by == user.id
+        assert row.item.relevance_note
+
+    async def test_una_confirmacio_exigeix_motiu(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        user, company = tenant_a
+        requirement = await add_requirement(db, extraction_run, tender)
+        document = await add_document(db, company.id)
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        item = WorkspaceEvidenceItem(
+            company_id=company.id,
+            workspace_id=workspace.id,
+            requirement_id=requirement.id,
+            label="Requisit",
+            status=EvidenceItemStatus.MISSING,
+            source=EvidenceItemSource.MANUAL,
+            document_id=document.id,
+        )
+        db.add(item)
+        await db.commit()
+
+        with pytest.raises(ValidationError):
+            await service.confirm_relevance(db, workspace, item, note="   ", user=user)
+
+    async def test_canviar_el_document_no_hereta_la_confirmacio(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        """Confirmar que un paper era el bo no diu res del paper seguent."""
+        user, company = tenant_a
+        requirement = await add_requirement(
+            db,
+            extraction_run,
+            tender,
+            category=RequirementCategory.CERTIFICATION,
+            value={"name": "ISO 14001"},
+            title="ISO 14001",
+        )
+        first = await add_document(db, company.id, name="ISO 14001.pdf")
+        second = await add_document(db, company.id, name="Un altre certificat.pdf")
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        item = WorkspaceEvidenceItem(
+            company_id=company.id,
+            workspace_id=workspace.id,
+            requirement_id=requirement.id,
+            label="ISO 14001",
+            status=EvidenceItemStatus.MISSING,
+            source=EvidenceItemSource.MANUAL,
+        )
+        db.add(item)
+        await db.commit()
+        await service.update_item(
+            db,
+            workspace,
+            item,
+            document_id=first.id,
+            status=EvidenceItemStatus.SELECTED,
+            user=user,
+        )
+        await service.confirm_relevance(
+            db, workspace, item, note="Es el certificat que demana el plec.", user=user
+        )
+        assert (await service.load_dossier(db, workspace)).coverage_by_requirement[
+            requirement.id
+        ] == DossierCoverage.COVERED
+
+        await service.update_item(db, workspace, item, document_id=second.id, user=user)
+        dossier = await service.load_dossier(db, workspace)
+
+        assert dossier.coverage_by_requirement[requirement.id] == (
+            DossierCoverage.NEEDS_REVIEW
+        )
+        await db.refresh(item)
+        assert item.relevance_confirmed_at is None
+
+    async def test_un_requisit_sense_pertinença_bloqueja_la_readiness(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        """Si afecta una evidencia obligatoria, la readiness ho ha de respectar."""
+        user, company = tenant_a
+        requirement = await add_requirement(
+            db,
+            extraction_run,
+            tender,
+            category=RequirementCategory.ECONOMIC_SOLVENCY,
+            value={"amount": 250000, "currency": "EUR"},
+            title="Volum de negoci",
+        )
+        document = await add_document(
+            db, company.id, name="Titol universitari.pdf", category=DocumentCategory.CV
+        )
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        await approve(db, workspace, user)
+        item = WorkspaceEvidenceItem(
+            company_id=company.id,
+            workspace_id=workspace.id,
+            requirement_id=requirement.id,
+            label="Volum de negoci",
+            status=EvidenceItemStatus.MISSING,
+            source=EvidenceItemSource.MANUAL,
+        )
+        db.add(item)
+        await db.commit()
+        await service.update_item(
+            db,
+            workspace,
+            item,
+            document_id=document.id,
+            status=EvidenceItemStatus.SELECTED,
+            user=user,
+        )
+
+        readiness = await service.evaluate_workspace_readiness(db, workspace)
+
+        assert readiness.is_ready is False
+
+
+# --------------------------------------------------------------------------- #
+# Reconciliar amb una analisi nova                                              #
+# --------------------------------------------------------------------------- #
+
+
+async def reanalyse(db, tender, previous):
+    """Una reanalisi legitima: neix un run nou i el d'abans deixa de ser vigent.
+
+    Passa quan l'organ publica una versio nova del plec, quan millora
+    l'extractor, quan algu corregeix un requisit o quan simplement es torna a
+    executar. Cada vegada neixen `Requirement` amb identificadors nous.
+    """
+    previous.is_current = False
+    run = RequirementExtractionRun(
+        tender_id=tender.id,
+        status=AnalysisRunStatus.COMPLETED,
+        input_fingerprint=uuid.uuid4().hex * 2,
+        extractor_version="tender-requirements-v1",
+        prompt_version="requirements-v1",
+        schema_version="requirements-schema-v1",
+        provider="anthropic",
+        model="claude-sonnet-5",
+        is_current=True,
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+class TestLlinatgeDeRequisits:
+    """La decisio, sense base de dades pel mig.
+
+    L'empremta que fa de clau es la mateixa que lliga una confirmacio humana de
+    pertinença: si coincideix, el requisit demana el mateix i el que algu va
+    afirmar segueix sent cert; si no, ha canviat materialment i no s'hereta res.
+    """
+
+    def test_el_mateix_requisit_despres_dun_rerun_es_mou_amb_la_feina(self):
+        vell, nou = uuid.uuid4(), uuid.uuid4()
+        plan = plan_migration(
+            [
+                ItemFacts(
+                    id=uuid.uuid4(),
+                    requirement_id=vell,
+                    fingerprint="f1",
+                    on_current_run=False,
+                    weight=human_weight(selected=True),
+                )
+            ],
+            {"f1": nou},
+        )
+
+        assert [entry.requirement_id for entry in plan.rebind] == [nou]
+        assert plan.supersede == ()
+
+    def test_un_requisit_materialment_modificat_no_hereta_res(self):
+        """Empremta diferent, exigencia diferent: la firma d'abans no hi val."""
+        item = ItemFacts(
+            id=uuid.uuid4(),
+            requirement_id=uuid.uuid4(),
+            fingerprint="abans",
+            on_current_run=False,
+            weight=human_weight(relevance_confirmed=True),
+        )
+
+        plan = plan_migration([item], {"despres": uuid.uuid4()})
+
+        assert plan.rebind == ()
+        assert plan.supersede == (item.id,)
+
+    def test_un_requisit_eliminat_deixa_de_comptar(self):
+        item = ItemFacts(
+            id=uuid.uuid4(),
+            requirement_id=uuid.uuid4(),
+            fingerprint="f1",
+            on_current_run=False,
+            weight=human_weight(selected=True),
+        )
+
+        plan = plan_migration([item], {})
+
+        assert plan.supersede == (item.id,)
+        assert plan.rebind == ()
+
+    def test_una_proposta_que_ningu_no_ha_tocat_i_esta_duplicada_sesborra(self):
+        """No hi ha cap afirmacio humana a dins: conservar-la nomes fa soroll."""
+        document = uuid.uuid4()
+        nou = uuid.uuid4()
+        vell_id, nou_id = uuid.uuid4(), uuid.uuid4()
+        plan = plan_migration(
+            [
+                ItemFacts(
+                    id=vell_id,
+                    requirement_id=uuid.uuid4(),
+                    fingerprint="f1",
+                    on_current_run=False,
+                    weight=0,
+                    document_id=document,
+                ),
+                ItemFacts(
+                    id=nou_id,
+                    requirement_id=nou,
+                    fingerprint="f1",
+                    on_current_run=True,
+                    weight=0,
+                    document_id=document,
+                ),
+            ],
+            {"f1": nou},
+        )
+
+        assert plan.drop == (vell_id,)
+        assert plan.rebind == ()
+
+    def test_dues_peces_amb_feina_humana_no_es_trepitgen(self):
+        """El lloc del requisit nou ja esta ocupat: la vella es queda d'historia.
+
+        Sense aixo, moure-la-hi violaria la unicitat (requisit, document) i el
+        que es perdria seria precisament la feina que s'intentava salvar.
+        """
+        document = uuid.uuid4()
+        nou = uuid.uuid4()
+        vell_id = uuid.uuid4()
+        plan = plan_migration(
+            [
+                ItemFacts(
+                    id=vell_id,
+                    requirement_id=uuid.uuid4(),
+                    fingerprint="f1",
+                    on_current_run=False,
+                    weight=human_weight(selected=True),
+                    document_id=document,
+                ),
+                ItemFacts(
+                    id=uuid.uuid4(),
+                    requirement_id=nou,
+                    fingerprint="f1",
+                    on_current_run=True,
+                    weight=human_weight(relevance_confirmed=True),
+                    document_id=document,
+                ),
+            ],
+            {"f1": nou},
+        )
+
+        assert plan.supersede == (vell_id,)
+        assert plan.rebind == ()
+
+    def test_es_salva_primer_el_que_mes_feina_humana_porta(self):
+        """Nomes hi cap un marcador de forat per requisit: hi va el millor."""
+        nou = uuid.uuid4()
+        confirmat, tocat = uuid.uuid4(), uuid.uuid4()
+        plan = plan_migration(
+            [
+                ItemFacts(
+                    id=tocat,
+                    requirement_id=uuid.uuid4(),
+                    fingerprint="f1",
+                    on_current_run=False,
+                    weight=human_weight(touched=True),
+                ),
+                ItemFacts(
+                    id=confirmat,
+                    requirement_id=uuid.uuid4(),
+                    fingerprint="f1",
+                    on_current_run=False,
+                    weight=human_weight(relevance_confirmed=True),
+                ),
+            ],
+            {"f1": nou},
+        )
+
+        assert [entry.item_id for entry in plan.rebind] == [confirmat]
+        assert plan.supersede == (tocat,)
+
+    def test_una_peca_solta_no_es_reconcilia(self):
+        """No penja de cap requisit: cap analisi la pot deixar obsoleta."""
+        plan = plan_migration(
+            [
+                ItemFacts(
+                    id=uuid.uuid4(),
+                    requirement_id=None,
+                    fingerprint=None,
+                    on_current_run=False,
+                    weight=human_weight(manual=True),
+                )
+            ],
+            {"f1": uuid.uuid4()},
+        )
+
+        assert plan.is_empty
+
+
+class TestReconciliacioContraLaBaseDeDades:
+    """El cami real: reanalitzar, reconciliar, i mirar que ha quedat viu.
+
+    Es el cas que va apareixer a l'E2E: la checklist es va quedar sencera
+    penjada d'una extraccio superada mentre el workspace ja es declarava
+    reconciliat, i la readiness comptava aquell soroll.
+    """
+
+    async def test_despres_de_reconciliar_cap_item_actiu_penja_dun_run_superat(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        user, company = tenant_a
+        await add_requirement(
+            db, extraction_run, tender, value={"name": "ISO 14001"}, title="ISO 14001"
+        )
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        await workspace_service.generate_checklist(db, workspace, user_id=user.id)
+        await db.commit()
+
+        nou = await reanalyse(db, tender, extraction_run)
+        await add_requirement(
+            db, nou, tender, value={"name": "ISO 14001"}, title="ISO 14001"
+        )
+
+        await service.reconcile_with_current_analysis(db, workspace, user_id=user.id)
+
+        actius = await service.active_checklist_items(db, workspace)
+        vius = await service.live_requirement_ids(db, tender.id)
+        assert actius
+        assert all(item.requirement_id in vius for item in actius)
+
+    async def test_el_workspace_deixa_de_dir_que_esta_endarrerit(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        user, company = tenant_a
+        await add_requirement(db, extraction_run, tender)
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        nou = await reanalyse(db, tender, extraction_run)
+        await add_requirement(db, nou, tender)
+
+        await service.reconcile_with_current_analysis(db, workspace, user_id=user.id)
+
+        assert workspace.current_requirement_run_id == nou.id
+
+    async def test_un_rerun_equivalent_conserva_document_tria_i_confirmacio(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        """Mateixa exigencia, identificador nou: la feina humana hi ha de ser."""
+        user, company = tenant_a
+        requirement = await add_requirement(
+            db,
+            extraction_run,
+            tender,
+            category=RequirementCategory.ECONOMIC_SOLVENCY,
+            value={"amount": 250000, "currency": "EUR"},
+            title="Volum de negoci",
+        )
+        document = await add_document(
+            db, company.id, name="Comptes 2025.pdf", category=DocumentCategory.FINANCIAL
+        )
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        item = WorkspaceEvidenceItem(
+            company_id=company.id,
+            workspace_id=workspace.id,
+            requirement_id=requirement.id,
+            label="Volum de negoci",
+            status=EvidenceItemStatus.MISSING,
+            source=EvidenceItemSource.MANUAL,
+        )
+        db.add(item)
+        await db.commit()
+        await service.update_item(
+            db,
+            workspace,
+            item,
+            document_id=document.id,
+            status=EvidenceItemStatus.SELECTED,
+            user=user,
+        )
+        await service.confirm_relevance(
+            db, workspace, item, note="Son els comptes de l'exercici.", user=user
+        )
+
+        nou = await reanalyse(db, tender, extraction_run)
+        equivalent = await add_requirement(
+            db,
+            nou,
+            tender,
+            category=RequirementCategory.ECONOMIC_SOLVENCY,
+            value={"amount": 250000, "currency": "EUR"},
+            title="Volum de negoci",
+        )
+
+        outcome = await service.reconcile_with_current_analysis(
+            db, workspace, user_id=user.id
+        )
+        await db.refresh(item)
+        dossier = await service.load_dossier(db, workspace)
+
+        assert outcome.carried >= 1
+        assert item.requirement_id == equivalent.id
+        assert item.document_id == document.id
+        assert item.relevance_confirmed_by == user.id
+        assert item.relevance_note
+        row = next(r for r in dossier.rows if r.item.id == item.id)
+        assert row.relevance == RelevanceState.CONFIRMED
+        assert dossier.coverage_by_requirement[equivalent.id] == DossierCoverage.COVERED
+
+    async def test_si_el_plec_canvia_el_que_demana_la_confirmacio_no_viatja(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        """250.000 EUR i 400.000 EUR no son la mateixa exigencia."""
+        user, company = tenant_a
+        requirement = await add_requirement(
+            db,
+            extraction_run,
+            tender,
+            category=RequirementCategory.ECONOMIC_SOLVENCY,
+            value={"amount": 250000, "currency": "EUR"},
+            title="Volum de negoci",
+        )
+        document = await add_document(
+            db, company.id, name="Comptes 2025.pdf", category=DocumentCategory.FINANCIAL
+        )
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        item = WorkspaceEvidenceItem(
+            company_id=company.id,
+            workspace_id=workspace.id,
+            requirement_id=requirement.id,
+            label="Volum de negoci",
+            status=EvidenceItemStatus.MISSING,
+            source=EvidenceItemSource.MANUAL,
+        )
+        db.add(item)
+        await db.commit()
+        await service.update_item(
+            db,
+            workspace,
+            item,
+            document_id=document.id,
+            status=EvidenceItemStatus.SELECTED,
+            user=user,
+        )
+        await service.confirm_relevance(
+            db, workspace, item, note="Son els comptes de l'exercici.", user=user
+        )
+
+        nou = await reanalyse(db, tender, extraction_run)
+        exigent = await add_requirement(
+            db,
+            nou,
+            tender,
+            category=RequirementCategory.ECONOMIC_SOLVENCY,
+            value={"amount": 400000, "currency": "EUR"},
+            title="Volum de negoci",
+        )
+
+        await service.reconcile_with_current_analysis(db, workspace, user_id=user.id)
+        dossier = await service.load_dossier(db, workspace)
+
+        # L'item d'abans es historia i no cobreix res.
+        assert any(r.item.id == item.id for r in dossier.superseded)
+        assert all(r.item.id != item.id for r in dossier.rows)
+        assert dossier.coverage_by_requirement.get(exigent.id) != DossierCoverage.COVERED
+
+    async def test_un_requisit_nou_apareix(self, db, tenant_a, tender, extraction_run):
+        user, company = tenant_a
+        await add_requirement(db, extraction_run, tender, title="ISO 14001")
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        await workspace_service.generate_checklist(db, workspace, user_id=user.id)
+        await db.commit()
+
+        nou = await reanalyse(db, tender, extraction_run)
+        await add_requirement(db, nou, tender, title="ISO 14001")
+        await add_requirement(db, nou, tender, title="ISO 45001")
+
+        await service.reconcile_with_current_analysis(db, workspace, user_id=user.id)
+        titles = {
+            item.title for item in await service.active_checklist_items(db, workspace)
+        }
+
+        assert any("ISO 45001" in title for title in titles)
+
+    async def test_un_requisit_eliminat_deixa_de_bloquejar_la_readiness(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        """El plec ja no ho demana: seguir comptant-ho seria preparar-se per a res."""
+        user, company = tenant_a
+        await add_requirement(
+            db,
+            extraction_run,
+            tender,
+            category=RequirementCategory.ECONOMIC_SOLVENCY,
+            value={"amount": 250000, "currency": "EUR"},
+            title="Volum de negoci",
+        )
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        await workspace_service.generate_checklist(db, workspace, user_id=user.id)
+        await db.commit()
+        items = await service.active_checklist_items(db, workspace)
+        items[0].status = ChecklistItemStatus.BLOCKED
+        await db.commit()
+
+        abans = await service.evaluate_workspace_readiness(db, workspace)
+        assert "mandatory_checklist_blocked" in abans.blockers
+
+        nou = await reanalyse(db, tender, extraction_run)
+        await add_requirement(db, nou, tender, title="Una altra cosa")
+        await service.reconcile_with_current_analysis(db, workspace, user_id=user.id)
+        despres = await service.evaluate_workspace_readiness(db, workspace)
+
+        assert "mandatory_checklist_blocked" not in despres.blockers
+
+    async def test_els_titols_els_torna_a_derivar_el_requisit_vigent(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        """El cas de l'E2E: el titol es va quedar congelat a la versio antiga.
+
+        Es el mateix sublimit, pero la primera extraccio no en deia el tipus i
+        la segona si. La checklist ha de dir el que diu el plec d'ara.
+        """
+        user, company = tenant_a
+        await add_requirement(
+            db,
+            extraction_run,
+            tender,
+            category=RequirementCategory.INSURANCE,
+            value={"coverage_amount": 600000, "currency": "EUR"},
+            title="Responsabilitat civil",
+        )
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        await workspace_service.generate_checklist(db, workspace, user_id=user.id)
+        await db.commit()
+        assert all(
+            "limit total" not in item.title
+            for item in await service.active_checklist_items(db, workspace)
+        )
+
+        nou = await reanalyse(db, tender, extraction_run)
+        await add_requirement(
+            db,
+            nou,
+            tender,
+            category=RequirementCategory.INSURANCE,
+            value={"coverage_amount": 600000, "currency": "EUR", "limit_kind": "total"},
+            title="Responsabilitat civil",
+        )
+
+        await service.reconcile_with_current_analysis(db, workspace, user_id=user.id)
+        titles = {
+            item.title for item in await service.active_checklist_items(db, workspace)
+        }
+
+        assert any("limit total" in title for title in titles)
+
+    async def test_reconciliar_dues_vegades_no_canvia_res_mes(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        """Idempotent: la segona passada no ha de trobar feina."""
+        user, company = tenant_a
+        await add_requirement(db, extraction_run, tender)
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        nou = await reanalyse(db, tender, extraction_run)
+        await add_requirement(db, nou, tender)
+
+        await service.reconcile_with_current_analysis(db, workspace, user_id=user.id)
+        segona = await service.reconcile_with_current_analysis(
+            db, workspace, user_id=user.id
+        )
+
+        # `historic` no hi surt a proposit: es un estat derivat, no una cosa que
+        # aquesta crida hagi fet. Reconciliar dues vegades el compta igual.
+        assert segona.carried == 0
+        assert segona.discarded == 0
+        assert segona.created_checklist == 0
+        assert segona.created_evidence == 0
+
+    async def test_moltes_reanalisis_seguides_no_acumulen_soroll(
+        self, db, tenant_a, tender, extraction_run
+    ):
+        """El cas exacte que vaig reproduir a l'E2E, amb sis reanalisis."""
+        user, company = tenant_a
+        await add_requirement(db, extraction_run, tender, title="ISO 14001")
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        await workspace_service.generate_checklist(db, workspace, user_id=user.id)
+        await db.commit()
+
+        run = extraction_run
+        for _ in range(6):
+            run = await reanalyse(db, tender, run)
+            await add_requirement(db, run, tender, title="ISO 14001")
+            await service.reconcile_with_current_analysis(db, workspace, user_id=user.id)
+
+        actius = await service.active_checklist_items(db, workspace)
+        vius = await service.live_requirement_ids(db, tender.id)
+
+        assert len(actius) == 1
+        assert actius[0].requirement_id in vius
+
+
+# --------------------------------------------------------------------------- #
+# Defensa en profunditat: els tests no poden tocar files d'un altre workspace  #
+# --------------------------------------------------------------------------- #
+
+
+async def test_the_test_helpers_never_touch_another_workspace(db, certified, tenant_b, tender):
+    """Una peca aliena, creada abans que les nostres, ha de sortir intacta.
+
+    El 10/09/2026 uns tests que agafaven `select(WorkspaceEvidenceItem)` sense
+    filtre van modificar sis peces d'un workspace real que compartia base de
+    dades. El harness ja aïlla cada test, pero dins del mateix schema tambe hi
+    pot haver files que no son del test: aquesta es la primera que retornaria
+    una consulta sense filtre, i el flux sencer no la pot tocar.
+    """
+    other_user, other_company = tenant_b
+    other = (
+        await workspace_service.create_workspace(
+            db, company_id=other_company.id, tender=tender, user_id=other_user.id
+        )
+    ).workspace
+    foreign = WorkspaceEvidenceItem(
+        company_id=other_company.id,
+        workspace_id=other.id,
+        label="Peca d'una altra empresa",
+        status=EvidenceItemStatus.SUGGESTED,
+        source=EvidenceItemSource.MANUAL,
+    )
+    db.add(foreign)
+    await db.commit()
+    table = WorkspaceEvidenceItem.__table__
+    snapshot = sa.select(table).where(table.c.id == foreign.id)
+    before = (await db.execute(snapshot)).one()
+
+    item = await make_ready(db, certified)
+    await service.update_item(
+        db, certified["workspace"], item, status=EvidenceItemStatus.NEEDS_REVIEW,
+        user=certified["user"],
+    )
+
+    assert item.workspace_id == certified["workspace"].id
+    assert (await db.execute(snapshot)).one() == before, "la peca aliena no s'ha tocat"
+
+
+class TestReconciliacioPerLAPI:
+    """El cami complet tal com el fa la interficie: reanalisi, reconciliacio i lectura.
+
+    Els tests de `TestReconciliacioContraLaBaseDeDades` comproven la decisio
+    contra la base de dades. Aquest la comprova per HTTP, que es on va apareixer
+    el problema: una checklist que continuava penjada d'una extraccio superada
+    mentre el workspace ja es declarava reconciliat.
+    """
+
+    async def test_reanalitzar_reconciliar_i_llegir(
+        self, db, client_a, tenant_a, tender, extraction_run
+    ):
+        user, company = tenant_a
+        estable = await add_requirement(
+            db, extraction_run, tender, title="Certificat ISO 14001 vigent",
+            value={"name": "ISO 14001"}, category=RequirementCategory.CERTIFICATION,
+        )
+        canviara = await add_requirement(
+            db, extraction_run, tender, title="Polissa de responsabilitat civil",
+            value={"amount": 150000, "currency": "EUR"},
+            category=RequirementCategory.INSURANCE,
+        )
+        desapareixera = await add_requirement(
+            db, extraction_run, tender, title="Memoria tecnica signada",
+            value={"name": "Memoria"}, category=RequirementCategory.TECHNICAL_REQUIREMENT,
+        )
+        iso = await add_document(
+            db, company.id, name="ISO 14001.pdf", category=DocumentCategory.CERTIFICATION
+        )
+        polissa = await add_document(
+            db, company.id, name="Polissa RC.pdf", category=DocumentCategory.INSURANCE
+        )
+        workspace = await open_workspace(db, company.id, tender, user.id)
+        base = f"/api/v1/companies/{company.id}/workspaces/{workspace.id}"
+
+        async def dossier_items() -> dict[str, dict]:
+            body = (await client_a.get(f"{base}/dossier")).json()
+            return {i["requirement_id"]: i for g in body["groups"] for i in g["items"]}
+
+        # 1. La feina de partida: checklist, dossier, tria i confirmacio humana.
+        # La checklist ja neix amb el workspace: reconciliar-la no hi afegeix res.
+        primera = await client_a.post(f"{base}/checklist/regenerate")
+        assert primera.status_code == 200
+        assert primera.json()["total"] == 3
+        # Sense compliment previ, `sync` no proposa res: les peces s'afegeixen a ma,
+        # que es el que fa qui prepara la candidatura.
+        assert (await client_a.post(f"{base}/dossier/sync")).status_code == 200
+        for requirement in (estable, canviara, desapareixera):
+            afegit = await client_a.post(
+                f"{base}/dossier", json={"requirement_id": str(requirement.id)}
+            )
+            assert afegit.status_code == 200, afegit.text
+
+        items = await dossier_items()
+        assert set(items) == {str(estable.id), str(canviara.id), str(desapareixera.id)}
+        for requirement, document in ((estable, iso), (canviara, polissa)):
+            item_id = items[str(requirement.id)]["id"]
+            tria = await client_a.patch(
+                f"{base}/dossier/{item_id}",
+                json={"document_id": str(document.id), "status": "selected"},
+            )
+            assert tria.status_code == 200, tria.text
+            confirmada = await client_a.post(
+                f"{base}/dossier/{item_id}/relevance",
+                json={"note": "Comprovat contra el plec."},
+            )
+            assert confirmada.status_code == 200, confirmada.text
+
+        # 2. Una reanalisi legitima: mateixa exigencia, una de modificada, una que
+        #    desapareix i una de nova.
+        nou_run = await reanalyse(db, tender, extraction_run)
+        estable_nou = await add_requirement(
+            db, nou_run, tender, title="Certificat ISO 14001 vigent",
+            value={"name": "ISO 14001"}, category=RequirementCategory.CERTIFICATION,
+        )
+        canviat = await add_requirement(
+            db, nou_run, tender, title="Polissa de responsabilitat civil",
+            value={"amount": 600000, "currency": "EUR"},
+            category=RequirementCategory.INSURANCE,
+        )
+        afegit = await add_requirement(
+            db, nou_run, tender, title="Certificat digital de representant",
+            value={"name": "Certificat digital"}, category=RequirementCategory.CERTIFICATION,
+        )
+
+        # 3. Reconciliar des de la interficie.
+        resultat = await client_a.post(f"{base}/checklist/regenerate")
+        assert resultat.status_code == 200
+        cos = resultat.json()
+        assert cos["carried"] >= 1 and cos["historic"] >= 1
+
+        actius = await dossier_items()
+        vius = {str(r) for r in await service.live_requirement_ids(db, tender.id)}
+
+        # (5) cap item actiu penja d'un run superat
+        assert set(actius) <= vius
+        assert str(estable.id) not in actius and str(canviara.id) not in actius
+
+        # (1) rerun equivalent: es conserva el que era segur conservar
+        conservat = actius[str(estable_nou.id)]
+        assert conservat["document"]["id"] == str(iso.id)
+        assert conservat["status"] == "selected"
+        assert conservat["relevance_confirmed_at"] is not None
+        assert conservat["relevance_note"] == "Comprovat contra el plec."
+
+        # (2) materialment modificat: la peca d'abans es historia i la nova neix
+        #     sense cap confirmacio. Ningu no hereta una firma a cegues.
+        assert str(canviat.id) not in actius, "no s'arrossega la peca del requisit vell"
+        nova = await client_a.post(
+            f"{base}/dossier", json={"requirement_id": str(canviat.id)}
+        )
+        assert nova.status_code == 200
+        refet = (await dossier_items())[str(canviat.id)]
+        assert refet["relevance_confirmed_at"] is None
+        assert refet["document"] is None
+        assert refet["coverage"] != "covered"
+
+        # (3) eliminat: ja no compta enlloc
+        assert str(desapareixera.id) not in actius
+        assert str(desapareixera.id) not in await dossier_items()
+
+        # (4) el requisit nou apareix a la feina pendent
+        detall = (await client_a.get(base)).json()
+        checklist = {i["requirement_id"]: i for i in detall["checklist"]}
+        assert set(checklist) == vius, "la checklist activa es exactament l'analisi vigent"
+        assert str(afegit.id) in checklist
+        # (6) els titols visibles els deriva el requisit VIGENT, no el que hi havia
+        #     escrit: es comparen amb el que el producte generaria ara mateix.
+        current = {
+            str(r.id): checklist_title(r)
+            for r in (await service._current_requirements(db, workspace))[1]
+        }
+        for requirement_id, item in checklist.items():
+            assert item["title"] == current[requirement_id]
+
+        # (7) la readiness es recalcula: el que ja no es demana no bloqueja, i el
+        #     que ha canviat torna a demanar una mirada humana.
+        readiness = (await client_a.get(f"{base}/readiness")).json()
+        dossier = (await client_a.get(f"{base}/dossier")).json()
+        assert readiness["state"] == "incomplete"
+        # La cobertura parla de les peces vives: el requisit nou encara no en te.
+        assert dossier["coverage"]["mandatory_total"] == len(await dossier_items())
+        assert dossier["coverage"]["covered"] == 1, "nomes el que segueix confirmat"
+        assert dossier["superseded_count"] >= 1, "la feina d'abans es conserva com a historia"

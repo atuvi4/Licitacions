@@ -73,17 +73,49 @@ async def test_exercici_economic_unic_per_any(client_a, tenant_a):
     assert duplicate.status_code == 409
 
 
-async def test_preferencies_contractuals_es_creen_a_la_primera_lectura(client_a, tenant_a):
+async def test_consultar_les_preferencies_no_les_crea(client_a, tenant_a, engine, db):
+    """Un GET no escriu: sense fila, es retornen els defaults i prou.
+
+    Abans la primera lectura inseria la fila. Ara neix a la primera escriptura
+    explicita, i nomes una vegada.
+    """
+    import sqlalchemy as sa
+
+    from app.models.profile import CompanyContractPreferences
+    from tests.dml import DmlRecorder
+
     _, company = tenant_a
     url = f"/api/v1/companies/{company.id}/contract-preferences"
+    rows = sa.select(sa.func.count()).select_from(CompanyContractPreferences).where(
+        CompanyContractPreferences.company_id == company.id
+    )
 
-    first = await client_a.get(url)
-    assert first.status_code == 200
-    assert first.json()["currency"] == "EUR"
+    with DmlRecorder(engine) as dml:
+        for _ in range(3):
+            response = await client_a.get(url)
+            assert response.status_code == 200
+            body = response.json()
+            assert body["currency"] == "EUR"
+            # Sense identificador inventat: la fila no existeix.
+            assert body["id"] is None
+            assert body["created_at"] is None and body["updated_at"] is None
+    assert dml.statements == [], "cap GET pot escriure"
+    assert await db.scalar(rows) == 0
 
     saved = await client_a.put(url, json={"minimum_interesting_contract": "30000"})
     assert saved.status_code == 200
     assert saved.json()["minimum_interesting_contract"] == "30000.00"
+    assert saved.json()["id"] is not None
+    assert await db.scalar(rows) == 1
+
+    again = await client_a.put(url, json={"notes": "Nomes serveis."})
+    assert again.json()["id"] == saved.json()["id"], "no se'n crea una segona"
+    assert await db.scalar(rows) == 1
+
+    read = (await client_a.get(url)).json()
+    assert read["id"] == saved.json()["id"]
+    assert read["minimum_interesting_contract"] == "30000.00"
+    assert read["notes"] == "Nomes serveis."
 
 
 async def test_certificacio_calcula_estat_temporal(client_a, tenant_a):

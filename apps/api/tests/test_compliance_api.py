@@ -17,6 +17,7 @@ from decimal import Decimal
 import pytest
 import sqlalchemy as sa
 
+from app.core.errors import ValidationError
 from app.models.compliance import CompanyComplianceRun, CompanyRequirementAssessment
 from app.models.credentials import CompanyCertification
 from app.models.enums import (
@@ -42,6 +43,7 @@ from app.models.tenders import Tender
 from app.services.compliance_analysis import (
     NoRequirementsError,
     analyze_company_compliance,
+    review_assessment,
 )
 
 DEADLINE = datetime(2026, 10, 15, 14, 0, tzinfo=UTC)
@@ -85,6 +87,30 @@ async def extraction_run(db, tender):
     await db.commit()
     await db.refresh(run)
     return run
+
+
+
+@pytest.fixture
+async def assessed(db, tenant_a, tender, extraction_run):
+    """Un assessment que el motor NO ha pogut resoldre.
+
+    Es el cas que importa per a la revisio humana: el sistema diu "no ho puc
+    comprovar" i despres una persona ho confirma. La pantalla ha de saber
+    explicar aquesta seqüencia sense que sembli que ho ha decidit el motor.
+    """
+    company = await company_of(db, tenant_a)
+    await add_requirement(
+        db,
+        extraction_run,
+        tender,
+        category=RequirementCategory.TECHNICAL_REQUIREMENT,
+        value=None,
+        title="Memoria tecnica signada per tecnic competent",
+    )
+    await analyze_company_compliance(db, company, tender)
+    assessment = await db.scalar(sa.select(CompanyRequirementAssessment))
+    assert assessment.automatic_result == AssessmentResult.NEEDS_REVIEW
+    return assessment
 
 
 async def add_requirement(
@@ -152,7 +178,7 @@ async def test_a_met_threshold_produces_a_satisfying_assessment(
     run = outcome.run
     assert run.overall_result == EligibilityResult.ELIGIBLE
     assert run.satisfies_count == 1
-    assert run.rules_version == "company-compliance-v2"
+    assert run.rules_version == "company-compliance-v3"
 
     assessment = await db.scalar(sa.select(CompanyRequirementAssessment))
     assert assessment.requirement_id == requirement.id
@@ -597,7 +623,7 @@ async def test_the_api_returns_the_full_chain(client_a, db, tenant_a, tender, ex
     assert response.status_code == 200
     body = response.json()
 
-    assert body["run"]["rules_version"] == "company-compliance-v2"
+    assert body["run"]["rules_version"] == "company-compliance-v3"
     assert body["is_stale"] is False
 
     item = body["assessments"][0]
@@ -614,3 +640,126 @@ async def test_the_api_returns_the_full_chain(client_a, db, tenant_a, tender, ex
     assert item["requirement"]["page_number"] == 27
     assert item["requirement"]["extraction_revision"] == 1
     assert "450.000 euros" in item["requirement"]["quote"]
+
+
+# --------------------------------------------------------------------------- #
+# La revisio humana es una revisio humana (N2)                                  #
+# --------------------------------------------------------------------------- #
+
+
+class TestRevisioHumana:
+    """Que el sistema no pugui decidir i una persona ho confirmi es coherent.
+
+    El que no es coherent es ensenyar-ho com si ho hagues decidit el sistema: la
+    pantalla mostrava "✅ Compleix" al costat de l'explicacio automatica
+    "aquest requisit no es pot comprovar automaticament", que diu exactament el
+    contrari. El resultat del motor no s'esborra mai; el que cal es explicar la
+    seqüencia.
+    """
+
+    async def test_el_resultat_automatic_no_es_toca_mai(self, db, tenant_a, assessed):
+        user, _ = tenant_a
+        assessment = assessed
+
+        await review_assessment(
+            db,
+            assessment,
+            reviewed_result=AssessmentResult.SATISFIES,
+            review_status=ReviewStatus.VERIFIED,
+            note="Ho he comprovat al plec.",
+            user_id=user.id,
+        )
+
+        assert assessment.automatic_result == AssessmentResult.NEEDS_REVIEW
+        assert assessment.reviewed_result == AssessmentResult.SATISFIES
+        assert assessment.effective_result == AssessmentResult.SATISFIES
+
+    async def test_la_revisio_deixa_qui_quan_i_per_que(self, db, tenant_a, assessed):
+        user, _ = tenant_a
+
+        await review_assessment(
+            db,
+            assessed,
+            reviewed_result=AssessmentResult.SATISFIES,
+            review_status=ReviewStatus.VERIFIED,
+            note="La memoria tecnica ja esta signada.",
+            user_id=user.id,
+        )
+
+        assert assessed.reviewed_by == user.id
+        assert assessed.reviewed_at is not None
+        assert assessed.review_note == "La memoria tecnica ja esta signada."
+
+    async def test_canviar_el_veredicte_a_no_compleix_tambe_queda_registrat(
+        self, db, tenant_a, assessed
+    ):
+        """Una persona pot dir que no, i tambe ha de dir per que."""
+        user, _ = tenant_a
+
+        await review_assessment(
+            db,
+            assessed,
+            reviewed_result=AssessmentResult.DOES_NOT_SATISFY,
+            review_status=ReviewStatus.VERIFIED,
+            note="El certificat es d'una altra norma.",
+            user_id=user.id,
+        )
+
+        assert assessed.automatic_result == AssessmentResult.NEEDS_REVIEW
+        assert assessed.effective_result == AssessmentResult.DOES_NOT_SATISFY
+        assert assessed.review_note
+
+    async def test_contradir_el_sistema_exigeix_motiu(self, db, tenant_a, assessed):
+        """Dir "compleix" alla on el motor no ho podia dir es una afirmacio nova."""
+        user, _ = tenant_a
+
+        with pytest.raises(ValidationError):
+            await review_assessment(
+                db,
+                assessed,
+                reviewed_result=AssessmentResult.SATISFIES,
+                review_status=ReviewStatus.VERIFIED,
+                note=None,
+                user_id=user.id,
+            )
+
+    async def test_confirmar_el_que_ja_deia_el_sistema_no_exigeix_res(
+        self, db, tenant_a, assessed
+    ):
+        """Aqui la persona no contradiu res: nomes hi posa la seva firma."""
+        user, _ = tenant_a
+
+        await review_assessment(
+            db,
+            assessed,
+            reviewed_result=AssessmentResult.NEEDS_REVIEW,
+            review_status=ReviewStatus.VERIFIED,
+            note=None,
+            user_id=user.id,
+        )
+
+        assert assessed.review_status == ReviewStatus.VERIFIED
+
+    async def test_lapi_torna_qui_ho_va_revisar(self, client_a, db, tenant_a, assessed):
+        """Un veredicte huma sense nom no es un veredicte huma."""
+        user, company = tenant_a
+        await review_assessment(
+            db,
+            assessed,
+            reviewed_result=AssessmentResult.SATISFIES,
+            review_status=ReviewStatus.VERIFIED,
+            note="Revisat amb el plec al davant.",
+            user_id=user.id,
+        )
+
+        response = await client_a.get(
+            f"/api/v1/companies/{company.id}/assessments/{assessed.id}"
+        )
+
+        body = response.json()
+        assert response.status_code == 200
+        assert body["reviewed_by_name"]
+        assert body["review_note"] == "Revisat amb el plec al davant."
+        # I l'explicacio automatica segueix disponible, sense sobreescriure.
+        assert body["automatic_result"] == "needs_review"
+        assert body["explanation_code"]

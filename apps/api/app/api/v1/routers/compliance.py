@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import CompanyCtx, SessionDep
 from app.core.errors import NotFoundError
 from app.models.compliance import CompanyComplianceRun, CompanyRequirementAssessment
-from app.models.identity import Company
+from app.models.identity import Company, User
 from app.models.requirements import Requirement, RequirementEvidence
 from app.models.tender_documents import TenderDocumentExtraction
 from app.models.tenders import Tender, TenderDocument
@@ -120,12 +120,29 @@ async def _requirement_sources(
 
 
 def _assessment_read(
-    assessment: CompanyRequirementAssessment, sources: dict
+    assessment: CompanyRequirementAssessment,
+    sources: dict,
+    reviewers: dict | None = None,
 ) -> AssessmentRead:
     # `effective_result` es una propietat del model: `from_attributes` la llegeix.
     read = AssessmentRead.model_validate(assessment)
     read.requirement = sources.get(assessment.requirement_id)
+    if assessment.reviewed_by:
+        read.reviewed_by_name = (reviewers or {}).get(assessment.reviewed_by)
     return read
+
+
+async def _reviewer_names(session, assessments) -> dict:
+    """Qui va revisar cada assessment. Un veredicte huma porta nom."""
+    ids = {a.reviewed_by for a in assessments if a.reviewed_by}
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            sa.select(User.id, User.full_name, User.email).where(User.id.in_(ids))
+        )
+    ).all()
+    return {row[0]: row[1] or row[2] for row in rows}
 
 
 @router.post("", response_model=ComplianceResult, summary="Calcula el compliment")
@@ -171,12 +188,15 @@ async def read_compliance(tender_id: uuid.UUID, session: SessionDep, ctx: Compan
     ).all()
 
     sources = await _requirement_sources(session, [a.requirement_id for a in assessments])
+    reviewers = await _reviewer_names(session, assessments)
     company = await session.get(Company, ctx.company_id)
     stale = await is_run_stale(session, run, company)
 
     return ComplianceRead(
         run=ComplianceRunRead.model_validate(run),
-        assessments=[_assessment_read(a, sources) for a in assessments],
+        assessments=[
+            _assessment_read(a, sources, reviewers) for a in assessments
+        ],
         is_stale=stale,
     )
 
@@ -226,7 +246,8 @@ async def _load_assessment(
 async def get_assessment(assessment_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
     assessment = await _load_assessment(session, ctx, assessment_id)
     sources = await _requirement_sources(session, [assessment.requirement_id])
-    return _assessment_read(assessment, sources)
+    reviewers = await _reviewer_names(session, [assessment])
+    return _assessment_read(assessment, sources, reviewers)
 
 
 @assessments_router.post(
@@ -249,4 +270,5 @@ async def review(
         user_id=ctx.user.id,
     )
     sources = await _requirement_sources(session, [updated.requirement_id])
-    return _assessment_read(updated, sources)
+    reviewers = await _reviewer_names(session, [updated])
+    return _assessment_read(updated, sources, reviewers)

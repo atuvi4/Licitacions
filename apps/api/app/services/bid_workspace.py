@@ -845,6 +845,9 @@ async def record_decision(
         automated_recommendation=(
             state.compliance_run.recommendation.value if state.compliance_run else None
         ),
+        # La fotografia dels avisos, calculada AQUI i no a la interficie: el que
+        # ha de quedar es el que hi havia a la pantalla en aquest moment.
+        open_warnings=warnings.codes(),
         deadline_passed=warnings.deadline_passed,
         tender_revision_id=state.tender_revision.id if state.tender_revision else None,
     )

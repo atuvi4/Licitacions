@@ -94,7 +94,12 @@ async def _detail(
     session: SessionDep, ctx: CompanyCtx, workspace, package: SubmissionPackage
 ) -> PackageDetail:
     state = await workspace_service.load_state(session, workspace)
-    readiness = await dossier_service.reconcile_readiness(session, workspace)
+    # Una lectura calcula l'estat efectiu del workspace i del paquet, pero no el
+    # desa: ni degrada el workspace ni marca el paquet com a superat. Aixo ho
+    # fan les mutacions, que reconcilien abans de cridar aquesta funcio.
+    plan = await dossier_service.plan_readiness(session, workspace)
+    readiness = plan.readiness
+    package_status = plan.package_status(package)
     stale = await service.evaluate_staleness(session, workspace, package)
     bases = await service.analysis_bases_behind(session, package)
     approvable_analysis = all(basis.is_trustworthy for basis in bases)
@@ -138,7 +143,7 @@ async def _detail(
         workspace_id=package.workspace_id,
         company_id=package.company_id,
         revision_number=package.revision_number,
-        status=package.status,
+        status=package_status,
         manifest_hash=package.manifest_hash,
         manifest_hash_short=_short(package.manifest_hash),
         tender_title=state.tender.title,
@@ -165,10 +170,10 @@ async def _detail(
         is_stale=stale.is_stale,
         # Un paquet SUPERSEDED tampoc s'envia, encara que res mes hagi canviat.
         coherent_for_submission=(
-            not stale.is_stale and package.status != SubmissionPackageStatus.SUPERSEDED
+            not stale.is_stale and package_status != SubmissionPackageStatus.SUPERSEDED
         ),
         can_approve=(
-            package.status == SubmissionPackageStatus.FROZEN
+            package_status == SubmissionPackageStatus.FROZEN
             and readiness.is_ready
             and not stale.is_stale
             # Un paquet de simulacio es pot congelar —cal, per provar la
@@ -179,9 +184,9 @@ async def _detail(
         analysis_bases=sorted(str(basis) for basis in bases),
         simulation_only=not approvable_analysis,
         can_sign=ctx.membership.role in service.FINAL_APPROVAL_ROLES,
-        workspace_status=workspace.status,
+        workspace_status=plan.status,
         # Explicit a la resposta: aprovar el paquet no es haver presentat res.
-        is_submitted=is_submitted(workspace.status),
+        is_submitted=is_submitted(plan.status),
         frozen_at=package.frozen_at,
         created_at=package.created_at,
     )
@@ -214,6 +219,9 @@ async def freeze(workspace_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
         summary=f"Paquet revisio {outcome.package.revision_number} congelat",
     )
     await session.commit()
+    # Mutacio explicita: es desa l'estat reconciliat abans de construir la
+    # resposta, que ja no escriu res.
+    await dossier_service.reconcile_readiness(session, workspace)
     return FreezeResult(
         created=outcome.created,
         package=await _detail(session, ctx, workspace, outcome.package),
@@ -301,6 +309,7 @@ async def approve(
         ),
     )
     await session.commit()
+    await dossier_service.reconcile_readiness(session, workspace)
     return await _detail(session, ctx, workspace, package)
 
 

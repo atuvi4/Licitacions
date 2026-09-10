@@ -150,6 +150,11 @@ REQUIREMENTS: tuple[Anchored, ...] = (
                 "coverage_amount": 600000,
                 "currency": "EUR",
                 "type": "civil_liability",
+                # La cita diu "limite total": el tipus de limit es part de
+                # l'exigencia, no un adorn del titol. Sense aixo, els dos
+                # requisits d'assegurança d'aquest plec arriben al dossier amb
+                # el mateix nom i ningu sap quin es quin.
+                "limit_kind": "total",
             },
             "confidence": ExtractionConfidence.HIGH.value,
         },
@@ -173,6 +178,7 @@ REQUIREMENTS: tuple[Anchored, ...] = (
                 "coverage_amount": 150000,
                 "currency": "EUR",
                 "type": "civil_liability_per_victim",
+                "limit_kind": "per_victim",
             },
             "confidence": ExtractionConfidence.MEDIUM.value,
         },

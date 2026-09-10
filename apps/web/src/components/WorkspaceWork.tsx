@@ -23,7 +23,7 @@ import { useMutation } from "@/lib/hooks";
 import { formatDateTime } from "@/lib/tenders";
 import {
   CHECKLIST_STATUS_LABELS,
-  reconciliationMessage,
+  checklistReconciliationMessage,
   TASK_STATUS_LABELS,
   TASK_STATUS_TONES,
   type ChecklistItemStatus,
@@ -64,7 +64,7 @@ export function ChecklistSection({
 }) {
   const mutation = useMutation();
   const [title, setTitle] = useState("");
-  const [outcome, setOutcome] = useState<ReturnType<typeof reconciliationMessage> | null>(null);
+  const [outcome, setOutcome] = useState<ReturnType<typeof checklistReconciliationMessage> | null>(null);
 
   const done = workspace.checklist.filter((item) => item.status === "completed").length;
 
@@ -95,12 +95,7 @@ export function ChecklistSection({
       // Sense això l'acció responia 200 i no passava res visible: ni un item,
       // ni un missatge, ni una pista. I era el botó que l'avís et demanava
       // prémer.
-      setOutcome(
-        reconciliationMessage(result.created, result.reason, {
-          one: "item",
-          many: "items nous",
-        }),
-      );
+      setOutcome(checklistReconciliationMessage(result));
     });
     await onChange();
   }

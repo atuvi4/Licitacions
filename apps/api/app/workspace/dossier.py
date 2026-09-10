@@ -26,6 +26,7 @@ from app.models.enums import (
     RequirementCategory,
     WorkspaceReadiness,
 )
+from app.workspace.relevance import ESTABLISHED, RelevanceState
 
 #: Agrupacio del dossier. Es la que fa servir un cap de licitacions quan prepara
 #: la carpeta, no la taxonomia interna de requisits.
@@ -108,15 +109,26 @@ class EvidenceView:
     validity: DocumentValidity
     has_document: bool
     mandatory: bool
+    #: Com de sostinguda esta la pertinença d'aquest document (`RelevanceState`).
+    #: Que estigui triat no vol dir que acrediti el que el plec demana.
+    relevance: str = RelevanceState.UNPROVEN
+    #: Quants documents demana el requisit. Un de sol no cobreix una exigencia
+    #: de tres certificats per molt que la categoria encaixi.
+    required_pieces: int = 1
 
 
 def coverage_for_requirement(pieces: list[EvidenceView]) -> DossierCoverage:
     """Cobertura d'UN requisit a partir de les seves peces.
 
     Un requisit pot necessitar diversos documents (tres certificats de bona
-    execucio, per exemple). N'hi ha prou amb que una peca estigui seleccionada i
-    sigui utilitzable per considerar-lo cobert, pero qualsevol peca marcada per
-    revisar el deixa en `needs_review`: es la persona qui ho ha dit.
+    execucio, per exemple). Qualsevol peca marcada per revisar el deixa en
+    `needs_review`: es la persona qui ho ha dit.
+
+    I **seleccionat no vol dir acreditat**. Una peça triada nomes cobreix si la
+    seva pertinença esta establerta —enllaç amb l'evidencia del compliment o
+    confirmacio humana—; si no, el requisit queda en revisio encara que hi hagi
+    un paper a la fila. Es el que evita que un titol universitari acrediti una
+    xifra de negoci nomes perque algu el va triar del desplegable.
     """
     if not pieces:
         return DossierCoverage.MISSING_DOCUMENT
@@ -134,6 +146,17 @@ def coverage_for_requirement(pieces: list[EvidenceView]) -> DossierCoverage:
         # Triat pero inservible per a aquesta licitacio: es un forat, no una
         # cobertura. Dir el contrari seria el pitjor error possible aqui.
         return DossierCoverage.MISSING_DOCUMENT
+
+    # A partir d'aqui hi ha papers triats i utilitzables. Falta la pregunta que
+    # el dossier no es feia: acrediten el que el plec demana?
+    if any(piece.relevance not in ESTABLISHED for piece in selected):
+        return DossierCoverage.NEEDS_REVIEW
+
+    expected = max((piece.required_pieces for piece in live), default=1)
+    if len(selected) < expected:
+        # El plec en demana mes dels que hi ha. Tenir-ne un de la categoria
+        # correcta no cobreix una exigencia de tres.
+        return DossierCoverage.NEEDS_REVIEW
     return DossierCoverage.COVERED
 
 
@@ -204,6 +227,10 @@ BLOCKER_CHECKLIST_BLOCKED = "mandatory_checklist_blocked"
 BLOCKER_MISSING_EVIDENCE = "mandatory_evidence_missing"
 BLOCKER_EXPIRED_DOCUMENTS = "mandatory_document_expired"
 BLOCKER_OPEN_TASKS = "mandatory_tasks_open"
+#: Hi ha papers triats per a requisits obligatoris i ningu no ha establert que
+#: acreditin el que el plec demana. Bloqueja de veritat: es exactament el forat
+#: pel qual un titol universitari arribava a un paquet congelat.
+BLOCKER_RELEVANCE_UNPROVEN = "mandatory_relevance_unproven"
 #: Aquest no impedeix res per si sol: nomes deixa el dossier a `needs_review`.
 BLOCKER_NEEDS_REVIEW = "evidence_needs_review"
 
@@ -224,6 +251,8 @@ class ReadinessInput:
     expired_mandatory_documents: int = 0
     open_mandatory_tasks: int = 0
     needs_review_items: int = 0
+    #: Requisits obligatoris amb document triat i pertinença sense acreditar.
+    unproven_mandatory_evidence: int = 0
     blockers: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -267,6 +296,8 @@ def evaluate_readiness(data: ReadinessInput) -> ReadinessResult:
         blockers.append(BLOCKER_EXPIRED_DOCUMENTS)
     if data.open_mandatory_tasks:
         blockers.append(BLOCKER_OPEN_TASKS)
+    if data.unproven_mandatory_evidence:
+        blockers.append(BLOCKER_RELEVANCE_UNPROVEN)
     if data.needs_review_items:
         blockers.append(BLOCKER_NEEDS_REVIEW)
 

@@ -83,6 +83,7 @@ from app.workspace.transitions import (
     TransitionActor,
     assert_transition,
 )
+from tests.dml import DmlRecorder
 
 DEADLINE = datetime.now(UTC) + timedelta(days=40)
 TODAY = date.today()
@@ -263,7 +264,9 @@ async def ready(db, tenant_a, tender, extraction_run):
     )
     await dossier_service.sync_dossier(db, workspace, user_id=user.id)
     await db.commit()
-    item = await db.scalar(sa.select(WorkspaceEvidenceItem))
+    item = await db.scalar(
+        sa.select(WorkspaceEvidenceItem).where(WorkspaceEvidenceItem.workspace_id == workspace.id)
+    )
     await dossier_service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
@@ -277,7 +280,35 @@ async def ready(db, tenant_a, tender, extraction_run):
         "evidence_item": item,
         "tender": tender,
         "requirement_run": extraction_run,
+        "certification": certification,
     }
+
+
+
+async def replace_document(db, ready, name: str):
+    """Substitueix el document del requisit per un de nou, ben acreditat.
+
+    Enllaça el document nou a la MATEIXA certificacio que el compliment va
+    citar: es el que faria qui renova un ISO i puja el certificat nou. Sense
+    aquest enllaç la pertinença no estaria establerta i el dossier ho diria,
+    que es justament el que proven els tests de `TestPertinenciaDocumental`.
+    """
+    replacement = await add_document(db, ready["company"].id, name=name)
+    await link_document(
+        db,
+        ready["company"].id,
+        replacement,
+        LinkedEntityType.COMPANY_CERTIFICATION,
+        ready["certification"].id,
+    )
+    await dossier_service.update_item(
+        db,
+        ready["workspace"],
+        ready["evidence_item"],
+        document_id=replacement.id,
+        user=ready["user"],
+    )
+    return replacement
 
 
 async def freeze(db, ready, *, role=MembershipRole.OWNER):
@@ -498,16 +529,12 @@ async def test_there_is_no_endpoint_to_edit_a_frozen_package(db, client_a, ready
 
 async def test_a_second_revision_leaves_the_first_untouched(db, ready):
     """§16: revision 2 no altera revision 1. Mai."""
-    workspace, user, company = ready["workspace"], ready["user"], ready["company"]
     first = await freeze(db, ready)
     first_hash = first.manifest_hash
     first_documents = [(i.document_id, i.document_sha256) for i in first.items]
 
     # Es canvia el document del requisit.
-    replacement = await add_document(db, company.id, name="ISO 27001 renovat.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "ISO 27001 renovat.pdf")
 
     second = await freeze(db, ready)
 
@@ -680,13 +707,9 @@ async def test_approvals_are_append_only(db, ready):
 
 async def test_a_package_whose_documents_changed_cannot_be_approved(db, ready):
     """§10: no s'aprova en silenci una cosa que ja no es la que es va congelar."""
-    workspace, user, company = ready["workspace"], ready["user"], ready["company"]
     package = await freeze(db, ready)
 
-    replacement = await add_document(db, company.id, name="Un altre.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "Un altre.pdf")
 
     with pytest.raises(service.PackageStaleError) as caught:
         await approve(db, ready, package)
@@ -735,15 +758,11 @@ async def test_a_document_expiring_before_the_deadline_makes_the_package_stale(d
 
 async def test_an_approval_never_moves_to_another_revision(db, ready):
     """§16: el cas critic. La revisio 1 segueix aprovada; la 2 no ho esta."""
-    workspace, user, company = ready["workspace"], ready["user"], ready["company"]
     first = await freeze(db, ready)
     approval = await approve(db, ready, first)
 
     # Es canvia una peca i es congela una revisio nova.
-    replacement = await add_document(db, company.id, name="Polissa RC 2027.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "Polissa RC 2027.pdf")
     second = await freeze(db, ready)
 
     await db.refresh(first)
@@ -760,12 +779,8 @@ async def test_an_approval_never_moves_to_another_revision(db, ready):
 
 
 async def test_a_superseded_revision_cannot_be_approved_later(db, ready):
-    workspace, user, company = ready["workspace"], ready["user"], ready["company"]
     first = await freeze(db, ready)
-    replacement = await add_document(db, company.id, name="Nou.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "Nou.pdf")
     await freeze(db, ready)
 
     await db.refresh(first)
@@ -884,12 +899,9 @@ async def test_the_api_refuses_to_approve_a_stale_package_and_says_why(
 
 
 async def test_the_api_shows_what_changed_since_the_freeze(db, client_a, ready):
-    workspace, user, company = ready["workspace"], ready["user"], ready["company"]
+    workspace, company = ready["workspace"], ready["company"]
     package = await freeze(db, ready)
-    replacement = await add_document(db, company.id, name="Substitut.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "Substitut.pdf")
     base = f"/api/v1/companies/{company.id}/workspaces/{workspace.id}/packages/{package.id}"
 
     body = (await client_a.get(base)).json()
@@ -948,10 +960,7 @@ async def test_the_full_final_approval_workflow(db, client_a, ready):
     assert workspace.status != WorkspaceStatus.SUBMITTED
 
     # 5. Es canvia un document: cal una revisio nova, que NO hereta l'aprovacio.
-    replacement = await add_document(db, company.id, name="Polissa RC nova.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "Polissa RC nova.pdf")
     stale = (await client_a.get(f"{root}/packages/{package['id']}")).json()
     assert stale["is_stale"] is True
     assert stale["can_approve"] is False
@@ -1040,13 +1049,10 @@ async def approved_workspace(db, ready):
 
 async def test_a_second_revision_stops_the_workspace_from_being_approved(db, ready):
     """L'aprovacio de la r1 no pot mantenir el workspace aprovat quan hi ha r2."""
-    workspace, user, company = ready["workspace"], ready["user"], ready["company"]
+    workspace = ready["workspace"]
     first = await approved_workspace(db, ready)
 
-    replacement = await add_document(db, company.id, name="Polissa nova.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "Polissa nova.pdf")
     second = await freeze(db, ready)
 
     await db.refresh(workspace)
@@ -1060,13 +1066,10 @@ async def test_a_second_revision_stops_the_workspace_from_being_approved(db, rea
 
 async def test_changing_a_document_stops_the_workspace_from_being_approved(db, ready):
     """Canviar una peca invalida l'estat aprovat encara sense congelar res mes."""
-    workspace, user, company = ready["workspace"], ready["user"], ready["company"]
+    workspace = ready["workspace"]
     first = await approved_workspace(db, ready)
 
-    replacement = await add_document(db, company.id, name="Substitut.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "Substitut.pdf")
 
     await db.refresh(workspace)
     assert workspace.status != WorkspaceStatus.APPROVED_FOR_SUBMISSION
@@ -1120,15 +1123,11 @@ async def test_a_document_expiring_before_the_deadline_un_approves_the_workspace
 
 async def test_the_historical_approval_survives_every_invalidation(db, ready):
     """El que canvia es l'estat del workspace, mai l'historial."""
-    workspace, user, company = ready["workspace"], ready["user"], ready["company"]
     first = await approved_workspace(db, ready)
     approval_id = service.approval_of(first).id
     manifest = first.manifest_hash
 
-    replacement = await add_document(db, company.id, name="Un altre.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "Un altre.pdf")
     await freeze(db, ready)
 
     stored = await db.scalar(
@@ -1154,14 +1153,11 @@ async def test_a_workspace_that_is_still_coherent_stays_approved(db, ready):
 
 
 async def test_the_api_reports_the_workspace_no_longer_approved(db, client_a, ready):
-    workspace, company, user = ready["workspace"], ready["company"], ready["user"]
+    workspace, company = ready["workspace"], ready["company"]
     first = await approved_workspace(db, ready)
     root = f"/api/v1/companies/{company.id}/workspaces/{workspace.id}"
 
-    replacement = await add_document(db, company.id, name="Nou.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "Nou.pdf")
 
     body = (await client_a.get(f"{root}/packages/{first.id}")).json()
     assert body["workspace_status"] != "approved_for_submission"
@@ -1228,14 +1224,11 @@ async def test_the_retained_bytes_still_hash_to_the_package_item(db, client_a, r
 
 async def test_a_superseded_revision_also_retains_its_documents(db, ready, client_a):
     """Una revisio superada segueix sent historial: els seus bytes tambe."""
-    workspace, user, company = ready["workspace"], ready["user"], ready["company"]
+    company = ready["company"]
     first = await freeze(db, ready)
     original = ready["document"]
 
-    replacement = await add_document(db, company.id, name="Substitut.pdf")
-    await dossier_service.update_item(
-        db, workspace, ready["evidence_item"], document_id=replacement.id, user=user
-    )
+    await replace_document(db, ready, "Substitut.pdf")
     await freeze(db, ready)
     await db.refresh(first)
     assert first.status == SubmissionPackageStatus.SUPERSEDED
@@ -1700,3 +1693,113 @@ class TestSimulacioNoAprovable:
 
         assert response.status_code == 409
         assert response.json()["error"]["code"] == "simulation_not_approvable"
+
+
+# --------------------------------------------------------------------------- #
+# Llegir no escriu                                                              #
+# --------------------------------------------------------------------------- #
+#
+# Un GET pot CALCULAR l'estat efectiu i ensenyar-lo, pero no el pot desar. El
+# 11/09/2026 una simple comprovacio de lectura (login -> candidatura -> dossier)
+# va degradar un workspace real de `ready_for_final_review` a `preparing_bid`,
+# perque les lectures reconciliaven. Les transicions persistents nomes passen
+# per camins de mutacio explicits.
+
+#: Tot el que una lectura del workspace podria tocar.
+READ_ONLY_TABLES = (
+    "bid_workspaces",
+    "workspace_evidence_items",
+    "workspace_checklist_items",
+    "workspace_decisions",
+    "workspace_tasks",
+    "workspace_notes",
+    "submission_packages",
+    "submission_package_items",
+    "submission_package_approvals",
+    "audit_logs",
+)
+
+
+async def _rows(session_factory) -> dict[str, list[tuple]]:
+    """Totes les files, tal com son a la base: sense passar per cap sessio oberta."""
+    async with session_factory() as session:
+        out = {}
+        for table in READ_ONLY_TABLES:
+            rows = (await session.execute(sa.text(f"select * from {table}"))).mappings().all()
+            out[table] = sorted(tuple(sorted((k, str(v)) for k, v in r.items())) for r in rows)
+        return out
+
+
+def _read_paths(ready, package) -> list[str]:
+    company, workspace = ready["company"], ready["workspace"]
+    base = f"/api/v1/companies/{company.id}/workspaces/{workspace.id}"
+    return [
+        base,
+        f"/api/v1/companies/{company.id}/tenders/{ready['tender'].id}/workspace",
+        f"{base}/dossier",
+        f"{base}/readiness",
+        f"{base}/decisions",
+        f"{base}/notes",
+        f"{base}/packages",
+        f"{base}/packages/{package.id}",
+        f"{base}/packages/{package.id}/manifest",
+        f"{base}/packages/{package.id}/approvals",
+    ]
+
+
+async def _external_change(db, workspace) -> None:
+    """Un canvi que no passa per cap mutacio del producte: l'etiqueta queda enrere."""
+    await db.execute(
+        sa.update(WorkspaceEvidenceItem)
+        .where(WorkspaceEvidenceItem.workspace_id == workspace.id)
+        .values(status=EvidenceItemStatus.SUGGESTED, selected_by=None, selected_at=None)
+    )
+    await db.commit()
+
+
+@pytest.mark.parametrize("approved", [False, True], ids=["congelat", "aprovat"])
+async def test_reading_never_writes_even_when_the_stored_state_is_stale(
+    db, engine, session_factory, client_a, ready, approved
+):
+    workspace = ready["workspace"]
+    package = await (approved_workspace(db, ready) if approved else freeze(db, ready))
+    await db.refresh(workspace)
+    stored = workspace.status
+    assert stored == (
+        WorkspaceStatus.APPROVED_FOR_SUBMISSION
+        if approved
+        else WorkspaceStatus.READY_FOR_FINAL_REVIEW
+    )
+    await _external_change(db, workspace)
+    before = await _rows(session_factory)
+
+    with DmlRecorder(engine) as dml:
+        for _ in range(3):
+            for path in _read_paths(ready, package):
+                response = await client_a.get(path)
+                assert response.status_code == 200, (path, response.text)
+
+    assert dml.statements == [], "cap GET pot escriure"
+    assert await _rows(session_factory) == before, "totes les files identiques, cap de nova"
+
+    # Llegir no escriu, pero diu la veritat: l'estat efectiu es a la resposta.
+    base = _read_paths(ready, package)[0]
+    assert (await client_a.get(base)).json()["status"] == "preparing_bid"
+    detail = (await client_a.get(f"{base}/packages/{package.id}")).json()
+    assert detail["workspace_status"] == "preparing_bid"
+    assert detail["status"] == ("superseded" if approved else "frozen")
+    await db.refresh(workspace)
+    await db.refresh(package)
+    assert workspace.status == stored
+    assert package.status == (
+        SubmissionPackageStatus.APPROVED if approved else SubmissionPackageStatus.FROZEN
+    )
+
+    # La mutacio explicita si que fa la transicio, i la desa.
+    assert (await client_a.post(f"{base}/checklist/regenerate")).status_code == 200
+    await db.refresh(workspace)
+    await db.refresh(package)
+    assert workspace.status == WorkspaceStatus.PREPARING_BID
+    assert package.status == (
+        SubmissionPackageStatus.SUPERSEDED if approved else SubmissionPackageStatus.FROZEN
+    )
