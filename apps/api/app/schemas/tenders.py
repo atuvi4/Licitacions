@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -234,3 +234,36 @@ class TenderFacets(BaseModel):
     contract_types: list[str]
     nuts_codes: list[str] = Field(default_factory=list)
     total_tenders: int
+
+
+class TenderChangeEventRead(ORMModel):
+    """Un canvi concret publicat per la font, amb el seu impacte."""
+
+    change_code: str
+    #: Que identifica l'element afectat: el codi d'un lot, la URL d'un document.
+    subject: str | None = None
+    old_value: Any = None
+    new_value: Any = None
+    impacts: list[str]
+    #: Cert si invalida alguna cosa. Un canvi de titol no ho fa.
+    is_material: bool
+    detected_at: datetime
+
+
+class TenderHistoryRevisionRead(ORMModel):
+    """Una fotografia de l'estat de la licitacio.
+
+    No es el mateix que `TenderRevisionRead`, que es una versio *rebuda* de la
+    font. Aquesta es una versio de l'estat *normalitzat*: una descarrega de
+    document que canvia un SHA en genera una sense que la font hagi publicat res.
+
+    No hi va `normalized_snapshot`: es gran, i el que interessa llegir es que ha
+    canviat, no l'estat sencer repetit a cada revisio.
+    """
+
+    id: uuid.UUID
+    revision_number: int
+    trigger: str
+    created_at: datetime
+    change_summary: dict[str, Any] | None = None
+    events: list[TenderChangeEventRead] = Field(default_factory=list)

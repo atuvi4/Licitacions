@@ -40,7 +40,7 @@ from app.models.tender_documents import (
     TenderDocumentPage,
     TenderExtractionIssue,
 )
-from app.models.tenders import TenderDocument
+from app.models.tenders import Tender, TenderDocument
 from app.services.document_download import DownloadError, DownloadResult, download_document
 from app.services.extraction_qa import PageInput as QaPageInput
 from app.services.extraction_qa import analyse as analyse_extraction_quality
@@ -51,6 +51,7 @@ from app.services.pdf_text import (
     unsupported_result,
 )
 from app.services.storage import build_tender_document_key, get_storage
+from app.services.tender_lifecycle import record_revision
 from app.services.url_guard import Resolver
 
 logger = logging.getLogger(__name__)
@@ -425,6 +426,12 @@ async def process_tender_document(
     await _ensure_current_extraction(session, content, force=force_reextract)
     await session.refresh(file)
 
+    # Baixar un plec i descobrir que el contingut ha canviat tambe es una
+    # modificacio de la licitacio, encara que el feed no digui res: es
+    # exactament el cas "mateixa URL, SHA nou". Si el SHA es el mateix, aixo no
+    # crea cap revisio.
+    await _record_tender_revision(session, document.tender_id)
+
     logger.info(
         "document.process.ok",
         extra={
@@ -439,3 +446,17 @@ async def process_tender_document(
         },
     )
     return ProcessOutcome(file=file, reused=False)
+
+
+async def _record_tender_revision(session: AsyncSession, tender_id: uuid.UUID) -> None:
+    """Deixa constancia si el contingut del document ha canviat la licitacio.
+
+    Es fa aqui i no a la ingestió perque el SHA d'un plec nomes es coneix
+    despres de baixar-lo. Sense aquest punt, substituir un plec sota la mateixa
+    URL seria invisible per al cicle de vida.
+    """
+    tender = await session.get(Tender, tender_id)
+    if tender is None:  # pragma: no cover - FK ON DELETE CASCADE ho impedeix
+        return
+    await record_revision(session, tender, trigger="document_processing")
+    await session.commit()

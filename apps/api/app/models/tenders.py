@@ -190,6 +190,14 @@ class TenderLot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     nuts_code: Mapped[str | None] = mapped_column(sa.String(10))
     deadline_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     status: Mapped[str | None] = mapped_column(sa.String(50))
+    #: Quan el lot va deixar de ser al feed. La fila NO s'esborra: una
+    #: candidatura pot apuntar-hi, i esborrar-la se l'enduria per davant amb
+    #: totes les seves decisions. Marcar-ho permet dir-ho a qui hi treballava.
+    removed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+
+    @property
+    def is_removed(self) -> bool:
+        return self.removed_at is not None
 
     tender: Mapped[Tender] = relationship(back_populates="lots")
     cpvs: Mapped[list[TenderLotCPV]] = relationship(

@@ -36,6 +36,7 @@ from app.models.workspace import (
     WorkspaceNote,
     WorkspaceTask,
 )
+from app.schemas.tenders import TenderChangeEventRead
 from app.schemas.workspace import (
     ChecklistItemCreateRequest,
     ChecklistItemRead,
@@ -200,6 +201,16 @@ async def _detail(
         current_requirement_run_id=workspace.current_requirement_run_id,
         analysis_outdated=state.analysis_outdated,
         outdated_reasons=list(state.outdated_reasons),
+        tender_actionable=state.tender_actionable,
+        lot_removed=state.lot_removed,
+        workspace_actionable=state.workspace_actionable,
+        decision_outdated=state.decision_outdated,
+        decision_basis_unknown=state.decision_basis_unknown,
+        decision_reasons=list(state.decision_reasons),
+        changes_since_decision=[
+            TenderChangeEventRead.model_validate(event)
+            for event in state.changes_since_decision
+        ],
         readiness=dossier.readiness.state,
         readiness_blockers=list(dossier.readiness.blockers),
         dossier_coverage=DossierCoverageRead(**asdict(dossier.counters)),

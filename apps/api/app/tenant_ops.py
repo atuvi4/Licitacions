@@ -98,6 +98,10 @@ PUBLIC_TABLES = frozenset(
         # La qualitat del text extret parla del document public, no de cap
         # empresa: penja de l'extraccio i s'esborra amb ella.
         "tender_extraction_issues",
+        # La historia d'un expedient es publica, com l'expedient: cent empreses
+        # que el miren comparteixen les mateixes revisions i els mateixos canvis.
+        "tender_revisions",
+        "tender_change_events",
         "tender_lot_cpvs",
         "tender_lots",
         "tenders",

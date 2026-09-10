@@ -63,6 +63,7 @@ from app.models.identity import Company
 from app.models.matching import CompanyTenderMatch
 from app.models.requirements import Requirement, RequirementExtractionRun
 from app.models.tenders import Tender, TenderLot
+from app.services.tender_lifecycle import latest_revision
 
 logger = logging.getLogger(__name__)
 
@@ -327,9 +328,14 @@ async def _claim_run(
     prefit: int | None,
 ) -> CompanyComplianceRun:
     """Reserva el calcul. L'index unic parcial impedeix el doble clic."""
+    revision = await latest_revision(session, tender.id)
     run = CompanyComplianceRun(
         company_id=company_id,
         tender_id=tender.id,
+        # Contra quin estat de la licitacio s'ha avaluat: els llindars
+        # percentuals es resolen contra el pressupost, i el pressupost es part
+        # de l'estat, no dels requisits.
+        tender_revision_id=revision.id if revision else None,
         requirement_extraction_run_id=extraction_run.id,
         status=ComplianceRunStatus.RUNNING,
         rules_version=RULES_VERSION,

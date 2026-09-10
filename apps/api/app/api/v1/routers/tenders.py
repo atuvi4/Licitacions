@@ -27,19 +27,22 @@ from app.models.tender_documents import (
     TenderDocumentExtraction,
     TenderDocumentFile,
 )
+from app.models.tender_lifecycle import TenderChangeEvent, TenderRevision
 from app.models.tenders import Buyer, Tender, TenderLot
 from app.schemas.tenders import (
     BuyerRead,
     BuyerSummary,
     IngestionRunRead,
     Page,
+    TenderChangeEventRead,
     TenderCPVRead,
     TenderDetail,
     TenderDocumentFileSummary,
     TenderDocumentRead,
     TenderFacets,
-    TenderLotRead,
+    TenderHistoryRevisionRead,
     TenderListItem,
+    TenderLotRead,
     TenderRevisionRead,
     TenderTraceability,
 )
@@ -449,3 +452,55 @@ async def list_ingestion_runs(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get(
+    "/tenders/{tender_id}/history",
+    response_model=list[TenderHistoryRevisionRead],
+    summary="Historial d'estats normalitzats d'una licitacio",
+)
+async def tender_history(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
+    """Com hem arribat a l'estat actual, de la mes recent a la mes antiga.
+
+    Es public i global, com la licitacio: la historia d'un expedient no pertany
+    a cap empresa. Els impactes sobre un workspace concret s'exposen al
+    workspace, que si que es del tenant.
+    """
+    await _load_tender(session, tender_id)
+    revisions = (
+        await session.scalars(
+            sa.select(TenderRevision)
+            .options(selectinload(TenderRevision.events))
+            .where(TenderRevision.tender_id == tender_id)
+            .order_by(TenderRevision.revision_number.desc())
+        )
+    ).all()
+    return list(revisions)
+
+
+@router.get(
+    "/tenders/{tender_id}/changes",
+    response_model=list[TenderChangeEventRead],
+    summary="Canvis publicats d'una licitacio",
+)
+async def tender_changes(
+    tender_id: uuid.UUID,
+    session: SessionDep,
+    _: CurrentUser,
+    material_only: bool = True,
+):
+    """Els canvis, del mes recent al mes antic.
+
+    Per defecte nomes els materials: un canvi de titol no invalida res i
+    barrejar-lo amb una substitucio de plec faria que la llista deixes de
+    llegir-se. `material_only=false` els ensenya tots.
+    """
+    await _load_tender(session, tender_id)
+    query = (
+        sa.select(TenderChangeEvent)
+        .where(TenderChangeEvent.tender_id == tender_id)
+        .order_by(TenderChangeEvent.detected_at.desc(), TenderChangeEvent.change_code)
+    )
+    if material_only:
+        query = query.where(TenderChangeEvent.is_material.is_(True))
+    return list((await session.scalars(query)).all())

@@ -25,6 +25,7 @@ from app.matching.engine import MatchOutcome, aggregate_lots, evaluate
 from app.matching.profile import CompanyMatchProfile, load_profile
 from app.matching.rules import RULES_VERSION
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
+from app.models.tender_lifecycle import TenderRevision
 from app.models.tenders import Tender, TenderLot
 
 logger = logging.getLogger("app.matching")
@@ -78,8 +79,12 @@ def evaluate_tender(
     tender_cpvs = [item.cpv_code for item in tender.cpvs]
     tender_amount = _amount(tender.estimated_value, tender.base_budget)
     status = tender.status.value
+    # Els lots que han desaparegut del feed es queden a la base de dades perque
+    # una candidatura hi pot apuntar, pero no son candidats a res: puntuar-los
+    # els faria sortir a la llista d'oportunitats com si encara existissin.
+    lots = [lot for lot in tender.lots if lot.removed_at is None]
 
-    if not tender.lots:
+    if not lots:
         outcome = evaluate(
             profile,
             cpv_codes=tender_cpvs,
@@ -93,7 +98,7 @@ def evaluate_tender(
         return outcome, []
 
     lot_results: list[tuple[TenderLot, MatchOutcome]] = []
-    for lot in tender.lots:
+    for lot in lots:
         # CPV del lot si en te; si no, els de l'expedient. Un lot sense CPV
         # propis hereta l'objecte del contracte, no es queda sense classificar.
         lot_cpvs = [item.cpv_code for item in lot.cpvs] or tender_cpvs
@@ -137,6 +142,38 @@ class MatchingService:
             statement = statement.where(Tender.id.in_(tender_ids))
         return list((await self.session.execute(statement)).scalars().unique().all())
 
+    async def _current_revisions(self, tenders: list[Tender]) -> dict[uuid.UUID, uuid.UUID]:
+        """La revisio vigent de cada licitacio, en una sola consulta.
+
+        Es desa amb el match perque despres es pugui preguntar nomes pels canvis
+        que afecten el pre-fit. Una consulta per licitacio dins del bucle
+        convertiria un recalcul massiu en milers d'anades i tornades.
+        """
+        if not tenders:
+            return {}
+        ids = [tender.id for tender in tenders]
+        newest = (
+            sa.select(
+                TenderRevision.tender_id,
+                sa.func.max(TenderRevision.revision_number).label("revision_number"),
+            )
+            .where(TenderRevision.tender_id.in_(ids))
+            .group_by(TenderRevision.tender_id)
+            .subquery()
+        )
+        rows = (
+            await self.session.execute(
+                sa.select(TenderRevision.tender_id, TenderRevision.id).join(
+                    newest,
+                    sa.and_(
+                        TenderRevision.tender_id == newest.c.tender_id,
+                        TenderRevision.revision_number == newest.c.revision_number,
+                    ),
+                )
+            )
+        ).all()
+        return dict(rows)
+
     async def recalculate(
         self,
         company_id: uuid.UUID,
@@ -151,6 +188,7 @@ class MatchingService:
 
         profile = await load_profile(self.session, company_id)
         tenders = await self._tenders(tender_ids)
+        revisions = await self._current_revisions(tenders)
 
         existing = {
             match.tender_id: match
@@ -180,7 +218,7 @@ class MatchingService:
             else:
                 summary.updated += 1
 
-            self._apply(match, outcome, moment, profile, tender)
+            self._apply(match, outcome, moment, profile, tender, revisions.get(tender.id))
 
             candidates = [
                 (lot, lot_outcome)
@@ -199,7 +237,9 @@ class MatchingService:
             match.best_lot_id = best[0].id if best else None
 
             await self.session.flush()
-            await self._sync_lot_matches(match, lot_results, moment, profile, tender)
+            await self._sync_lot_matches(
+                match, lot_results, moment, profile, tender, revisions.get(tender.id)
+            )
 
         await self.session.commit()
         summary.duration_ms = int((time.monotonic() - started) * 1000)
@@ -213,6 +253,7 @@ class MatchingService:
         moment: datetime,
         profile: CompanyMatchProfile,
         tender: Tender,
+        revision_id: uuid.UUID | None = None,
     ) -> None:
         match.score = outcome.score
         match.status = outcome.status
@@ -229,6 +270,7 @@ class MatchingService:
         # Instantanies per saber despres si el resultat ha quedat obsolet.
         match.company_profile_changed_at = profile.profile_changed_at
         match.tender_changed_at = tender.last_changed_at
+        match.tender_revision_id = revision_id
 
     async def _sync_lot_matches(
         self,
@@ -237,6 +279,7 @@ class MatchingService:
         moment: datetime,
         profile: CompanyMatchProfile,
         tender: Tender,
+        revision_id: uuid.UUID | None = None,
     ) -> None:
         current = {lot_match.tender_lot_id: lot_match for lot_match in match.lot_matches}
         seen: set[uuid.UUID] = set()
@@ -253,7 +296,7 @@ class MatchingService:
                 )
                 self.session.add(lot_match)
                 match.lot_matches.append(lot_match)
-            self._apply(lot_match, outcome, moment, profile, tender)
+            self._apply(lot_match, outcome, moment, profile, tender, revision_id)
 
         # Si un lot ha desaparegut de la font, el seu match no te sentit.
         for lot_id, lot_match in current.items():

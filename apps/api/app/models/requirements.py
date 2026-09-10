@@ -90,6 +90,12 @@ class RequirementExtractionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     tender_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False
     )
+    #: Sobre quina revisio de la licitacio s'ha extret. Els requisits surten dels
+    #: PLECS: que es mogui un import no els canvia, i per aixo aquesta extraccio
+    #: nomes queda obsoleta si un canvi posterior afecta els documents.
+    tender_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("tender_revisions.id", ondelete="SET NULL")
+    )
     status: Mapped[AnalysisRunStatus] = mapped_column(
         enum_column(AnalysisRunStatus, "analysis_run_status"),
         nullable=False,

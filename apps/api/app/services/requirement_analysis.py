@@ -82,6 +82,7 @@ from app.services.requirement_chunking import (
     compute_input_fingerprint,
     render_chunk,
 )
+from app.services.tender_lifecycle import latest_revision
 
 logger = logging.getLogger(__name__)
 
@@ -673,10 +674,14 @@ async def _claim_run(
 ) -> RequirementExtractionRun:
     """Reserva l'analisi. L'index unic parcial impedeix el doble clic."""
     quality_status, quality_issues = await _source_quality_snapshot(session, documents)
+    revision = await latest_revision(session, tender_id)
     run = RequirementExtractionRun(
         source_quality_status=quality_status,
         source_quality_issues=quality_issues or None,
         tender_id=tender_id,
+        # Sobre quin estat de la licitacio s'ha llegit. Serveix per no haver de
+        # reextreure els plecs quan el que s'ha mogut es un import.
+        tender_revision_id=revision.id if revision else None,
         status=AnalysisRunStatus.RUNNING,
         input_fingerprint=fingerprint,
         extractor_version=profile.extractor_version,

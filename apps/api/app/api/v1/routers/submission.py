@@ -34,6 +34,7 @@ from app.services import audit
 from app.services import bid_workspace as workspace_service
 from app.services import submission_package as service
 from app.services import workspace_dossier as dossier_service
+from app.services.tender_lifecycle import ChangeLog, load_change_log, revision_of
 from app.workspace.dossier import document_validity
 from app.workspace.transitions import is_submitted
 
@@ -62,9 +63,12 @@ def _short(digest: str | None) -> str | None:
     return digest[:12] if digest else None
 
 
-async def _summary(session: SessionDep, package: SubmissionPackage) -> PackageSummary:
+async def _summary(
+    session: SessionDep, package: SubmissionPackage, log: ChangeLog
+) -> PackageSummary:
     approval = service.approval_of(package)
     names = await _names(session, {approval.approved_by} if approval else set())
+    frozen_on = await revision_of(session, package.tender_revision_id)
     return PackageSummary(
         id=package.id,
         workspace_id=package.workspace_id,
@@ -81,6 +85,8 @@ async def _summary(session: SessionDep, package: SubmissionPackage) -> PackageSu
         is_approved=approval is not None,
         approved_at=approval.approved_at if approval else None,
         approved_by_name=names.get(approval.approved_by) if approval else None,
+        # Una base desconeguda tambe compta: no es pot dir que quadri.
+        tender_changed_since_freeze=bool(log.since(frozen_on)) or log.basis_unknown(frozen_on),
     )
 
 
@@ -90,6 +96,7 @@ async def _detail(
     state = await workspace_service.load_state(session, workspace)
     readiness = await dossier_service.reconcile_readiness(session, workspace)
     stale = await service.evaluate_staleness(session, workspace, package)
+    revision = await revision_of(session, package.tender_revision_id)
 
     documents = {
         d.id: d
@@ -139,6 +146,8 @@ async def _detail(
         days_remaining=state.days_remaining,
         compliance_run_id=package.compliance_run_id,
         requirement_run_id=package.requirement_run_id,
+        tender_revision_number=revision.revision_number if revision else None,
+        tender_normalized_hash_short=_short(package.tender_normalized_hash),
         prefit_score=package.prefit_score,
         coverage=PackageCoverageRead(
             mandatory_total=package.mandatory_total,
@@ -152,6 +161,10 @@ async def _detail(
         readiness_blockers=list(readiness.blockers),
         stale_reasons=list(stale.reasons),
         is_stale=stale.is_stale,
+        # Un paquet SUPERSEDED tampoc s'envia, encara que res mes hagi canviat.
+        coherent_for_submission=(
+            not stale.is_stale and package.status != SubmissionPackageStatus.SUPERSEDED
+        ),
         can_approve=(
             package.status == SubmissionPackageStatus.FROZEN
             and readiness.is_ready
@@ -171,7 +184,9 @@ async def list_packages(workspace_id: uuid.UUID, session: SessionDep, ctx: Compa
     """Totes les revisions, de la mes recent a la mes antiga. Cap se n'esborra."""
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
     packages = await service.list_packages(session, workspace)
-    return [await _summary(session, package) for package in packages]
+    # El registre de canvis es llegeix un sol cop per a tota la llista.
+    log = await load_change_log(session, workspace.tender_id)
+    return [await _summary(session, package, log) for package in packages]
 
 
 @router.post("/packages", response_model=FreezeResult, summary="Congela una revisio")

@@ -74,6 +74,14 @@ class _MatchColumns:
         sa.DateTime(timezone=True)
     )
     tender_changed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    #: Sobre quina revisio de la licitacio s'ha calculat. La marca de temps de
+    #: dalt diu "la licitacio s'ha tocat"; aixo diu QUE s'ha tocat, perque
+    #: permet mirar els events posteriors i preguntar nomes pels que afecten el
+    #: pre-fit. Sense aixo, reingerir sense cap canvi real ja feia semblar
+    #: obsolet tot el que s'havia calculat.
+    tender_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("tender_revisions.id", ondelete="SET NULL")
+    )
 
 
 class CompanyTenderMatch(UUIDPrimaryKeyMixin, TimestampMixin, _MatchColumns, Base):

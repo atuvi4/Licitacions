@@ -23,6 +23,7 @@ import {
 import { PreFitBadge, PreFitPanel } from "@/components/PreFit";
 import { ComplianceSection } from "@/components/ComplianceSection";
 import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
+import { TenderChangeHistory } from "@/components/TenderChangeHistory";
 import { WorkspaceLauncher } from "@/components/WorkspaceLauncher";
 import { useSession } from "@/components/SessionProvider";
 import { api } from "@/lib/api";
@@ -31,6 +32,7 @@ import { useResource } from "@/lib/hooks";
 import type { TenderMatch } from "@/lib/matching";
 import type { Compliance } from "@/lib/compliance";
 import type { RequirementAnalysis } from "@/lib/requirements";
+import type { TenderHistoryRevision } from "@/lib/tender-changes";
 import {
   CONTRACT_TYPE_LABELS,
   daysUntilDeadline,
@@ -63,6 +65,7 @@ export default function TenderDetailPage() {
   const { companyId } = useSession();
   const { data, loading, error, reload } = useResource<TenderDetail>(`/tenders/${tenderId}`);
   const revisions = useResource<TenderRevision[]>(`/tenders/${tenderId}/revisions`);
+  const history = useResource<TenderHistoryRevision[]>(`/tenders/${tenderId}/history`);
   // Pot no existir (404) si encara no s'ha calculat: `PreFitPanel` ho explica.
   const match = useResource<TenderMatch>(
     companyId ? `/companies/${companyId}/matches/by-tender/${tenderId}` : null,
@@ -451,6 +454,14 @@ export default function TenderDetailPage() {
           error={compliance.error}
           prefitScore={match.data?.score ?? null}
           onReload={compliance.reload}
+        />
+
+        {/* ------------------------------------------ Canvis publicats --- */}
+        <TenderChangeHistory
+          revisions={history.data}
+          loading={history.loading}
+          error={history.error}
+          onReload={history.reload}
         />
 
         {/* --------------------------------------------------- Historial --- */}

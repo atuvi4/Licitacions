@@ -31,6 +31,7 @@ from app.models.enums import (
     WorkspaceStatus,
     WorkspaceTaskStatus,
 )
+from app.schemas.tenders import TenderChangeEventRead
 
 
 class ORMModel(BaseModel):
@@ -268,6 +269,24 @@ class WorkspaceDetail(BaseModel):
     current_requirement_run_id: uuid.UUID | None = None
     analysis_outdated: bool = False
     outdated_reasons: list[str] = Field(default_factory=list)
+
+    #: Cert quan l'expedient ja no admet presentacio (anul.lat o equivalent).
+    tender_actionable: bool = True
+    #: Cert quan el lot d'aquesta candidatura ja no es al feed. Per a qui s'hi
+    #: presentava es tan definitiu com que caigui l'expedient sencer.
+    lot_removed: bool = False
+    #: Les dues coses anteriors juntes: si encara te sentit preparar-la.
+    workspace_actionable: bool = True
+    #: Cert quan la decisio humana no es pot donar per vigent. La decisio NO es
+    #: toca ni es torna a signar: el que caduca es la seva vigencia.
+    decision_outdated: bool = False
+    #: Cert quan la decisio es d'abans que la licitacio tingues historia. No es
+    #: pot dir que hagi caducat, pero tampoc que segueixi valida: cal mirar-s'ho.
+    decision_basis_unknown: bool = False
+    #: Per que la decisio no es vigent. Codis; el text el posa la interficie.
+    decision_reasons: list[str] = Field(default_factory=list)
+    #: Els canvis materials publicats despres de l'ultima decisio humana.
+    changes_since_decision: list[TenderChangeEventRead] = Field(default_factory=list)
 
     #: Estat del DOSSIER. Ni compliment ni decisio: si tenim els papers a punt.
     readiness: WorkspaceReadiness = WorkspaceReadiness.NOT_STARTED

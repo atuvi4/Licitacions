@@ -179,6 +179,13 @@ class WorkspaceDecision(UUIDPrimaryKeyMixin, CompanyOwnedMixin, Base):
     decided_by: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    #: Sobre quina revisio de la licitacio es va decidir. Es el que permet dir
+    #: despres "aquesta decisio es d'abans que canvies el termini" sense
+    #: tocar-la: la decisio no caduca, el que caduca es la seva vigencia, i
+    #: aixo es dedueix comparant aquesta revisio amb l'actual.
+    tender_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("tender_revisions.id", ondelete="SET NULL")
+    )
     decided_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )

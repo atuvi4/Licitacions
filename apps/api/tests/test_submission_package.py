@@ -30,6 +30,7 @@ from app.models.documents import Document, DocumentLink
 from app.models.enums import (
     AnalysisRunStatus,
     DocumentCategory,
+    DownloadStatus,
     EvidenceItemStatus,
     ExtractionConfidence,
     InsuranceType,
@@ -43,6 +44,7 @@ from app.models.enums import (
     ReviewStatus,
     SourceType,
     SubmissionPackageStatus,
+    TenderDocumentType,
     WorkspaceDecisionType,
     WorkspaceReadiness,
     WorkspaceStatus,
@@ -55,10 +57,15 @@ from app.models.submission import (
     SubmissionPackageApproval,
     SubmissionPackageItem,
 )
-from app.models.tenders import Tender
+from app.models.tender_documents import (
+    TenderDocumentContent,
+    TenderDocumentFile,
+)
+from app.models.tenders import Tender, TenderDocument
 from app.models.workspace import WorkspaceEvidenceItem
 from app.services import bid_workspace as workspace_service
 from app.services import submission_package as service
+from app.services import tender_lifecycle as lifecycle
 from app.services import workspace_dossier as dossier_service
 from app.services.compliance_analysis import analyze_company_compliance
 from app.services.storage import get_storage
@@ -1304,3 +1311,229 @@ async def test_the_freeze_response_lists_the_documents_it_just_froze(db, client_
     # I ha de coincidir amb el que retorna llegir-lo despres.
     fetched = (await client_a.get(f"{root}/packages/{frozen['id']}")).json()
     assert [i["id"] for i in fetched["items"]] == [i["id"] for i in frozen["items"]]
+
+
+# --------------------------------------------------------------------------- #
+# El paquet davant d'un canvi de la licitacio                                   #
+# --------------------------------------------------------------------------- #
+
+
+async def _revise(db, tender, **changes):
+    """Aplica un canvi a la licitacio i n'enregistra la revisio."""
+    for field, value in changes.items():
+        setattr(tender, field, value)
+    outcome = await lifecycle.record_revision(db, tender)
+    await db.commit()
+    return outcome
+
+
+async def _add_tender_document(db, tender, *, url, sha=None):
+    """Un document de la LICITACIO —un plec—, no un document corporatiu."""
+    document = TenderDocument(
+        tender_id=tender.id,
+        url=url,
+        name="PCAP",
+        document_type=TenderDocumentType.ADMINISTRATIVE_TERMS,
+    )
+    db.add(document)
+    await db.flush()
+    if sha is not None:
+        await _replace_content(db, document, sha=sha)
+    await db.commit()
+    return document
+
+
+async def _replace_content(db, document, *, sha):
+    """Substitueix el contingut vigent d'un plec per un de nou."""
+    previous = (
+        await db.scalars(
+            sa.select(TenderDocumentFile).where(
+                TenderDocumentFile.tender_document_id == document.id
+            )
+        )
+    ).all()
+    for file in previous:
+        file.is_current = False
+    content = TenderDocumentContent(
+        sha256=sha,
+        storage_key=f"documents/{sha}.pdf",
+        file_size=1024,
+        mime_type="application/pdf",
+        is_text_extractable=True,
+    )
+    db.add(content)
+    await db.flush()
+    db.add(
+        TenderDocumentFile(
+            tender_document_id=document.id,
+            content_id=content.id,
+            source_url=document.url,
+            version_number=len(previous) + 1,
+            is_current=True,
+            download_status=DownloadStatus.DOWNLOADED,
+            downloaded_at=datetime.now(UTC),
+        )
+    )
+    await db.commit()
+
+
+async def test_freezing_records_which_state_of_the_tender_it_was_frozen_against(
+    db, ready, tender
+):
+    """Sense aixo, un paquet aprovat no pot dir si es d'abans o de despres."""
+    revision = (await lifecycle.record_revision(db, tender)).revision
+    await db.commit()
+
+    package = await freeze(db, ready)
+
+    assert package.tender_revision_id == revision.id
+    assert package.tender_normalized_hash == revision.normalized_hash
+
+
+async def test_an_approved_package_survives_a_new_plec_but_stops_being_current(
+    db, ready, tender
+):
+    """El cas que importa: aprovat contra r1, i despres canvia el plec.
+
+    L'aprovacio NO es desfa. Segueix dient qui va signar, quan i sobre quin
+    estat, perque es historia i la historia no es reescriu. El que canvia es la
+    resposta a una altra pregunta —si aixo encara s'envia— i abans les dues
+    preguntes compartien una sola resposta.
+    """
+    document = await _add_tender_document(db, tender, url="https://x/pcap.pdf", sha="a" * 64)
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+
+    package = await freeze(db, ready)
+    approval = await approve(db, ready, package)
+    signed_at, signed_by = approval.approved_at, approval.approved_by
+
+    await _replace_content(db, document, sha="b" * 64)
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+
+    stale = await service.evaluate_staleness(db, ready["workspace"], package)
+    assert "tender_changed" in stale.reasons
+
+    # L'aprovacio, intacta.
+    await db.refresh(approval)
+    assert (approval.approved_at, approval.approved_by) == (signed_at, signed_by)
+    assert approval.decision == PackageApprovalDecision.APPROVED_FOR_SUBMISSION
+    # I el paquet tambe: segueix APROVAT, no "superat" ni degradat a res.
+    await db.refresh(package)
+    assert package.status == SubmissionPackageStatus.APPROVED
+    assert package.tender_normalized_hash is not None
+
+
+async def test_a_document_that_only_moved_does_not_invalidate_an_approved_package(
+    db, ready, tender
+):
+    """URL nova amb el mateix contingut: no ha canviat res del que es demana."""
+    document = await _add_tender_document(
+        db, tender, url="https://x/vell/pcap.pdf", sha="a" * 64
+    )
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+
+    package = await freeze(db, ready)
+    await approve(db, ready, package)
+
+    document.url = "https://x/nou/pcap.pdf"
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+
+    stale = await service.evaluate_staleness(db, ready["workspace"], package)
+
+    assert "tender_changed" not in stale.reasons
+    assert stale.is_stale is False
+
+
+async def test_a_new_deadline_makes_an_approved_package_stop_being_presentable(
+    db, ready, tender
+):
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+    package = await freeze(db, ready)
+    await approve(db, ready, package)
+
+    await _revise(db, tender, deadline_at=DEADLINE + timedelta(days=10))
+
+    stale = await service.evaluate_staleness(db, ready["workspace"], package)
+    assert "tender_changed" in stale.reasons
+
+
+async def test_a_package_frozen_before_the_tender_had_history_is_not_assumed_coherent(
+    db, ready, tender
+):
+    """NULL vol dir "no ho sabem", i "no ho sabem" no es "quadra"."""
+    package = await freeze(db, ready)
+    assert package.tender_revision_id is None
+
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+
+    stale = await service.evaluate_staleness(db, ready["workspace"], package)
+    assert "tender_revision_unknown" in stale.reasons
+
+
+async def test_a_tender_change_blocks_the_approval_of_a_frozen_package(db, ready, tender):
+    """No s'aprova en silenci una cosa que ja no es la que es va congelar."""
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+    package = await freeze(db, ready)
+
+    await _revise(db, tender, deadline_at=DEADLINE + timedelta(days=10))
+
+    with pytest.raises(service.PackageStaleError) as excinfo:
+        await approve(db, ready, package)
+
+    assert "tender_changed" in excinfo.value.details["reasons"]
+
+
+async def test_after_a_tender_change_the_path_back_is_a_new_revision(db, ready, tender):
+    """Tornar al cami de revisio es el cami que ja hi havia: congelar de nou."""
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+    first = await freeze(db, ready)
+    await approve(db, ready, first)
+    assert ready["workspace"].status == WorkspaceStatus.APPROVED_FOR_SUBMISSION
+
+    await _revise(db, tender, deadline_at=DEADLINE + timedelta(days=10))
+
+    second = await freeze(db, ready)
+
+    assert second.revision_number == first.revision_number + 1
+    assert ready["workspace"].status == WorkspaceStatus.READY_FOR_FINAL_REVIEW
+    # La revisio nova sap contra quin estat es congela, i es el nou.
+    assert second.tender_revision_id != first.tender_revision_id
+    stale = await service.evaluate_staleness(db, ready["workspace"], second)
+    assert stale.is_stale is False
+    # I la primera no s'ha tocat: segueix sent el que es va aprovar aquell dia.
+    await db.refresh(first)
+    assert first.tender_revision_id is not None
+
+
+async def test_the_api_says_whether_an_approved_package_is_still_presentable(
+    db, client_a, ready, tender
+):
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+    root = f"/api/v1/companies/{ready['company'].id}/workspaces/{ready['workspace'].id}"
+    package = await freeze(db, ready)
+    await approve(db, ready, package)
+
+    before = (await client_a.get(f"{root}/packages/{package.id}")).json()
+    assert before["coherent_for_submission"] is True
+    assert before["tender_revision_number"] == 1
+
+    await _revise(db, tender, deadline_at=DEADLINE + timedelta(days=10))
+
+    after = (await client_a.get(f"{root}/packages/{package.id}")).json()
+    assert after["coherent_for_submission"] is False
+    assert "tender_changed" in after["stale_reasons"]
+    # Aprovat segueix sent aprovat: son dues preguntes diferents.
+    assert after["approval"]["decision"] == "approved_for_submission"
+
+    listed = (await client_a.get(f"{root}/packages")).json()
+    assert listed[0]["is_approved"] is True
+    assert listed[0]["tender_changed_since_freeze"] is True

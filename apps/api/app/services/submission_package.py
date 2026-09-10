@@ -44,6 +44,7 @@ from app.models.workspace import BidWorkspace
 from app.services import bid_workspace as workspace_service
 from app.services import workspace_dossier as dossier_service
 from app.services.storage import StorageError, get_storage
+from app.services.tender_lifecycle import load_change_log, revision_of
 from app.workspace.dossier import UNUSABLE_VALIDITIES
 from app.workspace.transitions import TransitionActor
 
@@ -56,6 +57,18 @@ class PackageNotReadyError(ConflictError):
     """S'ha demanat congelar amb el dossier incomplet."""
 
     code = "package_not_ready"
+
+
+class TenderNotActionableError(ConflictError):
+    """L'expedient —o el lot— ja no admet preparar cap presentacio nova.
+
+    No esborra res. El workspace, les decisions i els paquets ja aprovats
+    segueixen sent historia consultable; el que es bloqueja es continuar
+    preparant una oferta per a una licitacio que ja no existeix, o per a un lot
+    que ha desaparegut del feed.
+    """
+
+    code = "tender_not_actionable"
 
 
 class PackageImmutableError(ConflictError):
@@ -229,6 +242,23 @@ async def freeze_package(
     """
     workspace_service.assert_can_decide(role)
 
+    # Un expedient anul.lat no admet cap preparacio nova, i un lot que ha
+    # desaparegut del feed tampoc: per a qui s'hi presentava es igual de
+    # definitiu. No s'esborra res del que ja hi ha —el workspace, les decisions i
+    # els paquets anteriors segueixen sent historia auditable— pero congelar-ne
+    # un de nou seria preparar una oferta que no te on anar.
+    state = await workspace_service.load_state(session, workspace)
+    if not state.workspace_actionable:
+        raise TenderNotActionableError(
+            "Aquest lot ja no es a la licitacio."
+            if state.lot_removed
+            else "Aquesta licitacio ja no admet presentacio.",
+            details={
+                "status": str(state.tender.status),
+                "reason": "lot_removed" if state.lot_removed else "tender_not_actionable",
+            },
+        )
+
     readiness = await dossier_service.reconcile_readiness(session, workspace)
     if not readiness.is_ready:
         raise PackageNotReadyError(
@@ -237,7 +267,6 @@ async def freeze_package(
         )
 
     dossier = await dossier_service.load_dossier(session, workspace)
-    state = await workspace_service.load_state(session, workspace)
 
     previous = await latest_package(session, workspace)
     revision_number = (previous.revision_number + 1) if previous else 1
@@ -259,6 +288,13 @@ async def freeze_package(
         requirement_run_id=state.requirement_run.id if state.requirement_run else None,
         prefit_score=state.prefit_score,
         deadline_at=state.deadline_at,
+        # Contra quin estat de la licitacio es congela. El manifest diu QUE
+        # enviavem; aixo diu contra QUE. Sense les dues coses, un paquet aprovat
+        # no pot respondre si es d'abans o de despres que canviessin el plec.
+        tender_revision_id=state.tender_revision.id if state.tender_revision else None,
+        tender_normalized_hash=(
+            state.tender_revision.normalized_hash if state.tender_revision else None
+        ),
         mandatory_total=dossier.counters.mandatory_total,
         mandatory_covered=dossier.counters.covered,
         document_count=len(selected),
@@ -338,7 +374,13 @@ async def freeze_package(
 
 @dataclass(frozen=True, slots=True)
 class StaleReport:
-    """Per que aquest paquet ja no descriu el que hi ha ara."""
+    """Per que aquest paquet ja no descriu el que hi ha ara.
+
+    **Estar obsolet no desfa res.** Un paquet aprovat segueix aprovat, amb la
+    seva signatura i la seva data: es historia i la historia no es reescriu. El
+    que diu aixo es una altra cosa —si encara es POT PRESENTAR— i son dues
+    preguntes diferents que abans no es podien distingir.
+    """
 
     reasons: tuple[str, ...]
     current_manifest_hash: str | None
@@ -356,9 +398,26 @@ async def evaluate_staleness(
     Es recalcula el manifest amb el que hi ha ara i es compara el hash: si
     difereix, hi ha alguna cosa que ja no es la mateixa —un document substituit,
     un que s'ha tret, un requisit que ja no hi es— i el paquet no es pot aprovar.
+
+    I es mira tambe la LICITACIO, que el manifest no cobreix: el manifest parla
+    dels nostres papers, no del que demana l'organ. Un termini que s'avança o un
+    plec substituit no canvien cap byte del que enviariem, i tot i aixi el fan
+    inservible.
     """
     reasons: list[str] = []
     state = await workspace_service.load_state(session, workspace)
+
+    log = await load_change_log(session, workspace.tender_id)
+    frozen_on = await revision_of(session, package.tender_revision_id)
+    if log.basis_unknown(frozen_on):
+        # Congelat abans que la licitacio tingues historia: no es pot afirmar
+        # que segueixi coherent, i afirmar-ho seria justament el que no toca en
+        # una pantalla d'aprovacio final.
+        reasons.append("tender_revision_unknown")
+    elif log.since(frozen_on):
+        reasons.append("tender_changed")
+    if not state.workspace_actionable:
+        reasons.append("lot_removed" if state.lot_removed else "tender_not_actionable")
 
     if state.compliance_run is not None and state.compliance_run.id != package.compliance_run_id:
         reasons.append("compliance_run_changed")

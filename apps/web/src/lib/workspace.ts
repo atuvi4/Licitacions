@@ -13,6 +13,7 @@
  */
 
 import type { EligibilityResult, RecommendationResult } from "@/lib/compliance";
+import type { TenderChangeEvent } from "@/lib/tender-changes";
 
 export type WorkspaceStatus =
   | "analysis"
@@ -51,6 +52,9 @@ export interface WorkspaceDecisionEntry {
   reason: string | null;
   compliance_run_id: string | null;
   requirement_run_id: string | null;
+  /** Contra quin estat de la licitació es va congelar. `null` = no consta. */
+  tender_revision_number: number | null;
+  tender_normalized_hash_short: string | null;
   prefit_score: number | null;
   confirmed_blockers: number;
   potential_blockers: number;
@@ -167,6 +171,21 @@ export interface WorkspaceDetail {
   current_requirement_run_id: string | null;
   analysis_outdated: boolean;
   outdated_reasons: string[];
+  /** Cert quan l'expedient ja no admet presentació (anul·lat o equivalent). */
+  tender_actionable: boolean;
+  /** Cert quan el lot d'aquesta candidatura ja no és al feed. */
+  lot_removed: boolean;
+  /** Les dues anteriors juntes: si encara té sentit preparar-la. */
+  workspace_actionable: boolean;
+  /**
+   * Cert quan la decisió humana no es pot donar per vigent. La decisió no es
+   * toca mai ni es torna a signar: el que caduca és la seva vigència.
+   */
+  decision_outdated: boolean;
+  /** Cert quan no se sap sobre quin estat es va decidir. Vegeu DECISION_REASONS. */
+  decision_basis_unknown: boolean;
+  decision_reasons: string[];
+  changes_since_decision: TenderChangeEvent[];
   readiness: WorkspaceReadiness;
   readiness_blockers: string[];
   dossier_coverage: DossierCoverageCounters | null;
@@ -472,6 +491,24 @@ export const OUTDATED_LABELS: Record<string, string> = {
   requirement_run_changed: "Hi ha una anàlisi de requisits més recent que la del workspace.",
   compliance_run_changed: "Hi ha un càlcul de compliment més recent que el del workspace.",
   compliance_run_missing: "El càlcul de compliment de referència ja no és vigent.",
+  tender_not_actionable: "L'òrgan ha anul·lat aquesta licitació.",
+  lot_removed: "El lot d'aquesta candidatura ja no és a la licitació.",
+  prefit_outdated: "La licitació ha canviat en alguna cosa que afecta l'encaix previ.",
+  requirements_outdated: "Els plecs han canviat: cal tornar a analitzar-los.",
+  compliance_outdated: "Els imports de la licitació han canviat: cal recalcular el compliment.",
+};
+
+/**
+ * Per què una decisió humana no es pot donar per vigent.
+ *
+ * Són dos motius molt diferents i barrejar-los seria un error: en un sabem què
+ * ha canviat i en l'altre no sabem ni de què partíem. El segon és el de les
+ * decisions anteriors a l'historial de canvis.
+ */
+export const DECISION_REASON_LABELS: Record<string, string> = {
+  tender_changed_since_decision: "La licitació ha canviat després de la decisió.",
+  revision_basis_unknown:
+    "Aquesta decisió és anterior a l'historial de canvis: no consta sobre quin estat de la licitació es va prendre.",
 };
 
 /** Text del comptador de dies. Mai s'amaga un termini passat. */
@@ -544,6 +581,11 @@ export interface PackageSummary {
   is_approved: boolean;
   approved_at: string | null;
   approved_by_name: string | null;
+  /**
+   * Cert si la licitació ha canviat materialment des que es va congelar. Un
+   * paquet aprovat continua aprovat: això diu si encara és presentable.
+   */
+  tender_changed_since_freeze: boolean;
 }
 
 export interface PackageDetail {
@@ -570,6 +612,12 @@ export interface PackageDetail {
   readiness_blockers: string[];
   stale_reasons: string[];
   is_stale: boolean;
+  /**
+   * Si el paquet encara descriu una presentació possible. Independent
+   * d'`is_approved`: una aprovació no es desfà mai, però un paquet aprovat
+   * contra un plec que després han substituït ja no s'envia.
+   */
+  coherent_for_submission: boolean;
   can_approve: boolean;
   can_sign: boolean;
   workspace_status: WorkspaceStatus;
@@ -606,4 +654,9 @@ export const STALE_REASON_LABELS: Record<string, string> = {
   document_expired_for_deadline:
     "Algun document del paquet ja no serà vigent el dia del termini.",
   superseded: "Aquesta revisió ha quedat superada per una de posterior.",
+  tender_changed: "La licitació ha canviat des que es va congelar el paquet.",
+  tender_revision_unknown:
+    "Aquest paquet és anterior a l'historial de canvis: no consta contra quin estat de la licitació es va congelar.",
+  tender_not_actionable: "L'òrgan ha anul·lat aquesta licitació.",
+  lot_removed: "El lot d'aquesta candidatura ja no és a la licitació.",
 };

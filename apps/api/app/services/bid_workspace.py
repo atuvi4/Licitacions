@@ -42,6 +42,7 @@ from app.models.enums import (
 from app.models.identity import CompanyMembership, User
 from app.models.matching import CompanyTenderMatch
 from app.models.requirements import Requirement, RequirementExtractionRun
+from app.models.tender_lifecycle import TenderChangeEvent, TenderRevision
 from app.models.tenders import Tender, TenderLot
 from app.models.workspace import (
     BidWorkspace,
@@ -50,6 +51,13 @@ from app.models.workspace import (
     WorkspaceNote,
     WorkspaceTask,
 )
+from app.services.tender_lifecycle import (
+    is_actionable,
+    load_change_log,
+    lot_is_gone,
+    revision_of,
+)
+from app.tenders.changes import ChangeImpact
 from app.workspace.checklist import (
     applies_to_workspace_lot,
     checklist_title,
@@ -298,6 +306,53 @@ class WorkspaceState:
     deadline_at: datetime | None
     days_remaining: int | None
     deadline_passed: bool
+    #: La revisio vigent de la licitacio. `None` si encara no se n'ha enregistrat
+    #: cap: no vol dir que no hagi canviat, vol dir que no ho sabem.
+    tender_revision: TenderRevision | None = None
+    #: Canvis materials publicats DESPRES de l'ultima decisio humana.
+    changes_since_decision: tuple[TenderChangeEvent, ...] = ()
+    #: Cert quan l'expedient ja no admet presentacio (cancel.lat o equivalent).
+    tender_actionable: bool = True
+    #: Cert quan el lot d'aquesta candidatura ja no es al feed.
+    lot_removed: bool = False
+    #: Per que la decisio humana no es pot donar per vigent. Buit = ho es.
+    #: Codis, no frases: la interficie en deriva el text.
+    decision_reasons: tuple[str, ...] = ()
+
+    @property
+    def decision_outdated(self) -> bool:
+        """Si la decisio humana no es pot donar per vigent.
+
+        Es DERIVAT i no una bandera desada. Una bandera s'hauria de mantenir
+        sincronitzada des de la ingestió, i el dia que algu s'oblides de posar-la
+        el sistema diria que una decisio es vigent quan no ho es. Aixo es la
+        mena de mentida que aquesta fase existeix per evitar.
+
+        La decisio en si no es toca mai: segueix dient qui, quan i sobre quin
+        estat, i ningu la torna a signar. El que caduca es la seva vigencia.
+        """
+        return bool(self.decision_reasons)
+
+    @property
+    def decision_basis_unknown(self) -> bool:
+        """La decisio es d'abans que la licitacio tingues historia.
+
+        No es pot afirmar que hagi quedat obsoleta, pero tampoc que segueixi
+        vigent: no sabem sobre quin estat es va prendre. Entre les dues
+        mentides, cap: es diu que no se sap i s'obliga a mirar-s'ho. Es el cas
+        de tota decisio anterior a aquesta fase.
+        """
+        return "revision_basis_unknown" in self.decision_reasons
+
+    @property
+    def workspace_actionable(self) -> bool:
+        """Si encara te sentit preparar aquesta candidatura.
+
+        Dues maneres de deixar de tenir-ne: que caigui l'expedient sencer o que
+        caigui NOMES el lot al qual ens presentavem. La segona es tan definitiva
+        com la primera per a qui hi treballava, i abans era invisible.
+        """
+        return self.tender_actionable and not self.lot_removed
 
     @property
     def warnings(self) -> DecisionWarnings:
@@ -359,16 +414,72 @@ async def load_state(
     deadline = (lot.deadline_at if lot and lot.deadline_at else None) or tender.deadline_at
     days = _days_remaining(deadline, now)
 
+    # La historia material de la licitacio, llegida un sol cop. Cada artefacte
+    # hi pregunta el mateix amb una base diferent: que ha passat des que em vaig
+    # calcular que m'afecti A MI. La matriu d'impacte dona la resposta exacta i
+    # per aixo un canvi de titol no desperta ningu.
+    log = await load_change_log(session, tender.id)
+    revision = log.latest
+
+    decision = await latest_decision(session, workspace.id)
+    decided_on = await revision_of(
+        session, decision.tender_revision_id if decision else None
+    )
+    since = log.since(decided_on)
+    decision_reasons: list[str] = []
+    if decision is not None:
+        if log.basis_unknown(decided_on):
+            # Decisio d'abans que existissin les revisions. No es toca ni es
+            # torna a signar: nomes deixa de comptar com a vigent fins que algu
+            # se la miri, perque afirmar que ho es seria inventar-s'ho.
+            decision_reasons.append("revision_basis_unknown")
+        elif since:
+            decision_reasons.append("tender_changed_since_decision")
+
+    # El pre-fit te component de calendari i d'import: el que el fa obsolet es
+    # exactament el que la matriu marca com a `prefit_affecting`.
+    prefit_basis = await revision_of(session, match.tender_revision_id if match else None)
+    if match is not None and log.is_outdated(prefit_basis, ChangeImpact.PREFIT_AFFECTING):
+        reasons.append("prefit_outdated")
+
+    # Els requisits surten dels PLECS. Que es mogui un import no els canvia:
+    # "el 50% del pressupost base" segueix dient el mateix. Nomes els
+    # `requirements_affecting` —documents— obliguen a tornar a llegir.
+    if requirements is not None and log.is_outdated(
+        await revision_of(session, requirements.tender_revision_id),
+        ChangeImpact.REQUIREMENTS_AFFECTING,
+    ):
+        reasons.append("requirements_outdated")
+
+    # El compliment si que depen dels imports: els llindars percentuals es
+    # resolen contra el pressupost. Ni el perfil ni els requisits han canviat i
+    # tots dos fingerprints segueixen iguals, pero el veredicte pot ser un altre.
+    if compliance is not None and log.is_outdated(
+        await revision_of(session, compliance.tender_revision_id),
+        ChangeImpact.COMPLIANCE_AFFECTING,
+    ):
+        reasons.append("compliance_outdated")
+
+    if not is_actionable(tender):
+        reasons.append("tender_not_actionable")
+    if lot_is_gone(lot):
+        reasons.append("lot_removed")
+
     return WorkspaceState(
         workspace=workspace,
         tender=tender,
+        tender_revision=revision,
+        changes_since_decision=since,
+        tender_actionable=is_actionable(tender),
+        lot_removed=lot_is_gone(lot),
+        decision_reasons=tuple(decision_reasons),
         lot=lot,
         compliance_run=compliance,
         requirement_run=requirements,
         counters=counters,
         prefit_score=match.score if match else workspace.prefit_score,
         prefit_status=match.status.value if match else None,
-        latest_decision=await latest_decision(session, workspace.id),
+        latest_decision=decision,
         analysis_outdated=bool(reasons),
         outdated_reasons=tuple(reasons),
         deadline_at=deadline,
@@ -712,6 +823,7 @@ async def record_decision(
             state.compliance_run.recommendation.value if state.compliance_run else None
         ),
         deadline_passed=warnings.deadline_passed,
+        tender_revision_id=state.tender_revision.id if state.tender_revision else None,
     )
     session.add(record)
     workspace.status = set_status(
@@ -768,3 +880,4 @@ def mark_completion(
         item.completed_at = datetime.now(UTC)
     elif not done:
         item.completed_at = None
+

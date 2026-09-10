@@ -90,6 +90,9 @@ class PackageSummary(ORMModel):
     is_approved: bool = False
     approved_at: datetime | None = None
     approved_by_name: str | None = None
+    #: Cert si la licitacio ha canviat materialment des que es va congelar.
+    #: Un paquet aprovat segueix aprovat: aixo diu si encara es presentable.
+    tender_changed_since_freeze: bool = False
 
 
 class PackageDetail(BaseModel):
@@ -111,6 +114,10 @@ class PackageDetail(BaseModel):
 
     compliance_run_id: uuid.UUID | None = None
     requirement_run_id: uuid.UUID | None = None
+    #: Contra quin estat de la licitacio es va congelar. `None` = es d'abans que
+    #: la licitacio tingues historia, i llavors no es pot afirmar que quadri.
+    tender_revision_number: int | None = None
+    tender_normalized_hash_short: str | None = None
     prefit_score: int | None = None
     coverage: PackageCoverageRead
 
@@ -124,6 +131,10 @@ class PackageDetail(BaseModel):
     #: Per que aquest paquet ja no descriu el que hi ha. Buit = segueix valid.
     stale_reasons: list[str] = Field(default_factory=list)
     is_stale: bool = False
+    #: Cert nomes si el paquet segueix descrivint una presentacio possible.
+    #: Independent de `is_approved`: una aprovacio no es desfa mai, pero un
+    #: paquet aprovat contra un plec que despres han substituit ja no s'envia.
+    coherent_for_submission: bool = False
     #: Cert nomes si TOT quadra ara mateix. La interficie no ho ha de deduir.
     can_approve: bool = False
     #: Si l'usuari que mira te potestat per signar-ho.

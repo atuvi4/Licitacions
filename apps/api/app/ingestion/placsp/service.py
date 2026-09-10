@@ -41,6 +41,7 @@ from app.models.tenders import (
 )
 from app.services.files import compute_sha256
 from app.services.storage import StorageService, get_storage
+from app.services.tender_lifecycle import record_revision
 
 logger = logging.getLogger("app.ingestion.placsp")
 
@@ -394,15 +395,26 @@ class PlacspIngestionService:
         tender.country_code = data.country_code
         tender.source_url = data.source_url
         tender.last_seen_at = now
-        tender.last_changed_at = now
         tender.revision_count = record.revision_number
         await self.session.flush()
         tender.latest_source_record_id = record.id
 
         await self._sync_cpvs(tender, data)
-        await self._sync_lots(tender, data)
+        await self._sync_lots(tender, data, now)
         await self._sync_documents(tender, data, record)
         await self.session.flush()
+
+        # La historia s'escriu aqui, amb l'estat ja sincronitzat. Si el
+        # contingut normalitzat no ha canviat, aixo no crea res: reingerir el
+        # mateix feed deixa el sistema exactament igual.
+        outcome = await record_revision(self.session, tender, source_record_id=record.id)
+
+        # `last_changed_at` nomes es mou si ha canviat alguna cosa de veritat.
+        # Abans s'escrivia a cada reingestió, i com que el pre-fit el compara
+        # per saber si s'ha de recalcular, TOT semblava obsolet cada vegada que
+        # passava el feed. Un avis que salta sempre no informa de res.
+        if not outcome.unchanged:
+            tender.last_changed_at = now
         return tender, created
 
     async def _upsert_buyer(self, data: NormalizedTender, source: Source) -> Buyer | None:
@@ -461,7 +473,9 @@ class PlacspIngestionService:
         for code, is_main in wanted.items():
             self.session.add(TenderCPV(tender_id=tender.id, cpv_code=code, is_main=is_main))
 
-    async def _sync_lots(self, tender: Tender, data: NormalizedTender) -> None:
+    async def _sync_lots(
+        self, tender: Tender, data: NormalizedTender, now: datetime
+    ) -> None:
         existing = {
             lot.external_lot_id: lot
             for lot in (
@@ -472,15 +486,22 @@ class PlacspIngestionService:
         }
         wanted_ids = {lot.external_lot_id for lot in data.lots}
 
+        # Un lot que ja no es al feed es MARCA, no s'esborra. Esborrar-lo se'n
+        # duria per davant qualsevol candidatura que hi apunti —`tender_lot_id`
+        # te ON DELETE CASCADE— i amb ella les seves decisions i els seus
+        # paquets. La feina d'una empresa no pot desapareixer perque l'organ
+        # hagi reorganitzat els lots: ha de quedar-hi, i avisar.
         for external_id, lot in existing.items():
-            if external_id not in wanted_ids:
-                await self.session.delete(lot)
+            if external_id not in wanted_ids and lot.removed_at is None:
+                lot.removed_at = now
 
         for info in data.lots:
             lot = existing.get(info.external_lot_id)
             if lot is None:
                 lot = TenderLot(tender_id=tender.id, external_lot_id=info.external_lot_id)
                 self.session.add(lot)
+            # Un lot que torna deixa d'estar marcat: la font mana.
+            lot.removed_at = None
             lot.lot_number = info.lot_number
             lot.title = info.title
             lot.estimated_value = info.estimated_value

@@ -100,6 +100,24 @@ class SubmissionPackage(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, 
     prefit_score: Mapped[int | None] = mapped_column(sa.Integer)
     deadline_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
+    #: Contra quin estat de la LICITACIO es va congelar. El manifest diu que
+    #: enviavem; aixo diu contra que. Sense aixo, un paquet aprovat no podia
+    #: respondre "es va aprovar abans o despres que canviessin el plec?", i
+    #: aquesta es justament la pregunta que decideix si encara es presentable.
+    tender_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "tender_revisions.id",
+            ondelete="SET NULL",
+            name="fk_submission_packages_tender_revision",
+        ),
+    )
+    #: El hash de l'estat normalitzat d'aquell moment, copiat. La revisio es pot
+    #: perdre si algun dia s'esborra la licitacio; el hash es queda, i un paquet
+    #: auditat d'aqui a dos anys ha de poder dir contra que es va congelar
+    #: encara que la fila apuntada ja no hi sigui.
+    tender_normalized_hash: Mapped[str | None] = mapped_column(sa.String(64))
+
     #: Recompte de cobertura en el moment de congelar. Es guarda perque el
     #: report d'auditoria no depengui de recalcular res.
     mandatory_total: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)

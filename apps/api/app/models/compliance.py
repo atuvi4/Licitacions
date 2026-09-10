@@ -80,6 +80,14 @@ class CompanyComplianceRun(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixi
     tender_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False
     )
+    #: Sobre quina revisio de la licitacio s'ha calculat. Cal a banda dels dos
+    #: fingerprints perque un llindar percentual es resol contra el pressupost
+    #: de l'expedient: si el pressupost es mou, ni el perfil ni els requisits han
+    #: canviat i tots dos fingerprints segueixen iguals, pero el veredicte pot
+    #: ser un altre.
+    tender_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("tender_revisions.id", ondelete="SET NULL")
+    )
     #: Quina extraccio de requisits s'ha avaluat. Una de nova obliga a recalcular.
     requirement_extraction_run_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True),

@@ -166,7 +166,9 @@ export function SubmissionPackageSection({
           {current.is_stale && (
             <div className="border-b border-border bg-warning-soft px-5 py-4">
               <p className="text-[13px] font-semibold text-warning">
-                Aquesta revisió ja no descriu el que hi ha ara
+                {current.approval
+                  ? "Aquesta revisió està aprovada, però ja no es pot presentar"
+                  : "Aquesta revisió ja no descriu el que hi ha ara"}
               </p>
               <ul className="mt-1 space-y-0.5">
                 {current.stale_reasons.map((code) => (

@@ -39,6 +39,7 @@ from app.models.tender_documents import (
     TenderDocumentFile,
     TenderDocumentPage,
 )
+from app.models.tender_lifecycle import TenderChangeEvent, TenderRevision
 from app.models.tenders import (
     Buyer,
     Tender,
@@ -97,6 +98,7 @@ __all__ = [
     "SubmissionPackageItem",
     "Tender",
     "TenderCPV",
+    "TenderChangeEvent",
     "TenderDocument",
     "TenderDocumentContent",
     "TenderDocumentExtraction",
@@ -104,6 +106,7 @@ __all__ = [
     "TenderDocumentPage",
     "TenderLot",
     "TenderLotCPV",
+    "TenderRevision",
     "User",
     "WorkspaceChecklistItem",
     "WorkspaceDecision",

@@ -16,9 +16,11 @@ import { useSession } from "@/components/SessionProvider";
 import { Badge, Card, ErrorNotice, PageHeader, Skeleton } from "@/components/ui";
 import { ELIGIBILITY_LABELS, ELIGIBILITY_TONES, RECOMMENDATION_LABELS } from "@/lib/compliance";
 import { useResource } from "@/lib/hooks";
+import { describeChange } from "@/lib/tender-changes";
 import { formatDateTime } from "@/lib/tenders";
 import {
   DECISION_LABELS,
+  DECISION_REASON_LABELS,
   DECISION_TONES,
   OUTDATED_LABELS,
   READINESS_LABELS,
@@ -115,6 +117,65 @@ export default function WorkspacePage() {
               Va vèncer el {formatDateTime(data.deadline_at)}. El workspace segueix consultable i
               es pot deixar constància del que es va decidir, però qualsevol GO a partir d&apos;ara
               exigeix motiu escrit.
+            </p>
+          </div>
+        )}
+
+        {/* Un expedient anul.lat no admet cap preparacio nova. */}
+        {!data.tender_actionable && (
+          <div className="rounded-[var(--radius-card)] border border-danger/40 bg-danger-soft px-5 py-4">
+            <p className="text-sm font-semibold text-danger">
+              L&apos;òrgan ha anul·lat aquesta licitació
+            </p>
+            <p className="mt-1 text-[13px] text-ink">
+              No s&apos;hi pot congelar cap paquet nou. El que ja hi ha —la decisió, la feina i
+              els paquets anteriors— es conserva com a història auditable.
+            </p>
+          </div>
+        )}
+
+        {/* El lot pot caure sense que caigui l'expedient, i per a qui s'hi
+            presentava es igual de definitiu. */}
+        {data.lot_removed && (
+          <div className="rounded-[var(--radius-card)] border border-danger/40 bg-danger-soft px-5 py-4">
+            <p className="text-sm font-semibold text-danger">
+              El lot d&apos;aquesta candidatura ja no és a la licitació
+            </p>
+            <p className="mt-1 text-[13px] text-ink">
+              La licitació continua, però sense aquest lot. No s&apos;hi pot congelar cap paquet
+              nou; la feina feta i les decisions es conserven com a història auditable.
+            </p>
+          </div>
+        )}
+
+        {/* La decisio no s'esborra: el que caduca es la seva vigencia. */}
+        {data.decision_outdated && (
+          <div className="rounded-[var(--radius-card)] border border-warning/40 bg-warning-soft px-5 py-4">
+            <p className="text-sm font-semibold text-warning">
+              {data.decision_basis_unknown
+                ? "Cal revisar la decisió"
+                : "La licitació ha canviat després de la decisió"}
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {/* Els canvis ja es llisten a sota un per un: repetir aquí "la
+                  licitació ha canviat" seria dir dues vegades el mateix. Només
+                  hi surten els motius que la llista de canvis no explica. */}
+              {data.decision_reasons
+                .filter((code) => code !== "tender_changed_since_decision")
+                .map((code) => (
+                  <li key={code} className="text-[13px] text-ink">
+                    {DECISION_REASON_LABELS[code] ?? code}
+                  </li>
+                ))}
+              {data.changes_since_decision.map((event, index) => (
+                <li key={`${event.change_code}-${index}`} className="text-[13px] text-ink">
+                  {describeChange(event)}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1 text-[12px] text-muted">
+              La decisió es conserva tal com es va prendre, amb qui la va signar i quan. El que
+              cal revisar és si segueix sent vàlida.
             </p>
           </div>
         )}
