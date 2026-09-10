@@ -150,3 +150,84 @@ def test_cap_varchar_no_es_mes_estret_que_el_del_model(migration_sql):
                 narrow.append(f"{table.name}.{column.name}: model {expected}, migracio {actual}")
 
     assert not narrow, "columnes mes estretes que el model: " + "; ".join(narrow)
+
+
+#: Un FK sense clausula `ON DELETE` es comporta com `NO ACTION` a PostgreSQL.
+_DEFAULT_ON_DELETE = "NO ACTION"
+_FOREIGN_KEY = re.compile(
+    r"CONSTRAINT (?P<name>\w+) FOREIGN\s*KEY\s*\((?P<columns>[^)]*)\)\s*"
+    r"REFERENCES (?P<referred>\w+)\s*\([^)]*\)(?P<rest>[^,\n]*)",
+    re.I,
+)
+
+
+def _on_delete(clause: str) -> str:
+    action = re.search(
+        r"ON DELETE (CASCADE|SET NULL|SET DEFAULT|RESTRICT|NO ACTION)", clause, re.I
+    )
+    return action.group(1).upper() if action else _DEFAULT_ON_DELETE
+
+
+def _foreign_keys(ddl: str) -> dict[tuple[str, tuple[str, ...]], tuple[str, str]]:
+    """Estat final de cada FK segons les migracions: `(taula, columnes) -> (nom, ON DELETE)`.
+
+    Cal llegir-ho en ordre i no com un recompte: una revisio posterior pot
+    esborrar una FK i tornar-la a crear amb un comportament diferent, i el que
+    val es l'ultima.
+    """
+    state: dict[tuple[str, tuple[str, ...]], tuple[str, str]] = {}
+
+    def remember(table: str, match: re.Match[str]) -> None:
+        columns = tuple(c.strip().strip('"') for c in match.group("columns").split(","))
+        state[(table, columns)] = (match.group("name"), _on_delete(match.group("rest")))
+
+    for created in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\);", ddl, re.S):
+        for match in _FOREIGN_KEY.finditer(created.group(2)):
+            remember(created.group(1), match)
+
+    for table, operation, tail in re.findall(
+        r"ALTER TABLE (\w+) (ADD|DROP) CONSTRAINT (.*?);", ddl, re.S
+    ):
+        if operation.upper() == "ADD":
+            match = _FOREIGN_KEY.search(f"CONSTRAINT {tail}")
+            if match:
+                remember(table, match)
+            continue
+        name = tail.split()[0]
+        for key, value in list(state.items()):
+            if key[0] == table and value[0] == name:
+                del state[key]
+
+    return state
+
+
+def test_cada_fk_esborra_igual_que_al_model(migration_sql):
+    """El `ON DELETE` de les migracions ha de ser el que declara el model.
+
+    Va passar de veritat: la 0013 va crear `company_insurance_limits.created_by`
+    i `updated_by` sense `ON DELETE`, quan `ActorMixin` les declara `SET NULL`.
+    A PostgreSQL aixo vol dir `NO ACTION`, i esborrar un usuari fallava amb
+    violacio de clau forana en comptes de deixar la fila sense autor.
+
+    La suite corre sobre SQLite creant les taules des dels MODELS, on la
+    clausula hi era sempre; l'esquema real es construeix des de les MIGRACIONS.
+    Mentre l'unic que es comparaven eren noms de columna, aquesta diferencia no
+    la podia veure ningu fins a tenir un PostgreSQL al davant.
+    """
+    from_migrations = _foreign_keys(migration_sql)
+    divergent: list[str] = []
+
+    for table in Base.metadata.sorted_tables:
+        for constraint in table.foreign_key_constraints:
+            columns = tuple(column.name for column in constraint.columns)
+            expected = (constraint.ondelete or _DEFAULT_ON_DELETE).upper()
+            found = from_migrations.get((table.name, columns))
+            if found is None:
+                divergent.append(f"{table.name}({', '.join(columns)}): no hi es a la migracio")
+            elif found[1] != expected:
+                divergent.append(
+                    f"{table.name}({', '.join(columns)}) [{found[0]}]: "
+                    f"model ON DELETE {expected}, migracio ON DELETE {found[1]}"
+                )
+
+    assert not divergent, "FK que no esborren com el model: " + "; ".join(divergent)
