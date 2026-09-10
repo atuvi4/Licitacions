@@ -14,6 +14,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
+    AnalysisBasis,
     AssessmentResult,
     ChecklistItemSource,
     ChecklistItemStatus,
@@ -220,6 +221,7 @@ class WorkspaceSummary(ORMModel):
     eligibility: EligibilityResult | None = None
     recommendation: RecommendationResult | None = None
     human_decision: WorkspaceDecisionType | None = None
+    analysis_basis: AnalysisBasis = AnalysisBasis.PROVIDER_NOT_CONFIGURED
     analysis_outdated: bool = False
     created_at: datetime
 
@@ -267,6 +269,10 @@ class WorkspaceDetail(BaseModel):
 
     current_compliance_run_id: uuid.UUID | None = None
     current_requirement_run_id: uuid.UUID | None = None
+    #: Sobre QUE s'ha construit el que ensenya aquesta candidatura. Amb
+    #: `simulation` o `provider_not_configured`, res del que hi ha a sota surt
+    #: de llegir el plec, i la interficie ho ha de dir abans que ningu decideixi.
+    analysis_basis: AnalysisBasis = AnalysisBasis.PROVIDER_NOT_CONFIGURED
     analysis_outdated: bool = False
     outdated_reasons: list[str] = Field(default_factory=list)
 
@@ -317,6 +323,11 @@ class WorkspaceCreateResult(BaseModel):
 class ChecklistRegenerateResult(BaseModel):
     created: int
     total: int
+    #: Per que no s'ha creat res, quan `created` es 0. Un 200 sense cap efecte i
+    #: sense cap explicacio es indistingible d'una accio que no ha funcionat:
+    #: qui l'ha premut es queda sense saber si el problema es seu o del sistema.
+    #: Codis; el text el posa la interficie.
+    reason: str | None = None
     checklist: list[ChecklistItemRead] = Field(default_factory=list)
 
 
@@ -415,4 +426,7 @@ class DossierSyncResult(BaseModel):
     suggested: int
     gaps: int
     total: int
+    #: Per que no s'ha proposat res. Mateix motiu que a la checklist: una accio
+    #: que no fa res ho ha de poder dir. Codis; el text el posa la interficie.
+    reason: str | None = None
     dossier: DossierRead

@@ -3,6 +3,11 @@
 import { useState } from "react";
 
 import { Modal } from "@/components/Modal";
+import {
+  ANALYSIS_BASIS_HINTS,
+  ANALYSIS_BASIS_LABELS,
+  isTrustworthyAnalysis,
+} from "@/lib/compliance";
 import { Badge, Button, Card, CardHeader, Field, Textarea } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useMutation } from "@/lib/hooks";
@@ -41,6 +46,8 @@ export function DecisionPanel({
 
   const warnings = workspace.open_warnings;
   const needsReason = pending === "go" && workspace.go_requires_reason;
+  const undetermined = workspace.eligibility === "undetermined" || workspace.eligibility === null;
+  const trustworthy = isTrustworthyAnalysis(workspace.analysis_basis);
 
   function open(decision: WorkspaceDecisionType) {
     mutation.reset();
@@ -185,9 +192,41 @@ export function DecisionPanel({
             </div>
             <div>
               <dt className="text-muted">Bloqueigs confirmats</dt>
-              <dd className="text-ink">{workspace.counters.confirmed_blockers}</dd>
+              {/* Un "0" surt igual tant si s'han avaluat vint requisits i cap
+                  bloqueja com si no se n'ha avaluat cap. Són coses oposades i
+                  aquesta és l'última pantalla abans d'un compromís. */}
+              <dd className="text-ink">
+                {undetermined ? (
+                  <span className="text-warning">Cap requisit avaluat</span>
+                ) : (
+                  workspace.counters.confirmed_blockers
+                )}
+              </dd>
             </div>
           </dl>
+
+          {undetermined && (
+            <div className="rounded-md border border-warning/40 bg-warning-soft px-3 py-3">
+              <p className="text-[13px] font-semibold text-warning">
+                Decidiràs sense saber si l&apos;empresa compleix
+              </p>
+              <p className="mt-1 text-[13px] text-ink">
+                No s&apos;ha avaluat cap requisit d&apos;aquest plec. La decisió és teva i
+                quedarà registrada tal com és: presa sobre una anàlisi que encara no diu res.
+              </p>
+            </div>
+          )}
+
+          {!trustworthy && (
+            <div className="rounded-md border border-warning/40 bg-warning-soft px-3 py-3">
+              <p className="text-[13px] font-semibold text-warning">
+                {ANALYSIS_BASIS_LABELS[workspace.analysis_basis]}
+              </p>
+              <p className="mt-1 text-[13px] text-ink">
+                {ANALYSIS_BASIS_HINTS[workspace.analysis_basis]}
+              </p>
+            </div>
+          )}
 
           {warnings.length > 0 && (
             <div className="rounded-md border border-warning/40 bg-warning-soft px-3 py-3">

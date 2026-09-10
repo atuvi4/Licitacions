@@ -318,6 +318,57 @@ export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: (
   );
 }
 
+/**
+ * Resultat d'una acció que ha anat bé.
+ *
+ * Existeix perquè una acció que retorna 200 i no canvia res a la pantalla és
+ * indistingible d'una que ha fallat: qui l'ha premuda es queda sense saber si
+ * el problema és seu o del sistema. Va passar amb «Reconcilia amb l'anàlisi»,
+ * que era literalment el botó que un avís et demanava prémer.
+ *
+ * `tone="info"` per al cas neutre —s'ha fet i no hi havia res a fer— i
+ * `tone="success"` quan alguna cosa ha canviat de veritat.
+ */
+export function ResultNotice({
+  message,
+  detail,
+  tone = "info",
+  onDismiss,
+}: {
+  message: string;
+  detail?: string;
+  tone?: "info" | "success";
+  onDismiss?: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-start justify-between gap-4 rounded-md border px-4 py-3",
+        tone === "success"
+          ? "border-success/25 bg-success-soft"
+          : "border-border bg-subtle",
+      )}
+    >
+      <div>
+        <p className={cn("text-[13px]", tone === "success" ? "text-success" : "text-ink")}>
+          {message}
+        </p>
+        {detail && <p className="mt-0.5 text-[12px] text-muted">{detail}</p>}
+      </div>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="text-[12px] text-muted hover:text-ink"
+          aria-label="Tanca l'avís"
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Taules                                                                      */
 /* -------------------------------------------------------------------------- */

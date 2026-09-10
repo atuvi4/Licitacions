@@ -68,7 +68,12 @@ export default function WorkspacePage() {
     );
   }
 
-  if (loading || !data) {
+  // Només la PRIMERA càrrega ensenya l'esquelet. Si ja hi ha dades, refrescar
+  // no pot desmuntar la pàgina: desmuntar-la destrueix l'estat local de cada
+  // secció —entre altres coses, el missatge que acaba d'explicar què ha fet
+  // l'acció que l'ha provocada— i fa que tota la pantalla parpellegi a cada
+  // clic.
+  if (!data) {
     return (
       <>
         <PageHeader title="Candidatura" />

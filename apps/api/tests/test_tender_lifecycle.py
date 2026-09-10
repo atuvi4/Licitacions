@@ -23,6 +23,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -63,6 +64,7 @@ from app.tenders.changes import (
     LOT_FIELDS,
     ChangeCode,
     ChangeImpact,
+    canonical_instant,
     diff_snapshots,
     snapshot_hash,
     summarise,
@@ -1467,3 +1469,154 @@ class TestPrimerShaConegutContraSubstitucio:
         assert revision.revision_number == 1
         log = await lifecycle.load_change_log(session, tender.id)
         assert log.entries == ()
+
+
+# --------------------------------------------------------------------------- #
+# Mateix instant = mateix valor                                                 #
+# --------------------------------------------------------------------------- #
+
+
+class TestMateixInstant:
+    """Un moment escrit de dues maneres no es un canvi de termini.
+
+    Va passar de veritat, i no en un cas rebuscat: a la PRIMERA licitacio que es
+    tocava. En processar el primer plec, la fotografia es tornava a construir,
+    el termini sortia amb un offset diferent del que s'havia desat, i la
+    candidatura naixia amb un `DEADLINE_CHANGED` **material** que ningu havia
+    fet —i, darrere seu, l'avis que tota l'analisi havia quedat endarrerida.
+
+    Es exactament el fals positiu que la 0016 es va escriure per evitar: si
+    l'avis salta sempre, deixa de voler dir res.
+    """
+
+    #: El mateix moment, escrit de tres maneres. 19:00 a Madrid a l'hivern son
+    #: les 18:00 UTC; l'offset explicit i la zona nomenada han de coincidir.
+    MADRID_HIVERN = datetime(2026, 11, 28, 19, 0, tzinfo=ZoneInfo("Europe/Madrid"))
+    UTC_HIVERN = datetime(2026, 11, 28, 18, 0, tzinfo=UTC)
+
+    def test_el_mateix_instant_amb_offsets_diferents_no_es_cap_canvi(self):
+        before = {"deadline_at": "2026-11-28T19:00:00+01:00"}
+        after = {"deadline_at": "2026-11-28T18:00:00+00:00"}
+
+        assert diff_snapshots(before, after) == []
+
+    def test_el_hash_no_depen_de_com_sescriu_lhora(self):
+        """Mateix instant, mateixa identitat: cap revisio nova."""
+        assert canonical_instant(self.MADRID_HIVERN) == canonical_instant(self.UTC_HIVERN)
+        assert snapshot_hash({"deadline_at": canonical_instant(self.MADRID_HIVERN)}) == (
+            snapshot_hash({"deadline_at": canonical_instant(self.UTC_HIVERN)})
+        )
+
+    def test_un_instant_realment_diferent_si_que_es_un_canvi(self):
+        """La correccio no pot fer-nos cecs al canvi que si que compta."""
+        before = {"deadline_at": "2026-11-28T19:00:00+01:00"}
+        after = {"deadline_at": "2026-11-28T19:00:00+00:00"}  # una hora mes tard
+
+        changes = diff_snapshots(before, after)
+
+        assert [change.code for change in changes] == [ChangeCode.DEADLINE_CHANGED]
+        assert changes[0].is_material is True
+
+    def test_el_canvi_dhorari_destiu_no_inventa_cap_canvi(self):
+        """A l'estiu Madrid es +02:00. Segueix sent el mateix moment."""
+        estiu_madrid = datetime(2026, 7, 15, 20, 0, tzinfo=ZoneInfo("Europe/Madrid"))
+        estiu_utc = datetime(2026, 7, 15, 18, 0, tzinfo=UTC)
+
+        assert estiu_madrid == estiu_utc  # premissa del test
+        assert diff_snapshots(
+            {"deadline_at": canonical_instant(estiu_madrid)},
+            {"deadline_at": canonical_instant(estiu_utc)},
+        ) == []
+
+    def test_un_datetime_sense_zona_es_tracta_com_a_utc(self):
+        naive = datetime(2026, 11, 28, 18, 0)
+
+        assert canonical_instant(naive) == canonical_instant(self.UTC_HIVERN)
+
+    def test_el_termini_dun_lot_te_la_mateixa_regla(self):
+        """El termini del lot mana per a qui s'hi presenta: mateix criteri."""
+        before = {
+            "lots": [{"external_lot_id": "1", "deadline_at": "2026-11-28T19:00:00+01:00"}]
+        }
+        after = {
+            "lots": [{"external_lot_id": "1", "deadline_at": "2026-11-28T18:00:00+00:00"}]
+        }
+
+        assert diff_snapshots(before, after) == []
+
+    def test_el_termini_dun_lot_que_es_mou_de_veritat_si_que_es_veu(self):
+        before = {
+            "lots": [{"external_lot_id": "1", "deadline_at": "2026-11-28T19:00:00+01:00"}]
+        }
+        after = {
+            "lots": [{"external_lot_id": "1", "deadline_at": "2026-11-29T19:00:00+01:00"}]
+        }
+
+        changes = diff_snapshots(before, after)
+
+        assert [change.code for change in changes] == [ChangeCode.LOT_DEADLINE_CHANGED]
+
+    def test_la_data_de_publicacio_dun_document_tampoc(self):
+        document = {"url": "https://x/a.pdf", "sha256": "aa"}
+        before = {"documents": [document | {"published_at": "2026-01-02T10:00:00+01:00"}]}
+        after = {"documents": [document | {"published_at": "2026-01-02T09:00:00+00:00"}]}
+
+        assert diff_snapshots(before, after) == []
+
+    async def test_reescriure_el_termini_en_una_altra_zona_no_crea_revisio(self, db, tender):
+        """Contra la base de dades: mateix moment, cap revisio i cap event."""
+        tender.deadline_at = self.MADRID_HIVERN
+        await lifecycle.record_revision(db, tender)
+        await db.commit()
+
+        outcome = await revise(db, tender, deadline_at=self.UTC_HIVERN)
+
+        assert outcome.unchanged is True
+        assert await count_revisions(db, tender) == 1
+        assert await events_of(db, tender) == []
+
+    async def test_coneixer_el_primer_document_no_mou_el_termini(self, db, tender):
+        """La regressio E2E, reproduida.
+
+        Processar el primer plec fa una revisio nova —ara sabem el SHA d'un
+        document que abans no haviem baixat— i aixo es correcte i informatiu.
+        El que no pot passar es que, de passada, el termini sembli que s'ha
+        mogut nomes perque la fotografia s'ha tornat a construir.
+        """
+        tender.deadline_at = self.MADRID_HIVERN
+        document = TenderDocument(
+            tender_id=tender.id,
+            url="https://x/pcap.pdf",
+            name="PCAP",
+            document_type=TenderDocumentType.ADMINISTRATIVE_TERMS,
+        )
+        db.add(document)
+        await db.commit()
+        await lifecycle.record_revision(db, tender)
+        await db.commit()
+
+        # El mateix instant, ara escrit en UTC (com el torna PostgreSQL), i el
+        # document ja baixat.
+        tender.deadline_at = self.UTC_HIVERN
+        content = TenderDocumentContent(
+            sha256="c" * 64, file_size=10, mime_type="application/pdf", storage_key="k/1"
+        )
+        db.add(content)
+        await db.flush()
+        db.add(
+            TenderDocumentFile(
+                tender_document_id=document.id,
+                content_id=content.id,
+                source_url=document.url,
+                is_current=True,
+                download_status=DownloadStatus.DOWNLOADED,
+            )
+        )
+        await db.commit()
+
+        outcome = await lifecycle.record_revision(db, tender)
+        await db.commit()
+
+        assert outcome.unchanged is False
+        assert await codes_of(db, tender) == [ChangeCode.DOCUMENT_CONTENT_IDENTIFIED.value]
+        assert outcome.summary.is_material is False

@@ -273,10 +273,45 @@ def test_a_clean_go_needs_no_written_reason():
         DecisionWarnings(mandatory_unknown=1),
         DecisionWarnings(mandatory_needs_review=1),
         DecisionWarnings(deadline_passed=True),
+        # Els tres de sota son els que faltaven: una decisio presa sobre una
+        # analisi que no diu res, que no es de fiar, o que descriu un estat
+        # anterior de la licitacio.
+        DecisionWarnings(undetermined_eligibility=True),
+        DecisionWarnings(unreliable_analysis=True),
+        DecisionWarnings(outdated_analysis=True),
     ],
 )
 def test_a_go_with_an_open_warning_needs_a_written_reason(warning):
     assert requires_reason(WorkspaceDecisionType.GO, warning) is True
+
+
+def test_un_go_sense_veredicte_exigeix_que_algu_ho_escrigui():
+    """La persona pot decidir igualment. El que no pot es fer-ho en silenci.
+
+    No es bloqueja el GO a proposit: prohibir-lo empenyeria la decisio fora de
+    l'eina, que es on deixa de quedar registrada. El que si que ha de passar es
+    que consti que es va decidir sense saber si l'empresa complia.
+    """
+    warnings = DecisionWarnings(undetermined_eligibility=True)
+
+    assert warnings.any_open is True
+    assert "undetermined_eligibility" in warnings.codes()
+    assert requires_reason(WorkspaceDecisionType.GO, warnings) is True
+
+
+def test_els_codis_davis_arriben_sencers_a_la_interficie():
+    """La pantalla en deriva el text: si el codi no hi es, l'avis no es veu."""
+    warnings = DecisionWarnings(
+        undetermined_eligibility=True,
+        unreliable_analysis=True,
+        outdated_analysis=True,
+    )
+
+    assert set(warnings.codes()) == {
+        "undetermined_eligibility",
+        "unreliable_analysis",
+        "outdated_analysis",
+    }
 
 
 def test_a_no_go_never_needs_to_justify_itself_against_a_warning():

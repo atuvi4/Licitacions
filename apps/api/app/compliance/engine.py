@@ -183,6 +183,19 @@ def derive_blocker_status(
     return BlockerStatus.POTENTIAL
 
 
+def _has_verdict(
+    rows: list[tuple[RequirementObligation, AssessmentResult, BlockerStatus]],
+) -> bool:
+    """Hi ha alguna cosa que sostingui una afirmacio sobre l'empresa?
+
+    Cap fila vol dir que no s'ha analitzat el plec. Totes "no aplicable" vol dir
+    que s'ha analitzat i que res del que demana afecta aquesta empresa: tampoc
+    s'ha verificat res d'ella. En tots dos casos el veredicte honest es "no ho
+    sabem", i no "compleix".
+    """
+    return any(result != AssessmentResult.NOT_APPLICABLE for _, result, _ in rows)
+
+
 @dataclass(frozen=True, slots=True)
 class EligibilitySummary:
     eligibility: EligibilityResult
@@ -205,7 +218,20 @@ def summarise(
     """Agrega els assessments en elegibilitat i recomanacio.
 
     Cap mitjana: els comptadors es miren un a un i el bloqueig sempre domina.
+
+    **Sense res avaluat no hi ha veredicte.** Zero requisits donava zero
+    bloquejadors i, per la via dels comptadors, `ELIGIBLE`: el sistema deia
+    "podeu acreditar que compliu" sense haver llegit ni un plec. Zero
+    informacio i zero impediments son coses oposades, i ara es diuen diferent.
     """
+    if not _has_verdict(rows):
+        return EligibilitySummary(
+            eligibility=EligibilityResult.UNDETERMINED,
+            recommendation=RecommendationResult.UNDETERMINED,
+            not_applicable=sum(
+                1 for _, result, _ in rows if result == AssessmentResult.NOT_APPLICABLE
+            ),
+        )
     counts = dict.fromkeys(AssessmentResult, 0)
     mandatory_total = 0
     potential = confirmed = 0

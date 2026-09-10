@@ -104,7 +104,7 @@ class TestDetail:
         assert len(detail["lots"]) == 3
         assert detail["lots"][0]["cpvs"]
         assert detail["documents"]
-        assert detail["revision_count"] == 1
+        assert detail["source_publication_count"] == 1
         assert detail["first_seen_at"] and detail["last_seen_at"]
 
     async def test_la_fitxa_inclou_tracabilitat(self, client_a, ingested):

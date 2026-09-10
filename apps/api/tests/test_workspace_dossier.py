@@ -110,8 +110,11 @@ async def extraction_run(db, tender):
         extractor_version="tender-requirements-v1",
         prompt_version="requirements-v1",
         schema_version="requirements-schema-v1",
-        provider="fake",
-        model="fake-model-v1",
+        # Proveidor REAL a proposit: aquests tests aproven paquets, i un paquet
+        # sostingut per una simulacio no s'ha de poder aprovar. Veure
+        # `PackageSimulationError`.
+        provider="anthropic",
+        model="claude-sonnet-5",
         is_current=True,
     )
     db.add(run)
@@ -1179,8 +1182,11 @@ async def new_extraction_run(db, tender) -> RequirementExtractionRun:
         extractor_version="tender-requirements-v1",
         prompt_version="requirements-v1",
         schema_version="requirements-schema-v1",
-        provider="fake",
-        model="fake-model-v1",
+        # Proveidor REAL a proposit: aquests tests aproven paquets, i un paquet
+        # sostingut per una simulacio no s'ha de poder aprovar. Veure
+        # `PackageSimulationError`.
+        provider="anthropic",
+        model="claude-sonnet-5",
         is_current=True,
     )
     db.add(run)

@@ -36,6 +36,7 @@ from app.schemas.workspace import (
 from app.services import audit
 from app.services import bid_workspace as workspace_service
 from app.services import workspace_dossier as service
+from app.workspace.decision import nothing_to_do_reason
 from app.workspace.transitions import is_submitted
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["dossier"])
@@ -208,10 +209,15 @@ async def sync_dossier(workspace_id: uuid.UUID, session: SessionDep, ctx: Compan
     await service.start_bid_preparation(session, workspace)
     await session.commit()
     await session.refresh(workspace)
+    run = await workspace_service.current_requirement_run(session, workspace.tender_id)
     return DossierSyncResult(
         suggested=outcome.suggested,
         gaps=outcome.gaps,
         total=outcome.total,
+        reason=nothing_to_do_reason(
+            created=outcome.suggested + outcome.gaps,
+            requirements_available=run.requirements_extracted if run else 0,
+        ),
         dossier=await _dossier_read(session, ctx, workspace),
     )
 

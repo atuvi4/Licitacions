@@ -26,14 +26,74 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from app.models.enums import StrEnum
+
+
+def canonical_instant(value: datetime | str | None) -> str | None:
+    """Un instant, sempre escrit igual: en UTC.
+
+    `2026-11-28T19:00:00+01:00` i `2026-11-28T18:00:00+00:00` son el MATEIX
+    moment. Si entren a la fotografia tal com arriben, un canvi de com la font
+    —o el driver de la base de dades— escriu l'hora sembla que l'organ ha mogut
+    el termini: revisio nova, event `DEADLINE_CHANGED` material i, darrere seu,
+    l'avis que tota l'analisi ha quedat endarrerida.
+
+    No es hipotetic: passava a la PRIMERA licitacio que es tocava. En processar
+    el primer document la fotografia es tornava a construir, l'hora sortia amb
+    un offset diferent, i la candidatura naixia amb un avis d'un canvi que
+    ningu havia fet.
+
+    Un datetime sense zona es tracta com a UTC. Es una suposicio, pero es la que
+    ja fa la resta del sistema —les columnes son `timezone=True` i tot el que
+    s'hi escriu porta zona—; comparar naive amb aware nomes mouria el fals
+    positiu de lloc.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            # No es un instant: es retorna tal qual i es compara com a text.
+            return value
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()
+
+
+def same_instant(old: Any, new: Any) -> bool:
+    """Cert quan dos valors son el mateix moment, encara que s'escriguin diferent.
+
+    Les fotografies noves ja arriben canonicalitzades, pero les que es van desar
+    abans d'aquesta correccio no. Comparar aqui tambe l'instant evita que la
+    primera revisio posterior al desplegament generi el fals positiu que
+    justament s'esta corregint.
+    """
+    if old == new:
+        return True
+    if old is None or new is None:
+        return False
+    return canonical_instant(old) == canonical_instant(new)
 
 #: Versio de la logica de deteccio. Es desa a cada revisio: si algun dia
 #: canviem que compta com a canvi, dues revisions calculades amb criteris
 #: diferents no serien comparables.
 CHANGE_DETECTION_VERSION = "tender-changes-v1"
+
+#: Camps de la fotografia que son un INSTANT i no una cadena qualsevol. Es
+#: comparen amb `same_instant`: el mateix moment escrit amb un offset diferent
+#: no es un canvi. Tot camp nou que porti data i hora ha d'entrar aqui.
+_INSTANT_FIELDS: frozenset[str] = frozenset({"deadline_at", "published_at"})
+
+
+def _same_field(name: str, old: Any, new: Any) -> bool:
+    """Iguals segons el TIPUS del camp, no segons com estan escrits."""
+    if name in _INSTANT_FIELDS:
+        return same_instant(old, new)
+    return old == new
 
 
 class ChangeImpact(StrEnum):
@@ -348,7 +408,9 @@ NOT_ACTIONABLE_STATUSES = frozenset({"cancelled"})
 
 def _deadline_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Change]:
     old, new = before.get("deadline_at"), after.get("deadline_at")
-    if old == new:
+    # `same_instant` i no `==`: el mateix moment escrit amb un offset diferent
+    # no es cap canvi de termini. Veure `canonical_instant`.
+    if same_instant(old, new):
         return []
     if old is None:
         return [Change(ChangeCode.DEADLINE_ADDED, None, new)]
@@ -444,7 +506,7 @@ def _lot_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Change]:
             was, now = previous.get(field_name), current.get(field_name)
             if field_name == "cpvs":
                 was, now = sorted(was or []), sorted(now or [])
-            if was == now or code in seen_codes:
+            if _same_field(field_name, was, now) or code in seen_codes:
                 # Un sol event per codi i lot: que pugin l'import i la moneda
                 # alhora es un sol fet, no dos avisos.
                 continue
@@ -524,7 +586,10 @@ def _document_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Cha
                 Change(ChangeCode.DOCUMENT_CONTENT_IDENTIFIED, None, new_sha, subject=url)
             )
             continue
-        if any(previous.get(name) != current.get(name) for name in _DOCUMENT_METADATA):
+        if any(
+            not _same_field(name, previous.get(name), current.get(name))
+            for name in _DOCUMENT_METADATA
+        ):
             changes.append(
                 Change(
                     ChangeCode.DOCUMENT_METADATA_CHANGED,
@@ -541,7 +606,7 @@ def diff_snapshots(before: dict[str, Any], after: dict[str, Any]) -> list[Change
     changes: list[Change] = []
     for field_name, code in _SCALAR_FIELDS:
         old, new = before.get(field_name), after.get(field_name)
-        if old != new:
+        if not _same_field(field_name, old, new):
             # El `subject` es el nom del camp, no per decorar: dos camps poden
             # compartir codi i cal poder dir quin s'ha mogut.
             changes.append(Change(code, old, new, subject=field_name))

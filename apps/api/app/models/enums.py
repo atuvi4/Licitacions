@@ -480,11 +480,20 @@ class EvidenceStrength(StrEnum):
 
 
 class EligibilityResult(StrEnum):
-    """Podem acreditar que complim? NO es "ens interessa" ni "guanyarem"."""
+    """Podem acreditar que complim? NO es "ens interessa" ni "guanyarem".
+
+    `UNDETERMINED` no es un quart grau de compliment: es l'abscencia de
+    veredicte. Zero requisits avaluats vol dir zero informacio, no zero
+    bloquejadors, i son coses oposades. Presentar-ho com a `ELIGIBLE` deia a
+    l'usuari "podeu acreditar que compliu" sense haver mirat ni un sol plec.
+    """
 
     ELIGIBLE = "eligible"
     REVIEW_REQUIRED = "review_required"
     NO_GO = "no_go"
+    #: No s'ha pogut avaluar res. Mai es tradueix a `NO_GO`: no saber si una
+    #: empresa compleix no es el mateix que saber que no compleix.
+    UNDETERMINED = "undetermined"
 
 
 class RecommendationResult(StrEnum):
@@ -494,6 +503,64 @@ class RecommendationResult(StrEnum):
     ELIGIBLE_LOW_FIT = "eligible_low_fit"
     REVIEW = "review"
     NO_GO = "no_go"
+    #: Sense elegibilitat no hi ha res a recomanar. El pre-fit sol no basta: diu
+    #: si la licitacio interessa, no si s'hi pot anar.
+    UNDETERMINED = "undetermined"
+
+
+#: Proveidors que NO llegeixen cap plec. El nom ja es a cada run, aixi que la
+#: base d'una analisi es dedueix del que es va desar i no cal cap columna nova
+#: que algu hagi de mantenir sincronitzada.
+#:
+#: Van fora de l'enum a proposit: dins d'un `str, Enum` qualsevol assignacio es
+#: converteix en un membre mes, i comparar contra el seu `.value` faria coses
+#: com ara donar per bo que la cadena buida es a "fixture".
+SIMULATED_PROVIDERS: frozenset[str] = frozenset({"fixture"})
+UNCONFIGURED_PROVIDERS: frozenset[str] = frozenset({"fake"})
+
+
+class AnalysisBasis(StrEnum):
+    """Sobre QUE s'ha construit una analisi. No es el seu estat.
+
+    `status = completed` nomes diu que el proces ha acabat. Aixo diu si el que
+    hi ha darrere es una lectura real del plec o una simulacio de
+    desenvolupament, i son coses que l'usuari no pot confondre: una analisi
+    "Completa" amb zero requisits sortida d'un proveidor fals es una afirmacio
+    falsa sobre el plec.
+    """
+
+    #: Proveidor d'inferencia real.
+    REAL = "real"
+    #: Sortida fabricada per a desenvolupament o proves. Mai es una lectura del
+    #: plec, encara que en tingui la forma.
+    SIMULATION = "simulation"
+    #: No hi ha cap motor configurat. El run existeix, pero no ha analitzat res.
+    PROVIDER_NOT_CONFIGURED = "provider_not_configured"
+
+    @classmethod
+    def for_provider(cls, name: str | None) -> AnalysisBasis:
+        """Sobre que s'ha construit una analisi, segons qui la va respondre.
+
+        Viu aqui i no a `app.ai` a proposit: qui ho ha de saber es el domini
+        —el paquet de presentacio, el workspace, l'esquema de l'API— i cap
+        d'ells no pot dependre de la capa d'inferencia. Es un mapatge de noms,
+        no una crida a res.
+
+        `fake` es el doble de proves: no encua res per defecte i respon buit. Si
+        apareix a un run que veu un usuari, el que ha passat no es que el plec
+        no tingues requisits: es que no hi ha cap motor configurat.
+        """
+        chosen = (name or "").strip().lower()
+        if chosen in SIMULATED_PROVIDERS:
+            return cls.SIMULATION
+        if not chosen or chosen in UNCONFIGURED_PROVIDERS:
+            return cls.PROVIDER_NOT_CONFIGURED
+        return cls.REAL
+
+    @property
+    def is_trustworthy(self) -> bool:
+        """Nomes una analisi real sosté una afirmacio sobre el plec."""
+        return self is AnalysisBasis.REAL
 
 
 class CompanyEvidenceKind(StrEnum):

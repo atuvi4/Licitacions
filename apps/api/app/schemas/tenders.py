@@ -139,7 +139,11 @@ class TenderListItem(ORMModel):
     buyer: BuyerSummary | None = None
     cpvs: list[TenderCPVRead] = []
     lot_count: int = 0
-    revision_count: int = 1
+    #: Quantes vegades la FONT ha publicat aquest expedient. No es el nombre de
+    #: canvis: la font pot republicar sense tocar cap dada. La historia del que
+    #: ha canviat de veritat viu a `tender_change_events`, i son dos conceptes
+    #: diferents que no poden dir-se tots dos "versions".
+    source_publication_count: int = 1
     source_code: str | None = None
     # True quan l'expedient ha canviat despres de la primera vegada que el vam veure.
     is_modified: bool = False
@@ -196,7 +200,8 @@ class TenderDetail(ORMModel):
     first_seen_at: datetime
     last_seen_at: datetime
     last_changed_at: datetime | None = None
-    revision_count: int
+    #: Publicacions rebudes de la font. Veure la nota a `TenderListItem`.
+    source_publication_count: int
     buyer: BuyerRead | None = None
     cpvs: list[TenderCPVRead] = []
     lots: list[TenderLotRead] = []

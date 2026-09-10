@@ -29,6 +29,7 @@ import {
   DOCUMENT_STATE_TONES,
   documentState,
   formatBytes,
+  type TenderDetail,
   type TenderDocumentFileSummary,
 } from "@/lib/tenders";
 
@@ -109,6 +110,15 @@ export default function DocumentTextPage() {
   );
   const [pageNumber, setPageNumber] = useState(citedPage ?? 1);
 
+  // El títol ha de ser el NOM del document ("Plec de prescripcions tècniques"),
+  // no el tros final de la seva URL: `original_filename` surt de l'adreça i a
+  // PLACSP acaba sent el nom d'un servlet ("GetDocumentByIdServlet"), que no
+  // diu res a ningú. L'adreça segueix visible a la zona tècnica, que és on
+  // toca.
+  const { data: tender } = useResource<TenderDetail>(`/tenders/${params.tenderId}`);
+  const documentName =
+    tender?.documents?.find((document) => document.id === params.documentId)?.name ?? null;
+
   const citedFile = citedExtraction
     ? files?.find((file) => file.extraction?.id === citedExtraction)
     : undefined;
@@ -156,7 +166,10 @@ export default function DocumentTextPage() {
       >
         ← Torna a la licitació
       </Link>
-      <PageHeader title={current.original_filename ?? "Document"} />
+      <PageHeader
+        title={documentName ?? current.original_filename ?? "Document"}
+        description={documentName ? undefined : "Nom no publicat per la font."}
+      />
 
       <Card>
         <CardHeader title="Versió actual" />

@@ -11,6 +11,7 @@ import {
   Field,
   Input,
   Select,
+  ResultNotice,
   Table,
   Td,
   Textarea,
@@ -22,9 +23,11 @@ import { useMutation } from "@/lib/hooks";
 import { formatDateTime } from "@/lib/tenders";
 import {
   CHECKLIST_STATUS_LABELS,
+  reconciliationMessage,
   TASK_STATUS_LABELS,
   TASK_STATUS_TONES,
   type ChecklistItemStatus,
+  type ChecklistRegenerateResult,
   type TaskStatus,
   type WorkspaceDetail,
 } from "@/lib/workspace";
@@ -61,6 +64,7 @@ export function ChecklistSection({
 }) {
   const mutation = useMutation();
   const [title, setTitle] = useState("");
+  const [outcome, setOutcome] = useState<ReturnType<typeof reconciliationMessage> | null>(null);
 
   const done = workspace.checklist.filter((item) => item.status === "completed").length;
 
@@ -84,7 +88,19 @@ export function ChecklistSection({
 
   async function regenerate() {
     await mutation.run(async () => {
-      await api.post(`${base(workspace)}/checklist/regenerate`, {});
+      const result = await api.post<ChecklistRegenerateResult>(
+        `${base(workspace)}/checklist/regenerate`,
+        {},
+      );
+      // Sense això l'acció responia 200 i no passava res visible: ni un item,
+      // ni un missatge, ni una pista. I era el botó que l'avís et demanava
+      // prémer.
+      setOutcome(
+        reconciliationMessage(result.created, result.reason, {
+          one: "item",
+          many: "items nous",
+        }),
+      );
     });
     await onChange();
   }
@@ -100,6 +116,16 @@ export function ChecklistSection({
           </Button>
         }
       />
+      {outcome && (
+        <div className="px-5 pt-4">
+          <ResultNotice
+            message={outcome.message}
+            detail={outcome.detail}
+            tone={outcome.tone}
+            onDismiss={() => setOutcome(null)}
+          />
+        </div>
+      )}
       {workspace.checklist.length === 0 ? (
         <p className="px-5 py-5 text-[13px] text-muted">
           Encara no hi ha cap item. Si el plec ja està analitzat, prem «Reconcilia amb

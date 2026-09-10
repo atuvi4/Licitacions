@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import {
   Badge,
@@ -91,12 +91,28 @@ export default function TenderDetailPage() {
     });
   }
 
+  /**
+   * Baixar un plec canvia la HISTÒRIA de la licitació, no només la seva fitxa:
+   * en saber el SHA d'un document que abans no teníem es registra una revisió
+   * nova i, si escau, els seus events. Refrescar només el detall deixava
+   * «Historial de canvis» dient «Cap canvi detectat» just després de provocar-ne
+   * un: calia recarregar la pàgina a mà per veure la conseqüència del que
+   * s'acabava de fer.
+   */
+  const reloadLifecycle = useCallback(async () => {
+    await Promise.all([reload(), history.reload(), revisions.reload()]);
+  }, [reload, history.reload, revisions.reload]);
+
+  const reloadAnalysis = useCallback(async () => {
+    await Promise.all([analysis.reload(), compliance.reload()]);
+  }, [analysis.reload, compliance.reload]);
+
   async function processOne(documentId: string) {
     setProcessing(documentId);
     setProcessError(null);
     try {
       await api.post(`/tenders/${tenderId}/documents/${documentId}/process`, {});
-      await reload();
+      await reloadLifecycle();
     } catch (caught) {
       setProcessError(caught instanceof Error ? caught.message : "No s'ha pogut processar.");
     } finally {
@@ -151,8 +167,10 @@ export default function TenderDetailPage() {
         }
         actions={
           <div className="flex items-center gap-2">
-            {data.revision_count > 1 && (
-              <Badge tone="warning">Modificada ({data.revision_count} versions)</Badge>
+            {data.source_publication_count > 1 && (
+              <Badge tone="neutral">
+                Publicada {data.source_publication_count} cops per la font
+              </Badge>
             )}
             <Badge tone={TENDER_STATUS_TONE[data.status]}>
               {TENDER_STATUS_LABELS[data.status]}
@@ -442,7 +460,9 @@ export default function TenderDetailPage() {
           analysis={analysis.data}
           loading={analysis.loading}
           error={analysis.error}
-          onReload={analysis.reload}
+          // Una anàlisi nova deixa el compliment endarrerit: el seu avís s'ha de
+          // veure ara, no després d'un F5.
+          onReload={reloadAnalysis}
         />
 
         {/* ------------------------------------ Compliment de l'empresa --- */}
@@ -467,14 +487,14 @@ export default function TenderDetailPage() {
         {/* --------------------------------------------------- Historial --- */}
         <Card>
           <CardHeader
-            title="Historial"
-            description="Cada versió rebuda de la font es conserva, amb el seu hash i la seva data."
+            title="Publicacions de la font"
+            description="Cada vegada que la font publica aquest expedient en queda una còpia, amb el seu hash i la seva data. Que hi hagi una publicació nova no vol dir que hagi canviat res: què ha canviat de veritat es veu a «Historial de canvis»."
           />
           <div className="grid gap-4 border-b border-border px-5 py-4 sm:grid-cols-4">
             <Fact label="Vista per primer cop">{formatDateTime(data.first_seen_at)}</Fact>
             <Fact label="Vista per últim cop">{formatDateTime(data.last_seen_at)}</Fact>
             <Fact label="Últim canvi">{formatDateTime(data.last_changed_at)}</Fact>
-            <Fact label="Versions">{data.revision_count}</Fact>
+            <Fact label="Publicacions rebudes">{data.source_publication_count}</Fact>
           </div>
           {revisions.loading ? (
             <Skeleton className="m-5 h-16" />
@@ -482,7 +502,7 @@ export default function TenderDetailPage() {
             <Table>
               <thead>
                 <tr>
-                  <Th>Versió</Th>
+                  <Th>Publicació</Th>
                   <Th>Rebuda</Th>
                   <Th>Publicada per la font</Th>
                   <Th>Hash del contingut</Th>

@@ -123,3 +123,58 @@ def test_user_agent_identifies_the_bot_and_the_contact():
     agent = user_agent()
     assert agent.startswith("LicitacionsBot/")
     assert "contacte" in agent
+
+
+# --------------------------------------------------------------------------- #
+# Un proveidor que no llegeix el plec no es una analisi                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_la_base_dunalisi_es_dedueix_del_proveidor():
+    """El nom del proveidor ja es a cada run: no cal cap columna nova."""
+    from app.models.enums import AnalysisBasis
+
+    assert AnalysisBasis.for_provider("anthropic") == AnalysisBasis.REAL
+    assert AnalysisBasis.for_provider("fixture") == AnalysisBasis.SIMULATION
+    assert AnalysisBasis.for_provider("fake") == AnalysisBasis.PROVIDER_NOT_CONFIGURED
+    assert AnalysisBasis.for_provider(None) == AnalysisBasis.PROVIDER_NOT_CONFIGURED
+
+
+def test_nomes_una_analisi_real_soste_una_afirmacio_sobre_el_plec():
+    from app.models.enums import AnalysisBasis
+
+    assert AnalysisBasis.REAL.is_trustworthy is True
+    assert AnalysisBasis.SIMULATION.is_trustworthy is False
+    assert AnalysisBasis.PROVIDER_NOT_CONFIGURED.is_trustworthy is False
+
+
+@pytest.mark.parametrize("provider", ["fake", "fixture", "FIXTURE"])
+def test_produccio_no_arrenca_amb_un_proveidor_que_no_llegeix_res(provider):
+    """A produccio, servir requisits inventats seria pitjor que no servir res."""
+    from app.core.config import Settings
+
+    with pytest.raises(ValueError, match="LLM_PROVIDER"):
+        Settings(
+            ENVIRONMENT="production",
+            SECRET_KEY="x" * 40,
+            LLM_PROVIDER=provider,
+        )
+
+
+def test_produccio_arrenca_amb_un_proveidor_real():
+    from app.core.config import Settings
+
+    settings = Settings(
+        ENVIRONMENT="production", SECRET_KEY="x" * 40, LLM_PROVIDER="anthropic"
+    )
+
+    assert settings.LLM_PROVIDER == "anthropic"
+
+
+def test_en_desenvolupament_la_simulacio_es_perfectament_valida():
+    """Es el que permet recorrer el flux sencer sense xarxa ni API."""
+    from app.core.config import Settings
+
+    settings = Settings(ENVIRONMENT="local", LLM_PROVIDER="fixture")
+
+    assert settings.LLM_PROVIDER == "fixture"

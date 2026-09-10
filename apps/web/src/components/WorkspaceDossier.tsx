@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-import { Badge, Button, Card, CardHeader, Select, Skeleton } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, ResultNotice, Select, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
 import { RESULT_ICONS, RESULT_LABELS, type AssessmentResult } from "@/lib/compliance";
 import { formatDate } from "@/lib/format";
 import { useMutation } from "@/lib/hooks";
 import {
   COVERAGE_LABELS,
+  reconciliationMessage,
   COVERAGE_TONES,
   EVIDENCE_STATUS_LABELS,
   EVIDENCE_STATUS_TONES,
@@ -55,6 +56,7 @@ export function DossierSection({
   const [documents, setDocuments] = useState<CompanyDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const mutation = useMutation();
+  const [outcome, setOutcome] = useState<ReturnType<typeof reconciliationMessage> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -74,6 +76,13 @@ export function DossierSection({
     const ok = await mutation.run(async () => {
       const result = await api.post<DossierSyncResult>(`${base}/dossier/sync`, {});
       setDossier(result.dossier);
+      // Un 200 silenciós no es distingeix d'una acció que ha fallat.
+      setOutcome(
+        reconciliationMessage(result.suggested + result.gaps, result.reason, {
+          one: "requisit",
+          many: "requisits al dossier",
+        }),
+      );
     });
     if (ok) await onChange();
   }
@@ -120,6 +129,16 @@ export function DossierSection({
           </Button>
         }
       />
+      {outcome && (
+        <div className="px-5 pt-4">
+          <ResultNotice
+            message={outcome.message}
+            detail={outcome.detail}
+            tone={outcome.tone}
+            onDismiss={() => setOutcome(null)}
+          />
+        </div>
+      )}
 
       {/* --------------------------------------------------- Capçalera --- */}
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border px-5 py-4">

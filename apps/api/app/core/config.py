@@ -111,8 +111,14 @@ class Settings(BaseSettings):
     DOCUMENT_PROCESSING_STALE_SECONDS: int = 300
 
     # --- Capa d'IA (extraccio de requisits) ---
-    # Proveidor d'inferencia. "fake" es determinista i no fa cap crida de xarxa:
-    # es el que fan servir els tests.
+    # Proveidor d'inferencia:
+    #   "anthropic" -> analisi real.
+    #   "fixture"   -> SIMULACIO: un plec inventat i estable per poder recorrer
+    #                  el flux sencer en desenvolupament sense xarxa ni API.
+    #   "fake"      -> doble de proves: respon el que cada test li encua i, per
+    #                  defecte, no res. Si apareix davant d'un usuari vol dir
+    #                  que no hi ha cap motor configurat, i aixi es diu.
+    # Cap dels dos ultims no arrenca en produccio: veure el validador de sota.
     LLM_PROVIDER: str = "fake"
     # Buida = la funcio d'analisi queda no disponible, pero l'aplicacio arrenca.
     ANTHROPIC_API_KEY: str = ""
@@ -139,7 +145,7 @@ class Settings(BaseSettings):
     EXPIRY_WARNING_DAYS: int = 60
 
     @model_validator(mode="after")
-    def _secret_key_is_strong_enough(self) -> "Settings":
+    def _secret_key_is_strong_enough(self) -> Settings:
         """A produccio, una clau curta o la d'exemple no son acceptables.
 
         HS256 amb una clau de pocs bytes es trivialment atacable per forca
@@ -166,6 +172,25 @@ class Settings(BaseSettings):
         if self.is_production and self.DOCUMENT_DOWNLOAD_ALLOW_PRIVATE_HOSTS:
             raise ValueError(
                 "DOCUMENT_DOWNLOAD_ALLOW_PRIVATE_HOSTS nomes es pot activar fora de produccio."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _production_needs_a_real_inference_provider(self) -> Settings:
+        """A produccio no s'hi pot analitzar amb un proveidor que no llegeix res.
+
+        `fake` i `fixture` responen sense obrir el plec. En desenvolupament aixo
+        es util —i la interficie ho diu amb totes les lletres—, pero a produccio
+        significaria ensenyar requisits inventats amb l'aparença d'una analisi.
+        Val mes no arrencar que servir aixo.
+
+        Es fa amb el mateix mecanisme que la resta de politiques d'entorn
+        (`is_production` + validador que llanca), no amb un de nou.
+        """
+        if self.is_production and self.LLM_PROVIDER.strip().lower() in {"fake", "fixture"}:
+            raise ValueError(
+                f"LLM_PROVIDER={self.LLM_PROVIDER!r} no llegeix cap plec i no es pot "
+                "fer servir en produccio. Configura un proveidor real."
             )
         return self
 

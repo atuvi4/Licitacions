@@ -13,9 +13,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.models.enums import (
+    AnalysisBasis,
     AnalysisRunStatus,
     AwardCriterionType,
     AwardEvaluationType,
@@ -150,6 +151,15 @@ class ExtractionRunRead(ORMModel):
     skipped_documents: list[Any] | None = None
     error_code: str | None = None
     error_message: str | None = None
+
+    #: Sobre QUE s'ha construit aquesta analisi. `status` nomes diu que el
+    #: proces ha acabat; aixo diu si darrere hi ha una lectura real del plec o
+    #: una simulacio de desenvolupament. Es deriva del proveidor que ja es desa
+    #: al run: cap columna nova que algu hagi de mantenir sincronitzada.
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def analysis_basis(self) -> AnalysisBasis:
+        return AnalysisBasis.for_provider(self.provider)
 
 
 class AnalysisRequest(BaseModel):

@@ -35,6 +35,7 @@ from app.tenders.changes import (
     Change,
     ChangeImpact,
     ChangeSummary,
+    canonical_instant,
     diff_snapshots,
     snapshot_hash,
     summarise,
@@ -74,6 +75,11 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
     distingir "la mateixa URL serveix un plec nou" de "el plec es el mateix i
     nomes ha canviat l'adreça". Als que encara no s'han baixat el SHA es `None`:
     es una limitacio real i es preferible a inventar-se una identitat.
+
+    **Tots els instants hi entren en UTC** (`canonical_instant`). El mateix
+    moment escrit amb dos offsets diferents ha de donar el mateix hash; si no,
+    tornar a construir la fotografia sense que l'organ hagi tocat res genera una
+    revisio i un `DEADLINE_CHANGED` material que no ha passat.
     """
     cpvs = (
         await session.execute(
@@ -134,7 +140,7 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
         "procedure_type": str(tender.procedure_type),
         "contract_type": str(tender.contract_type),
         "publication_date": str(tender.publication_date) if tender.publication_date else None,
-        "deadline_at": tender.deadline_at.isoformat() if tender.deadline_at else None,
+        "deadline_at": canonical_instant(tender.deadline_at),
         "estimated_value": _money(tender.estimated_value),
         "base_budget": _money(tender.base_budget),
         "base_budget_without_tax": _money(tender.base_budget_without_tax),
@@ -152,7 +158,7 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
                 "currency": lot.currency,
                 # El termini del lot mana sobre el de l'expedient per a qui s'hi
                 # presenta: si es mou, no pot ser invisible per a la historia.
-                "deadline_at": lot.deadline_at.isoformat() if lot.deadline_at else None,
+                "deadline_at": canonical_instant(lot.deadline_at),
                 # Un lot que ja no es al feed es queda a la fotografia marcat.
                 # No s'esborra la fila: una candidatura oberta hi apunta.
                 "removed": lot.removed_at is not None,
@@ -165,9 +171,7 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
                 "url": document.url,
                 "name": document.name,
                 "document_type": str(document.document_type),
-                "published_at": (
-                    document.published_at.isoformat() if document.published_at else None
-                ),
+                "published_at": canonical_instant(document.published_at),
                 "sha256": shas.get(document.id),
             }
             for document in documents

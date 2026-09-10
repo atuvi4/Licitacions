@@ -136,6 +136,14 @@ class PackageDetail(BaseModel):
     #: paquet aprovat contra un plec que despres han substituit ja no s'envia.
     coherent_for_submission: bool = False
     #: Cert nomes si TOT quadra ara mateix. La interficie no ho ha de deduir.
+    #: Sobre quines menes d'analisi descansa el paquet: el run de requisits que
+    #: cita i el que va fer servir el compliment. Amb qualsevol que no sigui
+    #: `real`, el paquet es de simulacio i no s'aprova.
+    analysis_bases: list[str] = Field(default_factory=list)
+    #: Cert quan alguna de les analisis que el sostenen no surt de llegir cap
+    #: plec. Congelar-lo si que es pot —cal, per provar la pantalla—; aprovar-lo
+    #: per presentar, no.
+    simulation_only: bool = False
     can_approve: bool = False
     #: Si l'usuari que mira te potestat per signar-ho.
     can_sign: bool = False

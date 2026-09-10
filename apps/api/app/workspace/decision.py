@@ -32,6 +32,18 @@ class DecisionWarnings:
     deadline_passed: bool = False
     #: Cap calcul de compliment vigent: s'estaria decidint a cegues.
     missing_compliance: bool = False
+    #: No s'ha pogut avaluar cap requisit. "Zero bloquejadors" no vol dir res
+    #: aqui: no s'ha mirat res. Es l'avis mes important de tots perque es el
+    #: unic que no es veu: la pantalla ensenya zeros, i els zeros semblen bones
+    #: noticies.
+    undetermined_eligibility: bool = False
+    #: L'analisi de requisits no surt de llegir el plec —simulacio o cap motor
+    #: configurat—. El que hi hagi a sota pot tenir la forma correcta i no ser
+    #: cert.
+    unreliable_analysis: bool = False
+    #: Hi ha canvis posteriors a l'analisi: el que es mostra descriu un estat
+    #: anterior de la licitacio.
+    outdated_analysis: bool = False
 
     @property
     def any_open(self) -> bool:
@@ -42,6 +54,9 @@ class DecisionWarnings:
             or self.mandatory_needs_review
             or self.deadline_passed
             or self.missing_compliance
+            or self.undetermined_eligibility
+            or self.unreliable_analysis
+            or self.outdated_analysis
         )
 
     def codes(self) -> list[str]:
@@ -59,6 +74,12 @@ class DecisionWarnings:
             codes.append("deadline_passed")
         if self.missing_compliance:
             codes.append("missing_compliance")
+        if self.undetermined_eligibility:
+            codes.append("undetermined_eligibility")
+        if self.unreliable_analysis:
+            codes.append("unreliable_analysis")
+        if self.outdated_analysis:
+            codes.append("outdated_analysis")
         return codes
 
 
@@ -70,3 +91,24 @@ def requires_reason(decision: WorkspaceDecisionType, warnings: DecisionWarnings)
     tampoc: no compromet res.
     """
     return decision == WorkspaceDecisionType.GO and warnings.any_open
+
+
+#: Per que una reconciliacio no ha pogut fer res. Son codis: el text el posa la
+#: interficie, com amb la resta d'avisos.
+NOTHING_TO_DO_NO_REQUIREMENTS = "no_requirements_analysed"
+NOTHING_TO_DO_ALREADY_IN_SYNC = "already_in_sync"
+
+
+def nothing_to_do_reason(*, created: int, requirements_available: int) -> str | None:
+    """Explica un 200 que no ha canviat res.
+
+    Sense aixo, "reconcilia" responia correctament i no passava res: ni un
+    element nou, ni un missatge, ni una pista. L'usuari havia premut el boto que
+    l'avis li demanava premer i es quedava igual, sense saber si el problema era
+    el sistema o ell.
+    """
+    if created:
+        return None
+    if requirements_available <= 0:
+        return NOTHING_TO_DO_NO_REQUIREMENTS
+    return NOTHING_TO_DO_ALREADY_IN_SYNC

@@ -20,8 +20,23 @@ export type AssessmentResult =
   | "not_applicable";
 
 export type BlockerStatus = "none" | "potential" | "confirmed";
-export type EligibilityResult = "eligible" | "review_required" | "no_go";
-export type RecommendationResult = "go_candidate" | "eligible_low_fit" | "review" | "no_go";
+export type EligibilityResult =
+  | "eligible"
+  | "review_required"
+  | "no_go"
+  /** No s'ha pogut avaluar res. NO es un grau de compliment: es l'absencia de
+   *  veredicte, i mai s'ha de pintar en verd ni tractar com un NO-GO. */
+  | "undetermined";
+export type RecommendationResult =
+  | "go_candidate"
+  | "eligible_low_fit"
+  | "review"
+  | "no_go"
+  | "undetermined";
+
+/** Sobre QUE s'ha construit una analisi. `status` nomes diu que el proces ha
+ *  acabat; aixo diu si darrere hi ha una lectura real del plec. */
+export type AnalysisBasis = "real" | "simulation" | "provider_not_configured";
 export type EvidenceStrength = "strong" | "supporting" | "missing";
 export type AssessmentMode = "automatic" | "review_required";
 export type ReviewStatus = "unreviewed" | "verified" | "needs_review" | "rejected";
@@ -140,6 +155,17 @@ export const ELIGIBILITY_LABELS: Record<EligibilityResult, string> = {
   eligible: "Elegible",
   review_required: "Cal revisió",
   no_go: "NO-GO",
+  undetermined: "Sense determinar",
+};
+
+/** Per que no hi ha veredicte. Es diu al costat de l'etiqueta, perque
+ *  "Sense determinar" tot sol convida a llegir-ho com un problema de l'empresa
+ *  i no com el que es: encara no s'ha mirat res. */
+export const ELIGIBILITY_HINTS: Record<EligibilityResult, string> = {
+  eligible: "Podem acreditar que complim?",
+  review_required: "Hi ha punts que ha de mirar una persona.",
+  no_go: "Hi ha un impediment acreditat.",
+  undetermined: "Encara no s'ha avaluat cap requisit del plec.",
 };
 
 export const ELIGIBILITY_TONES: Record<
@@ -149,6 +175,8 @@ export const ELIGIBILITY_TONES: Record<
   eligible: "success",
   review_required: "warning",
   no_go: "danger",
+  // Mai verd: no saber si es compleix no es una bona noticia, es cap noticia.
+  undetermined: "neutral",
 };
 
 export const RECOMMENDATION_LABELS: Record<RecommendationResult, string> = {
@@ -156,7 +184,39 @@ export const RECOMMENDATION_LABELS: Record<RecommendationResult, string> = {
   eligible_low_fit: "Elegible però poc encaix",
   review: "Revisió",
   no_go: "NO-GO",
+  undetermined: "Sense recomanació",
 };
+
+/** Que hi ha darrere d'una analisi, dit sense embuts. La diferencia entre
+ *  aquestes tres coses es la diferencia entre una afirmacio sobre el plec i una
+ *  afirmacio sobre res. */
+export const ANALYSIS_BASIS_LABELS: Record<AnalysisBasis, string> = {
+  real: "Anàlisi del plec",
+  simulation: "Simulació de desenvolupament",
+  provider_not_configured: "Motor d'anàlisi no configurat",
+};
+
+export const ANALYSIS_BASIS_HINTS: Record<AnalysisBasis, string> = {
+  real: "Extreta dels documents publicats per l'òrgan de contractació.",
+  simulation:
+    "Contingut inventat per provar el flux. No s'ha llegit cap plec: no serveix per decidir.",
+  provider_not_configured:
+    "No hi ha cap motor d'anàlisi configurat. Res del que es mostra surt de llegir el plec.",
+};
+
+export const ANALYSIS_BASIS_TONES: Record<
+  AnalysisBasis,
+  "neutral" | "brand" | "success" | "warning" | "danger"
+> = {
+  real: "success",
+  simulation: "warning",
+  provider_not_configured: "warning",
+};
+
+/** Nomes una analisi real sosté una afirmacio sobre el plec. */
+export function isTrustworthyAnalysis(basis: AnalysisBasis | null | undefined): boolean {
+  return basis === "real";
+}
 
 export const BLOCKER_LABELS: Record<BlockerStatus, string> = {
   none: "",

@@ -184,7 +184,7 @@ async def list_matches(
                     )
                 ],
                 lot_count=len(row.tender.lots),
-                revision_count=row.tender.revision_count,
+                source_publication_count=row.tender.revision_count,
                 source_code=source_codes.get(row.tender.source_id),
                 is_modified=row.tender.revision_count > 1,
             ),

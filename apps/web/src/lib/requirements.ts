@@ -6,6 +6,8 @@
  * l'empresa: aquesta comparació és una fase posterior.
  */
 
+import type { AnalysisBasis } from "@/lib/compliance";
+
 export type AnalysisRunStatus = "pending" | "running" | "completed" | "partial" | "failed";
 
 export type RequirementCategory =
@@ -103,6 +105,9 @@ export interface ExtractionRun {
   schema_version: string;
   provider: string;
   model: string;
+  /** Sobre QUÈ s'ha construït aquesta anàlisi. `status` només diu que el procés
+   *  ha acabat; això diu si darrere hi ha una lectura real del plec. */
+  analysis_basis: AnalysisBasis;
   started_at: string;
   completed_at: string | null;
   documents_analyzed: number;

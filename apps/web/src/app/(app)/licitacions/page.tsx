@@ -451,7 +451,7 @@ export default function TendersFeedPage() {
                       )}
                       {tender.is_modified && (
                         <Badge tone="warning" className="ml-1">
-                          Modificada ({tender.revision_count})
+                          Publicada {tender.source_publication_count} cops
                         </Badge>
                       )}
                     </div>

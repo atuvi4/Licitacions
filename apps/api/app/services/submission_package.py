@@ -26,8 +26,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import ConflictError, NotFoundError
+from app.models.compliance import CompanyComplianceRun
 from app.models.documents import Document
 from app.models.enums import (
+    AnalysisBasis,
     MembershipRole,
     PackageApprovalDecision,
     RequirementCategory,
@@ -35,6 +37,7 @@ from app.models.enums import (
     WorkspaceStatus,
 )
 from app.models.identity import User
+from app.models.requirements import RequirementExtractionRun
 from app.models.submission import (
     SubmissionPackage,
     SubmissionPackageApproval,
@@ -93,6 +96,24 @@ class NoDocumentsError(ConflictError):
     """No es congela un paquet buit."""
 
     code = "package_has_no_documents"
+
+
+class PackageSimulationError(ConflictError):
+    """S'ha intentat aprovar un paquet sostingut per una analisi que no ho es.
+
+    Congelar un paquet de simulacio SI que es pot: es el que permet provar la
+    pantalla de revisio final en desenvolupament. Aprovar-lo, no. L'aprovacio
+    final es l'unic moment en que una persona diu "aixo es exactament el que
+    presentarem", i signar-ho sobre requisits que ningu ha extret de cap plec
+    convertiria un artefacte de proves en un document amb aparença d'aprovat.
+
+    La regla viu al domini i no a la configuracio d'entorn a proposit: que un
+    desplegament estigui marcat com a desenvolupament no fa menys fals el
+    paquet, i el dia que algu miri l'historial voldra saber que allo mai va
+    arribar a aprovar-se.
+    """
+
+    code = "simulation_not_approvable"
 
 
 # --------------------------------------------------------------------------- #
@@ -390,6 +411,51 @@ class StaleReport:
         return bool(self.reasons)
 
 
+async def analysis_bases_behind(
+    session: AsyncSession, package: SubmissionPackage
+) -> set[AnalysisBasis]:
+    """Sobre quines menes d'analisi descansa aquest paquet.
+
+    Se'n miren les DUES portes: el run de requisits que el paquet cita, i el que
+    va fer servir el calcul de compliment. No n'hi ha prou amb una: un paquet
+    pot citar una extraccio real i haver-se congelat sobre un compliment
+    calculat contra una altra, i llavors la barreja no es mes fiable que la
+    seva pitjor meitat.
+
+    Un paquet que no cita cap run entra aqui com a `PROVIDER_NOT_CONFIGURED`:
+    no saber sobre que es va construir no es el mateix que saber que es real, i
+    entre les dues lectures la prudent es l'unica honesta.
+    """
+    run_ids: set[uuid.UUID] = set()
+    if package.requirement_run_id:
+        run_ids.add(package.requirement_run_id)
+    if package.compliance_run_id:
+        compliance = await session.get(CompanyComplianceRun, package.compliance_run_id)
+        if compliance is not None and compliance.requirement_extraction_run_id:
+            run_ids.add(compliance.requirement_extraction_run_id)
+
+    if not run_ids:
+        return {AnalysisBasis.PROVIDER_NOT_CONFIGURED}
+
+    providers = (
+        await session.scalars(
+            sa.select(RequirementExtractionRun.provider).where(
+                RequirementExtractionRun.id.in_(run_ids)
+            )
+        )
+    ).all()
+    if not providers:
+        return {AnalysisBasis.PROVIDER_NOT_CONFIGURED}
+    return {AnalysisBasis.for_provider(provider) for provider in providers}
+
+
+async def is_approvable_analysis(
+    session: AsyncSession, package: SubmissionPackage
+) -> bool:
+    """Cert nomes si TOT el que sosté el paquet surt de llegir un plec de veritat."""
+    return all(basis.is_trustworthy for basis in await analysis_bases_behind(session, package))
+
+
 async def evaluate_staleness(
     session: AsyncSession, workspace: BidWorkspace, package: SubmissionPackage
 ) -> StaleReport:
@@ -480,6 +546,16 @@ async def approve_package(
         )
 
     if decision == PackageApprovalDecision.APPROVED_FOR_SUBMISSION:
+        # Abans que res: signar "aixo es el que presentarem" sobre requisits que
+        # ningu ha extret de cap plec no es una aprovacio, es un malentes amb
+        # data i signatura.
+        if not await is_approvable_analysis(session, package):
+            bases = await analysis_bases_behind(session, package)
+            raise PackageSimulationError(
+                "Aquest paquet es de simulacio: no es pot aprovar per presentar.",
+                details={"analysis_bases": sorted(str(basis) for basis in bases)},
+            )
+
         readiness = await dossier_service.reconcile_readiness(session, workspace)
         if not readiness.is_ready:
             raise PackageNotReadyError(

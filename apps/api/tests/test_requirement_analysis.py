@@ -7,6 +7,7 @@ casos que un model real produeix quan vol i que costen mes de detectar.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 
 import pytest
@@ -16,6 +17,7 @@ from app.ai.providers import fake
 from app.core.errors import AnalysisInProgressError, NothingAnalyzableError
 from app.models.enums import (
     AnalysisRunStatus,
+    DownloadStatus,
     ExtractionQuality,
     ExtractionStatus,
     PageExtractionStatus,
@@ -584,3 +586,265 @@ async def test_a_second_analysis_while_one_runs_gets_a_conflict(session, analyza
 
     with pytest.raises(AnalysisInProgressError):
         await analyze_tender_requirements(session, tender)
+
+
+# --------------------------------------------------------------------------- #
+# Simulacio: el corpus controlat, i nomes aquell                                #
+# --------------------------------------------------------------------------- #
+
+
+async def _corpus_document(session, tender_document, pages: tuple[str, ...]):
+    """Materialitza un text com el document vigent d'una licitacio.
+
+    Rep les pagines perque hi ha un test que n'ha de canviar una: el que aquesta
+    familia sosté es justament que si la frase que aguanta un requisit
+    desapareix del text, el requisit desapareix de la simulacio.
+    """
+    from app.models.enums import TenderDocumentType
+
+    tender_document.document_type = TenderDocumentType.ADMINISTRATIVE_TERMS
+    joined = "\n".join(pages)
+
+    content = TenderDocumentContent(
+        sha256=hashlib.sha256(joined.encode("utf-8")).hexdigest(),
+        storage_key="fixture/corpus.pdf",
+        file_size=len(joined.encode("utf-8")),
+        mime_type="application/pdf",
+        detected_extension="pdf",
+        is_text_extractable=True,
+    )
+    session.add(content)
+    await session.flush()
+
+    extraction = TenderDocumentExtraction(
+        content_id=content.id,
+        parser_version="fixture-corpus-v1",
+        revision_number=1,
+        status=ExtractionStatus.EXTRACTED,
+        quality=ExtractionQuality.GOOD,
+        page_count=len(pages),
+        extracted_page_count=len(pages),
+        empty_page_count=0,
+        text_char_count=len(joined),
+        ocr_candidate=False,
+        is_current=True,
+    )
+    session.add(extraction)
+    await session.flush()
+
+    stored = []
+    for number, text in enumerate(pages, start=1):
+        page = TenderDocumentPage(
+            extraction_id=extraction.id,
+            page_number=number,
+            text=text,
+            char_count=len(text),
+            text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            status=PageExtractionStatus.EXTRACTED,
+        )
+        session.add(page)
+        stored.append(page)
+
+    session.add(
+        TenderDocumentFile(
+            tender_document_id=tender_document.id,
+            content_id=content.id,
+            source_url=tender_document.url,
+            is_current=True,
+            download_status=DownloadStatus.DOWNLOADED,
+            version_number=1,
+        )
+    )
+    await session.commit()
+    return {"document": tender_document, "extraction": extraction, "pages": stored}
+
+
+@pytest.fixture
+async def corpus(session, tender_document):
+    """El plec de desenvolupament, sencer, com a document vigent."""
+    from app.ai.providers.fixture_corpus import PAGES
+
+    return await _corpus_document(session, tender_document, PAGES)
+
+
+class TestProveidorDeSimulacio:
+    """La simulacio no pot inventar-se la relacio entre exigencia i cita.
+
+    Una simulacio pot inventar-se el CONTINGUT —per aixo es una simulacio— pero
+    si a mes es pot inventar quina frase del plec sosté cada requisit, el que
+    s'esta provant ja no es el producte: la validacio d'evidencia passa
+    igualment i el resultat no vol dir res.
+
+    La primera versio d'aquest proveidor feia exactament aixo: agafava
+    qualsevol frase prou llarga del document i l'enganxava al requisit que
+    toques. Ara cada requisit va lligat a una frase concreta del corpus, i si la
+    frase no hi es, el requisit no surt.
+    """
+
+    async def test_produeix_els_requisits_del_corpus(self, session, corpus):
+        from app.ai.providers.fixture import FixtureProvider
+        from app.models.enums import RequirementCategory
+
+        tender = await tender_of(session, corpus["document"])
+
+        run = (
+            await analyze_tender_requirements(session, tender, provider=FixtureProvider())
+        ).run
+
+        assert run.status == AnalysisRunStatus.COMPLETED
+        assert run.requirements_extracted == 6
+        assert run.award_criteria_extracted == 2
+
+        requirements = (
+            await session.scalars(sa.select(Requirement).where(Requirement.run_id == run.id))
+        ).all()
+        assert {r.category for r in requirements} == {
+            RequirementCategory.ECONOMIC_SOLVENCY,
+            RequirementCategory.INSURANCE,
+            RequirementCategory.CERTIFICATION,
+            RequirementCategory.EXPERIENCE,
+            RequirementCategory.TECHNICAL_REQUIREMENT,
+        }
+
+    async def test_cada_cita_sosté_el_seu_requisit(self, session, corpus):
+        """El cor d'aquesta iteracio: la cita ha de dir el que el requisit afirma.
+
+        No es comprova amb cap model ni amb cap semblança difusa: cada requisit
+        del corpus declara la seva frase, i aqui es comprova que l'evidencia
+        desada es aquella i no una altra qualsevol del document.
+        """
+        from app.ai.providers.fixture import FixtureProvider, _normalise
+        from app.ai.providers.fixture_corpus import REQUIREMENTS
+
+        tender = await tender_of(session, corpus["document"])
+        run = (
+            await analyze_tender_requirements(session, tender, provider=FixtureProvider())
+        ).run
+
+        rows = (
+            await session.execute(
+                sa.select(Requirement.title, RequirementEvidence.quote)
+                .join(RequirementEvidence, RequirementEvidence.requirement_id == Requirement.id)
+                .where(Requirement.run_id == run.id)
+            )
+        ).all()
+        quotes = {title: _normalise(quote) for title, quote in rows}
+
+        assert len(quotes) == 6
+        for anchor in REQUIREMENTS:
+            assert quotes[anchor.payload["title"]] == _normalise(anchor.quote), anchor.key
+
+    async def test_una_frase_que_desapareix_se_emporta_el_seu_requisit(
+        self, session, tender_document
+    ):
+        """Si el text deixa de dir-ho, la simulacio deixa de sostenir-ho.
+
+        Es la prova que la relacio entre requisit i cita no es decorativa: no hi
+        ha cap manera de mantenir el requisit si la frase que l'aguanta ja no es
+        al document.
+        """
+        from app.ai.providers.fixture import FixtureProvider
+        from app.ai.providers.fixture_corpus import PAGES
+
+        eliminada = (
+            "El volumen anual de negocios del licitador referido al mejor "
+            "ejercicio de los tres ultimos disponibles debera ser igual o "
+            "superior a 250.000 euros."
+        )
+        mutilat = tuple(page.replace(eliminada, "[frase eliminada]") for page in PAGES)
+        assert "250.000 euros" not in "\n".join(mutilat)
+
+        corpus = await _corpus_document(session, tender_document, mutilat)
+        tender = await tender_of(session, corpus["document"])
+
+        run = (
+            await analyze_tender_requirements(session, tender, provider=FixtureProvider())
+        ).run
+
+        titles = set(
+            (
+                await session.scalars(
+                    sa.select(Requirement.title).where(Requirement.run_id == run.id)
+                )
+            ).all()
+        )
+        assert "Volum anual de negoci igual o superior a 250.000 EUR" not in titles
+        assert run.requirements_extracted == 5
+        # La resta segueix sencera: nomes cau el que depenia de la frase.
+        assert "Certificat ISO 14001 en vigor" in titles
+
+    async def test_es_nega_a_respondre_sobre_un_document_qualsevol(self, session, analyzable):
+        """Un plec real no es el corpus: no s'hi improvisa cap analisi.
+
+        `analyzable` te text perfectament citable —frases llargues i concretes—
+        i precisament per aixo serveix: la versio anterior del proveidor
+        n'hauria tret sis requisits tan convincents com falsos.
+        """
+        from app.ai.providers.fixture import CORPUS_MISSING, FixtureProvider
+
+        tender = await tender_of(session, analyzable["document"])
+
+        run = (
+            await analyze_tender_requirements(session, tender, provider=FixtureProvider())
+        ).run
+
+        assert run.status == AnalysisRunStatus.FAILED
+        assert run.requirements_extracted == 0
+        assert CORPUS_MISSING in f"{run.error_code or ''} {run.error_message or ''}"
+
+    async def test_lasseguranca_porta_el_total_i_el_sublimit_per_victima(self, session, corpus):
+        """Son dos limits diferents i el corpus els diu en dues frases."""
+        from app.ai.providers.fixture import FixtureProvider
+        from app.models.enums import RequirementCategory
+
+        tender = await tender_of(session, corpus["document"])
+        run = (
+            await analyze_tender_requirements(session, tender, provider=FixtureProvider())
+        ).run
+
+        insurance = (
+            await session.scalars(
+                sa.select(Requirement).where(
+                    Requirement.run_id == run.id,
+                    Requirement.category == RequirementCategory.INSURANCE,
+                )
+            )
+        ).all()
+
+        assert len(insurance) == 2
+        assert sorted((r.value_json or {}).get("coverage_amount") for r in insurance) == [
+            150000,
+            600000,
+        ]
+
+    async def test_el_run_diu_que_es_una_simulacio(self, session, corpus):
+        from app.ai.providers.fixture import FixtureProvider
+        from app.models.enums import AnalysisBasis
+
+        tender = await tender_of(session, corpus["document"])
+        run = (
+            await analyze_tender_requirements(session, tender, provider=FixtureProvider())
+        ).run
+
+        assert run.provider == "fixture"
+        assert AnalysisBasis.for_provider(run.provider) == AnalysisBasis.SIMULATION
+        assert AnalysisBasis.for_provider(run.provider).is_trustworthy is False
+
+    async def test_una_simulacio_si_que_dona_veredicte_de_compliment(self, session, corpus):
+        """El punt de tot plegat: amb requisits, el compliment deixa d'estar cec."""
+        from app.ai.providers.fixture import FixtureProvider
+        from app.models.enums import EligibilityResult
+        from app.models.identity import Company
+        from app.services.compliance_analysis import analyze_company_compliance
+
+        company = Company(legal_name="Empresa de prova")
+        session.add(company)
+        await session.flush()
+
+        tender = await tender_of(session, corpus["document"])
+        await analyze_tender_requirements(session, tender, provider=FixtureProvider())
+
+        outcome = await analyze_company_compliance(session, company, tender)
+
+        assert outcome.run.requirements_total == 6
+        assert outcome.run.overall_result != EligibilityResult.UNDETERMINED

@@ -17,6 +17,12 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorNotice, Spinner } from "@/components/ui";
+import {
+  ANALYSIS_BASIS_HINTS,
+  ANALYSIS_BASIS_LABELS,
+  ANALYSIS_BASIS_TONES,
+  isTrustworthyAnalysis,
+} from "@/lib/compliance";
 import { api } from "@/lib/api";
 import {
   ANALYSIS_DISCLAIMER,
@@ -206,7 +212,17 @@ export function RequirementAnalysisSection({
           description="Extreu els requisits i els criteris d'adjudicació dels documents processats."
           action={
             <div className="flex items-center gap-2">
-              <Badge tone={ANALYSIS_STATE_TONES[state]}>{ANALYSIS_STATE_LABELS[state]}</Badge>
+              {/* Amb un motor simulat o sense motor, «Complet» seria una
+                  afirmació falsa sobre el plec: el procés ha acabat, però no
+                  ha llegit res. Es diu el que és, i el distintiu no pot ser
+                  verd. */}
+              {run && !isTrustworthyAnalysis(run.analysis_basis) ? (
+                <Badge tone={ANALYSIS_BASIS_TONES[run.analysis_basis]}>
+                  {ANALYSIS_BASIS_LABELS[run.analysis_basis]}
+                </Badge>
+              ) : (
+                <Badge tone={ANALYSIS_STATE_TONES[state]}>{ANALYSIS_STATE_LABELS[state]}</Badge>
+              )}
               <Button onClick={() => void analyse(state === "stale")} disabled={running || loading}>
                 {running ? <Spinner /> : run ? "Torna a analitzar" : "Analitza requisits"}
               </Button>
@@ -215,6 +231,13 @@ export function RequirementAnalysisSection({
         />
 
         {(error || actionError) && <ErrorNotice message={actionError ?? error ?? ""} />}
+
+        {run && !isTrustworthyAnalysis(run.analysis_basis) && (
+          <div className="border-b border-border bg-warning-soft px-5 py-3 text-[13px]">
+            <p className="font-medium">{ANALYSIS_BASIS_LABELS[run.analysis_basis]}</p>
+            <p className="text-muted">{ANALYSIS_BASIS_HINTS[run.analysis_basis]}</p>
+          </div>
+        )}
 
         <p className="border-b border-border px-5 py-3 text-[12px] text-muted">
           {ANALYSIS_DISCLAIMER}
@@ -251,9 +274,10 @@ export function RequirementAnalysisSection({
               <dd>{run.evidence_rejected}</dd>
             </div>
             <div>
-              <dt className="text-muted">Model</dt>
+              <dt className="text-muted">Motor</dt>
               <dd className="truncate">
-                {run.provider} · {run.model}
+                {ANALYSIS_BASIS_LABELS[run.analysis_basis]}
+                <span className="text-faint"> · {run.provider} · {run.model}</span>
               </dd>
             </div>
             <div>

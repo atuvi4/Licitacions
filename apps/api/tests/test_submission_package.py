@@ -25,6 +25,7 @@ import pytest
 import sqlalchemy as sa
 
 from app.core.errors import NotFoundError, PermissionDeniedError
+from app.models.compliance import CompanyComplianceRun
 from app.models.credentials import CompanyCertification, CompanyInsurance
 from app.models.documents import Document, DocumentLink
 from app.models.enums import (
@@ -130,8 +131,11 @@ async def add_extraction_run(db, tender) -> RequirementExtractionRun:
         extractor_version="tender-requirements-v1",
         prompt_version="requirements-v1",
         schema_version="requirements-schema-v1",
-        provider="fake",
-        model="fake-model-v1",
+        # Proveidor REAL a proposit: aquests tests aproven paquets, i un paquet
+        # sostingut per una simulacio no s'ha de poder aprovar. Veure
+        # `PackageSimulationError`.
+        provider="anthropic",
+        model="claude-sonnet-5",
         is_current=True,
     )
     db.add(run)
@@ -272,6 +276,7 @@ async def ready(db, tenant_a, tender, extraction_run):
         "document": document,
         "evidence_item": item,
         "tender": tender,
+        "requirement_run": extraction_run,
     }
 
 
@@ -1537,3 +1542,161 @@ async def test_the_api_says_whether_an_approved_package_is_still_presentable(
     listed = (await client_a.get(f"{root}/packages")).json()
     assert listed[0]["is_approved"] is True
     assert listed[0]["tender_changed_since_freeze"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Una simulacio no arriba mai a l'aprovacio final                               #
+# --------------------------------------------------------------------------- #
+
+
+async def _run_provider(db, run_id, provider: str, model: str = "x") -> None:
+    """Canvia qui va respondre una extraccio. Nomes per muntar l'escenari."""
+    run = await db.get(RequirementExtractionRun, run_id)
+    run.provider = provider
+    run.model = model
+    await db.commit()
+
+
+class TestSimulacioNoAprovable:
+    """Congelar un paquet de simulacio si; aprovar-lo, no.
+
+    Congelar-lo cal: es l'unica manera de provar la pantalla de revisio final
+    en desenvolupament. Aprovar-lo seria una altra cosa: l'aprovacio final es
+    l'unic moment en que una persona signa "aixo es exactament el que
+    presentarem", i signar-ho sobre requisits que ningu ha extret de cap plec
+    convertiria un artefacte de proves en un document amb aparença d'aprovat.
+
+    La regla viu al domini i no a la configuracio d'entorn a proposit: que un
+    desplegament estigui marcat com a desenvolupament no fa menys fals el
+    paquet.
+    """
+
+    async def test_una_simulacio_si_que_es_pot_congelar(self, db, ready):
+        """Cal poder-hi arribar: si no, la pantalla no es pot provar."""
+        await _run_provider(db, ready["requirement_run"].id, "fixture")
+
+        package = await freeze(db, ready)
+
+        assert package.status == SubmissionPackageStatus.FROZEN
+        assert package.manifest_hash
+
+    async def test_una_simulacio_no_es_pot_aprovar(self, db, ready):
+        await _run_provider(db, ready["requirement_run"].id, "fixture")
+        package = await freeze(db, ready)
+
+        with pytest.raises(service.PackageSimulationError) as raised:
+            await approve(db, ready, package)
+
+        assert raised.value.code == "simulation_not_approvable"
+
+    async def test_sense_cap_motor_configurat_tampoc(self, db, ready):
+        """`fake` davant d'un usuari no vol dir "sense requisits": vol dir sense motor."""
+        await _run_provider(db, ready["requirement_run"].id, "fake")
+        package = await freeze(db, ready)
+
+        with pytest.raises(service.PackageSimulationError):
+            await approve(db, ready, package)
+
+    async def test_una_analisi_real_segueix_aprovant_se_igual(self, db, ready):
+        """La regla no toca res del cami de sempre."""
+        package = await freeze(db, ready)
+
+        approval = await approve(db, ready, package)
+
+        assert approval.decision == PackageApprovalDecision.APPROVED_FOR_SUBMISSION
+        assert package.status == SubmissionPackageStatus.APPROVED
+
+    async def test_barrejar_real_i_simulacio_tampoc_saprova(self, db, ready):
+        """El paquet no es mes fiable que la seva pitjor meitat.
+
+        Es el cas incomode: el paquet cita una extraccio real, pero el
+        compliment sobre el qual es va congelar es va calcular contra una altra
+        que era simulada. Mirar nomes una de les dues portes deixaria passar
+        exactament aixo.
+        """
+        package = await freeze(db, ready)
+
+        simulada = RequirementExtractionRun(
+            tender_id=ready["tender"].id,
+            status=AnalysisRunStatus.COMPLETED,
+            input_fingerprint=uuid.uuid4().hex * 2,
+            extractor_version="tender-requirements-v1",
+            prompt_version="requirements-v1",
+            schema_version="requirements-schema-v1",
+            provider="fixture",
+            model="fixture-plec-v1",
+            is_current=False,
+        )
+        db.add(simulada)
+        await db.flush()
+        compliance = await db.get(CompanyComplianceRun, package.compliance_run_id)
+        compliance.requirement_extraction_run_id = simulada.id
+        await db.commit()
+
+        with pytest.raises(service.PackageSimulationError):
+            await approve(db, ready, package)
+
+    async def test_un_rebuig_si_que_es_pot_registrar_sobre_una_simulacio(self, db, ready):
+        """Nomes es bloqueja l'APROVACIO. Dir que no a una simulacio no fa mal a ningu."""
+        await _run_provider(db, ready["requirement_run"].id, "fixture")
+        package = await freeze(db, ready)
+
+        rejection = await service.approve_package(
+            db,
+            ready["workspace"],
+            package,
+            user=ready["user"],
+            role=MembershipRole.OWNER,
+            decision=PackageApprovalDecision.REJECTED,
+            comment="Es una simulacio.",
+        )
+
+        assert rejection.decision == PackageApprovalDecision.REJECTED
+
+    async def test_una_aprovacio_historica_real_no_canvia(self, db, ready):
+        """El que ja estava aprovat sobre una analisi real segueix aprovat.
+
+        La regla nova mira el moment d'aprovar, no reescriu res del passat: un
+        paquet signat abans continua sent el que era i amb el mateix hash.
+        """
+        package = await freeze(db, ready)
+        approval = await approve(db, ready, package)
+        hash_signat = approval.package_manifest_hash
+
+        # Encara que despres algu canvies el proveidor del run que el sosté.
+        await _run_provider(db, ready["requirement_run"].id, "fixture")
+        await db.refresh(package)
+        await db.refresh(approval)
+
+        assert package.status == SubmissionPackageStatus.APPROVED
+        assert approval.package_manifest_hash == hash_signat
+        assert approval.decision == PackageApprovalDecision.APPROVED_FOR_SUBMISSION
+
+    async def test_lapi_no_ofereix_el_boto_daprovar_una_simulacio(self, client_a, ready, db):
+        """`can_approve` ha de ser fals abans que ningu premi res."""
+        await _run_provider(db, ready["requirement_run"].id, "fixture")
+        package = await freeze(db, ready)
+
+        response = await client_a.get(
+            f"/api/v1/companies/{ready['company'].id}/workspaces/"
+            f"{ready['workspace'].id}/packages/{package.id}"
+        )
+
+        body = response.json()
+        assert response.status_code == 200
+        assert body["can_approve"] is False
+        assert body["simulation_only"] is True
+        assert "simulation" in " ".join(body["analysis_bases"])
+
+    async def test_lapi_rebutja_laprovacio_amb_un_codi_llegible(self, client_a, ready, db):
+        await _run_provider(db, ready["requirement_run"].id, "fixture")
+        package = await freeze(db, ready)
+
+        response = await client_a.post(
+            f"/api/v1/companies/{ready['company'].id}/workspaces/"
+            f"{ready['workspace'].id}/packages/{package.id}/approvals",
+            json={"decision": "approved_for_submission", "comment": "Endavant."},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "simulation_not_approvable"

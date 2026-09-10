@@ -59,6 +59,7 @@ from app.schemas.workspace import (
 )
 from app.services import audit, workspace_dossier
 from app.services import bid_workspace as service
+from app.workspace.decision import nothing_to_do_reason
 
 tender_router = APIRouter(prefix="/tenders/{tender_id}/workspace", tags=["candidatura"])
 router = APIRouter(prefix="/workspaces", tags=["candidatura"])
@@ -133,6 +134,7 @@ async def _summary(session: SessionDep, workspace: BidWorkspace) -> WorkspaceSum
         eligibility=state.compliance_run.overall_result if state.compliance_run else None,
         recommendation=state.compliance_run.recommendation if state.compliance_run else None,
         human_decision=state.latest_decision.decision if state.latest_decision else None,
+        analysis_basis=state.analysis_basis,
         analysis_outdated=state.analysis_outdated,
         created_at=workspace.created_at,
     )
@@ -199,6 +201,7 @@ async def _detail(
         go_requires_reason=warnings.any_open,
         current_compliance_run_id=workspace.current_compliance_run_id,
         current_requirement_run_id=workspace.current_requirement_run_id,
+        analysis_basis=state.analysis_basis,
         analysis_outdated=state.analysis_outdated,
         outdated_reasons=list(state.outdated_reasons),
         tender_actionable=state.tender_actionable,
@@ -384,9 +387,14 @@ async def regenerate_checklist(workspace_id: uuid.UUID, session: SessionDep, ctx
     created = await service.regenerate_checklist(session, workspace, user_id=ctx.user.id)
     items = await service.checklist_items(session, workspace.id)
     names = await _people_names(session, {item.assigned_to for item in items})
+    run = await service.current_requirement_run(session, workspace.tender_id)
     return ChecklistRegenerateResult(
         created=created,
         total=len(items),
+        reason=nothing_to_do_reason(
+            created=created,
+            requirements_available=run.requirements_extracted if run else 0,
+        ),
         checklist=[_checklist_read(item, names) for item in items],
     )
 

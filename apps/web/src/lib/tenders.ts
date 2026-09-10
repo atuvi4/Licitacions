@@ -165,7 +165,9 @@ export interface TenderListItem {
   buyer: BuyerSummary | null;
   cpvs: TenderCPV[];
   lot_count: number;
-  revision_count: number;
+  /** Quantes vegades la FONT ha publicat aquest expedient. NO és el nombre de
+   *  canvis ni el de revisions del cicle de vida: són històries diferents. */
+  source_publication_count: number;
   source_code: string | null;
   is_modified: boolean;
 }
@@ -217,7 +219,9 @@ export interface TenderDetail {
   first_seen_at: string;
   last_seen_at: string;
   last_changed_at: string | null;
-  revision_count: number;
+  /** Quantes vegades la FONT ha publicat aquest expedient. NO és el nombre de
+   *  canvis ni el de revisions del cicle de vida: són històries diferents. */
+  source_publication_count: number;
   buyer: Buyer | null;
   cpvs: TenderCPV[];
   lots: TenderLot[];

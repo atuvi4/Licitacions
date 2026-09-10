@@ -135,6 +135,12 @@ class Tender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.Uuid(as_uuid=True),
         sa.ForeignKey("source_records.id", ondelete="SET NULL", use_alter=True),
     )
+    #: Quantes vegades la FONT ha publicat aquest expedient (`SourceRecord`). NO
+    #: es el nombre de revisions del cicle de vida: `tender_revisions` en te de
+    #: propies, que compten tambe el que aprenem nosaltres —per exemple baixar
+    #: un plec i saber-ne el SHA—. Son dues histories diferents i no es poden
+    #: presentar totes dues com "versions": ho feien, i la pantalla deia
+    #: "Versions 1" al costat de "Versio 2".
     revision_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1)
 
     first_seen_at: Mapped[datetime] = mapped_column(

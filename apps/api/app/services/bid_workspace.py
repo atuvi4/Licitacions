@@ -29,10 +29,12 @@ from app.core.errors import (
 )
 from app.models.compliance import CompanyComplianceRun, CompanyRequirementAssessment
 from app.models.enums import (
+    AnalysisBasis,
     AssessmentResult,
     BlockerStatus,
     ChecklistItemSource,
     ChecklistItemStatus,
+    EligibilityResult,
     MembershipRole,
     RequirementObligation,
     WorkspaceDecisionType,
@@ -363,7 +365,28 @@ class WorkspaceState:
             mandatory_needs_review=self.counters.mandatory_needs_review,
             deadline_passed=self.deadline_passed,
             missing_compliance=self.compliance_run is None,
+            undetermined_eligibility=self.eligibility_undetermined,
+            unreliable_analysis=not self.analysis_basis.is_trustworthy,
+            outdated_analysis=self.analysis_outdated,
         )
+
+    @property
+    def analysis_basis(self) -> AnalysisBasis:
+        """Sobre que s'ha construit el que ensenya aquesta candidatura.
+
+        Sense cap run de requisits no hi ha analisi de cap mena, i tampoc es
+        pot dir que sigui de fiar: es tracta igual que una simulacio.
+        """
+        if self.requirement_run is None:
+            return AnalysisBasis.PROVIDER_NOT_CONFIGURED
+        return AnalysisBasis.for_provider(self.requirement_run.provider)
+
+    @property
+    def eligibility_undetermined(self) -> bool:
+        """Cert quan no hi ha veredicte, que NO es el mateix que no complir."""
+        if self.compliance_run is None:
+            return True
+        return self.compliance_run.overall_result == EligibilityResult.UNDETERMINED
 
 
 def _days_remaining(deadline: datetime | None, now: datetime | None = None) -> int | None:

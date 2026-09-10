@@ -20,6 +20,7 @@ import { api } from "@/lib/api";
 import {
   BLOCKER_LABELS,
   COMPLIANCE_DISCLAIMER,
+  ELIGIBILITY_HINTS,
   ELIGIBILITY_LABELS,
   ELIGIBILITY_TONES,
   RECOMMENDATION_LABELS,
@@ -241,6 +242,19 @@ export function ComplianceSection({
 
         {run && (
           <>
+            {/* Sense cap requisit avaluat, els zeros de sota no volen dir "cap
+                impediment": volen dir que no s'ha mirat res. Es diu abans que
+                ningú els llegeixi com una bona notícia. */}
+            {run.overall_result === "undetermined" && (
+              <div className="border-b border-border bg-warning-soft px-5 py-3 text-[13px]">
+                <p className="font-medium">Encara no es pot dir si l&apos;empresa compleix</p>
+                <p className="text-muted">
+                  No s&apos;ha avaluat cap requisit del plec. Els comptadors de sota són zero
+                  perquè no hi ha res avaluat, no perquè no hi hagi impediments.
+                </p>
+              </div>
+            )}
+
             {/* Les dues dimensions, de costat i mai fusionades. */}
             <div className="grid grid-cols-1 gap-3 border-b border-border px-5 py-4 sm:grid-cols-3">
               <div>
@@ -249,6 +263,9 @@ export function ComplianceSection({
                   <Badge tone={ELIGIBILITY_TONES[run.overall_result]}>
                     {ELIGIBILITY_LABELS[run.overall_result]}
                   </Badge>
+                </p>
+                <p className="mt-1 text-[12px] text-muted">
+                  {ELIGIBILITY_HINTS[run.overall_result]}
                 </p>
               </div>
               <div>

@@ -103,6 +103,10 @@ def get_provider(name: str | None = None) -> StructuredLLMProvider:
         from app.ai.providers.fake import FakeProvider
 
         return FakeProvider()
+    if chosen == "fixture":
+        from app.ai.providers.fixture import FixtureProvider
+
+        return FixtureProvider()
     if chosen == "anthropic":
         from app.ai.providers.anthropic import AnthropicProvider
 

@@ -233,3 +233,73 @@ def test_counts_are_reported_one_by_one_never_averaged():
     assert summary.mandatory_total == 4
     assert summary.potential_blockers == 1
     assert not hasattr(summary, "score"), "no hi ha cap puntuacio agregada, a proposit"
+
+
+# --------------------------------------------------------------------------- #
+# Zero requisits no es zero bloquejadors                                        #
+# --------------------------------------------------------------------------- #
+
+
+class TestSenseVeredicte:
+    """No haver avaluat res i no haver trobat cap impediment son coses oposades.
+
+    Amb els comptadors a zero, `summarise` deia `ELIGIBLE`: el sistema afirmava
+    "podeu acreditar que compliu" sense haver llegit ni un plec. I la interficie
+    ho ensenyava en verd, al costat d'un "Bloquejos confirmats: 0" que semblava
+    una bona noticia. La resposta honesta es que no se sap.
+    """
+
+    def test_sense_cap_requisit_no_hi_ha_veredicte(self):
+        summary = summarise([])
+
+        assert summary.eligibility == EligibilityResult.UNDETERMINED
+        assert summary.recommendation == RecommendationResult.UNDETERMINED
+
+    def test_sense_veredicte_no_es_converteix_en_no_go(self):
+        """No saber si una empresa compleix no es saber que no compleix."""
+        summary = summarise([])
+
+        assert summary.eligibility != EligibilityResult.NO_GO
+        assert summary.confirmed_blockers == 0
+
+    def test_el_prefit_no_pot_rescatar_una_recomanacio_sense_base(self):
+        """Un pre-fit alt diu que la licitacio interessa, no que s'hi pugui anar."""
+        summary = summarise([], prefit_score=95)
+
+        assert summary.recommendation == RecommendationResult.UNDETERMINED
+
+    def test_tot_no_aplicable_tampoc_es_un_veredicte(self):
+        """S'ha mirat el plec i res afecta l'empresa: no s'ha verificat res d'ella."""
+        rows = [
+            (RequirementObligation.MANDATORY, AssessmentResult.NOT_APPLICABLE, BlockerStatus.NONE),
+            (RequirementObligation.SCORED, AssessmentResult.NOT_APPLICABLE, BlockerStatus.NONE),
+        ]
+
+        summary = summarise(rows)
+
+        assert summary.eligibility == EligibilityResult.UNDETERMINED
+        assert summary.not_applicable == 2
+
+    def test_amb_un_sol_requisit_avaluat_ja_hi_ha_veredicte(self):
+        """La correccio no pot fer-nos cecs: un compliment real segueix comptant."""
+        rows = [
+            (RequirementObligation.MANDATORY, AssessmentResult.SATISFIES, BlockerStatus.NONE),
+        ]
+
+        summary = summarise(rows)
+
+        assert summary.eligibility == EligibilityResult.ELIGIBLE
+        assert summary.satisfies == 1
+
+    def test_un_bloqueig_confirmat_segueix_manant(self):
+        rows = [
+            (
+                RequirementObligation.MANDATORY,
+                AssessmentResult.DOES_NOT_SATISFY,
+                BlockerStatus.CONFIRMED,
+            ),
+        ]
+
+        summary = summarise(rows)
+
+        assert summary.eligibility == EligibilityResult.NO_GO

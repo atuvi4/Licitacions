@@ -225,6 +225,26 @@ export function SubmissionPackageSection({
             ))}
           </ul>
 
+          {/* Un paquet de simulació es congela per poder provar aquesta
+              pantalla, però no s'aprova mai: signar «això és exactament el que
+              presentarem» sobre requisits que ningú ha tret de cap plec seria
+              convertir una prova en un document amb aparença d'aprovat. */}
+          {current.simulation_only && (
+            <div className="border-t border-border bg-warning-soft px-5 py-3 text-[13px]">
+              <p className="font-medium text-warning">
+                Paquet de simulació — no es pot aprovar per presentar
+              </p>
+              <p className="mt-0.5 text-muted">
+                L&apos;anàlisi que el sosté no surt de llegir cap plec
+                {current.analysis_bases.length > 0 && (
+                  <> ({current.analysis_bases.join(", ")})</>
+                )}
+                . Es pot congelar per provar el circuit, però l&apos;aprovació final
+                queda reservada a una anàlisi real.
+              </p>
+            </div>
+          )}
+
           {/* ------------------------------------------------ Aprovació --- */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-4">
             {current.approval ? (
@@ -251,6 +271,11 @@ export function SubmissionPackageSection({
                 variant="primary"
                 onClick={() => setConfirming(true)}
                 disabled={!current.can_approve}
+                title={
+                  current.simulation_only
+                    ? "Un paquet de simulació no es pot aprovar per presentar."
+                    : undefined
+                }
               >
                 Aprova per presentar
               </Button>

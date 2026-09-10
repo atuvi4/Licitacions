@@ -141,7 +141,7 @@ async def list_tenders(
             buyer=BuyerSummary.model_validate(tender.buyer) if tender.buyer else None,
             cpvs=_cpv_reads(tender, descriptions),
             lot_count=len(tender.lots),
-            revision_count=tender.revision_count,
+            source_publication_count=tender.revision_count,
             source_code=source_codes.get(tender.source_id),
             is_modified=tender.revision_count > 1,
         )
@@ -279,7 +279,7 @@ async def get_tender(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
         first_seen_at=tender.first_seen_at,
         last_seen_at=tender.last_seen_at,
         last_changed_at=tender.last_changed_at,
-        revision_count=tender.revision_count,
+        source_publication_count=tender.revision_count,
         buyer=BuyerRead.model_validate(tender.buyer) if tender.buyer else None,
         cpvs=_cpv_reads(tender, descriptions),
         lots=[

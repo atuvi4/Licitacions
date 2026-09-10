@@ -12,7 +12,7 @@
  * diferents i s'han de veure com a tres coses diferents.
  */
 
-import type { EligibilityResult, RecommendationResult } from "@/lib/compliance";
+import type { AnalysisBasis, EligibilityResult, RecommendationResult } from "@/lib/compliance";
 import type { TenderChangeEvent } from "@/lib/tender-changes";
 
 export type WorkspaceStatus =
@@ -139,6 +139,7 @@ export interface WorkspaceSummary {
   eligibility: EligibilityResult | null;
   recommendation: RecommendationResult | null;
   human_decision: WorkspaceDecisionType | null;
+  analysis_basis: AnalysisBasis;
   analysis_outdated: boolean;
   created_at: string;
 }
@@ -169,6 +170,8 @@ export interface WorkspaceDetail {
   go_requires_reason: boolean;
   current_compliance_run_id: string | null;
   current_requirement_run_id: string | null;
+  /** Sobre QUÈ s'ha construït el que ensenya aquesta candidatura. */
+  analysis_basis: AnalysisBasis;
   analysis_outdated: boolean;
   outdated_reasons: string[];
   /** Cert quan l'expedient ja no admet presentació (anul·lat o equivalent). */
@@ -307,7 +310,15 @@ export interface DossierSyncResult {
   suggested: number;
   gaps: number;
   total: number;
+  /** Per què no s'ha proposat res. Codi; el text viu a `NOTHING_TO_DO_LABELS`. */
+  reason: string | null;
   dossier: Dossier;
+}
+
+export interface ChecklistRegenerateResult {
+  created: number;
+  total: number;
+  reason: string | null;
 }
 
 export const GROUP_LABELS: Record<string, string> = {
@@ -485,6 +496,12 @@ export const WARNING_LABELS: Record<string, string> = {
   mandatory_needs_review: "Hi ha requisits obligatoris que una persona ha de revisar.",
   deadline_passed: "El termini de presentació ja ha passat.",
   missing_compliance: "Encara no s'ha calculat el compliment d'aquesta licitació.",
+  undetermined_eligibility:
+    "No s'ha avaluat cap requisit del plec: «cap bloqueig» aquí no vol dir que no n'hi hagi, vol dir que no s'ha mirat.",
+  unreliable_analysis:
+    "L'anàlisi de requisits no surt de llegir el plec (simulació o cap motor configurat).",
+  outdated_analysis:
+    "La licitació ha canviat després de l'anàlisi: el que es mostra descriu un estat anterior.",
 };
 
 export const OUTDATED_LABELS: Record<string, string> = {
@@ -618,6 +635,14 @@ export interface PackageDetail {
    * contra un plec que després han substituït ja no s'envia.
    */
   coherent_for_submission: boolean;
+  /** Sobre quines menes d'anàlisi descansa el paquet (requisits i compliment). */
+  analysis_bases: string[];
+  /**
+   * Cert quan alguna de les anàlisis que el sostenen no surt de llegir cap
+   * plec. Congelar-lo sí que es pot —cal, per provar la pantalla— però mai
+   * arriba a l'aprovació final.
+   */
+  simulation_only: boolean;
   can_approve: boolean;
   can_sign: boolean;
   workspace_status: WorkspaceStatus;
@@ -660,3 +685,35 @@ export const STALE_REASON_LABELS: Record<string, string> = {
   tender_not_actionable: "L'òrgan ha anul·lat aquesta licitació.",
   lot_removed: "El lot d'aquesta candidatura ja no és a la licitació.",
 };
+
+
+/**
+ * Text del resultat d'una reconciliació.
+ *
+ * Un 200 que no canvia res ha de poder dir per què. El codi el decideix el
+ * servidor (`nothing_to_do_reason`) perquè la raó sigui la mateixa als dos
+ * costats i no dues versions que divergeixin.
+ */
+export const NOTHING_TO_DO_LABELS: Record<string, string> = {
+  no_requirements_analysed:
+    "No hi ha cap requisit analitzat en aquest plec: no hi ha res d'on derivar-ho.",
+  already_in_sync: "Ja estava al dia: no hi havia res de nou per incorporar.",
+};
+
+export function reconciliationMessage(
+  created: number,
+  reason: string | null,
+  noun: { one: string; many: string },
+): { message: string; detail?: string; tone: "info" | "success" } {
+  if (created > 0) {
+    return {
+      message: `${created} ${created === 1 ? noun.one : noun.many}.`,
+      tone: "success",
+    };
+  }
+  return {
+    message: `Cap ${noun.one} nou.`,
+    detail: reason ? NOTHING_TO_DO_LABELS[reason] ?? reason : undefined,
+    tone: "info",
+  };
+}

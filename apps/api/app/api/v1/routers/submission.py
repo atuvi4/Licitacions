@@ -96,6 +96,8 @@ async def _detail(
     state = await workspace_service.load_state(session, workspace)
     readiness = await dossier_service.reconcile_readiness(session, workspace)
     stale = await service.evaluate_staleness(session, workspace, package)
+    bases = await service.analysis_bases_behind(session, package)
+    approvable_analysis = all(basis.is_trustworthy for basis in bases)
     revision = await revision_of(session, package.tender_revision_id)
 
     documents = {
@@ -169,7 +171,13 @@ async def _detail(
             package.status == SubmissionPackageStatus.FROZEN
             and readiness.is_ready
             and not stale.is_stale
+            # Un paquet de simulacio es pot congelar —cal, per provar la
+            # pantalla— pero no s'aprova mai. La regla es del domini; aixo
+            # nomes evita oferir un boto que hauria de fallar.
+            and approvable_analysis
         ),
+        analysis_bases=sorted(str(basis) for basis in bases),
+        simulation_only=not approvable_analysis,
         can_sign=ctx.membership.role in service.FINAL_APPROVAL_ROLES,
         workspace_status=workspace.status,
         # Explicit a la resposta: aprovar el paquet no es haver presentat res.
