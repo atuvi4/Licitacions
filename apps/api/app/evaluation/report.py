@@ -149,6 +149,7 @@ def render_markdown(summary: EvaluationSummary, details: list[dict[str, Any]]) -
         "",
         f"- Dataset: `{summary.dataset_id}` v{summary.dataset_version}",
         f"- Proveidor: `{summary.provider}` · model `{summary.model}`",
+        f"- Perfil: `{summary.profile or 'desconegut'}`",
         f"- Prompt: `{summary.prompt_version}` · extractor `{summary.extractor_version}` "
         f"· schema `{summary.schema_version}`",
         f"- Generat: {datetime.now(UTC).isoformat(timespec='seconds')}",
@@ -436,7 +437,9 @@ def write_reports(
     summary: EvaluationSummary, details: list[dict[str, Any]], output_dir: Path
 ) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"{summary.dataset_id}-{summary.provider}-{summary.prompt_version}"
+    # El perfil forma part del nom: mesurar la v1 i la v2 del mateix dataset amb
+    # el mateix proveidor no pot deixar un informe a sobre de l'altre.
+    stem = f"{summary.dataset_id}-{summary.provider}-{summary.profile or 'default'}"
     paths = {
         "json": write_json(output_dir / f"{stem}.json", build_payload(summary, details)),
         "markdown": output_dir / f"{stem}.md",

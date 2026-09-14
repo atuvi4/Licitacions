@@ -13,8 +13,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-from app.ai.provider import ProviderNotConfiguredError, get_provider
 from app.db.session import SessionFactory
+from app.evaluation.benchmark import BenchmarkConfigError, resolve_provider
 from app.evaluation.dataset import available_datasets, load_dataset
 from app.evaluation.report import render_markdown, write_reports
 from app.evaluation.runner import evaluate_dataset
@@ -27,7 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m app.evaluation.requirements", description=__doc__
     )
     parser.add_argument("--dataset", default="gold-v1", help="identificador del gold dataset")
-    parser.add_argument("--provider", default=None, help="fake | anthropic (per defecte, ENV)")
+    parser.add_argument(
+        "--provider", default=None, help="proveidor real (per defecte, ENV). `fake` es refusa."
+    )
     parser.add_argument("--limit", type=int, default=None, help="nombre maxim de casos")
     parser.add_argument("--tender", default=None, help="avalua nomes aquest case_id")
     parser.add_argument(
@@ -79,16 +81,14 @@ async def run(args: argparse.Namespace) -> int:
         )
         return 3
 
+    # Un proveidor simulat responia el que li encuaven i el benchmark seguia
+    # endavant: les xifres que en sortien tenien aparenca de mesura i no ho eren.
+    # La regla viu a `benchmark.resolve_provider` i es la mateixa per als dos CLI.
     try:
-        provider = get_provider(args.provider)
-    except ProviderNotConfiguredError as exc:
-        print(f"Proveidor no configurat: {exc}")
-        return 2
-
-    if not provider.is_available():
+        provider = resolve_provider(args.provider)
+    except BenchmarkConfigError as exc:
         print(
-            f"\nEl proveidor {provider.name!r} no esta disponible.\n"
-            "Falta ANTHROPIC_API_KEY per executar el benchmark real.\n"
+            f"\nNo es pot mesurar: {exc}\n"
             "L'arnes esta llest: dataset, evaluator, metriques, CLI i informes.\n"
             "No s'inventa cap resultat."
         )

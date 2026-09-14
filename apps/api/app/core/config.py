@@ -140,6 +140,13 @@ class Settings(BaseSettings):
     # Una analisi en curs mes antiga que aixo es considera morta i es pot reclamar.
     REQUIREMENTS_ANALYSIS_STALE_SECONDS: int = 900
 
+    # --- Benchmark d'extraccio ---
+    # La base de dades on s'executen els benchmarks, amb el seu propi corpus.
+    # Buida per defecte: el benchmark no ha de poder arrencar per descuit contra
+    # la base de desenvolupament. `app/evaluation/benchmark.py` refusa per nom
+    # `licitacions` i `licitacions_test`, passin per aqui o per la linia d'ordres.
+    BENCHMARK_DATABASE_URL: str = ""
+
     # --- Regles de negoci ---
     # Dies abans de la caducitat a partir dels quals una acreditacio es "expiring_soon".
     EXPIRY_WARNING_DAYS: int = 60

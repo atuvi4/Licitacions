@@ -22,9 +22,8 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.ai.prompts.requirements_v1 import EXTRACTOR_VERSION, PROMPT_VERSION
+from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
 from app.ai.provider import ProviderError, StructuredLLMProvider, get_provider
-from app.ai.schemas import SCHEMA_VERSION
 
 # `resolve_tender` viu a `corpus.py`, compartit amb la pagina de revisio: el
 # gold s'ha de verificar contra EXACTAMENT el document que s'analitzara.
@@ -160,8 +159,15 @@ async def run_case(
     provider: StructuredLLMProvider,
     *,
     force: bool = False,
+    profile: ExtractorProfile = DEFAULT_PROFILE,
 ) -> CaseOutcome:
-    """Analitza un cas amb el proveidor real i deixa el run a la base de dades."""
+    """Analitza un cas amb el proveidor real i deixa el run a la base de dades.
+
+    El `profile` decideix amb quin prompt i quin contracte s'extreu. Es un
+    parametre i no una constant perque el benchmark ha de poder mesurar dues
+    versions de l'extractor sobre el mateix corpus; el que fa servir qui no en
+    demana cap segueix sent `DEFAULT_PROFILE`.
+    """
     outcome = CaseOutcome(case_id=case.case_id)
 
     tender = await resolve_tender(session, case)
@@ -180,7 +186,7 @@ async def run_case(
 
     try:
         result = await analyze_tender_requirements(
-            session, tender, force=force, provider=provider
+            session, tender, force=force, provider=provider, profile=profile
         )
     except ProviderError as exc:
         outcome.skipped_reason = f"provider_error:{exc.code}"
@@ -203,6 +209,7 @@ async def evaluate_dataset(
     limit: int | None = None,
     only_case: str | None = None,
     include_draft: bool = False,
+    profile: ExtractorProfile = DEFAULT_PROFILE,
 ) -> tuple[EvaluationSummary, list[dict[str, Any]]]:
     """Executa el benchmark i retorna el resum i el detall per cas.
 
@@ -211,6 +218,10 @@ async def evaluate_dataset(
     al denominador convertiria una intuicio en una xifra oficial.
 
     `include_draft=True` existeix per a exploracio, i el resum ho deixa marcat.
+
+    El `profile` queda desat al resum amb les seves versions: una xifra de
+    benchmark sense dir amb quin extractor es va obtenir no es pot comparar amb
+    cap altra.
     """
     llm = provider or get_provider()
     started = time.monotonic()
@@ -220,9 +231,10 @@ async def evaluate_dataset(
         dataset_version=dataset.version,
         provider=llm.name,
         model=llm.model,
-        prompt_version=PROMPT_VERSION,
-        extractor_version=EXTRACTOR_VERSION,
-        schema_version=SCHEMA_VERSION,
+        profile=profile.name,
+        prompt_version=profile.prompt_version,
+        extractor_version=profile.extractor_version,
+        schema_version=profile.schema_version,
         coverage=dataset.coverage(),
         include_draft=include_draft,
     )
@@ -235,7 +247,7 @@ async def evaluate_dataset(
         cases = cases[:limit]
 
     for case in cases:
-        result = await run_case(session, case, llm, force=force)
+        result = await run_case(session, case, llm, force=force, profile=profile)
         if result.skipped_reason or result.run_id is None:
             summary.skipped_cases.append(
                 {"case_id": case.case_id, "reason": result.skipped_reason or "no_run"}

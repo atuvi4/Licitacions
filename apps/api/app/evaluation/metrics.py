@@ -182,6 +182,10 @@ class EvaluationSummary:
     dataset_version: int = 0
     provider: str = ""
     model: str = ""
+    #: Quin perfil d'extraccio va produir aquestes xifres (`v1`, `v2`...). Dues
+    #: mesures del mateix corpus amb perfils diferents no son comparables si no
+    #: es pot dir quin va ser cadascuna.
+    profile: str = ""
     prompt_version: str = ""
     extractor_version: str = ""
     schema_version: str = ""
@@ -223,6 +227,7 @@ class EvaluationSummary:
             "official": not self.include_draft,
             "provider": self.provider,
             "model": self.model,
+            "profile": self.profile,
             "prompt_version": self.prompt_version,
             "extractor_version": self.extractor_version,
             "schema_version": self.schema_version,
