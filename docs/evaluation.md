@@ -171,14 +171,48 @@ Taxonomia tancada, no un «incorrecte» genèric: `missed_requirement`,
 ## Execució
 
 ```bash
-python -m app.evaluation.requirements --dataset gold-v1 --provider anthropic
+# 1. Que s'enviaria: no construeix ni crida cap proveidor, i no escriu res
+python -m app.evaluation.benchmark --dataset gold-v2.1 --profile v2 --plan-only
+
+# 2. L'execucio de pagament, confirmada expressament
+python -m app.evaluation.benchmark --dataset gold-v2.1 --profile v2 --paid-run
 ```
 
-Opcions: `--limit`, `--tender <case_id>`, `--force`, `--prompt-version`,
-`--output`, `--list`.
+Opcions: `--limit`, `--tender <case_id>`, `--force`, `--output`, `--list`,
+`--include-draft`, `--database-url`. El CLI d'un sol perfil
+(`python -m app.evaluation.requirements`) accepta les mateixes i
+`--prompt-version`.
+
+### Protecció de pressupost
+
+Un run es paga per chunk, i per això cap dels dos CLI no crida el proveidor real
+per accident:
+
+* **`--plan-only`** llegeix la base del benchmark (transacció `READ ONLY` a
+  PostgreSQL) i mostra, per cas, els documents, les pàgines, els caràcters i els
+  chunks que s'enviarien; quin servidor respon; el gold que cita pàgines que el
+  pla no enviaria mai (no mesurable d'entrada), i els casos que reaprofitarien
+  un run existent (0 chunks). No construeix cap proveidor.
+* L'**estimació de volum** surt de tokens registrats en runs anteriors del mateix
+  prompt i model, a la mateixa base (tokens per petició × chunks a enviar). Es
+  marca com a ESTIMACIÓ: el real depèn del text de cada chunk. Sense històric no
+  s'estima res. El **cost en diners** només surt si `LLM_MODEL_PRICES` té preu
+  per a aquell model: el codi no porta cap preu.
+* **Sense `--paid-run`**, una execució amb proveidor real s'atura abans de
+  connectar a la base i surt amb codi 5. `--plan-only` i `--paid-run` són
+  excloents.
 
 Sense credencial l'ordre **no inventa cap resultat**: diu què falta i surt amb
 codi 2, que un CI pot distingir d'un fracàs de qualitat.
+
+### Tokens de respostes invàlides
+
+Si el proveidor respon però la resposta no serveix (per exemple, sense la crida a
+la tool de sortida), aquells tokens **es paguen igual** i compten al cost del run.
+Cada chunk desa a `chunk_coverage` els seus tokens i el `stop_reason`, que
+distingeix una resposta mal formada d'una tallada pel límit de sortida
+(`max_tokens`). Un error sense resposta (xarxa, HTTP) deixa els tokens a `None`,
+no a zero.
 
 ### Cache
 
@@ -230,6 +264,136 @@ no mostra `0,0 %` sinó `n/d`, amb el missatge
 `Award criteria metrics unavailable: no verified gold annotations`. Un zero es
 llegeix com una mesura; aquí no s'ha mesurat res. El JSON ho porta explícit a
 `award_criteria_metrics_available`.
+
+## Cobertura parcial: «no mesurable» no és «error del model»
+
+Un run pot acabar `partial`: alguns chunks han fallat i les seves pàgines no han
+arribat mai al model. Una anotació del gold que només viu en aquestes pàgines
+**no és un fals negatiu**: és **no mesurable per cobertura**, i surt del
+denominador d'aquell run. Comptar-la com a `model_miss` culparia el model d'una
+pàgina que no va veure; ignorar-la en silenci faria que el run semblés complet.
+
+Per això el report separa sempre:
+
+* **errors de cobertura** — anotacions amb `reason: page_not_analysed`, amb el
+  chunk que les contenia i el seu estat;
+* **errors de model** — `missed_requirement`, `wrong_operator`,
+  `hallucinated_requirement`… només sobre pàgines que sí es van analitzar.
+
+I una mesura parcial **no es compara amb una de completa**. Per comparar dos
+perfils quan un és parcial, l'altre es retalla als mateixos chunks completats.
+
+Els runs amb `chunk_coverage` porten l'estat de cada chunk. Els anteriors a
+aquesta instrumentació es poden reconstruir, en mode només lectura, amb
+`scripts/reconstruct_run_coverage.py`: la inferència és exacta quan el nombre de
+chunks amb rastre coincideix amb `chunks_completed`. El resultat **no** es desa a
+`chunk_coverage`, perquè és una deducció i no una observació.
+
+### Precedent: smoke 422-2026 (2026-09-14), lectura acceptada
+
+| | V1 `9e608835` | V2 `bc2abade` |
+| --- | --- | --- |
+| Estat | `completed`, 8/8 chunks | **`partial`**, 5/8 chunks (`invalid_structured_output`) |
+| Chunks fallits | — | #1 (PCAP p.6-11), #4 (p.21-26), #6 (p.31-36) |
+| Pàgines analitzades | 41/41 | 28/41 |
+
+`eco-1` (PCAP p.9) només és al chunk #1, que va fallar a V2. La reconstrucció és
+exacta (5 chunks amb rastre = 5 completats) i V1 el va detectar al mateix chunk.
+**Classificació acceptada per AlbertTuvi1: `eco-1` és no mesurable per cobertura
+a V2, no un error de V2.** L'informe original el marcava com a `model_miss`; no
+s'ha reescrit.
+
+Mètriques corregides (precisió / recall / F1, %):
+
+| Conjunt | V2 corregit (ins-1, award-1) | V1 als mateixos 5 chunks | V1 complet |
+| --- | --- | --- | --- |
+| Global | 2,3 / 100 / 4,4 | 1,9 / 100 / 3,8 | 2,3 / 100 / 4,5 |
+| Obligatoris | 2,7 / 100 / 5,3 | 2,0 / 100 / 3,9 | 2,4 / 100 / 4,7 |
+| Crítics | 100 / 100 / 100 | 100 / 100 / 100 | 100 / 100 / 100 |
+| Criteris d'adjudicació | 100 / 100 / 100 | 100 / 100 / 100 | 100 / 100 / 100 |
+| Estructura tota correcta | 0 | 100 | 100 |
+
+Errors de V2 separats: **cobertura 1** (`eco-1`); **model**: 0 no detectats,
+1 `wrong_operator` (`ins-1`), 43 prediccions sense parella al gold. Amb un gold de
+2 requisits, aquestes 43 no són necessàriament al·lucinacions.
+
+Dues coses que aquest smoke deixa obertes:
+
+* **`invalid_structured_output` no és exclusiu de V2.** Un segon run V1 sobre el
+  mateix expedient (`2579990f`) també va quedar `partial`, amb 6/8 chunks. En
+  total, 5 dels 24 chunks enviats en aquests tres runs van fallar. Fins que no
+  s'entengui, cada mostra ha de portar `chunk_coverage` i s'ha de llegir amb
+  aquesta separació.
+* **El recall de V2 a solvència econòmica continua sense mesurar.**
+
+## Mostra mínima següent (proposta, sense executar)
+
+Calculat el 2026-09-14 amb el pla de chunks real (`collect_analyzable_documents`,
+`_cap_pages`, `build_chunks`; 6 pàgines per chunk i 1 de solapament) i la QA
+d'extracció de `licitacions_benchmark`, en mode només lectura. Els documents,
+pàgines i chunks de cada cas es tornen a obtenir amb `--plan-only --tender <cas>`.
+
+Criteris de «cobertura suficient» per a un cas:
+
+1. té almenys una anotació que compta per a les mètriques (`verified` i no
+   substituïda);
+2. la pàgina del gold és dins del pla de chunks i té text;
+3. la QA de les fonts és coneguda (no `unknown`) i no té cap avís a la pàgina del
+   gold, perquè altrament un error no es pot atribuir al model;
+4. és prou petit per no fer la mostra cara: menys chunks vol dir menys cost i
+   menys exposició a chunks fallits.
+
+| Cas | Gold que compta | Pàgina → chunk | Chunks | QA fonts | Documents saltats | Veredicte |
+| --- | --- | --- | ---: | --- | --- | --- |
+| 1-2026 | exp-1 | PCAP p.5 → #0 | 4 | good | — | **apte** |
+| TSA0082096-040 | ins-2 | PPT p.4 → #13 | 15 | good | — | **apte** |
+| SER-2026-93411 | eco-1 | PCAP p.7 → #1 | 18 | warning (cap a la pàgina) | — | **apte** |
+| 2025-04671 | cert-1 | PCAP p.16 → #2, #3 | 9 | warning (cap a la pàgina) | PPT i annex sense text | apte, soroll a precisió |
+| 422-2026 | ins-1, eco-1, award-1 | — | 8 | warning (cap a la pàgina) | — | ja mesurat; eco-1 pendent a V2 |
+| 4249-2026 | eco-1, exp-1, ins-1 | PCAP p.10 → #1; p.17 → #3 | 16 | **unknown** | — | no: QA pendent i possible document duplicat (vegeu incidència) |
+| 300-2025-03877 | exp-1 | PCAP p.68 → #13 | 23 | warning (cap a la pàgina) | — | apte, però car |
+| 26-095-3 | ins-1 | PCAP p.67 → #13 | 25 | warning (cap a la pàgina) | — | apte, però car |
+| LIC-10495 | ins-1 | PCAP p.15 → #2 | 26 | warning (6 DENSITY_DROP) | 1 annex | apte, però car |
+| P4107500C-2026-65 | award-1 | PCAP p.13 → #2 | 80 (400/570 pàg.) | warning | — | no: massa car |
+| 2026SE00013 | — (només `needs_review`) | — | 12 | warning | 6 annexos | no: res mesurable |
+
+Proposta de tres casos:
+
+1. **Solvència econòmica → SER-2026-93411.** És l'únic `eco-1` verificat, fora de
+   422-2026, amb QA coneguda. És preferible a 4249-2026, que cobriria solvència,
+   experiència i assegurança alhora amb 16 chunks, però té la QA `unknown`: tot
+   error hi sortiria `UNDETERMINED`. A més, té una incidència de corpus oberta
+   (vegeu més avall).
+2. **Assegurances → TSA0082096-040.** `ins-2` és l'única anotació verificada amb
+   `insurance_limits` (i `obligation_modality`): justament on V2 va fallar
+   l'estructura a 422-2026. QA `good` i cap document saltat.
+3. **Experiència/criteris → 1-2026.** És el cas més barat del gold (4 chunks, QA
+   `good`) i mesura la detecció d'`exp-1`. No mesura cap dimensió nova de V2.
+   Si es vol provar `aggregation` i `percentage_base`, el cas és
+   300-2025-03877, amb 23 chunks. Criteris d'adjudicació verificats: només n'hi
+   ha a 422-2026 (ja mesurat) i a P4107500C-2026-65 (80 chunks), així que no n'hi
+   ha cap de barat per ampliar.
+
+### Incidència de corpus oberta: 4249-2026, possible document duplicat
+
+Detectada el 2026-09-14 amb `--plan-only` sobre `licitacions_benchmark`. El
+«Plec de prescripcions tecniques» i el «Plec de clausules administratives»
+d'aquest expedient tenen exactament les mateixes pàgines (39) i els mateixos
+caràcters (143.767). Molt probablement és el mateix fitxer ingerit dues vegades
+amb tipus diferents. Si és així:
+
+* la meitat dels 16 chunks del cas es pagarien dues vegades;
+* el model veuria el text del PCAP com si fos el PPT, i els requisits en sortirien
+  duplicats o amb el document equivocat, cosa que falsejaria precisió i evidència.
+
+**No s'ha corregit ni verificat** (cal comparar el hash del contingut i la font
+de cada document). Fins que no es revisi, **4249-2026 no s'executa amb el
+proveïdor real**, ni sol ni dins d'una mostra.
+
+La mostra suma 37 chunks per perfil. Extrapolant dels tokens registrats a
+422-2026 (V1 ≈ 11,5 k d'entrada i 4,3 k de sortida per chunk; V2 ≈ 14,8 k i 5,0 k),
+són uns 425 k + 159 k tokens per a V1 i uns 547 k + 187 k per a V2. És una
+estimació, no una mesura: el cost real depèn del text de cada chunk.
 
 ## El benchmark no veu dades de l'empresa
 

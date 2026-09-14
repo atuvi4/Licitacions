@@ -350,6 +350,57 @@ async def test_a_provider_error_fails_the_run(session, analyzable):
     assert run.chunks_failed == 1
 
 
+async def test_els_tokens_d_una_resposta_inservible_tambe_compten(session, analyzable):
+    """Una resposta sense la tool es paga igual: no pot desapareixer del cost."""
+    from app.ai.provider import InvalidStructuredOutputError, Usage
+
+    fake.queue_response(
+        InvalidStructuredOutputError(
+            "Sense tool.",
+            usage=Usage(
+                input_tokens=900, output_tokens=8000, request_id="req-1", stop_reason="max_tokens"
+            ),
+        )
+    )
+
+    tender = await tender_of(session, analyzable["document"])
+    run = (await analyze_tender_requirements(session, tender)).run
+
+    assert run.status == AnalysisRunStatus.FAILED
+    assert run.input_tokens == 900
+    assert run.output_tokens == 8000
+    [chunk] = run.chunk_coverage["chunks"]
+    assert chunk["status"] == "failed"
+    assert chunk["error"] == "invalid_structured_output"
+    assert (chunk["input_tokens"], chunk["output_tokens"]) == (900, 8000)
+    assert chunk["stop_reason"] == "max_tokens"
+
+
+async def test_un_error_sense_resposta_no_s_inventa_tokens(session, analyzable):
+    fake.queue_error()
+
+    tender = await tender_of(session, analyzable["document"])
+    run = (await analyze_tender_requirements(session, tender)).run
+
+    [chunk] = run.chunk_coverage["chunks"]
+    assert run.input_tokens is None
+    assert chunk["input_tokens"] is None and chunk["stop_reason"] is None
+
+
+async def test_la_cobertura_registra_les_pagines_i_el_consum_de_cada_chunk(session, analyzable):
+    extraction = analyzable["extraction"]
+    fake.queue_response({"requirements": [requirement_payload(extraction.id)]})
+
+    tender = await tender_of(session, analyzable["document"])
+    run = (await analyze_tender_requirements(session, tender)).run
+
+    [chunk] = run.chunk_coverage["chunks"]
+    assert chunk["pages"] == [27, 28]
+    assert chunk["status"] == "completed"
+    assert (chunk["input_tokens"], chunk["output_tokens"]) == (100, 50)
+    assert run.input_tokens == 100
+
+
 # --------------------------------------------------------------------------- #
 # Semantica de l'obligatorietat                                                 #
 # --------------------------------------------------------------------------- #

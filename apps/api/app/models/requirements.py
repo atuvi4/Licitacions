@@ -155,6 +155,14 @@ class RequirementExtractionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: canviaria la qualitat, i aquest run es va fer amb la d'aleshores.
     source_quality_issues: Mapped[list[Any] | None] = mapped_column(sa.JSON)
 
+    #: Els chunks d'aquest run amb l'estat de cadascun: quines pagines van
+    #: arribar al model i quines no. `chunks_completed` diu quants en van caure;
+    #: aixo diu **quins**, que es l'unica manera de distingir despres "el model
+    #: no ho ha trobat" de "aquell tros no es va analitzar". Veure
+    #: `app/services/analysis_coverage.py`. Nul als runs anteriors a aquesta
+    #: instrumentacio: cobertura desconeguda, que no es cobertura completa.
+    chunk_coverage: Mapped[dict[str, Any] | None] = mapped_column(sa.JSON)
+
     is_current: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     error_code: Mapped[str | None] = mapped_column(sa.String(50))
     error_message: Mapped[str | None] = mapped_column(sa.Text)

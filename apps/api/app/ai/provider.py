@@ -18,11 +18,20 @@ from app.core.config import settings
 
 
 class ProviderError(Exception):
-    """Fallada atribuible al proveidor: xarxa, quota, 5xx, resposta il·legible."""
+    """Fallada atribuible al proveidor: xarxa, quota, 5xx, resposta il·legible.
 
-    def __init__(self, message: str, code: str = "provider_error") -> None:
+    `usage` porta el consum quan el proveidor SI que ha respost i la resposta no
+    serveix (per exemple, sense la crida a la tool). Aquells tokens es paguen
+    igual: si es perdessin aqui, el cost d'un run amb chunks caiguts sortiria
+    per sota del real. `None` vol dir que no hi va haver resposta (xarxa, 4xx/5xx).
+    """
+
+    def __init__(
+        self, message: str, code: str = "provider_error", usage: Usage | None = None
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.usage = usage
 
 
 class ProviderTimeoutError(ProviderError):
@@ -40,8 +49,8 @@ class ProviderNotConfiguredError(ProviderError):
 class InvalidStructuredOutputError(ProviderError):
     """El proveidor ha respost, pero el JSON no compleix l'esquema."""
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message, "invalid_structured_output")
+    def __init__(self, message: str, usage: Usage | None = None) -> None:
+        super().__init__(message, "invalid_structured_output", usage)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +60,10 @@ class Usage:
     input_tokens: int | None = None
     output_tokens: int | None = None
     request_id: str | None = None
+    #: Per que el model va deixar d'escriure (`end_turn`, `tool_use`,
+    #: `max_tokens`...). Sense aixo, un "invalid_structured_output" no distingeix
+    #: una resposta mal formada d'una resposta tallada pel limit de sortida.
+    stop_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,6 +1,8 @@
 """CLI del benchmark d'extraccio de requisits.
 
-    python -m app.evaluation.requirements --dataset gold-v1 --provider anthropic
+    python -m app.evaluation.requirements --dataset gold-v1 --provider anthropic --paid-run
+
+Sense `--paid-run` no es crida el proveidor real: l'execucio te cost.
 
 Sense credencial no s'inventa cap resultat: l'ordre diu exactament que falta i
 surt amb codi 2, de manera que un CI ho pot distingir d'un fracas de qualitat.
@@ -14,7 +16,11 @@ import sys
 from pathlib import Path
 
 from app.db.session import SessionFactory
-from app.evaluation.benchmark import BenchmarkConfigError, resolve_provider
+from app.evaluation.benchmark import (
+    EXIT_PAID_RUN_NOT_CONFIRMED,
+    BenchmarkConfigError,
+    resolve_provider,
+)
 from app.evaluation.dataset import available_datasets, load_dataset
 from app.evaluation.report import render_markdown, write_reports
 from app.evaluation.runner import evaluate_dataset
@@ -44,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-draft",
         action="store_true",
         help="inclou anotacions en esborrany (exploracio; NO son metriques oficials)",
+    )
+    parser.add_argument(
+        "--paid-run",
+        action="store_true",
+        help="confirmacio explicita: aquesta execucio crida el proveidor real i te cost",
     )
     return parser
 
@@ -93,6 +104,16 @@ async def run(args: argparse.Namespace) -> int:
             "No s'inventa cap resultat."
         )
         return 2
+    if not args.paid_run:
+        # La mateixa proteccio que `app.evaluation.benchmark`: cap execucio de
+        # pagament comenca sense que algu ho hagi demanat expressament.
+        print(
+            f"\nAquesta execucio cridaria el proveidor real {provider.name!r} "
+            f"(model {provider.model!r}) i TE COST.\n"
+            "Revisa que s'enviaria amb `python -m app.evaluation.benchmark --plan-only` "
+            "i repeteix-la amb --paid-run si la vols pagar."
+        )
+        return EXIT_PAID_RUN_NOT_CONFIRMED
 
     if args.prompt_version:
         from app.ai.prompts.requirements_v1 import PROMPT_VERSION

@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SECONDS: float = 120.0
     LLM_MAX_RETRIES: int = 2
     LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS: int = 8000
+    # Preu dels models, en dolars per milio de tokens, per poder posar un cost a
+    # una execucio del benchmark. Buit per defecte: un preu al codi envelleix
+    # sense que ningu no ho noti, i un cost calculat amb un preu fals es pitjor
+    # que no tenir-ne cap. Si el model no hi es, `estimated_cost` queda buit i
+    # l'informe diu per que. Exemple:
+    #   LLM_MODEL_PRICES={"<model>": {"input": <USD per 1M>, "output": <USD per 1M>}}
+    LLM_MODEL_PRICES: dict[str, dict[str, float]] = Field(default_factory=dict)
 
     # --- Analisi de requisits ---
     # Chunking per pagines: mai es parteix una pagina entre chunks.

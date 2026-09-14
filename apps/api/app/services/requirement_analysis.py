@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.normalize_v2 import normalise_requirement
 from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
-from app.ai.provider import ProviderError, StructuredLLMProvider, get_provider
+from app.ai.provider import ProviderError, StructuredLLMProvider, Usage, get_provider
 from app.ai.schemas import (
     AwardCriterionOut,
     EvidenceOut,
@@ -70,6 +70,7 @@ from app.models.tender_documents import (
     TenderExtractionIssue,
 )
 from app.models.tenders import Tender, TenderDocument, TenderLot
+from app.services.analysis_coverage import build_coverage
 from app.services.evidence_validation import locate_quote
 from app.services.extraction_qa import QaStatus, combine_status
 from app.services.requirement_chunking import (
@@ -537,6 +538,13 @@ async def analyze_tender_requirements(
     seen_requirements: dict[str, Requirement] = {}
     seen_awards: set[str] = set()
     last_error: str | None = None
+    # Per index de chunk, el motiu pel qual no s'ha pogut fer servir. El
+    # recompte ja hi era; el que faltava era saber QUINS, que es l'unic que
+    # permet dir despres si una pagina del gold va arribar al model.
+    chunk_failures: dict[int, str] = {}
+    # Per index de chunk, el que va costar. Inclou els chunks caiguts si el
+    # proveidor va arribar a respondre: aquells tokens tambe es paguen.
+    chunk_usage: dict[int, Usage] = {}
 
     for chunk in chunks:
         try:
@@ -544,24 +552,28 @@ async def analyze_tender_requirements(
         except ProviderError as exc:
             tally.validation_errors += 1
             run.chunks_failed += 1
+            chunk_failures[chunk.index] = exc.code
             last_error = f"{exc.code}: {exc}"
+            if exc.usage is not None:
+                chunk_usage[chunk.index] = exc.usage
             logger.warning(
                 "requirements.chunk.failed",
-                extra={"run_id": str(run.id), "chunk": chunk.index, "error_code": exc.code},
+                extra={
+                    "run_id": str(run.id),
+                    "chunk": chunk.index,
+                    "error_code": exc.code,
+                    "stop_reason": exc.usage.stop_reason if exc.usage else None,
+                },
             )
             continue
 
         parsed, usage = result
-        if usage.input_tokens:
-            input_tokens += usage.input_tokens
-        if usage.output_tokens:
-            output_tokens += usage.output_tokens
-        if usage.request_id:
-            request_ids.append(usage.request_id)
+        chunk_usage[chunk.index] = usage
 
         if parsed is None:
             tally.validation_errors += 1
             run.chunks_failed += 1
+            chunk_failures[chunk.index] = "invalid_structured_output"
             last_error = "invalid_structured_output"
             continue
 
@@ -578,6 +590,23 @@ async def analyze_tender_requirements(
             profile=profile,
         )
         run.chunks_completed += 1
+
+    for usage in chunk_usage.values():
+        input_tokens += usage.input_tokens or 0
+        output_tokens += usage.output_tokens or 0
+        if usage.request_id:
+            request_ids.append(usage.request_id)
+
+    # La fotografia es desa sempre, tambe quan no ha fallat res: "tots els
+    # chunks analitzats" es una afirmacio que despres es voldra poder comprovar,
+    # no assumir per l'absencia d'errors.
+    run.chunk_coverage = build_coverage(
+        chunks,
+        failures=chunk_failures,
+        usage=chunk_usage,
+        pages_per_chunk=settings.REQUIREMENTS_CHUNK_PAGES,
+        overlap_pages=settings.REQUIREMENTS_CHUNK_OVERLAP_PAGES,
+    )
 
     conflicts = await check_deadline_consistency(session, run, tender)
 

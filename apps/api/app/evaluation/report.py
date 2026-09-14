@@ -48,15 +48,51 @@ def build_payload(summary: EvaluationSummary, details: list[dict[str, Any]]) -> 
         "generated_at": datetime.now(UTC).isoformat(),
         "summary": summary.as_dict(),
         "cases": details,
-        "warnings": warnings_for(summary),
+        "warnings": warnings_for(summary, details),
         # Explicit perque qui llegeixi el JSON no confongui un 0.0 amb una mesura.
         "award_criteria_metrics_available": award_metrics_available(summary),
     }
 
 
-def warnings_for(summary: EvaluationSummary) -> list[str]:
+def warnings_for(
+    summary: EvaluationSummary, details: list[dict[str, Any]] | None = None
+) -> list[str]:
     """Els senyals que impedeixen posar aixo davant d'un usuari."""
     alerts: list[str] = []
+
+    # Cobertura primer: si el model no ha llegit tot el plec, la resta de
+    # xifres parlen d'una mesura parcial i cal saber-ho abans de llegir-les.
+    for item in details or []:
+        cobertura = item.get("coverage") or {}
+        if not cobertura.get("known"):
+            alerts.append(
+                f"`{item['case_id']}`: cobertura NO verificada (run anterior a la "
+                "instrumentacio de chunks). No es pot saber quines pagines va llegir el model."
+            )
+            continue
+        if cobertura.get("chunks_failed"):
+            motius = ", ".join(cobertura.get("errors") or []) or "sense codi"
+            alerts.append(
+                f"`{item['case_id']}`: nomes {cobertura['chunks_analyzed']}/"
+                f"{cobertura['chunks_total']} chunks analitzats ({motius}). "
+                f"{cobertura['pages_analyzed']}/{cobertura['pages_total']} pagines han arribat "
+                "al model: aquesta mesura es PARCIAL."
+            )
+            if cobertura.get("failed_input_tokens") or cobertura.get("failed_output_tokens"):
+                parades = ", ".join(cobertura.get("failed_stop_reasons") or []) or "—"
+                alerts.append(
+                    f"`{item['case_id']}`: els chunks caiguts van consumir "
+                    f"{cobertura['failed_input_tokens']} tokens d'entrada i "
+                    f"{cobertura['failed_output_tokens']} de sortida sense aportar res "
+                    f"(stop_reason: {parades}). Estan inclosos al cost."
+                )
+    if summary.unmeasurable:
+        alerts.append(
+            f"{len(summary.unmeasurable)} element(s) del gold NO mesurables en aquesta "
+            "execucio: la pagina que citen no es va analitzar. Queden fora de les "
+            "metriques, i per tant aquestes xifres no son comparables amb les d'una "
+            "execucio amb cobertura completa."
+        )
 
     coverage = summary.coverage or {}
     verified = coverage.get("verified", 0)
@@ -82,8 +118,23 @@ def warnings_for(summary: EvaluationSummary) -> list[str]:
             f"{needs_review} anotacio(ns) marcades com a `needs_review`: queden fora de les "
             "metriques oficials fins que la revisio humana les resolgui."
         )
+    # Un denominador buit pot voler dir que el gold no en te, o que en te pero
+    # aquesta execucio no els podia trobar. Dir el primer quan passa el segon
+    # amagaria que el run va fallar.
+    excluded_awards = sum(1 for u in summary.unmeasurable if u.get("kind") == "award_criterion")
+    excluded_critical = sum(
+        1
+        for u in summary.unmeasurable
+        if u.get("kind") != "award_criterion" and u.get("is_critical")
+    )
     if not award_metrics_available(summary):
-        alerts.append(AWARD_METRICS_UNAVAILABLE)
+        if excluded_awards:
+            alerts.append(
+                f"Criteris d'adjudicacio NO mesurats: {excluded_awards} del gold exclosos "
+                "perque la seva pagina no es va analitzar."
+            )
+        else:
+            alerts.append(AWARD_METRICS_UNAVAILABLE)
     if coverage.get("cases_with_verified", 0) < MIN_CASES_FOR_COVERAGE and verified:
         alerts.append(
             f"dataset coverage incomplete: {coverage.get('cases_with_verified', 0)} cas(os) "
@@ -91,9 +142,15 @@ def warnings_for(summary: EvaluationSummary) -> list[str]:
         )
 
     if summary.critical.true_positives + summary.critical.false_negatives == 0:
-        alerts.append(
-            "No hi ha cap requisit critic al gold dataset: el recall critic no es mesurable."
-        )
+        if excluded_critical:
+            alerts.append(
+                f"Recall critic NO mesurat: {excluded_critical} requisit(s) critic(s) del gold "
+                "exclosos perque la seva pagina no es va analitzar."
+            )
+        else:
+            alerts.append(
+                "No hi ha cap requisit critic al gold dataset: el recall critic no es mesurable."
+            )
     elif summary.critical.recall < CRITICAL_RECALL_WARN:
         alerts.append(
             f"Recall critic {summary.critical.recall:.1%} per sota de "
@@ -139,10 +196,32 @@ def _table(rows: list[tuple[str, ...]], headers: tuple[str, ...]) -> str:
     return "\n".join(lines)
 
 
+def _money(amount: float | None, currency: str | None) -> str:
+    """Un import, o un guio si no se'n pot saber el preu.
+
+    `None` i zero no son el mateix: `None` vol dir que no hi ha preu configurat,
+    i zero que no s'han gastat tokens (per exemple, tot reaprofitat de la cache).
+    """
+    if amount is None:
+        return "—"
+    return f"{amount:.6f} {currency or ''}".strip()
+
+
+def _price_note(cost: dict[str, Any]) -> str:
+    """Amb quin preu s'ha calculat el cost, o per que no s'ha pogut calcular."""
+    if cost.get("cost_unavailable_reason"):
+        return str(cost["cost_unavailable_reason"])
+    unit = cost.get("price_unit_tokens")
+    return (
+        f"entrada {cost['price_input_per_unit']} · sortida {cost['price_output_per_unit']} "
+        f"{cost.get('currency') or ''}/{unit} tokens"
+    ).strip()
+
+
 def render_markdown(summary: EvaluationSummary, details: list[dict[str, Any]]) -> str:
     data = summary.as_dict()
     detection = data["detection"]
-    alerts = warnings_for(summary)
+    alerts = warnings_for(summary, details)
 
     parts: list[str] = [
         f"# Benchmark d'extraccio de requisits — `{summary.dataset_id}`",
@@ -184,6 +263,57 @@ def render_markdown(summary: EvaluationSummary, details: list[dict[str, Any]]) -
         parts += ["## Avisos", ""]
         parts += [f"- ⚠️ {alert}" for alert in alerts]
         parts.append("")
+
+    # Cobertura d'analisi abans de les metriques: dir quantes pagines va llegir
+    # el model es condicio per poder interpretar el que ve despres.
+    if any(item.get("coverage") for item in details):
+        files = []
+        for item in details:
+            cob = item.get("coverage") or {}
+            if cob.get("known"):
+                chunks = f"{cob['chunks_analyzed']}/{cob['chunks_total']}"
+                pagines = f"{cob['pages_analyzed']}/{cob['pages_total']}"
+                motius = ", ".join(cob.get("errors") or []) or "—"
+            else:
+                chunks = pagines = motius = "desconeguda"
+            files.append(
+                (
+                    f"`{item['case_id']}`",
+                    str(item.get("run_status", "—")),
+                    chunks,
+                    pagines,
+                    str(len(item.get("unmeasurable") or [])),
+                    motius,
+                )
+            )
+        parts += [
+            "## Cobertura d'analisi",
+            "",
+            _table(
+                files,
+                ("Cas", "Estat del run", "Chunks", "Pagines", "Gold no mesurable", "Errors"),
+            ),
+            "",
+        ]
+        if summary.unmeasurable:
+            parts += [
+                "Elements del gold **exclosos de les metriques** perque la pagina que citen "
+                "no va arribar al model:",
+                "",
+                _table(
+                    [
+                        (
+                            f"`{u['case_id']}`",
+                            u["gold_id"],
+                            u["category"],
+                            f"{u['document_name']} p.{u['page_number']}",
+                        )
+                        for u in summary.unmeasurable
+                    ],
+                    ("Cas", "Gold id", "Categoria", "Cita"),
+                ),
+                "",
+            ]
 
     award_available = award_metrics_available(summary)
 
@@ -343,9 +473,13 @@ def render_markdown(summary: EvaluationSummary, details: list[dict[str, Any]]) -
                 ("Tokens entrada", str(cost["input_tokens"])),
                 ("Tokens sortida", str(cost["output_tokens"])),
                 ("Durada", f"{cost['duration_ms'] / 1000:.1f} s"),
-                ("Cost estimat", str(cost["estimated_cost"] or "—")),
-                ("Cost per expedient", str(cost["cost_per_tender"] or "—")),
-                ("Cost per requisit correcte", str(cost["cost_per_correct_requirement"] or "—")),
+                ("Cost estimat", _money(cost["estimated_cost"], cost["currency"])),
+                ("Cost per expedient", _money(cost["cost_per_tender"], cost["currency"])),
+                (
+                    "Cost per requisit correcte",
+                    _money(cost["cost_per_correct_requirement"], cost["currency"]),
+                ),
+                ("Preu aplicat", _price_note(cost)),
             ],
             ("Mesura", "Valor"),
         ),
@@ -402,7 +536,7 @@ def render_html(summary: EvaluationSummary, details: list[dict[str, Any]]) -> st
             f"<tbody>{''.join(rows)}</tbody></table></section>"
         )
 
-    alerts = "".join(f"<li>{esc(a)}</li>" for a in warnings_for(summary))
+    alerts = "".join(f"<li>{esc(a)}</li>" for a in warnings_for(summary, details))
     data = summary.as_dict()
     return f"""<!doctype html>
 <meta charset="utf-8">

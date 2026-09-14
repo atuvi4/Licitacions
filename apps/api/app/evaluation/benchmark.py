@@ -1,7 +1,7 @@
 """Benchmark d'extraccio: el mateix corpus mesurat amb perfils diferents.
 
-    python -m app.evaluation.benchmark --dataset gold-v2.1 --profile V1
-    python -m app.evaluation.benchmark --dataset gold-v2.1 --profile V2
+    python -m app.evaluation.benchmark --dataset gold-v2.1 --profile V2 --plan-only
+    python -m app.evaluation.benchmark --dataset gold-v2.1 --profile V2 --paid-run
 
 Que aporta sobre `app.evaluation.requirements`, que segueix sent el benchmark
 d'un sol perfil:
@@ -17,6 +17,10 @@ d'un sol perfil:
 * **Base de dades propia.** El corpus viu en una base de dades, i el benchmark hi
   escriu els runs. Fer-ho contra la base de desenvolupament o contra la de tests
   seria contaminar-les: aqui es refusa per nom, abans de connectar.
+* **Pla abans de pagar.** `--plan-only` diu quins casos, documents, pagines i
+  chunks s'enviarien, amb una estimacio de volum si hi ha historic, sense
+  construir cap proveidor. I una execucio amb proveidor real no comenca sense
+  `--paid-run`: un run es paga per chunk, i no s'ha de poder llancar per accident.
 * **Manifest per execucio.** Cada run deixa escrit contra que es va mesurar
   —commit, dataset, proveidor, model, perfil, versions i hora— al seu propi
   directori. Una execucio no pot trepitjar-ne una altra.
@@ -38,8 +42,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import sqlalchemy as sa
 from sqlalchemy.engine import URL, make_url
-from sqlalchemy.exc import ArgumentError
+from sqlalchemy.exc import ArgumentError, DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.ai.profiles import PROFILES, ExtractorProfile
@@ -49,6 +54,7 @@ from app.core.config import settings
 from app.evaluation.corpus import resolve_tender
 from app.evaluation.dataset import GoldDataset, available_datasets
 from app.evaluation.dataset_v2 import GoldDatasetV2, load_gold
+from app.evaluation.plan import build_plan, render_plan
 from app.evaluation.report import render_markdown, write_reports
 from app.evaluation.runner import evaluate_dataset
 
@@ -68,6 +74,9 @@ FORBIDDEN_DATABASES = frozenset({"licitacions", "licitacions_test", "postgres"})
 SIMULATED_PROVIDERS = frozenset({"fake", "fixture"})
 
 _DRIVER = "postgresql+asyncpg"
+
+#: Codi de sortida quan falta la confirmacio explicita d'un run de pagament.
+EXIT_PAID_RUN_NOT_CONFIRMED = 5
 
 
 class BenchmarkConfigError(RuntimeError):
@@ -268,7 +277,84 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="inclou anotacions en esborrany (exploracio; NO son metriques oficials)",
     )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="mostra casos, documents, pagines i chunks que s'enviarien, i una estimacio "
+        "de volum; NO construeix ni crida cap proveidor i no escriu res",
+    )
+    mode.add_argument(
+        "--paid-run",
+        action="store_true",
+        help="confirmacio explicita: aquesta execucio crida el proveidor real i te cost",
+    )
     return parser
+
+
+def planned_provider(name: str | None) -> tuple[str, str]:
+    """Nom i model del proveidor que es faria servir, SENSE construir-lo."""
+    return (name or settings.LLM_PROVIDER or "fake").strip().lower(), settings.LLM_MODEL
+
+
+async def _describe_cluster(session: AsyncSession) -> str | None:
+    """Quin servidor respon: el port 5433 d'una maquina ha allotjat clusters diferents."""
+    if session.bind.dialect.name != "postgresql":
+        return None
+    database = await session.scalar(sa.text("SELECT current_database()"))
+    version = await session.scalar(sa.text("SHOW server_version"))
+    parts = [f"base {database!r}", f"PostgreSQL {version}"]
+    try:
+        async with session.begin_nested():
+            data_dir = await session.scalar(sa.text("SHOW data_directory"))
+        parts.append(f"data_directory {data_dir}")
+    except DBAPIError:
+        # Cal pg_read_all_settings; sense aquest permis, la resta ja identifica prou.
+        pass
+    return " · ".join(parts)
+
+
+async def plan_only(
+    args: argparse.Namespace, dataset: GoldDataset, profile: ExtractorProfile, database: URL
+) -> int:
+    """Llegeix la base i diu que s'enviaria. No construeix ni crida cap proveidor."""
+    provider_name, model = planned_provider(args.provider)
+    engine = create_async_engine(database)
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            if session.bind.dialect.name == "postgresql":
+                await session.execute(sa.text("SET TRANSACTION READ ONLY"))
+            cluster = await _describe_cluster(session)
+            plan = await build_plan(
+                session,
+                dataset,
+                profile=profile,
+                provider_name=provider_name,
+                model=model,
+                only_case=args.tender,
+                limit=args.limit,
+                force=args.force,
+                include_draft=args.include_draft,
+            )
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+    print()
+    if cluster:
+        print(f"Servidor: {cluster}")
+    print(render_plan(plan))
+    if provider_name in SIMULATED_PROVIDERS:
+        print(
+            f"\nNota: el proveidor configurat es {provider_name!r}, que no mesura res: "
+            "una execucio real el refusaria."
+        )
+    print(
+        "\nNO s'ha construit ni cridat cap proveidor i no s'ha escrit res. "
+        "Per executar-ho de debo cal --paid-run."
+    )
+    return 0 if any(case.has_corpus for case in plan.cases) else 4
 
 
 def describe_dataset(dataset: GoldDataset) -> str:
@@ -311,10 +397,29 @@ async def run(args: argparse.Namespace) -> int:
         database = resolve_benchmark_database(
             args.database_url or settings.BENCHMARK_DATABASE_URL or None
         )
+    except BenchmarkConfigError as exc:
+        print(f"\nNo es pot mesurar: {exc}")
+        return 2
+
+    if args.plan_only:
+        return await plan_only(args, dataset, profile, database)
+
+    try:
         provider = resolve_provider(args.provider)
     except BenchmarkConfigError as exc:
         print(f"\nNo es pot mesurar: {exc}")
         return 2
+    if not args.paid_run:
+        # Construir el proveidor no gasta res (el client es crea a la primera
+        # crida); el que es paga ve despres. Aqui s'atura tota execucio que no
+        # s'hagi confirmat expressament.
+        print(
+            f"\nAquesta execucio cridaria el proveidor real {provider.name!r} "
+            f"(model {provider.model!r}) i TE COST.\n"
+            "Revisa primer que s'enviaria amb --plan-only, i repeteix-la amb --paid-run "
+            "si la vols pagar."
+        )
+        return EXIT_PAID_RUN_NOT_CONFIRMED
 
     coverage = dataset.coverage()
     if coverage.get("verified", 0) == 0 and not args.include_draft:

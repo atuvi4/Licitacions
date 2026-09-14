@@ -111,6 +111,15 @@ class AnthropicProvider:
         except anthropic.APIError as exc:
             raise ProviderError(f"{type(exc).__name__}: {exc}") from exc
 
+        # L'us es llegeix abans de validar: una resposta inservible tambe s'ha pagat.
+        raw_usage = getattr(response, "usage", None)
+        usage = Usage(
+            input_tokens=getattr(raw_usage, "input_tokens", None),
+            output_tokens=getattr(raw_usage, "output_tokens", None),
+            request_id=getattr(response, "id", None),
+            stop_reason=getattr(response, "stop_reason", None),
+        )
+
         payload: dict[str, Any] | None = None
         for block in response.content:
             if getattr(block, "type", None) == "tool_use" and block.name == _TOOL_NAME:
@@ -118,16 +127,13 @@ class AnthropicProvider:
                 break
         if payload is None:
             raise InvalidStructuredOutputError(
-                "El proveidor no ha retornat cap crida a la tool de sortida."
+                "El proveidor no ha retornat cap crida a la tool de sortida "
+                f"(stop_reason={usage.stop_reason}).",
+                usage=usage,
             )
 
-        usage = getattr(response, "usage", None)
         return StructuredResult(
             data=payload,
-            usage=Usage(
-                input_tokens=getattr(usage, "input_tokens", None),
-                output_tokens=getattr(usage, "output_tokens", None),
-                request_id=getattr(response, "id", None),
-            ),
+            usage=usage,
             model=getattr(response, "model", self._model),
         )

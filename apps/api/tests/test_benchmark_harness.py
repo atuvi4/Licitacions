@@ -234,7 +234,7 @@ async def test_the_cli_stops_when_there_is_no_corpus(tmp_path, engine, capsys, m
     monkeypatch.setattr(benchmark, "create_async_engine", lambda url: _NoDispose(engine))
     runs = tmp_path / "runs"
     args = benchmark.build_parser().parse_args(
-        ["--dataset", "gold-v2.1", "--profile", "v1",
+        ["--dataset", "gold-v2.1", "--profile", "v1", "--paid-run",
          "--database-url", BENCHMARK_DSN, "--output", str(runs)]
     )
 

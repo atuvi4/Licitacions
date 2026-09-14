@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,7 @@ from app.evaluation.metrics import (
     accumulate_case,
     update_evidence,
 )
+from app.evaluation.pricing import configured_prices, price_for
 from app.models.requirements import (
     AwardCriterion,
     Requirement,
@@ -48,6 +50,7 @@ from app.models.requirements import (
 )
 from app.models.tender_documents import TenderDocumentPage
 from app.models.tenders import TenderDocument
+from app.services.analysis_coverage import analyzed_pages, coverage_summary, covers
 from app.services.evidence_validation import quote_is_present
 from app.services.requirement_analysis import (
     analyze_tender_requirements,
@@ -63,6 +66,50 @@ class CaseOutcome:
     reused: bool = False
     skipped_reason: str | None = None
     analysed_pages: set[int] = field(default_factory=set)
+
+
+#: Un element del gold amb cita: es tot el que necessita el filtre de cobertura.
+class _Citable(Protocol):
+    gold_id: str
+    document_name: str
+    page_number: int
+
+
+def split_by_coverage(
+    items: Sequence[_Citable],
+    coverage: Mapping[str, Any] | None,
+    *,
+    kind: str = "requirement",
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    """Separa el gold en el que aquell run podia trobar i el que no.
+
+    Si la pagina que cita el gold no va arribar al model —el seu chunk va
+    fallar—, comptar-ho com un requisit perdut seria atribuir al perfil un
+    error de l'execucio. Aquests elements queden **fora de les metriques** i es
+    llisten a part com a no mesurables.
+
+    Cobertura desconeguda (runs anteriors a la instrumentacio) NO exclou res:
+    no saber si una pagina es va llegir no es el mateix que saber que no. En
+    aquest cas l'informe avisa que la cobertura no esta verificada.
+    """
+    measurable: list[Any] = []
+    unmeasurable: list[dict[str, Any]] = []
+    for item in items:
+        if covers(coverage, item.document_name, item.page_number) is False:
+            unmeasurable.append(
+                {
+                    "gold_id": item.gold_id,
+                    "kind": kind,
+                    "is_critical": bool(getattr(item, "is_critical", False)),
+                    "category": str(getattr(item, "category", "") or ""),
+                    "document_name": item.document_name,
+                    "page_number": item.page_number,
+                    "reason": "page_not_analysed",
+                }
+            )
+        else:
+            measurable.append(item)
+    return measurable, unmeasurable
 
 
 async def _page_text(session: AsyncSession, page_id: uuid.UUID) -> str:
@@ -238,6 +285,10 @@ async def evaluate_dataset(
         coverage=dataset.coverage(),
         include_draft=include_draft,
     )
+    # El preu es resol un sol cop, al principi: si a mig benchmark canviessin els
+    # preus configurats, el cost de l'execucio deixaria de ser una xifra sola.
+    summary.cost.model = llm.model
+    summary.cost.price = price_for(llm.model, configured_prices())
     details: list[dict[str, Any]] = []
 
     cases = dataset.cases
@@ -273,12 +324,36 @@ async def evaluate_dataset(
         gold_awards = (
             case.award_criteria if include_draft else case.verified_award_criteria
         )
+
+        # Cobertura real d'aquest run: quines pagines van arribar al model. El
+        # gold que cita una pagina que no s'hi va enviar no es mesurable aqui.
+        coverage = run.chunk_coverage
+        gold_requirements, unmeasurable_reqs = split_by_coverage(
+            gold_requirements, coverage, kind="requirement"
+        )
+        gold_awards, unmeasurable_awards = split_by_coverage(
+            gold_awards, coverage, kind="award_criterion"
+        )
+        for item in unmeasurable_reqs + unmeasurable_awards:
+            summary.unmeasurable.append({"case_id": case.case_id, **item})
+
+        # `analysed_pages` alimenta la hipotesi de per que s'ha perdut un
+        # requisit. Amb cobertura coneguda es fan servir les pagines que el
+        # model va llegir de veritat, no les que tenien text: aquesta confusio
+        # es la que feia dir "model_miss" d'una pagina mai analitzada.
+        covered = analyzed_pages(coverage)
+        case_pages = (
+            {page for pages in covered.values() for page in pages}
+            if covered is not None
+            else result.analysed_pages
+        )
+
         matched = match_requirements(gold_requirements, predicted)
         accumulate_case(
             summary,
             case_id=case.case_id,
             outcome=matched,
-            analysed_pages=result.analysed_pages,
+            analysed_pages=case_pages,
         )
         for pair in matched.pairs:
             update_evidence(
@@ -308,6 +383,13 @@ async def evaluate_dataset(
                 "expediente_number": case.expediente_number,
                 "run_id": str(run.id),
                 "reused": result.reused,
+                # L'estat del run al costat de les seves xifres: un `partial`
+                # mesura nomes una part del plec, i aixo s'ha de poder veure
+                # sense anar a la base de dades.
+                "run_status": str(run.status),
+                "run_error_code": run.error_code,
+                "coverage": coverage_summary(coverage),
+                "unmeasurable": unmeasurable_reqs + unmeasurable_awards,
                 "gold_requirements": len(gold_requirements),
                 "predicted_requirements": len(predicted),
                 "matched": len(matched.pairs),

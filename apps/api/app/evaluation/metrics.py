@@ -24,6 +24,7 @@ from app.compliance.engine import assess_requirement
 from app.compliance.profile import ProfileSnapshot
 from app.compliance.rules import ExplanationCode
 from app.evaluation.matching import ErrorKind, MatchOutcome, MatchPair, PredictedRequirement
+from app.evaluation.pricing import CURRENCY, TOKENS_PER_UNIT, ModelPrice
 from app.models.enums import RequirementObligation
 
 #: Motius que volen dir "el motor de 4C no pot decidir aixo automaticament".
@@ -126,24 +127,51 @@ class CostMetrics:
     requests: int = 0
     duration_ms: int = 0
     tenders: int = 0
-    estimated_cost: float | None = None
+    #: Preu del model que ha fet l'execucio. `None` vol dir que no n'hi ha cap
+    #: configurat: llavors no s'estima cap cost, i `cost_unavailable_reason` ho
+    #: diu. Veure `app/evaluation/pricing.py`.
+    price: ModelPrice | None = None
+    #: El model mesurat, nomes per poder explicar quin preu falta.
+    model: str = ""
+
+    @property
+    def estimated_cost(self) -> float | None:
+        """El cost de l'execucio, o `None` si no se'n pot saber el preu."""
+        if self.price is None:
+            return None
+        return round(self.price.cost(self.input_tokens, self.output_tokens), 6)
+
+    @property
+    def cost_unavailable_reason(self) -> str | None:
+        if self.price is not None:
+            return None
+        return (
+            f"no hi ha preu configurat per al model {self.model!r}: defineix "
+            f"LLM_MODEL_PRICES (dolars per {TOKENS_PER_UNIT} tokens)"
+        )
 
     def as_dict(self, correct_requirements: int = 0) -> dict[str, Any]:
+        cost = self.estimated_cost
         return {
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "requests": self.requests,
             "duration_ms": self.duration_ms,
             "tenders": self.tenders,
-            "estimated_cost": self.estimated_cost,
+            "estimated_cost": cost,
+            "currency": CURRENCY if cost is not None else None,
+            # El preu queda escrit al costat del cost: un cost sense el preu amb
+            # que es va calcular no es pot reproduir ni auditar despres.
+            "price_input_per_unit": self.price.input_per_unit if self.price else None,
+            "price_output_per_unit": self.price.output_per_unit if self.price else None,
+            "price_unit_tokens": TOKENS_PER_UNIT if self.price else None,
+            "cost_unavailable_reason": self.cost_unavailable_reason,
             "cost_per_tender": (
-                round(self.estimated_cost / self.tenders, 6)
-                if self.estimated_cost is not None and self.tenders
-                else None
+                round(cost / self.tenders, 6) if cost is not None and self.tenders else None
             ),
             "cost_per_correct_requirement": (
-                round(self.estimated_cost / correct_requirements, 6)
-                if self.estimated_cost is not None and correct_requirements
+                round(cost / correct_requirements, 6)
+                if cost is not None and correct_requirements
                 else None
             ),
         }
@@ -213,6 +241,12 @@ class EvaluationSummary:
     critical_correct: int = 0
     #: Casos que no s'han pogut analitzar (documents sense text, etc.).
     skipped_cases: list[dict[str, Any]] = field(default_factory=list)
+    #: Elements del gold que aquest run no podia trobar perque la pagina que
+    #: citen no va arribar al model (el seu chunk va fallar). Queden FORA de les
+    #: metriques: comptar-los com a perduts atribuiria al perfil un error de
+    #: l'execucio. Es llisten perque un perfil que nomes sembla millor perque va
+    #: mesurar menys pagines s'ha de poder detectar.
+    unmeasurable: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def automatable_rate(self) -> float:
@@ -249,6 +283,7 @@ class EvaluationSummary:
             "critical_misses": [asdict(item) for item in self.critical_misses],
             "false_blockers": [asdict(item) for item in self.false_blockers],
             "skipped_cases": self.skipped_cases,
+            "unmeasurable": self.unmeasurable,
             "cost": self.cost.as_dict(self.overall.true_positives),
         }
 

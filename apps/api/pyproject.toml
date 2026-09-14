@@ -30,6 +30,12 @@ dependencies = [
     "pypdf>=5.1",
     # Zones horaries a Windows (a Linux les aporta el sistema).
     "tzdata>=2024.1",
+    # SDK del proveidor d'inferencia real. Nomes l'importa
+    # `app/ai/providers/anthropic.py`, i de manera diferida: sense credencial
+    # l'aplicacio arrenca igual i queda no disponible nomes l'analisi de plecs.
+    # Sense el paquet, pero, `is_available()` deia "falta la credencial" quan el
+    # que faltava era la dependencia, i cap benchmark real es podia executar.
+    "anthropic>=1.5",
 ]
 
 [project.optional-dependencies]
