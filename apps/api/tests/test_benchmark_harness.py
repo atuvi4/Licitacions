@@ -230,7 +230,7 @@ async def test_the_cli_stops_when_there_is_no_corpus(tmp_path, engine, capsys, m
         async def dispose(self):
             return None
 
-    monkeypatch.setattr(benchmark, "resolve_provider", lambda name: _StubProvider())
+    monkeypatch.setattr(benchmark, "resolve_provider", lambda name, **_: _StubProvider())
     monkeypatch.setattr(benchmark, "create_async_engine", lambda url: _NoDispose(engine))
     runs = tmp_path / "runs"
     args = benchmark.build_parser().parse_args(

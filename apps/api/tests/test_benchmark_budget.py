@@ -188,7 +188,7 @@ def _no_database(*_args, **_kwargs):
 
 
 async def test_a_real_run_does_not_start_without_paid_run(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(benchmark, "resolve_provider", lambda name: _StubProvider())
+    monkeypatch.setattr(benchmark, "resolve_provider", lambda name, **_: _StubProvider())
     monkeypatch.setattr(benchmark, "create_async_engine", _no_database)
     monkeypatch.setattr(benchmark, "evaluate_dataset", _no_database)
     runs = tmp_path / "runs"
@@ -205,7 +205,7 @@ async def test_a_real_run_does_not_start_without_paid_run(tmp_path, capsys, monk
 
 async def test_the_single_profile_cli_also_requires_paid_run(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(requirements, "load_dataset", lambda _name: gold())
-    monkeypatch.setattr(requirements, "resolve_provider", lambda name: _StubProvider())
+    monkeypatch.setattr(requirements, "resolve_provider", lambda name, **_: _StubProvider())
     monkeypatch.setattr(requirements, "evaluate_dataset", _no_database)
     monkeypatch.setattr(requirements, "SessionFactory", _no_database)
     args = requirements.build_parser().parse_args(["--output", str(tmp_path / "informes")])
@@ -213,3 +213,40 @@ async def test_the_single_profile_cli_also_requires_paid_run(tmp_path, capsys, m
     assert await requirements.run(args) == benchmark.EXIT_PAID_RUN_NOT_CONFIRMED
     assert "TE COST" in capsys.readouterr().out
     assert not (tmp_path / "informes").exists()
+
+
+async def test_a_paid_run_asks_for_a_provider_without_automatic_retries(
+    tmp_path, engine, monkeypatch
+):
+    """El reintent automatic del SDK pagaria dues vegades el mateix chunk."""
+    demanat: dict = {}
+
+    def _resolve(name, **kwargs):
+        demanat.update(kwargs)
+        return _StubProvider()
+
+    monkeypatch.setattr(benchmark, "resolve_provider", _resolve)
+    monkeypatch.setattr(benchmark, "create_async_engine", lambda url: _NoDispose(engine))
+    args = benchmark.build_parser().parse_args(
+        ["--dataset", "gold-v2.1", "--paid-run",
+         "--database-url", BENCHMARK_DSN, "--output", str(tmp_path / "runs")]
+    )
+
+    # Sense corpus s'atura abans de mesurar: nomes interessa com es va demanar.
+    assert await benchmark.run(args) == 4
+    assert demanat == {"max_retries": 0}
+
+
+async def test_the_single_profile_cli_also_asks_for_no_retries(tmp_path, monkeypatch):
+    demanat: dict = {}
+
+    def _resolve(name, **kwargs):
+        demanat.update(kwargs)
+        return _StubProvider()
+
+    monkeypatch.setattr(requirements, "load_dataset", lambda _name: gold())
+    monkeypatch.setattr(requirements, "resolve_provider", _resolve)
+    args = requirements.build_parser().parse_args(["--output", str(tmp_path / "informes")])
+
+    assert await requirements.run(args) == benchmark.EXIT_PAID_RUN_NOT_CONFIRMED
+    assert demanat == {"max_retries": 0}

@@ -8,6 +8,7 @@ casos que un model real produeix quan vol i que costen mes de detectar.
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 
 import pytest
@@ -374,6 +375,140 @@ async def test_els_tokens_d_una_resposta_inservible_tambe_compten(session, analy
     assert chunk["error"] == "invalid_structured_output"
     assert (chunk["input_tokens"], chunk["output_tokens"]) == (900, 8000)
     assert chunk["stop_reason"] == "max_tokens"
+
+
+async def test_una_sortida_que_no_compleix_el_contracte_es_schema_invalid(session, analyzable):
+    """La diagnosi diu on i de quin tipus es l'error, sense copiar cap text."""
+    from app.ai.provider import StructuredResult, Usage
+
+    extraction = analyzable["extraction"]
+    secret = "TEXT LITERAL DEL PLEC QUE NO S'HA DE DESAR"
+    bad = requirement_payload(extraction.id, category="categoria_inventada", title=secret)
+    bad["camp_inventat"] = secret
+    fake.queue_response(
+        StructuredResult(
+            data={"requirements": [bad]},
+            usage=Usage(input_tokens=700, output_tokens=300, stop_reason="tool_use"),
+        )
+    )
+
+    tender = await tender_of(session, analyzable["document"])
+    run = (await analyze_tender_requirements(session, tender)).run
+
+    [chunk] = run.chunk_coverage["chunks"]
+    assert run.status == AnalysisRunStatus.FAILED
+    assert chunk["error"] == "schema_invalid"
+    assert (chunk["input_tokens"], chunk["output_tokens"]) == (700, 300)
+    detail = chunk["error_detail"]
+    assert {"path": "requirements.0.category", "type": "enum"} in detail
+    assert {"path": "requirements.0.<key>", "type": "extra_forbidden"} in detail
+    assert all(set(item) == {"path", "type"} for item in detail)
+    assert secret not in str(run.chunk_coverage)
+    assert secret not in (run.error_message or "")
+
+
+async def test_una_clau_dinamica_amb_text_del_plec_no_arriba_a_la_diagnosi(session, analyzable):
+    """El path nomes conserva camps de l'esquema i indexs; la resta es `<key>`."""
+    extraction = analyzable["extraction"]
+    literal = (
+        "El volumen anual de negocios del licitador debera ser al menos de 450.000 euros"
+    )
+    bad = requirement_payload(extraction.id)
+    bad[literal] = "x"
+    bad["evidence"][0][f"nota {literal}"] = "y"
+    fake.queue_response({"requirements": [bad], literal: []})
+
+    tender = await tender_of(session, analyzable["document"])
+    run = (await analyze_tender_requirements(session, tender)).run
+
+    [chunk] = run.chunk_coverage["chunks"]
+    assert chunk["error"] == "schema_invalid"
+    paths = {item["path"] for item in chunk["error_detail"]}
+    assert paths == {"<key>", "requirements.0.<key>", "requirements.0.evidence.0.<key>"}
+    for fragment in (literal, "volumen", "450.000"):
+        assert fragment not in json.dumps(run.chunk_coverage, ensure_ascii=False)
+        assert fragment not in (run.error_message or "")
+
+
+def test_el_path_de_la_diagnosi_nomes_admet_camps_coneguts_i_indexs():
+    from pydantic import BaseModel, ConfigDict, ValidationError
+
+    from app.services.requirement_analysis import known_schema_fields, schema_diagnostics
+
+    class Fill(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        quote: str
+
+    class Pare(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        items: list[Fill]
+
+    with pytest.raises(ValidationError) as caught:
+        Pare.model_validate({"items": [{"quote": 3, "text secret del plec": 1}]})
+
+    known = known_schema_fields(Pare.model_json_schema())
+    detail = schema_diagnostics(caught.value, known)
+
+    assert known == {"items", "quote"}
+    assert {"path": "items.0.quote", "type": "string_type"} in detail
+    assert {"path": "items.0.<key>", "type": "extra_forbidden"} in detail
+    assert all(set(item) == {"path", "type"} for item in detail)
+
+
+async def test_la_diagnosi_de_schema_invalid_es_limitada(session, analyzable):
+    from app.services.requirement_analysis import MAX_SCHEMA_DIAGNOSTICS
+
+    extraction = analyzable["extraction"]
+    bad = [requirement_payload(extraction.id, category="no-existeix") for _ in range(12)]
+    fake.queue_response({"requirements": bad})
+
+    tender = await tender_of(session, analyzable["document"])
+    run = (await analyze_tender_requirements(session, tender)).run
+
+    [chunk] = run.chunk_coverage["chunks"]
+    assert len(chunk["error_detail"]) == MAX_SCHEMA_DIAGNOSTICS
+
+
+async def test_una_resposta_tallada_falla_encara_que_el_payload_validi(session, analyzable):
+    """`max_tokens` vol dir incomplet: ni es persisteix ni compta com a analitzat."""
+    from app.ai.provider import StructuredResult, Usage
+
+    extraction = analyzable["extraction"]
+    fake.queue_response(
+        StructuredResult(
+            data={"requirements": [requirement_payload(extraction.id)]},
+            usage=Usage(input_tokens=900, output_tokens=8000, stop_reason="max_tokens"),
+        )
+    )
+
+    tender = await tender_of(session, analyzable["document"])
+    run = (await analyze_tender_requirements(session, tender)).run
+
+    [chunk] = run.chunk_coverage["chunks"]
+    assert chunk["status"] == "failed"
+    assert chunk["error"] == "output_truncated"
+    assert chunk["stop_reason"] == "max_tokens"
+    assert run.output_tokens == 8000, "la resposta tallada tambe es paga"
+    assert run.chunks_completed == 0
+    persisted = (
+        await session.scalars(sa.select(Requirement).where(Requirement.run_id == run.id))
+    ).all()
+    assert persisted == []
+
+
+async def test_el_proveidor_sense_tool_queda_com_no_tool_call(session, analyzable):
+    from app.ai.provider import NoToolCallError, Usage
+
+    fake.queue_response(
+        NoToolCallError("Sense tool.", usage=Usage(output_tokens=40, stop_reason="end_turn"))
+    )
+
+    tender = await tender_of(session, analyzable["document"])
+    run = (await analyze_tender_requirements(session, tender)).run
+
+    [chunk] = run.chunk_coverage["chunks"]
+    assert chunk["error"] == "no_tool_call"
+    assert chunk["error_detail"] is None
 
 
 async def test_un_error_sense_resposta_no_s_inventa_tokens(session, analyzable):

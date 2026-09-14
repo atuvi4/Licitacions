@@ -26,6 +26,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -37,7 +38,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.normalize_v2 import normalise_requirement
 from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
-from app.ai.provider import ProviderError, StructuredLLMProvider, Usage, get_provider
+from app.ai.provider import (
+    OutputTruncatedError,
+    ProviderError,
+    SchemaInvalidError,
+    StructuredLLMProvider,
+    Usage,
+    get_provider,
+)
 from app.ai.schemas import (
     AwardCriterionOut,
     EvidenceOut,
@@ -542,6 +550,9 @@ async def analyze_tender_requirements(
     # recompte ja hi era; el que faltava era saber QUINS, que es l'unic que
     # permet dir despres si una pagina del gold va arribar al model.
     chunk_failures: dict[int, str] = {}
+    # Per index de chunk, diagnosi estructural d'un `schema_invalid` (path i
+    # tipus dels primers errors). Sense aixo, "l'esquema no valida" no diu que.
+    chunk_diagnostics: dict[int, list[dict[str, str]]] = {}
     # Per index de chunk, el que va costar. Inclou els chunks caiguts si el
     # proveidor va arribar a respondre: aquells tokens tambe es paguen.
     chunk_usage: dict[int, Usage] = {}
@@ -556,6 +567,8 @@ async def analyze_tender_requirements(
             last_error = f"{exc.code}: {exc}"
             if exc.usage is not None:
                 chunk_usage[chunk.index] = exc.usage
+            if isinstance(exc, SchemaInvalidError) and exc.diagnostics:
+                chunk_diagnostics[chunk.index] = exc.diagnostics
             logger.warning(
                 "requirements.chunk.failed",
                 extra={
@@ -569,13 +582,6 @@ async def analyze_tender_requirements(
 
         parsed, usage = result
         chunk_usage[chunk.index] = usage
-
-        if parsed is None:
-            tally.validation_errors += 1
-            run.chunks_failed += 1
-            chunk_failures[chunk.index] = "invalid_structured_output"
-            last_error = "invalid_structured_output"
-            continue
 
         _persist_chunk(
             session=session,
@@ -604,6 +610,7 @@ async def analyze_tender_requirements(
         chunks,
         failures=chunk_failures,
         usage=chunk_usage,
+        diagnostics=chunk_diagnostics,
         pages_per_chunk=settings.REQUIREMENTS_CHUNK_PAGES,
         overlap_pages=settings.REQUIREMENTS_CHUNK_OVERLAP_PAGES,
     )
@@ -745,27 +752,91 @@ async def _claim_run(
     return run
 
 
+#: Quants errors de Pydantic es desen com a diagnosi d'un `schema_invalid`.
+MAX_SCHEMA_DIAGNOSTICS = 5
+#: Segment que substitueix qualsevol clau que no sigui un camp de l'esquema.
+UNKNOWN_PATH_SEGMENT = "<key>"
+
+
+def known_schema_fields(json_schema: Mapping[str, Any]) -> frozenset[str]:
+    """Tots els noms de camp que declara l'esquema, a qualsevol nivell."""
+    names: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, Mapping):
+            properties = node.get("properties")
+            if isinstance(properties, Mapping):
+                names.update(str(name) for name in properties)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(json_schema)
+    return frozenset(names)
+
+
+def schema_diagnostics(
+    exc: PydanticValidationError, known_fields: frozenset[str]
+) -> list[dict[str, str]]:
+    """On i de quin tipus son els primers errors. Ni valors ni missatges.
+
+    Del path nomes es conserven els noms de camp que declara l'esquema i els
+    indexs de llista. Qualsevol altre segment —una clau que el model s'ha
+    inventat (`extra_forbidden`), l'etiqueta d'una branca d'union— es
+    `<key>`: una clau dinamica pot portar text del plec, i retallar-la no ho evita.
+    """
+    diagnostics: list[dict[str, str]] = []
+    for error in exc.errors(include_url=False, include_context=False, include_input=False):
+        segments = [
+            str(part)
+            if isinstance(part, int) or part in known_fields
+            else UNKNOWN_PATH_SEGMENT
+            for part in error.get("loc", ())
+        ]
+        diagnostics.append({"path": ".".join(segments) or "$", "type": str(error.get("type", ""))})
+        if len(diagnostics) == MAX_SCHEMA_DIAGNOSTICS:
+            break
+    return diagnostics
+
+
 async def _run_chunk(
     llm: StructuredLLMProvider, chunk: Chunk, profile: ExtractorProfile
-) -> tuple[Any | None, Any]:
-    """Crida el proveidor i valida la sortida contra l'esquema del perfil."""
-    from app.ai.provider import Usage
+) -> tuple[Any, Usage]:
+    """Crida el proveidor i valida la sortida contra l'esquema del perfil.
 
+    Tota sortida inservible surt com a `ProviderError` amb el seu codi i l'us
+    que va costar: `output_truncated`, `no_tool_call` (des del proveidor) o
+    `schema_invalid` (aqui).
+    """
     response = await llm.extract_structured(
         system=profile.system_prompt,
         user_content=profile.build_user_message(render_chunk(chunk)),
         json_schema=profile.json_schema(),
         max_output_tokens=settings.LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS,
     )
+    usage = response.usage or Usage()
+    # El proveidor d'Anthropic ja ho refusa; aqui es cobreix qualsevol altre.
+    # Un payload tallat que valida continua sent un chunk incomplet.
+    if usage.stop_reason == "max_tokens":
+        raise OutputTruncatedError(
+            "La resposta ha topat amb el limit de sortida.", usage=usage
+        )
     try:
         parsed = profile.parse(response.data)
     except PydanticValidationError as exc:
+        diagnostics = schema_diagnostics(exc, known_schema_fields(profile.json_schema()))
         logger.warning(
             "requirements.chunk.schema_invalid",
-            extra={"chunk": chunk.index, "errors": len(exc.errors())},
+            extra={"chunk": chunk.index, "errors": len(exc.errors()), "first": diagnostics},
         )
-        return None, response.usage or Usage()
-    return parsed, response.usage
+        raise SchemaInvalidError(
+            f"La sortida no compleix el contracte del perfil ({len(exc.errors())} errors).",
+            usage=usage,
+            diagnostics=diagnostics,
+        ) from None
+    return parsed, usage
 
 
 def _append_new_evidence(requirement: Requirement, validated: list[ValidatedEvidence]) -> None:

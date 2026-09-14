@@ -18,6 +18,7 @@ from pathlib import Path
 from app.db.session import SessionFactory
 from app.evaluation.benchmark import (
     EXIT_PAID_RUN_NOT_CONFIRMED,
+    PAID_RUN_MAX_RETRIES,
     BenchmarkConfigError,
     resolve_provider,
 )
@@ -96,7 +97,7 @@ async def run(args: argparse.Namespace) -> int:
     # endavant: les xifres que en sortien tenien aparenca de mesura i no ho eren.
     # La regla viu a `benchmark.resolve_provider` i es la mateixa per als dos CLI.
     try:
-        provider = resolve_provider(args.provider)
+        provider = resolve_provider(args.provider, max_retries=PAID_RUN_MAX_RETRIES)
     except BenchmarkConfigError as exc:
         print(
             f"\nNo es pot mesurar: {exc}\n"

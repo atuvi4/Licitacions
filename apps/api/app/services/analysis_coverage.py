@@ -45,6 +45,7 @@ def build_coverage(
     pages_per_chunk: int,
     overlap_pages: int,
     usage: Mapping[int, Usage] | None = None,
+    diagnostics: Mapping[int, list[dict[str, str]]] | None = None,
 ) -> dict[str, Any]:
     """La fotografia dels chunks d'un run, amb l'estat de cadascun.
 
@@ -54,8 +55,12 @@ def build_coverage(
     `usage` va tambe per index: el que va costar cada crida, i per que el model
     va parar. Un chunk sense entrada no va arribar a tenir resposta (error de
     xarxa o HTTP), i els seus tokens queden `None`, no zero.
+
+    `diagnostics` porta, per a un `schema_invalid`, on i de quin tipus eren els
+    primers errors del contracte. Nomes estructura: cap text del plec.
     """
     usage = usage or {}
+    diagnostics = diagnostics or {}
     return {
         "schema": COVERAGE_SCHEMA,
         "pages_per_chunk": pages_per_chunk,
@@ -68,6 +73,7 @@ def build_coverage(
                 "pages": [page.page_number for page in chunk.pages],
                 "status": STATUS_FAILED if chunk.index in failures else STATUS_COMPLETED,
                 "error": failures.get(chunk.index),
+                "error_detail": diagnostics.get(chunk.index),
                 "input_tokens": _usage_field(usage, chunk.index, "input_tokens"),
                 "output_tokens": _usage_field(usage, chunk.index, "output_tokens"),
                 "stop_reason": _usage_field(usage, chunk.index, "stop_reason"),

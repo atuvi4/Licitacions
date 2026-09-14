@@ -78,6 +78,13 @@ _DRIVER = "postgresql+asyncpg"
 #: Codi de sortida quan falta la confirmacio explicita d'un run de pagament.
 EXIT_PAID_RUN_NOT_CONFIRMED = 5
 
+#: Reintents automatics del SDK en un run de pagament: cap. El SDK reintenta sol
+#: en timeouts, 429 i 5xx, i un intent que el proveidor arriba a processar es
+#: paga encara que la resposta no arribi. Un chunk fallit queda fallit i es veu a
+#: `chunk_coverage`; repetir-lo es una decisio, no un efecte secundari. La
+#: politica de produccio (`LLM_MAX_RETRIES`) no es toca.
+PAID_RUN_MAX_RETRIES = 0
+
 
 class BenchmarkConfigError(RuntimeError):
     """Falta alguna cosa per poder mesurar, o el que hi ha no serveix."""
@@ -97,14 +104,19 @@ def resolve_profile(name: str) -> ExtractorProfile:
     return profile
 
 
-def resolve_provider(name: str | None) -> StructuredLLMProvider:
+def resolve_provider(
+    name: str | None, *, max_retries: int | None = PAID_RUN_MAX_RETRIES
+) -> StructuredLLMProvider:
     """El proveidor real, o un error que diu exactament que falta.
 
     Un proveidor simulat respon el que li han encuat o un plec inventat. Deixar
     que un benchmark l'utilitzi produiria xifres amb aparenca de mesura.
+
+    Per defecte, sense reintents automatics (`PAID_RUN_MAX_RETRIES`): tot el que
+    resol aquesta funcio es un benchmark que es paga.
     """
     try:
-        provider = get_provider(name)
+        provider = get_provider(name, max_retries=max_retries)
     except ProviderNotConfiguredError as exc:
         raise BenchmarkConfigError(str(exc)) from None
     if provider.name in SIMULATED_PROVIDERS:
@@ -405,7 +417,7 @@ async def run(args: argparse.Namespace) -> int:
         return await plan_only(args, dataset, profile, database)
 
     try:
-        provider = resolve_provider(args.provider)
+        provider = resolve_provider(args.provider, max_retries=PAID_RUN_MAX_RETRIES)
     except BenchmarkConfigError as exc:
         print(f"\nNo es pot mesurar: {exc}")
         return 2

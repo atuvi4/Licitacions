@@ -47,10 +47,49 @@ class ProviderNotConfiguredError(ProviderError):
 
 
 class InvalidStructuredOutputError(ProviderError):
-    """El proveidor ha respost, pero el JSON no compleix l'esquema."""
+    """El proveidor ha respost, pero la sortida no es pot fer servir."""
+
+    code = "invalid_structured_output"
 
     def __init__(self, message: str, usage: Usage | None = None) -> None:
-        super().__init__(message, "invalid_structured_output", usage)
+        super().__init__(message, type(self).code, usage)
+
+
+class OutputTruncatedError(InvalidStructuredOutputError):
+    """El model ha topat amb el limit de sortida (`stop_reason == "max_tokens"`).
+
+    Es una fallada SEMPRE, encara que el tros que ha arribat validi: una
+    extraccio tallada pot semblar completa i haver perdut la meitat dels
+    requisits del chunk.
+    """
+
+    code = "output_truncated"
+
+
+class NoToolCallError(InvalidStructuredOutputError):
+    """El proveidor ha respost sense cridar la tool de sortida."""
+
+    code = "no_tool_call"
+
+
+class SchemaInvalidError(InvalidStructuredOutputError):
+    """Hi ha crida a la tool, pero el contracte del perfil (Pydantic) la rebutja.
+
+    `diagnostics` es nomes estructural: on (`path`) i quin tipus d'error
+    (`type`), com a molt `MAX_SCHEMA_DIAGNOSTICS`. Mai el valor rebut ni el
+    missatge de l'error, que poden portar text del plec.
+    """
+
+    code = "schema_invalid"
+
+    def __init__(
+        self,
+        message: str,
+        usage: Usage | None = None,
+        diagnostics: list[dict[str, str]] | None = None,
+    ) -> None:
+        super().__init__(message, usage)
+        self.diagnostics = diagnostics or []
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,12 +142,18 @@ class StructuredLLMProvider(Protocol):
         ...
 
 
-def get_provider(name: str | None = None) -> StructuredLLMProvider:
+def get_provider(
+    name: str | None = None, *, max_retries: int | None = None
+) -> StructuredLLMProvider:
     """Construeix el proveidor configurat.
 
     S'importa dins de la funcio a proposit: aixi el SDK d'un proveidor nomes es
     carrega si de veritat es fa servir, i l'aplicacio arrenca encara que no
     estigui instal·lat.
+
+    `max_retries` substitueix `LLM_MAX_RETRIES` nomes per a aquest proveidor.
+    `None` deixa la politica de produccio tal com esta; el benchmark de
+    pagament hi passa 0 (veure `app.evaluation.benchmark.PAID_RUN_MAX_RETRIES`).
     """
     chosen = (name or settings.LLM_PROVIDER or "fake").strip().lower()
 
@@ -123,5 +168,5 @@ def get_provider(name: str | None = None) -> StructuredLLMProvider:
     if chosen == "anthropic":
         from app.ai.providers.anthropic import AnthropicProvider
 
-        return AnthropicProvider()
+        return AnthropicProvider(max_retries=max_retries)
     raise ProviderNotConfiguredError(f"Proveidor d'IA desconegut: {chosen!r}.")

@@ -214,6 +214,67 @@ distingeix una resposta mal formada d'una tallada pel límit de sortida
 (`max_tokens`). Un error sense resposta (xarxa, HTTP) deixa els tokens a `None`,
 no a zero.
 
+### Per què falla un chunk
+
+Una resposta que no es pot fer servir queda classificada a `chunk_coverage` amb
+un codi concret, i no amb un `invalid_structured_output` genèric que no permet
+saber què ha passat:
+
+| Codi | Quan | Què es desa |
+| --- | --- | --- |
+| `output_truncated` | `stop_reason == "max_tokens"`: el model ha topat amb el límit de sortida | tokens i `stop_reason` |
+| `no_tool_call` | el proveidor respon sense cridar la tool `record_extraction` | tokens i `stop_reason` |
+| `schema_invalid` | hi ha crida a la tool, però el contracte del perfil (Pydantic) la rebutja | tokens, `stop_reason` i `error_detail` |
+
+* **`stop_reason=max_tokens` invalida sempre el chunk**, encara que el tros de
+  JSON que ha arribat validi. Una extracció tallada pot semblar completa i haver
+  perdut la meitat dels requisits: no es persisteix res i el chunk compta com a
+  fallat (i els seus tokens, com a pagats).
+* **`error_detail`** porta com a molt 5 errors, i de cadascun només
+  `{path, type}`: cap valor rebut ni cap missatge d'error. Del path només es
+  conserven els noms de camp que declara l'esquema i els índexs de llista;
+  qualsevol altre segment (una clau que el model s'hagi inventat, que pot contenir
+  text del plec) es desa com a `<key>`.
+* `invalid_structured_output` es manté per a sortides que no es poden llegir de
+  cap manera (per exemple, JSON trencat).
+
+Els runs anteriors a aquesta classificació només diuen `invalid_structured_output`,
+i per a ells la causa concreta de cada chunk és desconeguda.
+
+### Sense reintents automàtics en un run de pagament
+
+El SDK d'Anthropic reintenta sol en timeouts, 429 i 5xx, i un intent que el
+proveidor arriba a processar es pot pagar encara que la resposta no arribi. Els
+dos CLI de benchmark (`--paid-run`) construeixen el proveidor amb
+**`max_retries=0`** (`PAID_RUN_MAX_RETRIES`): un chunk fallit queda fallit i es
+veu a `chunk_coverage`, i repetir-lo és una decisió, no un efecte secundari.
+
+La política de producció no canvia: l'anàlisi de plecs del producte continua fent
+servir `LLM_MAX_RETRIES`.
+
+### `strict` tool use: ajornat
+
+La tool de sortida es crida amb `tool_choice` forçat, però **sense `strict`**:
+Anthropic no garanteix que l'entrada compleixi l'esquema, i per això existeix
+`schema_invalid`. Activar-lo queda ajornat expressament, per dos motius
+comprovats offline sobre els esquemes reals (SDK `anthropic` 1.5.0):
+
+* **L'esquema conté restriccions que el mode strict no admet.** V1: 3 `minLength`,
+  2 `maxLength`, 1 `minimum`. V2: 5 `minLength`, 9 `maxLength`, 1 `minimum`
+  (a `title`, `name`, `quote`, `formula`, `condition_note`, `alternative_group`,
+  `page_number`…). A més, 18 (V1) i 28 (V2) `default` que el SDK no conserva.
+* **`value: dict[str, Any]` no es pot transformar de manera segura.** La via
+  oficial del SDK (`anthropic.transform_schema`) deixa l'esquema sintàcticament
+  compatible però converteix `value` en un objecte sense propietats i amb
+  `additionalProperties: false`: en mode strict el model només podria escriure
+  `{}`. Es perdrien els imports de V1 i tot el valor tipat de V2. A més, les
+  longituds passen a la descripció com a text: Pydantic les continuaria validant
+  i un excés continuaria sent `schema_invalid`.
+
+Per reprendre-ho caldria, com a mínim, donar a `value` propietats explícites (per
+exemple, unions tipades a partir de `app/ai/value_schemas.py`) i decidir què es
+fa amb les restriccions de longitud, i verificar-ho abans de cap run de pagament.
+
 ### Cache
 
 El benchmark reutilitza la canonada real de 4B, així que hereta la seva cache:

@@ -18,7 +18,8 @@ import logging
 from typing import Any
 
 from app.ai.provider import (
-    InvalidStructuredOutputError,
+    NoToolCallError,
+    OutputTruncatedError,
     ProviderError,
     ProviderNotConfiguredError,
     ProviderTimeoutError,
@@ -36,9 +37,17 @@ _TOOL_NAME = "record_extraction"
 class AnthropicProvider:
     name = "anthropic"
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_retries: int | None = None) -> None:
         self._client: Any | None = None
         self._model = settings.LLM_MODEL
+        #: Reintents automatics del SDK. `None` = `LLM_MAX_RETRIES` (produccio).
+        #: El benchmark de pagament hi posa 0: el SDK reintenta sol en timeouts,
+        #: 429 i 5xx, i cada intent que el proveidor arriba a processar es paga.
+        self._max_retries = settings.LLM_MAX_RETRIES if max_retries is None else max_retries
+
+    @property
+    def max_retries(self) -> int:
+        return self._max_retries
 
     @property
     def model(self) -> str:
@@ -70,7 +79,7 @@ class AnthropicProvider:
         self._client = anthropic.AsyncAnthropic(
             api_key=settings.ANTHROPIC_API_KEY,
             timeout=settings.LLM_TIMEOUT_SECONDS,
-            max_retries=settings.LLM_MAX_RETRIES,
+            max_retries=self._max_retries,
         )
         return self._client
 
@@ -120,13 +129,21 @@ class AnthropicProvider:
             stop_reason=getattr(response, "stop_reason", None),
         )
 
+        # Primer el limit de sortida: una resposta tallada es inservible encara
+        # que el tros que ha arribat sembli un JSON valid.
+        if usage.stop_reason == "max_tokens":
+            raise OutputTruncatedError(
+                f"La resposta ha topat amb el limit de sortida ({max_output_tokens} tokens).",
+                usage=usage,
+            )
+
         payload: dict[str, Any] | None = None
         for block in response.content:
             if getattr(block, "type", None) == "tool_use" and block.name == _TOOL_NAME:
                 payload = dict(block.input)
                 break
         if payload is None:
-            raise InvalidStructuredOutputError(
+            raise NoToolCallError(
                 "El proveidor no ha retornat cap crida a la tool de sortida "
                 f"(stop_reason={usage.stop_reason}).",
                 usage=usage,
