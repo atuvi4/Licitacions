@@ -14,10 +14,10 @@ export function cn(...values: Array<string | false | null | undefined>): string 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
-  primary: "bg-brand text-white hover:bg-brand-strong border-transparent",
-  secondary: "bg-surface text-ink hover:bg-subtle border-border-strong",
+  primary: "border-transparent bg-brand text-white shadow-control hover:bg-brand-strong",
+  secondary: "border-border bg-surface text-ink shadow-control hover:border-border-strong hover:bg-subtle",
   ghost: "bg-transparent text-muted hover:bg-subtle hover:text-ink border-transparent",
-  danger: "bg-danger text-white hover:opacity-90 border-transparent",
+  danger: "border-transparent bg-danger text-white shadow-control hover:opacity-90",
 };
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -40,9 +40,9 @@ export function Button({
       {...props}
       disabled={disabled || loading}
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-md border font-medium transition-colors",
+        "inline-flex items-center justify-center gap-2 rounded-control border font-medium transition-colors duration-150",
         "disabled:cursor-not-allowed disabled:opacity-55",
-        size === "sm" ? "h-8 px-3 text-[13px]" : "h-9 px-3.5 text-sm",
+        size === "sm" ? "ui-action-sm" : "ui-action-md",
         BUTTON_VARIANTS[variant],
         className,
       )}
@@ -76,8 +76,8 @@ export function LinkButton({
     <Link
       href={href}
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-md border font-medium transition-colors",
-        size === "sm" ? "h-8 px-3 text-[13px]" : "h-9 px-3.5 text-sm",
+        "inline-flex items-center justify-center gap-2 rounded-control border font-medium transition-colors duration-150",
+        size === "sm" ? "ui-action-sm" : "ui-action-md",
         BUTTON_VARIANTS[variant],
         className,
       )}
@@ -92,12 +92,12 @@ export function LinkButton({
 /* -------------------------------------------------------------------------- */
 
 const CONTROL_CLASS =
-  "w-full rounded-md border border-border-strong bg-surface px-3 text-sm text-ink " +
+  "ui-control rounded-control border border-border-strong bg-surface px-3 text-body text-ink shadow-control transition-colors duration-150 " +
   "placeholder:text-faint focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 " +
-  "disabled:bg-subtle disabled:text-muted";
+  "disabled:cursor-not-allowed disabled:bg-subtle disabled:text-muted";
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} className={cn(CONTROL_CLASS, "h-9", className)} />;
+  return <input {...props} className={cn(CONTROL_CLASS, "ui-control-single", className)} />;
 }
 
 export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
@@ -111,7 +111,7 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 
 export function Select({ options, placeholder, className, ...props }: SelectProps) {
   return (
-    <select {...props} className={cn(CONTROL_CLASS, "h-9 pr-8", className)}>
+    <select {...props} className={cn(CONTROL_CLASS, "ui-control-single pr-8", className)}>
       {placeholder && <option value="">{placeholder}</option>}
       {options.map((option) => (
         <option key={option.value} value={option.value}>
@@ -139,13 +139,13 @@ export function Field({
 }) {
   return (
     <label className={cn("flex flex-col gap-1.5", className)}>
-      <span className="text-[13px] font-medium text-ink">
+      <span className="text-[13px] leading-5 font-medium text-ink">
         {label}
         {required && <span className="ml-0.5 text-danger">*</span>}
       </span>
       {children}
-      {hint && !error && <span className="text-xs text-faint">{hint}</span>}
-      {error && <span className="text-xs text-danger">{error}</span>}
+      {hint && !error && <span className="text-caption text-muted">{hint}</span>}
+      {error && <span className="text-caption text-danger">{error}</span>}
     </label>
   );
 }
@@ -156,11 +156,11 @@ export function Checkbox({
   ...props
 }: InputHTMLAttributes<HTMLInputElement> & { label: string }) {
   return (
-    <label className={cn("flex cursor-pointer items-center gap-2 text-sm text-ink", className)}>
+    <label className={cn("flex cursor-pointer items-center gap-2.5 text-body text-ink", className)}>
       <input
         type="checkbox"
         {...props}
-        className="h-4 w-4 rounded border-border-strong accent-brand"
+        className="h-4 w-4 shrink-0 rounded border-border-strong accent-brand disabled:cursor-not-allowed"
       />
       {label}
     </label>
@@ -175,7 +175,7 @@ export function Card({ className, children }: { className?: string; children: Re
   return (
     <section
       className={cn(
-        "rounded-[var(--radius-card)] border border-border bg-surface shadow-[0_1px_2px_rgba(16,24,40,0.04)]",
+        "rounded-card border border-border bg-surface shadow-card",
         className,
       )}
     >
@@ -194,10 +194,10 @@ export function CardHeader({
   action?: ReactNode;
 }) {
   return (
-    <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-      <div>
-        <h2 className="text-sm font-semibold text-ink">{title}</h2>
-        {description && <p className="mt-0.5 text-[13px] text-muted">{description}</p>}
+    <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border px-5 py-4">
+      <div className="min-w-0">
+        <h2 className="text-section font-semibold text-ink">{title}</h2>
+        {description && <p className="mt-1 text-[13px] leading-5 text-muted">{description}</p>}
       </div>
       {action}
     </header>
@@ -214,12 +214,12 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight text-ink">{title}</h1>
-        {description && <p className="mt-1 text-sm text-muted">{description}</p>}
+    <header className="mb-7 flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
+      <div className="min-w-0">
+        <h1 className="text-page font-semibold tracking-tight text-ink">{title}</h1>
+        {description && <p className="mt-1.5 text-body leading-6 text-muted">{description}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </header>
   );
 }
@@ -250,7 +250,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-caption font-medium ring-1 ring-current/10 ring-inset",
         BADGE_TONES[tone],
         className,
       )}
@@ -266,7 +266,7 @@ export function Spinner({ className }: { className?: string }) {
       role="status"
       aria-label="Carregant"
       className={cn(
-        "inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-r-transparent",
+        "ui-spinner inline-block shrink-0 animate-spin rounded-full border-2 border-current border-r-transparent",
         className,
       )}
     />
@@ -274,14 +274,14 @@ export function Spinner({ className }: { className?: string }) {
 }
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("animate-skeleton rounded bg-subtle", className)} />;
+  return <div className={cn("animate-skeleton rounded-control bg-subtle", className)} />;
 }
 
 export function LoadingRows({ rows = 3 }: { rows?: number }) {
   return (
-    <div className="space-y-2 p-5">
+    <div className="space-y-3 p-5">
       {Array.from({ length: rows }).map((_, index) => (
-        <Skeleton key={index} className="h-9 w-full" />
+        <Skeleton key={index} className="h-10 w-full" />
       ))}
     </div>
   );
@@ -298,17 +298,17 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 px-6 py-14 text-center">
-      <p className="text-sm font-medium text-ink">{title}</p>
-      {description && <p className="max-w-md text-[13px] text-muted">{description}</p>}
-      {action && <div className="mt-2">{action}</div>}
+      <p className="text-section font-semibold text-ink">{title}</p>
+      {description && <p className="max-w-md text-body leading-6 text-muted">{description}</p>}
+      {action && <div className="mt-3">{action}</div>}
     </div>
   );
 }
 
 export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="flex items-start justify-between gap-4 rounded-md border border-danger/25 bg-danger-soft px-4 py-3">
-      <p className="text-[13px] text-danger">{message}</p>
+    <div className="flex flex-wrap items-start justify-between gap-3 rounded-control border border-danger/25 bg-danger-soft px-4 py-3">
+      <p className="min-w-0 text-body break-words text-danger">{message}</p>
       {onRetry && (
         <Button size="sm" variant="secondary" onClick={onRetry}>
           Reintenta
@@ -343,23 +343,23 @@ export function ResultNotice({
   return (
     <div
       className={cn(
-        "flex items-start justify-between gap-4 rounded-md border px-4 py-3",
+        "flex items-start justify-between gap-4 rounded-control border px-4 py-3",
         tone === "success"
           ? "border-success/25 bg-success-soft"
           : "border-border bg-subtle",
       )}
     >
-      <div>
-        <p className={cn("text-[13px]", tone === "success" ? "text-success" : "text-ink")}>
+      <div className="min-w-0">
+        <p className={cn("text-body font-medium", tone === "success" ? "text-success" : "text-ink")}>
           {message}
         </p>
-        {detail && <p className="mt-0.5 text-[12px] text-muted">{detail}</p>}
+        {detail && <p className="mt-1 text-[13px] leading-5 text-muted">{detail}</p>}
       </div>
       {onDismiss && (
         <button
           type="button"
           onClick={onDismiss}
-          className="text-[12px] text-muted hover:text-ink"
+          className="-my-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-lg text-muted transition-colors hover:bg-surface/70 hover:text-ink"
           aria-label="Tanca l'avís"
         >
           ×
@@ -376,7 +376,7 @@ export function ResultNotice({
 export function Table({ children }: { children: ReactNode }) {
   return (
     <div className="scroll-thin overflow-x-auto">
-      <table className="w-full min-w-[640px] border-collapse text-sm">{children}</table>
+      <table className="w-full min-w-[640px] border-collapse text-body">{children}</table>
     </div>
   );
 }
@@ -385,7 +385,7 @@ export function Th({ children, className }: { children?: ReactNode; className?: 
   return (
     <th
       className={cn(
-        "border-b border-border px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-faint",
+        "border-b border-border bg-canvas/70 px-5 py-3 text-left text-caption font-semibold text-muted",
         className,
       )}
     >
@@ -396,12 +396,12 @@ export function Th({ children, className }: { children?: ReactNode; className?: 
 
 export function Td({ children, className }: { children?: ReactNode; className?: string }) {
   return (
-    <td className={cn("border-b border-border px-5 py-3 align-middle text-ink", className)}>
+    <td className={cn("border-b border-border px-5 py-3.5 align-middle text-ink", className)}>
       {children}
     </td>
   );
 }
 
 export function Tr({ children, className }: { children: ReactNode; className?: string }) {
-  return <tr className={cn("hover:bg-subtle/60", className)}>{children}</tr>;
+  return <tr className={cn("transition-colors hover:bg-subtle/70 [&:last-child>td]:border-b-0", className)}>{children}</tr>;
 }

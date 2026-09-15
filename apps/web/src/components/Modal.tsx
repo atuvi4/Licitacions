@@ -31,7 +31,7 @@ export function Modal({ open, title, description, onClose, children, footer, siz
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink/40 p-4 sm:p-8">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink/45 p-4 sm:p-8 lg:py-12">
       <div
         className="absolute inset-0"
         aria-hidden
@@ -42,29 +42,29 @@ export function Modal({ open, title, description, onClose, children, footer, siz
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "animate-fade-in relative z-10 w-full rounded-[var(--radius-card)] border border-border bg-surface shadow-xl",
+          "animate-fade-in relative z-10 w-full rounded-card border border-border bg-surface shadow-dialog",
           size === "lg" ? "max-w-3xl" : "max-w-xl",
         )}
       >
-        <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-          <div>
-            <h2 className="text-sm font-semibold text-ink">{title}</h2>
-            {description && <p className="mt-0.5 text-[13px] text-muted">{description}</p>}
+        <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-5 sm:px-6">
+          <div className="min-w-0">
+            <h2 className="text-section font-semibold text-ink">{title}</h2>
+            {description && <p className="mt-1 text-body text-muted">{description}</p>}
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Tanca"
-            className="rounded p-1 text-faint transition-colors hover:bg-subtle hover:text-ink"
+            className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-subtle hover:text-ink"
           >
             <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
               <path d="M5 5l10 10M15 5L5 15" strokeLinecap="round" />
             </svg>
           </button>
         </header>
-        <div className="max-h-[70vh] overflow-y-auto px-5 py-4 scroll-thin">{children}</div>
+        <div className="max-h-[70vh] overflow-y-auto px-5 py-5 scroll-thin sm:px-6">{children}</div>
         {footer && (
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-canvas/60 px-5 py-3">
+          <footer className="flex flex-wrap items-center justify-end gap-2 rounded-b-card border-t border-border bg-canvas/70 px-5 py-4 sm:px-6">
             {footer}
           </footer>
         )}
@@ -106,7 +106,7 @@ export function ConfirmDialog({
         </>
       }
     >
-      <p className="text-sm text-muted">{message}</p>
+      <p className="text-body leading-6 text-muted">{message}</p>
     </Modal>
   );
 }

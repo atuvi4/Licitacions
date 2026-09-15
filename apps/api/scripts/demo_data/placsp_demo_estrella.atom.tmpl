@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  DEMO. Licitacio inventada per a l'escenari de demostracio local
+  (scripts/demo_scenario.py). No existeix, no es de PLACSP i no s'ha de fer
+  servir fora de apps/api/var/dev.db.
+
+  Te l'estructura CODICE d'un expedient sense lots de la font real perque
+  passi pel mateix parser, normalitzador i pre-fit que qualsevol altra. Cap
+  DocumentReference: l'unic plec es el corpus de desenvolupament, i aixi no hi
+  ha res a descarregar de la xarxa.
+
+  Les dates (termini, publicacio i actualitzacio) les posa l'script en generar
+  el feed: el termini ha de ser relatiu al dia en que es crea, com els
+  venciments del seed.
+-->
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:cbc="urn:dgpe:names:draft:codice:schema:xsd:CommonBasicComponents-2" xmlns:cac="urn:dgpe:names:draft:codice:schema:xsd:CommonAggregateComponents-2" xmlns:cac-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonAggregateComponents-2" xmlns:cbc-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonBasicComponents-2" xmlns:at="http://purl.org/atompub/tombstones/1.0">
+  <id>urn:licitacions:demo:feed</id>
+  <title>DEMO - Feed de demostracio local</title>
+  <updated>$UPDATED</updated>
+  <entry>
+    <id>urn:licitacions:demo:estrella-001</id>
+    <link href="https://licitacions.demo.invalid/estrella-001"/>
+    <summary type="text">[DEMO] Expedient de demostracio: DEMO-2026-001; Organ de contractacio: Ajuntament Demo (DEMO); Import: 240000.00 EUR; Estat: PUB</summary>
+    <title>[DEMO] Desplegament de xarxa de fibra optica i telecomunicacions municipals</title>
+    <updated>$UPDATED</updated>
+    <cac-place-ext:ContractFolderStatus>
+      <cbc:ContractFolderID>DEMO-2026-001</cbc:ContractFolderID>
+      <cbc-place-ext:ContractFolderStatusCode languageID="es">PUB</cbc-place-ext:ContractFolderStatusCode>
+      <cac-place-ext:LocatedContractingParty>
+        <cbc:ContractingPartyTypeCode>4</cbc:ContractingPartyTypeCode>
+        <cac:Party>
+          <cbc:WebsiteURI>https://licitacions.demo.invalid</cbc:WebsiteURI>
+          <cac:PartyIdentification>
+            <cbc:ID schemeName="ID_PLATAFORMA">DEMO-ORGAN-0001</cbc:ID>
+          </cac:PartyIdentification>
+          <cac:PartyName>
+            <cbc:Name>Ajuntament Demo (DEMO)</cbc:Name>
+          </cac:PartyName>
+          <cac:PostalAddress>
+            <cbc:CityName>Girona</cbc:CityName>
+            <cbc:PostalZone>17001</cbc:PostalZone>
+            <cac:AddressLine>
+              <cbc:Line>Placa de la Demo, 1 (DEMO)</cbc:Line>
+            </cac:AddressLine>
+            <cac:Country>
+              <cbc:IdentificationCode>ES</cbc:IdentificationCode>
+              <cbc:Name>Espanya</cbc:Name>
+            </cac:Country>
+          </cac:PostalAddress>
+        </cac:Party>
+        <cac-place-ext:ParentLocatedParty>
+          <cac:PartyName>
+            <cbc:Name>Administracio local (DEMO)</cbc:Name>
+          </cac:PartyName>
+        </cac-place-ext:ParentLocatedParty>
+      </cac-place-ext:LocatedContractingParty>
+      <cac:ProcurementProject>
+        <cbc:Name>[DEMO] Desplegament de xarxa de fibra optica i telecomunicacions municipals</cbc:Name>
+        <cbc:TypeCode>3</cbc:TypeCode>
+        <cac:BudgetAmount>
+          <cbc:EstimatedOverallContractAmount currencyID="EUR">240000.00</cbc:EstimatedOverallContractAmount>
+          <cbc:TotalAmount currencyID="EUR">290400.00</cbc:TotalAmount>
+          <cbc:TaxExclusiveAmount currencyID="EUR">240000.00</cbc:TaxExclusiveAmount>
+        </cac:BudgetAmount>
+        <cac:RequiredCommodityClassification>
+          <cbc:ItemClassificationCode>45314300</cbc:ItemClassificationCode>
+        </cac:RequiredCommodityClassification>
+        <cac:RequiredCommodityClassification>
+          <cbc:ItemClassificationCode>32412110</cbc:ItemClassificationCode>
+        </cac:RequiredCommodityClassification>
+        <cac:RealizedLocation>
+          <cbc:CountrySubentity>Girona</cbc:CountrySubentity>
+          <cbc:CountrySubentityCode>ES512</cbc:CountrySubentityCode>
+          <cac:Address>
+            <cac:Country>
+              <cbc:IdentificationCode>ES</cbc:IdentificationCode>
+              <cbc:Name>Espanya</cbc:Name>
+            </cac:Country>
+          </cac:Address>
+        </cac:RealizedLocation>
+        <cac:PlannedPeriod>
+          <cbc:DurationMeasure unitCode="MON">12</cbc:DurationMeasure>
+        </cac:PlannedPeriod>
+      </cac:ProcurementProject>
+      <cac:TenderingProcess>
+        <cbc:ProcedureCode>1</cbc:ProcedureCode>
+        <cac:TenderSubmissionDeadlinePeriod>
+          <cbc:EndDate>$DEADLINE</cbc:EndDate>
+          <cbc:EndTime>14:00:00</cbc:EndTime>
+        </cac:TenderSubmissionDeadlinePeriod>
+      </cac:TenderingProcess>
+      <cac-place-ext:ValidNoticeInfo>
+        <cbc-place-ext:NoticeTypeCode>DOC_CN</cbc-place-ext:NoticeTypeCode>
+        <cac-place-ext:AdditionalPublicationStatus>
+          <cbc-place-ext:PublicationMediaName>Perfil del contractant (DEMO)</cbc-place-ext:PublicationMediaName>
+          <cac-place-ext:AdditionalPublicationDocumentReference>
+            <cbc:IssueDate>$PUBLISHED</cbc:IssueDate>
+          </cac-place-ext:AdditionalPublicationDocumentReference>
+        </cac-place-ext:AdditionalPublicationStatus>
+      </cac-place-ext:ValidNoticeInfo>
+    </cac-place-ext:ContractFolderStatus>
+  </entry>
+</feed>

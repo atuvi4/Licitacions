@@ -1,40 +1,91 @@
 @import "tailwindcss";
 
 /* -------------------------------------------------------------------------
-   Tokens de disseny. Una eina interna: densitat alta, contrast sobri,
-   accent nomes on hi ha una accio o un estat.
+   Sistema visual compartit. Els noms semàntics es mantenen per compatibilitat
+   amb totes les pantalles; els components de domini continuen decidint l'estat.
    ------------------------------------------------------------------------- */
 @theme {
-  --color-canvas: #f6f7f9;
+  --color-canvas: #f6f7fa;
   --color-surface: #ffffff;
   --color-subtle: #f2f4f7;
-  --color-border: #e3e6ea;
-  --color-border-strong: #cfd4dc;
+  --color-border: #e4e7ec;
+  --color-border-strong: #7f8b9c;
 
-  --color-ink: #101828;
-  --color-muted: #566072;
-  --color-faint: #8c95a5;
+  --color-ink: #182230;
+  --color-muted: #475467;
+  --color-faint: #667085;
 
-  --color-brand: #3d5afe;
-  --color-brand-strong: #2f47d6;
-  --color-brand-soft: #eef1ff;
+  --color-brand: #3154d5;
+  --color-brand-strong: #2744b4;
+  --color-brand-soft: #eef2ff;
 
   --color-success: #0b7a4b;
   --color-success-soft: #e6f5ee;
-  --color-warning: #9a6200;
-  --color-warning-soft: #fdf3e2;
+  --color-warning: #8a5700;
+  --color-warning-soft: #fff4e5;
   --color-danger: #b42318;
   --color-danger-soft: #fdecea;
 
-  --color-sidebar: #0f1524;
-  --color-sidebar-hover: #1b2338;
-  --color-sidebar-ink: #aab3c5;
+  --color-sidebar: #111827;
+  --color-sidebar-hover: #1f2937;
+  --color-sidebar-ink: #d1d5db;
+  --color-sidebar-muted: #98a2b3;
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
-  --radius-card: 10px;
+  --text-page: 1.625rem;
+  --text-page--line-height: 2rem;
+  --text-section: 1rem;
+  --text-section--line-height: 1.5rem;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.25rem;
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1.125rem;
+
+  --spacing: 0.25rem;
+  --spacing-sidebar: 16rem;
+  --spacing-topbar: 4rem;
+  --container-workspace: 72rem;
+
+  --radius-control: 6px;
+  --radius-card: 12px;
+  --shadow-card: 0 1px 3px rgb(24 34 48 / 0.04), 0 1px 2px rgb(24 34 48 / 0.02);
+  --shadow-control: 0 1px 2px rgb(24 34 48 / 0.05);
+  --shadow-dialog: 0 24px 64px -16px rgb(16 24 40 / 0.24), 0 8px 24px -8px rgb(16 24 40 / 0.12);
+  --default-transition-duration: 150ms;
+}
+
+/* Defaults de les primitives. La capa utilities conserva els ajustos locals
+   existents (h-auto dels uploads, h-8/w-56 dels selectors, etc.). */
+@layer components {
+  .ui-action-sm {
+    height: 2rem;
+    padding-inline: 0.75rem;
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+  }
+
+  .ui-action-md {
+    height: 2.25rem;
+    padding-inline: 0.875rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+
+  .ui-control {
+    width: 100%;
+  }
+
+  .ui-control-single {
+    height: 2.25rem;
+  }
+
+  .ui-spinner {
+    height: 1rem;
+    width: 1rem;
+  }
 }
 
 html,
@@ -88,4 +139,14 @@ body {
 
 .animate-skeleton {
   animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
