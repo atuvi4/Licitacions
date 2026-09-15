@@ -43,6 +43,9 @@ const JOB_ERROR_MESSAGES: Record<string, string> = {
   provider_not_configured: "El servei d'anàlisi no està disponible.",
   analysis_in_progress: "Aquesta licitació ja s'està analitzant fora de la cua.",
   all_chunks_failed: "Cap part del plec s'ha pogut analitzar.",
+  analysis_too_large: "L'anàlisi supera el límit de chunks del pilot.",
+  company_active_limit: "L'empresa ja té el màxim d'anàlisis en marxa. Espera que n'acabi alguna.",
+  permission_denied: "El teu rol no pot llançar anàlisis.",
   no_documents: "No hi ha cap document per processar.",
   internal_error: "Error intern en executar la feina.",
 };
@@ -52,10 +55,64 @@ export function jobErrorMessage(code: string | null): string {
   return JOB_ERROR_MESSAGES[code] ?? `La feina no s'ha pogut completar (${code}).`;
 }
 
-export function requestAnalysis(companyId: string, tenderId: string, force: boolean) {
-  return api.post<JobRequest>(
-    `/companies/${companyId}/tenders/${tenderId}/job-requests/analyze-requirements`,
-    { force },
+export interface AnalysisQuote {
+  id: string;
+  tender_id: string;
+  status: "open" | "confirmed" | "superseded" | "expired";
+  planning_version: string;
+  profile: string;
+  provider: string;
+  model: string;
+  force: boolean;
+  input_fingerprint: string;
+  documents: {
+    tender_document_id: string;
+    name: string;
+    document_type: string;
+    pages: number;
+    chars: number;
+  }[];
+  skipped_documents: {
+    tender_document_id: string;
+    name: string;
+    document_type: string;
+    reason: string;
+  }[];
+  pages_total: number;
+  pages_in_plan: number;
+  pages_truncated: boolean;
+  chunks: number;
+  chunks_to_send: number;
+  reusable_run_id: string | null;
+  estimated_input_tokens: number | null;
+  estimated_output_tokens: number | null;
+  max_chunks: number;
+  allowed: boolean;
+  blocking_reason: string | null;
+  expires_at: string;
+}
+
+export interface AnalysisLimits {
+  max_chunks_per_run: number;
+  max_active_per_company: number;
+  active_now: number;
+  can_confirm: boolean;
+  can_process_documents: boolean;
+  confirm_roles: string[];
+}
+
+/** Preview del volum d'una anàlisi. No crida cap proveïdor ni crea cap feina. */
+export function previewAnalysis(companyId: string, tenderId: string, force: boolean) {
+  return api.post<AnalysisQuote>(`/companies/${companyId}/tenders/${tenderId}/analysis-quotes`, {
+    force,
+  });
+}
+
+/** Confirma el preview i demana l'anàlisi. */
+export function confirmAnalysis(companyId: string, quoteId: string) {
+  return api.post<JobRequest & { quote_id: string }>(
+    `/companies/${companyId}/analysis-quotes/${quoteId}/confirm`,
+    {},
   );
 }
 

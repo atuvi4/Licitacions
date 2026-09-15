@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +36,7 @@ from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
 from app.ai.provider import StructuredLLMProvider, get_provider
 from app.core.config import settings
 from app.core.errors import (
+    AnalysisInputChangedError,
     JobRequestNotPendingError,
     NotFoundError,
     NothingAnalyzableError,
@@ -63,6 +64,11 @@ from app.services.requirement_analysis import analysis_input, find_reusable_run
 logger = logging.getLogger(__name__)
 
 _MAX_LINK_ATTEMPTS = 3
+
+#: S'executa just abans de confirmar la transaccio de la peticio, amb la peticio
+#: ja escrita. Serveix per fer dins la mateixa transaccio el que ha de ser atomic
+#: amb ella (marcar el preview com a confirmat, comprovar el limit d'actives).
+BeforeCommit = Callable[[AsyncSession, JobRequest], Awaitable[None]]
 _ACTIVE_SQL = sa.text("status IN ('queued', 'running', 'orphaned')")
 
 
@@ -126,6 +132,7 @@ async def _link(
     tender_id: uuid.UUID,
     job_type: WorkJobType,
     parameters: dict[str, Any],
+    analysis_quote_id: uuid.UUID | None = None,
 ) -> Submission | None:
     """Vincula la peticio a l'execucio. `None` si l'execucio ja no es activa."""
     query = sa.select(WorkJob.status, WorkJob.progress_current).where(WorkJob.id == job_id)
@@ -159,6 +166,7 @@ async def _link(
         reused_existing=False,
         linked_existing=not created,
         progress_baseline=0 if created else (row.progress_current or 0),
+        analysis_quote_id=analysis_quote_id,
     )
     session.add(request)
     try:
@@ -192,9 +200,20 @@ async def submit_analysis_request(
     document_ids: list[uuid.UUID] | None = None,
     profile: ExtractorProfile = DEFAULT_PROFILE,
     provider_factory: Callable[[], StructuredLLMProvider] = get_provider,
+    expected_fingerprint: str | None = None,
+    analysis_quote_id: uuid.UUID | None = None,
+    before_commit: BeforeCommit | None = None,
 ) -> Submission:
     """Demana l'analisi d'una licitacio. No crida el proveidor: nomes el construeix
-    per saber-ne el nom i el model, que formen part de la identitat de la feina."""
+    per saber-ne el nom i el model, que formen part de la identitat de la feina.
+
+    Des dels previews (7B), la demana `app/jobs/quotes.py` amb:
+
+    * `expected_fingerprint`: el del preview confirmat. Si els plecs han canviat
+      entre la comprovacio i la insercio, `AnalysisInputChangedError`.
+    * `analysis_quote_id`: queda desat a la peticio.
+    * `before_commit`: el que ha de passar a la mateixa transaccio.
+    """
     await _load_tender(session, tender_id)
     ids = sorted(set(document_ids or []), key=str)
 
@@ -226,6 +245,10 @@ async def submit_analysis_request(
                 "Cap document d'aquesta licitacio te text extret per analitzar. "
                 "Processa'n els plecs primer."
             )
+        if expected_fingerprint is not None and current.fingerprint != expected_fingerprint:
+            raise AnalysisInputChangedError(
+                "Els plecs han canviat des del preview. Cal tornar-lo a veure."
+            )
 
         if not force:
             reusable = await find_reusable_run(
@@ -248,8 +271,12 @@ async def submit_analysis_request(
                     result_run_id=reusable.id,
                     requested_at=now,
                     finished_at=now,
+                    analysis_quote_id=analysis_quote_id,
                 )
                 session.add(request)
+                await session.flush()
+                if before_commit is not None:
+                    await before_commit(session, request)
                 await session.commit()
                 return Submission(request)
 
@@ -299,10 +326,13 @@ async def submit_analysis_request(
             tender_id=tender_id,
             job_type=WorkJobType.ANALYZE_TENDER_REQUIREMENTS,
             parameters=parameters,
+            analysis_quote_id=analysis_quote_id,
         )
         if submission is None:
             await session.rollback()
             continue
+        if before_commit is not None:
+            await before_commit(session, submission.request)
         if not await _commit_or_retry(session):
             continue
         return submission

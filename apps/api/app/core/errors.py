@@ -111,6 +111,29 @@ class JobRequestNotPendingError(ConflictError):
     code = "job_request_not_pending"
 
 
+class AnalysisConfirmationRequiredError(ConflictError):
+    """L'analisi s'ha de previsualitzar i confirmar abans de demanar-la."""
+
+    code = "analysis_confirmation_required"
+
+
+class AnalysisTooLargeError(ValidationError):
+    """L'analisi supera el limit de chunks configurat per al pilot."""
+
+    code = "analysis_too_large"
+
+
+class CompanyActiveLimitError(AppError):
+    """L'empresa ja te el maxim d'analisis pendents."""
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    code = "company_active_limit"
+
+
+class QuoteNotOpenError(ConflictError):
+    code = "quote_not_open"
+
+
 class EndpointMovedError(AppError):
     """L'operacio llarga ja no s'executa en una peticio HTTP."""
 

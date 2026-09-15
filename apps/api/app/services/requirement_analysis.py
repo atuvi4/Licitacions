@@ -57,6 +57,7 @@ from app.core.errors import (
     AnalysisInputChangedError,
     AnalysisInterruptedError,
     AnalysisRunReclaimedError,
+    AnalysisTooLargeError,
     NothingAnalyzableError,
 )
 from app.models.enums import (
@@ -576,6 +577,7 @@ async def analyze_tender_requirements(
     expected_fingerprint: str | None = None,
     on_progress: ProgressCallback | None = None,
     should_continue: ContinueCallback | None = None,
+    chunk_limit: int | None = None,
 ) -> AnalysisOutcome:
     """Extreu els requisits d'una licitacio a partir dels plecs ja processats.
 
@@ -593,6 +595,9 @@ async def analyze_tender_requirements(
       plecs han canviat, s'atura amb `AnalysisInputChangedError` **abans** de
       cap crida al proveidor: no s'analitza en silenci una altra versio.
     * `on_progress(fets, total)` en reservar el run i a cada chunk.
+    * `chunk_limit`: si l'analisi te mes chunks, s'atura amb
+      `AnalysisTooLargeError` abans de reservar el run i de cap crida. Cobreix un
+      limit abaixat mentre el job era a la cua.
     * `should_continue()` abans de cada chunk. Si torna fals no s'inicia cap
       crida mes i el run **no** es tanca: queda en curs perque el reconcilii qui
       en te l'autoritat (`AnalysisInterruptedError`).
@@ -623,6 +628,10 @@ async def analyze_tender_requirements(
             return AnalysisOutcome(run=reusable, reused=True)
 
     chunks = build_chunks(documents)
+    if chunk_limit is not None and len(chunks) > chunk_limit:
+        raise AnalysisTooLargeError(
+            f"L'analisi te {len(chunks)} chunks i el maxim es {chunk_limit}."
+        )
     run = await _claim_run(
         session,
         tender.id,

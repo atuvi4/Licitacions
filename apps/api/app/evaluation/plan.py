@@ -2,15 +2,16 @@
 
 Existeix per pressupost. Un run del benchmark es paga per chunk, i fins ara
 l'unica manera de saber quants chunks tenia una mostra era executar-la. El pla
-refa exactament la seleccio de la canonada (`analysis_input`, `build_chunks`)
-i s'atura aqui: **no construeix cap proveidor ni
-en crida cap**.
+refa exactament la seleccio de la canonada (`analysis_input`, `build_chunks`) i
+s'atura aqui: **no construeix cap proveidor ni en crida cap**.
 
-L'estimacio de volum surt de runs ja fets a la mateixa base (tokens registrats
-per peticio, del mateix prompt i model). Es una ESTIMACIO i es diu aixi a tot
-arreu: el cost real depen del text de cada chunk i del que el model respongui.
-Sense historic no s'estima res, i no s'inventa cap ratio. El cost en diners nomes
-surt si `LLM_MODEL_PRICES` te preu per al model; el codi no en porta cap.
+L'historic de tokens (`usage_history`) ve del servei de producte
+`app/services/analysis_planning.py`: runs ja fets a la mateixa base, tokens
+registrats per peticio, del mateix prompt i model. Es una ESTIMACIO i es diu aixi
+a tot arreu: el cost real depen del text de cada chunk i del que el model
+respongui. Sense historic no s'estima res, i no s'inventa cap ratio. El cost en
+diners nomes surt si `LLM_MODEL_PRICES` te preu per al model; el codi no en porta
+cap.
 """
 
 from __future__ import annotations
@@ -19,14 +20,17 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
-import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.profiles import ExtractorProfile
 from app.evaluation.corpus import resolve_tender
 from app.evaluation.dataset import GoldDataset
 from app.evaluation.pricing import CURRENCY, configured_prices, price_for
-from app.models.requirements import RequirementExtractionRun
+from app.services.analysis_planning import (  # noqa: F401 - reexportats
+    UsageHistory,
+    _request_count,
+    usage_history,
+)
 from app.services.requirement_analysis import analysis_input, find_reusable_run
 from app.services.requirement_chunking import build_chunks
 
@@ -66,24 +70,6 @@ class CasePlan:
         if not self.has_corpus or self.reusable_run_id:
             return 0
         return self.chunks
-
-
-@dataclass(slots=True)
-class UsageHistory:
-    """Tokens per peticio observats en runs anteriors del mateix prompt i model."""
-
-    runs: int = 0
-    requests: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-
-    @property
-    def input_per_request(self) -> float | None:
-        return self.input_tokens / self.requests if self.requests else None
-
-    @property
-    def output_per_request(self) -> float | None:
-        return self.output_tokens / self.requests if self.requests else None
 
 
 @dataclass(slots=True)
@@ -131,43 +117,6 @@ class BenchmarkPlan:
                 "(LLM_MODEL_PRICES)"
             ),
         }
-
-
-def _request_count(run: RequirementExtractionRun) -> int:
-    """Peticions que va respondre el proveidor en aquell run, amb la millor font que hi hagi."""
-    coverage = run.chunk_coverage or {}
-    chunks = coverage.get("chunks") if isinstance(coverage, dict) else None
-    if isinstance(chunks, list):
-        return sum(1 for chunk in chunks if chunk.get("input_tokens") is not None)
-    metadata = run.provider_metadata or {}
-    request_ids = metadata.get("request_ids") if isinstance(metadata, dict) else None
-    if isinstance(request_ids, list) and request_ids:
-        return len(request_ids)
-    return run.chunks_completed or 0
-
-
-async def usage_history(
-    session: AsyncSession, *, prompt_version: str, model: str
-) -> UsageHistory:
-    runs = (
-        await session.scalars(
-            sa.select(RequirementExtractionRun).where(
-                RequirementExtractionRun.prompt_version == prompt_version,
-                RequirementExtractionRun.model == model,
-                RequirementExtractionRun.input_tokens.is_not(None),
-            )
-        )
-    ).all()
-    history = UsageHistory()
-    for run in runs:
-        requests = _request_count(run)
-        if not requests:
-            continue
-        history.runs += 1
-        history.requests += requests
-        history.input_tokens += run.input_tokens or 0
-        history.output_tokens += run.output_tokens or 0
-    return history
 
 
 async def build_plan(

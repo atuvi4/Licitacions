@@ -11,16 +11,9 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from app.models.enums import JobOutcome, WorkJobType
-
-
-class AnalyzeRequirementsJobIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    force: bool = False
-    document_ids: list[uuid.UUID] = Field(default_factory=list)
+from app.models.enums import AnalysisQuoteStatus, JobOutcome, WorkJobType
 
 
 class ProcessDocumentsJobIn(BaseModel):
@@ -54,3 +47,82 @@ class JobRequestRead(BaseModel):
 class JobSubmissionRead(JobRequestRead):
     #: La mateixa empresa ja tenia aquesta peticio pendent.
     already_requested: bool = False
+
+
+# --------------------------------------------------------------------------- #
+# Previews d'analisi (7B)                                                        #
+# --------------------------------------------------------------------------- #
+
+
+class AnalysisQuoteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    force: bool = False
+    document_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class QuoteDocumentRead(BaseModel):
+    tender_document_id: str
+    name: str
+    document_type: str
+    pages: int
+    chars: int
+
+
+class QuoteSkippedDocumentRead(BaseModel):
+    tender_document_id: str
+    name: str
+    document_type: str
+    reason: str
+
+
+class AnalysisQuoteRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tender_id: uuid.UUID
+    status: AnalysisQuoteStatus
+    planning_version: str
+    profile: str
+    provider: str
+    model: str
+    force: bool
+    input_fingerprint: str
+    pages_per_chunk: int
+    overlap_pages: int
+    documents: list[QuoteDocumentRead]
+    skipped_documents: list[QuoteSkippedDocumentRead]
+    pages_total: int
+    pages_in_plan: int
+    chunks: int
+    #: Chunks que arribarien al proveidor (0 si es reaprofita un resultat vigent).
+    chunks_to_send: int
+    reusable_run_id: uuid.UUID | None = None
+    #: ESTIMACIO a partir de l'historic; `None` si no n'hi ha.
+    estimated_input_tokens: int | None = None
+    estimated_output_tokens: int | None = None
+    estimate_basis: dict | None = None
+    max_chunks: int
+    allowed: bool
+    blocking_reason: str | None = None
+    expires_at: datetime
+    confirmed_at: datetime | None = None
+    superseded_by_id: uuid.UUID | None = None
+
+    @computed_field
+    @property
+    def pages_truncated(self) -> bool:
+        return self.pages_in_plan < self.pages_total
+
+
+class AnalysisConfirmationRead(JobSubmissionRead):
+    quote_id: uuid.UUID
+
+
+class AnalysisLimitsRead(BaseModel):
+    max_chunks_per_run: int
+    max_active_per_company: int
+    active_now: int
+    can_confirm: bool
+    can_process_documents: bool
+    confirm_roles: list[str]

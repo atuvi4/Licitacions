@@ -57,7 +57,7 @@ from app.models.tender_documents import (
 from app.models.tenders import Tender
 from app.models.workspace import WorkspaceDecision
 from app.services.requirement_analysis import analysis_input, analyze_tender_requirements
-from tests.jobs_support import run_worker
+from tests.jobs_support import confirm_new_quote, confirm_quote, create_quote, run_worker
 
 QUOTE = "El volumen anual de negocios del licitador debera ser al menos de 450.000 euros"
 
@@ -138,6 +138,11 @@ def _analyze_url(company_id, tender_id) -> str:
     return f"/api/v1/companies/{company_id}/tenders/{tender_id}/job-requests/analyze-requirements"
 
 
+async def _request(client, company_id, tender_id):
+    """La interficie: preview i confirmacio."""
+    return await confirm_new_quote(client, company_id, tender_id)
+
+
 async def _count(session, model) -> int:
     return await session.scalar(sa.select(sa.func.count()).select_from(model))
 
@@ -171,7 +176,7 @@ async def test_a_request_only_enqueues(client_a, tenant_a, plec, session, monkey
     _, company = tenant_a
     tender_id = plec["document"].tender_id
 
-    response = await client_a.post(_analyze_url(company.id, tender_id))
+    response = await _request(client_a, company.id, tender_id)
 
     assert response.status_code == 202, response.text
     body = response.json()
@@ -190,10 +195,13 @@ async def test_a_double_click_returns_the_same_request(client_a, tenant_a, plec,
     _, company = tenant_a
     tender_id = plec["document"].tender_id
 
-    first = await client_a.post(_analyze_url(company.id, tender_id))
-    second = await client_a.post(_analyze_url(company.id, tender_id))
+    quote = await create_quote(client_a, company.id, tender_id)
+    first = await confirm_quote(client_a, company.id, quote["id"])
+    again = await confirm_quote(client_a, company.id, quote["id"])
+    second = await _request(client_a, company.id, tender_id)
 
     assert first.status_code == 202
+    assert again.status_code == 409 and again.json()["error"]["code"] == "quote_not_open"
     assert second.status_code == 200
     assert second.json()["already_requested"] is True
     assert second.json()["id"] == first.json()["id"]
@@ -206,11 +214,11 @@ async def test_an_existing_result_is_reused_without_enqueuing(
 ):
     _, company = tenant_a
     tender_id = plec["document"].tender_id
-    await client_a.post(_analyze_url(company.id, tender_id))
+    await _request(client_a, company.id, tender_id)
     await run_worker(session_factory)
     calls = len(fake.SENT_PAYLOADS)
 
-    response = await client_a.post(_analyze_url(company.id, tender_id))
+    response = await _request(client_a, company.id, tender_id)
 
     assert response.status_code == 200
     body = response.json()
@@ -226,8 +234,8 @@ async def test_two_companies_share_one_execution_and_cannot_tell(
     client_a, client_b, tenant_a, tenant_b, plec, session, session_factory
 ):
     tender_id = plec["document"].tender_id
-    a = await client_a.post(_analyze_url(tenant_a[1].id, tender_id))
-    b = await client_b.post(_analyze_url(tenant_b[1].id, tender_id))
+    a = await _request(client_a, tenant_a[1].id, tender_id)
+    b = await _request(client_b, tenant_b[1].id, tender_id)
 
     assert a.status_code == b.status_code == 202
     assert a.json().keys() == b.json().keys()
@@ -255,7 +263,7 @@ async def test_a_company_cannot_read_or_cancel_another_companys_request(
     client_a, client_b, tenant_a, tenant_b, plec
 ):
     tender_id = plec["document"].tender_id
-    a = await client_a.post(_analyze_url(tenant_a[1].id, tender_id))
+    a = await _request(client_a, tenant_a[1].id, tender_id)
     request_id = a.json()["id"]
 
     read = await client_b.get(f"/api/v1/companies/{tenant_b[1].id}/job-requests/{request_id}")
@@ -969,14 +977,14 @@ async def test_a_linked_company_sees_nothing_of_the_other_one(
     user_a, company_a = tenant_a
     user_b, company_b = tenant_b
 
-    first = await client_a.post(_analyze_url(company_a.id, tender_id))
+    first = await _request(client_a, company_a.id, tender_id)
     job = await session.scalar(sa.select(WorkJob))
     # La feina ja va per 3 de 8 quan B la demana.
     job.status = WorkJobStatus.RUNNING
     job.progress_current, job.progress_total = 3, 8
     await session.commit()
 
-    second = await client_b.post(_analyze_url(company_b.id, tender_id))
+    second = await _request(client_b, company_b.id, tender_id)
     b_url = f"/api/v1/companies/{company_b.id}/job-requests/{second.json()['id']}"
     a_url = f"/api/v1/companies/{company_a.id}/job-requests/{first.json()['id']}"
     b_view = await client_b.get(b_url)

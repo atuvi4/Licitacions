@@ -163,6 +163,26 @@ class Settings(BaseSettings):
     # (timeout x intents) i el tancament del run.
     JOB_ORPHAN_GRACE_SECONDS: int = 900
 
+    # --- Control de cost de l'analisi (pilot) ---
+    # Cap anàlisi no es llança sense que l'usuari n'hagi vist el volum i l'hagi
+    # confirmat. Aquests valors son de configuracio, no de negoci: el pilot els
+    # ha de poder ajustar sense tocar codi.
+    # Chunks maxims d'una analisi. Per sobre, el preview surt `allowed: false`.
+    ANALYSIS_MAX_CHUNKS_PER_RUN: int = 40
+    # Peticions d'analisi pendents simultanies per empresa.
+    ANALYSIS_MAX_ACTIVE_PER_COMPANY: int = 2
+    # Temps durant el qual es pot confirmar un preview.
+    ANALYSIS_QUOTE_TTL_SECONDS: int = 900
+    # Rols que poden confirmar una analisi (i per tant fer despesa). `technical`
+    # en queda fora per defecte: prepara la candidatura, no compromet despesa.
+    ANALYSIS_CONFIRM_ROLES: list[str] = Field(
+        default_factory=lambda: ["owner", "admin", "bid_manager"]
+    )
+    # Rols que poden demanar el processat dels plecs.
+    DOCUMENT_PROCESS_ROLES: list[str] = Field(
+        default_factory=lambda: ["owner", "admin", "bid_manager"]
+    )
+
     # --- Benchmark d'extraccio ---
     # La base de dades on s'executen els benchmarks, amb el seu propi corpus.
     # Buida per defecte: el benchmark no ha de poder arrencar per descuit contra
@@ -223,6 +243,18 @@ class Settings(BaseSettings):
                 "fer servir en produccio. Configura un proveidor real."
             )
         return self
+
+    @field_validator("ANALYSIS_CONFIRM_ROLES", "DOCUMENT_PROCESS_ROLES")
+    @classmethod
+    def _roles_must_exist(cls, value: list[str]) -> list[str]:
+        from app.models.enums import MembershipRole
+
+        known = {role.value for role in MembershipRole}
+        roles = [str(role).strip().lower() for role in value]
+        unknown = sorted(set(roles) - known)
+        if unknown:
+            raise ValueError(f"Rols desconeguts: {', '.join(unknown)}.")
+        return roles
 
     @field_validator("COOKIE_SAMESITE")
     @classmethod

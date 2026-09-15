@@ -26,7 +26,12 @@ import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
 import { TenderChangeHistory } from "@/components/TenderChangeHistory";
 import { WorkspaceLauncher } from "@/components/WorkspaceLauncher";
 import { useSession } from "@/components/SessionProvider";
-import { jobErrorMessage, requestProcessing, useJobRequest } from "@/lib/jobs";
+import {
+  type AnalysisLimits,
+  jobErrorMessage,
+  requestProcessing,
+  useJobRequest,
+} from "@/lib/jobs";
 import { formatDate, formatMoney } from "@/lib/format";
 import { useResource } from "@/lib/hooks";
 import type { TenderMatch } from "@/lib/matching";
@@ -119,7 +124,11 @@ export default function TenderDetailPage() {
     }
     await reloadLifecycle();
   });
-  const processing = submittingProcess || processJob.active;
+  const limits = useResource<AnalysisLimits>(
+    companyId ? `/companies/${companyId}/analysis-limits` : null,
+  );
+  const canProcess = limits.data?.can_process_documents ?? false;
+  const processing = submittingProcess || processJob.active || !canProcess;
 
   // Una sola feina per a tots els documents: el worker els baixa un rere
   // l'altre, sense ràfegues contra un servei públic.
@@ -408,6 +417,11 @@ export default function TenderDetailPage() {
             }
           />
           {processError && <ErrorNotice message={processError} />}
+          {limits.data && !canProcess && (
+            <p className="px-5 py-2 text-[12px] text-muted">
+              El teu rol no pot demanar el processat dels plecs.
+            </p>
+          )}
           {data.documents.length === 0 ? (
             <EmptyState title="Sense documents publicats" />
           ) : (

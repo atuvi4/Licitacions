@@ -148,6 +148,14 @@ class JobRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
         sa.Index("ix_job_requests_company_tender", "company_id", "tender_id", "created_at"),
         sa.Index("ix_job_requests_work_job_id", "work_job_id"),
+        # Un preview confirmat dona com a molt una peticio.
+        sa.Index(
+            "uq_job_requests_analysis_quote",
+            "analysis_quote_id",
+            unique=True,
+            postgresql_where=sa.text("analysis_quote_id IS NOT NULL"),
+            sqlite_where=sa.text("analysis_quote_id IS NOT NULL"),
+        ),
     )
 
     company_id: Mapped[uuid.UUID] = mapped_column(
@@ -191,3 +199,8 @@ class JobRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     error_code: Mapped[str | None] = mapped_column(sa.String(50))
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    #: El preview que l'usuari va confirmar. NULL per al processat de plecs i
+    #: per a les analisis demanades abans que existissin els previews.
+    analysis_quote_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("analysis_quotes.id", ondelete="SET NULL")
+    )

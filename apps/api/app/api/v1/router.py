@@ -8,6 +8,7 @@ Aixo fa que el tenant sigui explicit a la URL i que la dependencia
 from fastapi import APIRouter
 
 from app.api.v1.routers import (
+    analysis_quotes,
     auth,
     companies,
     compliance,
@@ -56,6 +57,8 @@ company_scoped.include_router(dossier.router)
 company_scoped.include_router(submission.router)
 # Feina llarga: la peticio es de l'empresa; l'execucio, global.
 company_scoped.include_router(job_requests.router)
+# Previews d'analisi: el volum abans de fer despesa.
+company_scoped.include_router(analysis_quotes.router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

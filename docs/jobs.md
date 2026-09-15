@@ -129,9 +129,12 @@ Tots sota `/api/v1/companies/{company_id}`:
 
 | Mètode | Ruta | Resposta |
 | --- | --- | --- |
-| POST | `/tenders/{tid}/job-requests/analyze-requirements` | 202 `accepted`; 200 `already_requested`; 200 `succeeded` + `reused_existing`; 409 `operation_busy`; 422 `nothing_analyzable` |
-| POST | `/tenders/{tid}/job-requests/process-documents` | 202 `accepted`; 200 `already_requested`; 404 si un document no és de la licitació |
+| POST | `/tenders/{tid}/analysis-quotes` | 201 preview; 422 `nothing_analyzable` |
+| POST | `/analysis-quotes/{qid}/confirm` | 202 `accepted`; 200 `already_requested`; 200 `succeeded` + `reused_existing`; 409 `preview_changed` / `quote_expired` / `quote_not_open` / `operation_busy`; 422 `analysis_too_large`; 429 `company_active_limit`; 403 |
+| POST | `/tenders/{tid}/job-requests/analyze-requirements` | 409 `analysis_confirmation_required` (no executa res) |
+| POST | `/tenders/{tid}/job-requests/process-documents` | 202 `accepted`; 200 `already_requested`; 404 si un document no és de la licitació; 403 segons `DOCUMENT_PROCESS_ROLES` |
 | GET | `/job-requests/{rid}` | estat de la petició |
+| GET | `/analysis-limits` | límits del pilot i si l'usuari pot confirmar o processar |
 | GET | `/tenders/{tid}/job-requests?job_type=&active=` | peticions de l'empresa (la UI les fa servir per reprendre el seguiment) |
 | POST | `/job-requests/{rid}/cancel` | cancel·la la petició; l'execució només si és `queued` i ja no la necessita ningú |
 
@@ -150,6 +153,48 @@ Cap job no pren decisions humanes: el registre de handlers només coneix
 `process_tender_documents` i `analyze_tender_requirements`. La política de reintents
 del proveïdor al worker és la de producció (`LLM_MAX_RETRIES`); el benchmark de
 pagament continua amb `max_retries=0`.
+
+## Control de cost de l'anàlisi (7B)
+
+Cap anàlisi es demana sense que l'usuari n'hagi vist el volum:
+
+1. **Preview** — `POST /companies/{cid}/tenders/{tid}/analysis-quotes`. Calcula,
+   sense cap proveïdor, els documents, les pàgines (`pages_in_plan` de
+   `pages_total`, amb `pages_truncated` si el sostre de pàgines talla), els chunks
+   i els que s'enviarien (`chunks_to_send`, 0 si ja hi ha una anàlisi vigent
+   reaprofitable), el fingerprint, el perfil i el model, i una **estimació de
+   tokens** si hi ha històric del mateix proveïdor, model i prompt. Cap import en
+   diners. Es desa com a `AnalysisQuote` de l'empresa, amb `planning_version`.
+   El calcula `app/services/analysis_planning.py`, que també fa servir el benchmark.
+2. **Confirmació** — `POST /companies/{cid}/analysis-quotes/{qid}/confirm`. Torna a
+   calcular el preview i el compara amb el desat (versió del càlcul, fingerprint,
+   chunking, pàgines, chunks, perfil, proveïdor i model). Si ha canviat o ha
+   caducat, respon 409 (`preview_changed` / `quote_expired`) amb el preview nou a
+   `error.details.quote`, i **no crea res**. Si no, crea la `JobRequest` de 7A amb el
+   fingerprint confirmat (`job_requests.analysis_quote_id`) i marca el preview
+   `confirmed` a la mateixa transacció.
+
+El `POST …/job-requests/analyze-requirements` directe respon **409
+`analysis_confirmation_required`** amb les rutes del preview i de la confirmació, i
+no executa res.
+
+Límits del pilot, tots de configuració:
+
+| Setting | Defecte | Efecte |
+| --- | --- | --- |
+| `ANALYSIS_MAX_CHUNKS_PER_RUN` | 40 | preview `allowed: false`; confirmació 422 `analysis_too_large`; el worker també l'aplica abans de reservar el run |
+| `ANALYSIS_MAX_ACTIVE_PER_COMPANY` | 2 | 429 `company_active_limit`; compta només peticions pendents de la mateixa empresa |
+| `ANALYSIS_QUOTE_TTL_SECONDS` | 900 | un preview caducat es torna a ensenyar |
+| `ANALYSIS_CONFIRM_ROLES` | owner, admin, bid_manager | qui pot confirmar (403 si no); `technical` fora per defecte |
+| `DOCUMENT_PROCESS_ROLES` | owner, admin, bid_manager | qui pot demanar el processat |
+
+Qualsevol membre pot veure el preview. `GET /companies/{cid}/analysis-limits` diu a
+la interfície els límits i si l'usuari pot confirmar o processar. El límit
+d'actives es comprova amb la fila de l'empresa bloquejada, de manera que dues
+confirmacions simultànies no el poden superar.
+
+Tenant-safe: el preview no diu mai si una altra empresa està analitzant el mateix
+plec.
 
 ## Límits coneguts
 

@@ -24,7 +24,17 @@ import {
   isTrustworthyAnalysis,
 } from "@/lib/compliance";
 import { api } from "@/lib/api";
-import { jobErrorMessage, requestAnalysis, useJobRequest } from "@/lib/jobs";
+import { AnalysisQuotePanel } from "@/components/AnalysisQuotePanel";
+import { ApiError } from "@/lib/api";
+import {
+  type AnalysisLimits,
+  type AnalysisQuote,
+  confirmAnalysis,
+  jobErrorMessage,
+  previewAnalysis,
+  useJobRequest,
+} from "@/lib/jobs";
+import { useResource } from "@/lib/hooks";
 import {
   ANALYSIS_DISCLAIMER,
   ANALYSIS_STATE_LABELS,
@@ -170,6 +180,13 @@ export function RequirementAnalysisSection({
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<string | null>(null);
+  // Cap anàlisi es demana sense haver-ne vist el volum: primer el preview.
+  const [quote, setQuote] = useState<AnalysisQuote | null>(null);
+  const [quoteNotice, setQuoteNotice] = useState<string | null>(null);
+  const limits = useResource<AnalysisLimits>(
+    companyId ? `/companies/${companyId}/analysis-limits` : null,
+  );
+  const canConfirm = limits.data?.can_confirm ?? false;
 
   const state = analysisState(analysis);
   const run = analysis?.run ?? null;
@@ -189,10 +206,40 @@ export function RequirementAnalysisSection({
     }
     setSubmitting(true);
     setActionError(null);
+    setQuoteNotice(null);
     try {
-      job.track(await requestAnalysis(companyId, tenderId, force));
+      setQuote(await previewAnalysis(companyId, tenderId, force));
     } catch (caught) {
-      setActionError(caught instanceof Error ? caught.message : "No s'ha pogut demanar l'anàlisi.");
+      setActionError(caught instanceof Error ? caught.message : "No s'ha pogut calcular el volum.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function confirm() {
+    if (!companyId || !quote) return;
+    setSubmitting(true);
+    setActionError(null);
+    try {
+      job.track(await confirmAnalysis(companyId, quote.id));
+      setQuote(null);
+      setQuoteNotice(null);
+      void limits.reload();
+    } catch (caught) {
+      const replaced = caught instanceof ApiError ? caught.details.quote : undefined;
+      if (caught instanceof ApiError && replaced) {
+        // El preview ja no valia (plecs canviats o caducat): s'ensenya el nou.
+        setQuote(replaced as AnalysisQuote);
+        setQuoteNotice(
+          caught.code === "quote_expired"
+            ? "El preview havia caducat: revisa el volum actualitzat."
+            : "El volum ha canviat des del preview: revisa'l abans de confirmar.",
+        );
+      } else if (caught instanceof ApiError) {
+        setActionError(jobErrorMessage(caught.code));
+      } else {
+        setActionError("No s'ha pogut demanar l'anàlisi.");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -244,7 +291,10 @@ export function RequirementAnalysisSection({
                     : "Analitzant en segon pla…"}
                 </span>
               )}
-              <Button onClick={() => void analyse(state === "stale")} disabled={running || loading}>
+              <Button
+                onClick={() => void analyse(state === "stale")}
+                disabled={running || loading || quote !== null}
+              >
                 {running ? <Spinner /> : run ? "Torna a analitzar" : "Analitza requisits"}
               </Button>
             </div>
@@ -252,6 +302,20 @@ export function RequirementAnalysisSection({
         />
 
         {(error || actionError) && <ErrorNotice message={actionError ?? error ?? ""} />}
+
+        {quote && (
+          <AnalysisQuotePanel
+            quote={quote}
+            notice={quoteNotice}
+            canConfirm={canConfirm}
+            confirming={submitting}
+            onConfirm={() => void confirm()}
+            onCancel={() => {
+              setQuote(null);
+              setQuoteNotice(null);
+            }}
+          />
+        )}
 
         {run && !isTrustworthyAnalysis(run.analysis_basis) && (
           <div className="border-b border-border bg-warning-soft px-5 py-3 text-[13px]">

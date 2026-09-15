@@ -7,7 +7,10 @@ Pengen de `/companies/{company_id}`: la peticio es de l'empresa (auditoria i, me
 endavant, cost). El resultat no ho es: els requisits es llegeixen, com sempre, a
 `GET /tenders/{tender_id}/analysis/requirements`.
 
-Respostes de `POST`:
+L'analisi es demana des d'un preview confirmat (`analysis_quotes.py`). El `POST`
+d'analisi directe respon 409 `analysis_confirmation_required` i no executa res.
+
+Respostes de `POST` (i de la confirmacio d'un preview):
 
 * 202 `accepted`: la peticio queda registrada. Tant si ha creat la feina com si
   s'ha vinculat a una que ja existia: la resposta no ho distingeix.
@@ -23,10 +26,11 @@ import uuid
 from fastapi import APIRouter, Query, Response, status
 
 from app.api.deps import CompanyCtx, SessionDep
+from app.core.errors import AnalysisConfirmationRequiredError, PermissionDeniedError
+from app.jobs import quotes as analysis_quotes
 from app.jobs import requests as job_requests
 from app.models.enums import JobOutcome, WorkJobType
 from app.schemas.jobs import (
-    AnalyzeRequirementsJobIn,
     JobRequestRead,
     JobSubmissionRead,
     ProcessDocumentsJobIn,
@@ -49,27 +53,19 @@ async def _submission_response(
 
 @router.post(
     "/tenders/{tender_id}/job-requests/analyze-requirements",
-    response_model=JobSubmissionRead,
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Demana l'analisi de requisits dels plecs",
+    status_code=status.HTTP_409_CONFLICT,
+    summary="(Cal confirmacio) L'analisi es demana des d'un preview confirmat",
 )
-async def request_requirement_analysis(
-    tender_id: uuid.UUID,
-    ctx: CompanyCtx,
-    session: SessionDep,
-    response: Response,
-    payload: AnalyzeRequirementsJobIn | None = None,
-):
-    options = payload or AnalyzeRequirementsJobIn()
-    submission = await job_requests.submit_analysis_request(
-        session,
-        company_id=ctx.company_id,
-        user_id=ctx.user_id,
-        tender_id=tender_id,
-        force=options.force,
-        document_ids=options.document_ids,
+async def request_requirement_analysis(tender_id: uuid.UUID, ctx: CompanyCtx):
+    """No executa ni encua res. Accepta qualsevol cos: un client antic rep 409, no 422."""
+    base = f"/companies/{ctx.company_id}"
+    raise AnalysisConfirmationRequiredError(
+        "Cal veure el volum de l'analisi i confirmar-lo abans de demanar-la.",
+        details={
+            "preview": f"{base}/tenders/{tender_id}/analysis-quotes",
+            "confirm": f"{base}/analysis-quotes/{{quote_id}}/confirm",
+        },
     )
-    return await _submission_response(session, response, submission)
 
 
 @router.post(
@@ -85,6 +81,8 @@ async def request_document_processing(
     response: Response,
     payload: ProcessDocumentsJobIn | None = None,
 ):
+    if not analysis_quotes.can_process_documents(ctx.membership.role):
+        raise PermissionDeniedError("El teu rol no pot demanar el processat dels plecs.")
     options = payload or ProcessDocumentsJobIn()
     submission = await job_requests.submit_process_request(
         session,

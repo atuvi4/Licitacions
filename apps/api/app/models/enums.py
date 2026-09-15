@@ -879,3 +879,13 @@ class JobOutcome(StrEnum):
     REUSED_EXISTING = "reused_existing"
     #: La feina ha acabat, pero una part ha fallat (chunks o documents).
     PARTIAL = "partial"
+
+
+class AnalysisQuoteStatus(StrEnum):
+    """Estat d'un preview d'analisi que l'usuari pot confirmar."""
+
+    OPEN = "open"
+    CONFIRMED = "confirmed"
+    #: Els plecs o el calcul han canviat: s'ha substituit per un preview nou.
+    SUPERSEDED = "superseded"
+    EXPIRED = "expired"

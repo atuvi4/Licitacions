@@ -27,11 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.profiles import PROFILES
 from app.ai.provider import ProviderNotConfiguredError, StructuredLLMProvider
+from app.core.config import settings
 from app.core.errors import (
     AnalysisInProgressError,
     AnalysisInputChangedError,
     AnalysisInterruptedError,
     AnalysisRunReclaimedError,
+    AnalysisTooLargeError,
     NoContentToExtractError,
     NothingAnalyzableError,
     ProcessingInProgressError,
@@ -185,6 +187,11 @@ async def analyze_requirements(ctx: JobContext) -> JobCompletion | None:
                 expected_fingerprint=ctx.job.input_fingerprint,
                 on_progress=ctx.report_progress,
                 should_continue=ctx.should_continue,
+                chunk_limit=settings.ANALYSIS_MAX_CHUNKS_PER_RUN,
+            )
+        except AnalysisTooLargeError:
+            return JobCompletion.failed(
+                "analysis_too_large", "L'analisi supera el limit de chunks configurat."
             )
         except AnalysisInputChangedError:
             return JobCompletion.failed(

@@ -1,6 +1,7 @@
 """Registre de models. Importar aquest modul carrega tot el metadata d'Alembic."""
 
 from app.db.base import Base
+from app.models.analysis_quotes import AnalysisQuote
 from app.models.audit import AuditLog
 from app.models.compliance import (
     AssessmentEvidence,
@@ -59,6 +60,7 @@ from app.models.workspace import (
 )
 
 __all__ = [
+    "AnalysisQuote",
     "AssessmentEvidence",
     "AuditLog",
     "AwardCriterion",

@@ -199,7 +199,7 @@ async def test_an_unanalysed_tender_returns_an_empty_analysis(client_a, analyzab
 async def test_a_tender_without_text_returns_422(client_a, tender_document, tenant_a):
     response = await client_a.post(
         f"/api/v1/companies/{tenant_a[1].id}/tenders/{tender_document.tender_id}"
-        "/job-requests/analyze-requirements"
+        "/analysis-quotes"
     )
 
     assert response.status_code == 422
