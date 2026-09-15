@@ -17,6 +17,7 @@ from app.api.v1.routers import (
     documents,
     dossier,
     insurance_limits,
+    job_requests,
     matching,
     people,
     profile,
@@ -53,6 +54,8 @@ company_scoped.include_router(workspaces.router)
 company_scoped.include_router(dossier.router)
 # Paquet de presentacio i aprovacio final humana.
 company_scoped.include_router(submission.router)
+# Feina llarga: la peticio es de l'empresa; l'execucio, global.
+company_scoped.include_router(job_requests.router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

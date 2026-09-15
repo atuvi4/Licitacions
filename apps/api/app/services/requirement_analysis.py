@@ -26,10 +26,10 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 import sqlalchemy as sa
 from pydantic import ValidationError as PydanticValidationError
@@ -52,7 +52,13 @@ from app.ai.schemas import (
     RequirementOut,
 )
 from app.core.config import settings
-from app.core.errors import AnalysisInProgressError, NothingAnalyzableError
+from app.core.errors import (
+    AnalysisInProgressError,
+    AnalysisInputChangedError,
+    AnalysisInterruptedError,
+    AnalysisRunReclaimedError,
+    NothingAnalyzableError,
+)
 from app.models.enums import (
     AnalysisRunStatus,
     AwardCriterionType,
@@ -63,6 +69,7 @@ from app.models.enums import (
     RequirementScope,
     ReviewStatus,
 )
+from app.models.jobs import ACTIVE_WORK_JOB_STATUSES, WorkJob
 from app.models.requirements import (
     AwardCriterion,
     AwardCriterionEvidence,
@@ -101,6 +108,39 @@ class AnalysisOutcome:
     run: RequirementExtractionRun
     #: Cert si s'ha reutilitzat un run anterior sense gastar tokens.
     reused: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisInput:
+    """Que s'analitzaria ara mateix: els documents, ja amb el sostre de pagines,
+    i la seva empremta.
+
+    Es l'unica definicio de "l'entrada d'una analisi". La fan servir l'analisi,
+    la cua de feina (per confirmar abans de pagar que res no ha canviat) i el pla
+    del benchmark.
+    """
+
+    documents: list[AnalyzableDocument]
+    skipped: list[SkippedDocument]
+    fingerprint: str
+    #: Pagines amb text abans d'aplicar `REQUIREMENTS_MAX_PAGES_PER_RUN`.
+    pages_total: int
+
+
+class ProviderIdentity(Protocol):
+    """El que cal d'un proveidor per decidir si un run es reaprofitable."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+
+#: Crida de progres: (chunks tractats, chunks totals).
+ProgressCallback = Callable[[int, int], Awaitable[None]]
+#: Es consulta abans de cada chunk. Fals = no s'ha d'iniciar cap crida mes.
+ContinueCallback = Callable[[], Awaitable[bool]]
 
 
 @dataclass(slots=True)
@@ -228,6 +268,31 @@ async def collect_analyzable_documents(
         )
 
     return analyzable, skipped
+
+
+async def analysis_input(
+    session: AsyncSession,
+    tender_id: uuid.UUID,
+    *,
+    document_ids: list[uuid.UUID] | None = None,
+) -> AnalysisInput:
+    """Els documents que s'analitzarien i la seva empremta, calculats ara.
+
+    No llanca si no hi ha res analitzable: `documents` torna buit i qui crida
+    decideix. L'analisi ho converteix en `NothingAnalyzableError`; el pla del
+    benchmark ho mostra.
+    """
+    documents, skipped = await collect_analyzable_documents(
+        session, tender_id, document_ids=document_ids
+    )
+    pages_total = sum(document.page_count for document in documents)
+    capped = _cap_pages(documents)
+    return AnalysisInput(
+        documents=capped,
+        skipped=skipped,
+        fingerprint=compute_input_fingerprint(capped),
+        pages_total=pages_total,
+    )
 
 
 def _cap_pages(documents: list[AnalyzableDocument]) -> list[AnalyzableDocument]:
@@ -445,6 +510,16 @@ async def _reclaim_stale(session: AsyncSession, tender_id: uuid.UUID) -> None:
                 [AnalysisRunStatus.PENDING, AnalysisRunStatus.RUNNING]
             ),
             RequirementExtractionRun.started_at < cutoff,
+            # Un run amb un job viu (o orfe, pendent de reconciliar) no es reclama
+            # per antiguitat: una analisi llarga amb heartbeat es legitima, i la
+            # decisio sobre un orfe la pren el reconciliador.
+            sa.or_(
+                RequirementExtractionRun.work_job_id.is_(None),
+                ~sa.exists().where(
+                    WorkJob.id == RequirementExtractionRun.work_job_id,
+                    WorkJob.status.in_(ACTIVE_WORK_JOB_STATUSES),
+                ),
+            ),
         )
         .values(
             status=AnalysisRunStatus.FAILED,
@@ -456,11 +531,11 @@ async def _reclaim_stale(session: AsyncSession, tender_id: uuid.UUID) -> None:
         await session.commit()
 
 
-async def _find_reusable_run(
+async def find_reusable_run(
     session: AsyncSession,
     tender_id: uuid.UUID,
     fingerprint: str,
-    provider: StructuredLLMProvider,
+    provider: ProviderIdentity,
     profile: ExtractorProfile,
 ) -> RequirementExtractionRun | None:
     """Un run completat amb la mateixa entrada i la mateixa configuracio."""
@@ -497,42 +572,70 @@ async def analyze_tender_requirements(
     document_ids: list[uuid.UUID] | None = None,
     provider: StructuredLLMProvider | None = None,
     profile: ExtractorProfile = DEFAULT_PROFILE,
+    work_job_id: uuid.UUID | None = None,
+    expected_fingerprint: str | None = None,
+    on_progress: ProgressCallback | None = None,
+    should_continue: ContinueCallback | None = None,
 ) -> AnalysisOutcome:
     """Extreu els requisits d'una licitacio a partir dels plecs ja processats.
 
-    Viu separada de l'endpoint HTTP a proposit: mes endavant la podra executar
-    un worker sense tocar-ne ni una linia.
+    Viu separada de l'endpoint HTTP: l'executa el worker de la cua (`app/jobs/`)
+    i tambe els scripts d'operador.
 
     El `profile` decideix amb quin prompt i quin contracte s'extreu, i les seves
     versions es desen al Run: dos runs de perfils diferents no es reaprofiten
     l'un a l'altre ni es poden comparar per accident.
+
+    Costures per al worker, totes opcionals i cap amb dades de tenant:
+
+    * `work_job_id` queda desat al run a la mateixa transaccio que el crea.
+    * `expected_fingerprint`: l'entrada confirmada en demanar l'analisi. Si els
+      plecs han canviat, s'atura amb `AnalysisInputChangedError` **abans** de
+      cap crida al proveidor: no s'analitza en silenci una altra versio.
+    * `on_progress(fets, total)` en reservar el run i a cada chunk.
+    * `should_continue()` abans de cada chunk. Si torna fals no s'inicia cap
+      crida mes i el run **no** es tanca: queda en curs perque el reconcilii qui
+      en te l'autoritat (`AnalysisInterruptedError`).
     """
     started = time.monotonic()
     llm = provider or get_provider()
 
     await _reclaim_stale(session, tender.id)
 
-    documents, skipped = await collect_analyzable_documents(
-        session, tender.id, document_ids=document_ids
-    )
-    if not documents:
+    current_input = await analysis_input(session, tender.id, document_ids=document_ids)
+    if not current_input.documents:
         raise NothingAnalyzableError(
             "Cap document d'aquesta licitacio te text extret per analitzar. "
             "Processa'n els plecs primer."
         )
+    if expected_fingerprint is not None and current_input.fingerprint != expected_fingerprint:
+        raise AnalysisInputChangedError(
+            "Els plecs han canviat des que es va demanar l'analisi. Cal demanar-la de nou."
+        )
 
-    documents = _cap_pages(documents)
-    fingerprint = compute_input_fingerprint(documents)
+    documents = current_input.documents
+    skipped = current_input.skipped
+    fingerprint = current_input.fingerprint
 
     if not force:
-        reusable = await _find_reusable_run(session, tender.id, fingerprint, llm, profile)
+        reusable = await find_reusable_run(session, tender.id, fingerprint, llm, profile)
         if reusable is not None:
             return AnalysisOutcome(run=reusable, reused=True)
 
     chunks = build_chunks(documents)
     run = await _claim_run(
-        session, tender.id, fingerprint, llm, documents, chunks, skipped, profile
+        session,
+        tender.id,
+        fingerprint,
+        llm,
+        documents,
+        chunks,
+        skipped,
+        profile,
+        work_job_id=work_job_id,
     )
+    if on_progress is not None:
+        await on_progress(0, len(chunks))
 
     lots = list(
         (await session.scalars(sa.select(TenderLot).where(TenderLot.tender_id == tender.id))).all()
@@ -557,7 +660,20 @@ async def analyze_tender_requirements(
     # proveidor va arribar a respondre: aquells tokens tambe es paguen.
     chunk_usage: dict[int, Usage] = {}
 
-    for chunk in chunks:
+    for position, chunk in enumerate(chunks):
+        # Abans de cada chunk, i no despres: una crida que ja es en vol pot
+        # acabar, pero cap de nova no comenca si el worker ja no es propietari
+        # de la feina. El run queda en curs, sense tancar-lo.
+        if should_continue is not None and not await should_continue():
+            logger.warning(
+                "requirements.run.interrupted",
+                extra={"run_id": str(run.id), "before_chunk": chunk.index},
+            )
+            raise AnalysisInterruptedError(
+                "L'execucio ha perdut el lease: no s'inicia cap chunk mes."
+            )
+        if position and on_progress is not None:
+            await on_progress(position, len(chunks))
         try:
             result = await _run_chunk(llm, chunk, profile)
         except ProviderError as exc:
@@ -596,6 +712,9 @@ async def analyze_tender_requirements(
             profile=profile,
         )
         run.chunks_completed += 1
+
+    if on_progress is not None:
+        await on_progress(len(chunks), len(chunks))
 
     for usage in chunk_usage.values():
         input_tokens += usage.input_tokens or 0
@@ -707,14 +826,21 @@ async def _claim_run(
     chunks: list[Chunk],
     skipped: list[SkippedDocument],
     profile: ExtractorProfile,
+    *,
+    work_job_id: uuid.UUID | None = None,
 ) -> RequirementExtractionRun:
-    """Reserva l'analisi. L'index unic parcial impedeix el doble clic."""
+    """Reserva l'analisi. L'index unic parcial impedeix el doble clic.
+
+    `work_job_id` s'escriu a la mateixa transaccio que crea el run: no hi ha cap
+    moment en que el run existeixi sense saber de quin job ve.
+    """
     quality_status, quality_issues = await _source_quality_snapshot(session, documents)
     revision = await latest_revision(session, tender_id)
     run = RequirementExtractionRun(
         source_quality_status=quality_status,
         source_quality_issues=quality_issues or None,
         tender_id=tender_id,
+        work_job_id=work_job_id,
         # Sobre quin estat de la licitacio s'ha llegit. Serveix per no haver de
         # reextreure els plecs quan el que s'ha mogut es un import.
         tender_revision_id=revision.id if revision else None,
@@ -1082,7 +1208,22 @@ async def _finalise_run(
 
     Nomes hi passa si ha acabat be. Si no, el run anterior es queda: una analisi
     fallida no pot deixar sense requisits una licitacio que ja en tenia.
+
+    Primer es bloqueja la fila i es comprova que el run segueix en curs. Si
+    mentrestant el reconciliador l'ha donat per perdut (`worker_lost`), aquest
+    tancament arriba tard: es desfa tot i el run no passa a vigent. El bloqueig
+    serialitza la comprovacio amb l'UPDATE condicional del reconciliador.
     """
+    locked_status = await session.scalar(
+        sa.select(RequirementExtractionRun.status)
+        .where(RequirementExtractionRun.id == run.id)
+        .with_for_update()
+    )
+    if locked_status != AnalysisRunStatus.RUNNING:
+        await session.rollback()
+        raise AnalysisRunReclaimedError(
+            "Aquest run ja no estava en curs quan s'ha intentat tancar."
+        )
     run.requirements_extracted = tally.requirements
     run.requirements_rejected = tally.rejected
     run.award_criteria_extracted = tally.award_criteria

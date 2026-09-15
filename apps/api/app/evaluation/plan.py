@@ -2,8 +2,8 @@
 
 Existeix per pressupost. Un run del benchmark es paga per chunk, i fins ara
 l'unica manera de saber quants chunks tenia una mostra era executar-la. El pla
-refa exactament la seleccio de la canonada (`collect_analyzable_documents`,
-`_cap_pages`, `build_chunks`) i s'atura aqui: **no construeix cap proveidor ni
+refa exactament la seleccio de la canonada (`analysis_input`, `build_chunks`)
+i s'atura aqui: **no construeix cap proveidor ni
 en crida cap**.
 
 L'estimacio de volum surt de runs ja fets a la mateixa base (tokens registrats
@@ -27,12 +27,8 @@ from app.evaluation.corpus import resolve_tender
 from app.evaluation.dataset import GoldDataset
 from app.evaluation.pricing import CURRENCY, configured_prices, price_for
 from app.models.requirements import RequirementExtractionRun
-from app.services.requirement_analysis import (
-    _cap_pages,
-    _find_reusable_run,
-    collect_analyzable_documents,
-)
-from app.services.requirement_chunking import build_chunks, compute_input_fingerprint
+from app.services.requirement_analysis import analysis_input, find_reusable_run
+from app.services.requirement_chunking import build_chunks
 
 
 @dataclass(slots=True)
@@ -220,12 +216,12 @@ async def build_plan(
             continue
         case_plan.tender_id = str(tender.id)
 
-        documents, skipped = await collect_analyzable_documents(session, tender.id)
-        case_plan.skipped = [(doc.document_name, doc.reason) for doc in skipped]
-        case_plan.pages_total = sum(doc.page_count for doc in documents)
-        if not documents:
+        current = await analysis_input(session, tender.id)
+        case_plan.skipped = [(doc.document_name, doc.reason) for doc in current.skipped]
+        case_plan.pages_total = current.pages_total
+        if not current.documents:
             continue
-        capped = _cap_pages(documents)
+        capped = current.documents
         case_plan.documents = [
             DocumentPlan(
                 name=doc.document_name,
@@ -247,8 +243,8 @@ async def build_plan(
         ]
 
         if not force:
-            reusable = await _find_reusable_run(
-                session, tender.id, compute_input_fingerprint(capped), identity, profile
+            reusable = await find_reusable_run(
+                session, tender.id, current.fingerprint, identity, profile
             )
             case_plan.reusable_run_id = str(reusable.id) if reusable is not None else None
 

@@ -837,3 +837,45 @@ class AwardCriterionType(StrEnum):
     IMPROVEMENT = "improvement"
     OTHER = "other"
     UNKNOWN = "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Feina asincrona (Fase 7A)
+#
+# `WorkJob` es l'execucio tecnica global; `JobRequest`, la peticio d'un tenant.
+# Una mateixa execucio pot satisfer peticions de diverses empreses.
+# ---------------------------------------------------------------------------
+
+
+class WorkJobType(StrEnum):
+    PROCESS_TENDER_DOCUMENTS = "process_tender_documents"
+    ANALYZE_TENDER_REQUIREMENTS = "analyze_tender_requirements"
+
+
+class WorkJobStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    # Nomes anàlisi: el worker ha perdut el lease i el run s'ha de reconciliar
+    # contra el seu estat real. Mai no es torna a executar sol.
+    ORPHANED = "orphaned"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class JobRequestStatus(StrEnum):
+    PENDING = "pending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class JobOutcome(StrEnum):
+    #: S'ha fet la feina de nou.
+    EXECUTED = "executed"
+    #: L'execucio ha trobat un resultat vigent i no l'ha repetit.
+    REUSED = "reused"
+    #: La peticio ja tenia resultat en crear-se: no s'ha encuat res.
+    REUSED_EXISTING = "reused_existing"
+    #: La feina ha acabat, pero una part ha fallat (chunks o documents).
+    PARTIAL = "partial"

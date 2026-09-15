@@ -1,6 +1,7 @@
 """Endpoints de la capa documental.
 
-Son dades publiques i globals: cal sessio, pero no pertinenca a cap empresa.
+La lectura es publica i global: cal sessio, pero no pertinenca a cap empresa. El
+processat es demana per empresa i l'executa el worker (`tests/jobs_support.py`).
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import httpx
 import pytest
 
 from tests.fixtures.pdf_builder import build_pdf
+from tests.jobs_support import request_processing
 
 PCAP = build_pdf(["Plec de clausules administratives particulars. " * 8] * 3)
 
@@ -35,22 +37,52 @@ def _fake_network(monkeypatch):
     monkeypatch.setattr(processing, "download_document", patched)
 
 
-async def test_processing_requires_a_session(client, tender_document):
-    response = await client.post(
-        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/process"
+def _process_url(company_id, tender_document) -> str:
+    return (
+        f"/api/v1/companies/{company_id}/tenders/{tender_document.tender_id}"
+        "/job-requests/process-documents"
     )
+
+
+async def _process(client_a, tenant_a, tender_document, session_factory, **options):
+    return await request_processing(
+        client_a,
+        tenant_a[1].id,
+        tender_document.tender_id,
+        session_factory,
+        json={"document_ids": [str(tender_document.id)], **options},
+    )
+
+
+async def _current_file(client_a, tender_document) -> dict:
+    files = await client_a.get(
+        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/files"
+    )
+    assert files.status_code == 200
+    return next(item for item in files.json() if item["is_current"])
+
+
+async def test_processing_requires_a_session(client, tender_document, tenant_a):
+    response = await client.post(_process_url(tenant_a[1].id, tender_document))
     assert response.status_code == 401
 
 
-async def test_processes_a_document_and_returns_the_file(client_a, tender_document):
+async def test_the_old_synchronous_endpoint_no_longer_processes(client_a, tender_document):
     response = await client_a.post(
         f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/process"
     )
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "endpoint_moved"
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["reused"] is False
-    file = body["file"]
+
+async def test_processes_a_document_and_returns_the_file(
+    client_a, tender_document, tenant_a, session_factory
+):
+    final = await _process(client_a, tenant_a, tender_document, session_factory)
+
+    assert final.json()["status"] == "succeeded"
+    assert final.json()["outcome"] == "executed"
+    file = await _current_file(client_a, tender_document)
     assert file["download_status"] == "downloaded"
     assert file["version_number"] == 1
     assert file["content"]["mime_type"] == "application/pdf"
@@ -58,25 +90,31 @@ async def test_processes_a_document_and_returns_the_file(client_a, tender_docume
     assert file["extraction"]["quality"] == "good"
 
 
-async def test_no_response_ever_leaks_the_storage_key(client_a, tender_document):
-    response = await client_a.post(
-        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/process"
+async def test_no_response_ever_leaks_the_storage_key(
+    client_a, tender_document, tenant_a, session_factory
+):
+    final = await _process(client_a, tenant_a, tender_document, session_factory)
+    files = await client_a.get(
+        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/files"
     )
-    assert "storage_key" not in response.text
+    assert "storage_key" not in final.text
+    assert "storage_key" not in files.text
 
 
-async def test_processing_twice_reports_reuse(client_a, tender_document):
-    base = f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/process"
-    await client_a.post(base)
-    second = await client_a.post(base)
+async def test_processing_twice_reports_reuse(
+    client_a, tender_document, tenant_a, session_factory
+):
+    await _process(client_a, tenant_a, tender_document, session_factory)
+    second = await _process(client_a, tenant_a, tender_document, session_factory)
 
-    assert second.json()["reused"] is True
+    assert second.json()["status"] == "succeeded"
+    assert second.json()["outcome"] == "reused"
 
 
-async def test_lists_the_versions_of_a_document(client_a, tender_document):
-    await client_a.post(
-        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/process"
-    )
+async def test_lists_the_versions_of_a_document(
+    client_a, tender_document, tenant_a, session_factory
+):
+    await _process(client_a, tenant_a, tender_document, session_factory)
 
     response = await client_a.get(
         f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/files"
@@ -88,11 +126,12 @@ async def test_lists_the_versions_of_a_document(client_a, tender_document):
     assert files[0]["is_current"] is True
 
 
-async def test_reads_the_pages_of_the_current_extraction(client_a, tender_document):
-    processed = await client_a.post(
-        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/process"
-    )
-    file_id = processed.json()["file"]["id"]
+async def test_reads_the_pages_of_the_current_extraction(
+    client_a, tender_document, tenant_a, session_factory
+):
+    await _process(client_a, tenant_a, tender_document, session_factory)
+    current = await _current_file(client_a, tender_document)
+    file_id = current["id"]
 
     response = await client_a.get(f"/api/v1/tender-document-files/{file_id}/pages")
 
@@ -103,12 +142,13 @@ async def test_reads_the_pages_of_the_current_extraction(client_a, tender_docume
     assert "clausules" in body["items"][0]["text"]
 
 
-async def test_reads_one_page_by_its_human_number(client_a, tender_document):
-    processed = await client_a.post(
-        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/process"
-    )
-    file_id = processed.json()["file"]["id"]
-    extraction_id = processed.json()["file"]["extraction"]["id"]
+async def test_reads_one_page_by_its_human_number(
+    client_a, tender_document, tenant_a, session_factory
+):
+    await _process(client_a, tenant_a, tender_document, session_factory)
+    current = await _current_file(client_a, tender_document)
+    file_id = current["id"]
+    extraction_id = current["extraction"]["id"]
 
     response = await client_a.get(f"/api/v1/tender-document-extractions/{extraction_id}/pages/2")
 
@@ -124,11 +164,10 @@ async def test_reads_one_page_by_its_human_number(client_a, tender_document):
     assert file_id
 
 
-async def test_serves_the_original_pdf_inline(client_a, tender_document):
-    processed = await client_a.post(
-        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/process"
-    )
-    file_id = processed.json()["file"]["id"]
+async def test_serves_the_original_pdf_inline(client_a, tender_document, tenant_a, session_factory):
+    await _process(client_a, tenant_a, tender_document, session_factory)
+    current = await _current_file(client_a, tender_document)
+    file_id = current["id"]
 
     response = await client_a.get(f"/api/v1/tender-document-files/{file_id}/original")
 
@@ -138,29 +177,32 @@ async def test_serves_the_original_pdf_inline(client_a, tender_document):
     assert response.content == PCAP
 
 
-async def test_unknown_identifiers_are_404(client_a, tender_document):
+async def test_unknown_identifiers_are_404(client_a, tender_document, tenant_a):
     missing = uuid.uuid4()
     assert (await client_a.get(f"/api/v1/tender-document-files/{missing}")).status_code == 404
-    assert (
-        await client_a.post(
-            f"/api/v1/tenders/{tender_document.tender_id}/documents/{missing}/process"
-        )
-    ).status_code == 404
+    unknown_document = await client_a.post(
+        _process_url(tenant_a[1].id, tender_document), json={"document_ids": [str(missing)]}
+    )
+    assert unknown_document.status_code == 404
 
 
-async def test_a_document_of_another_tender_is_not_reachable(client_a, tender_document):
-    """El tender_id de la ruta ha de coincidir de veritat amb el del document."""
+async def test_a_document_of_another_tender_is_not_reachable(client_a, tender_document, tenant_a):
+    """El document ha de ser de la licitacio de la ruta."""
     response = await client_a.post(
-        f"/api/v1/tenders/{uuid.uuid4()}/documents/{tender_document.id}/process"
+        f"/api/v1/companies/{tenant_a[1].id}/tenders/{uuid.uuid4()}"
+        "/job-requests/process-documents",
+        json={"document_ids": [str(tender_document.id)]},
     )
     assert response.status_code == 404
 
 
-async def test_reextract_without_content_is_a_422(client_a, tender_document):
-    response = await client_a.post(
-        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/process",
-        json={"force_reextract": True},
+async def test_reextract_without_content_is_reported_per_document(
+    client_a, tender_document, tenant_a, session_factory
+):
+    """Ja no es un 422 de la peticio: la feina ho escriu a la fila del document."""
+    final = await _process(
+        client_a, tenant_a, tender_document, session_factory, force_reextract=True
     )
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "no_content_to_extract"
+    assert final.json()["status"] == "succeeded"
+    assert final.json()["outcome"] == "partial"

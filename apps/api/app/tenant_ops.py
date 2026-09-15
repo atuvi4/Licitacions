@@ -106,6 +106,10 @@ PUBLIC_TABLES = frozenset(
         "tender_lots",
         "tenders",
         "users",
+        # L'execucio tecnica d'una feina llarga es global: la poden compartir
+        # peticions de diverses empreses. La peticio de cada empresa
+        # (`job_requests`) si que es de tenant, i porta el seu `company_id`.
+        "work_jobs",
     }
 )
 

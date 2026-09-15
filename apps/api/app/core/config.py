@@ -147,6 +147,22 @@ class Settings(BaseSettings):
     # Una analisi en curs mes antiga que aixo es considera morta i es pot reclamar.
     REQUIREMENTS_ANALYSIS_STALE_SECONDS: int = 900
 
+    # --- Feina asincrona (worker) ---
+    # Durada del lease d'un job en curs. Si no es renova, el job es considera
+    # abandonat: els de documents es tornen a encuar i els d'analisi es queden
+    # orfes per reconciliar-los (mai no es reexecuten sols).
+    JOB_LEASE_SECONDS: int = 120
+    # Cada quant renova el lease el worker mentre treballa.
+    JOB_HEARTBEAT_SECONDS: int = 15
+    # Cada quant mira la cua un worker desocupat.
+    JOB_POLL_SECONDS: float = 2.0
+    # Intents d'un job de documents (idempotent i sense cost de proveidor).
+    JOB_DOCUMENT_MAX_ATTEMPTS: int = 3
+    # Temps que es deixa a un worker d'analisi que ha perdut el lease abans de
+    # donar-lo per mort. Ha de cobrir la crida al proveidor mes llarga possible
+    # (timeout x intents) i el tancament del run.
+    JOB_ORPHAN_GRACE_SECONDS: int = 900
+
     # --- Benchmark d'extraccio ---
     # La base de dades on s'executen els benchmarks, amb el seu propi corpus.
     # Buida per defecte: el benchmark no ha de poder arrencar per descuit contra

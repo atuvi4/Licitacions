@@ -183,7 +183,9 @@ async def test_the_tender_detail_reports_the_documental_state(client_a, tender_d
     assert documents[0]["latest_file"] is None
 
 
-async def test_the_tender_detail_summarises_a_processed_document(client_a, tender_document):
+async def test_the_tender_detail_summarises_a_processed_document(
+    client_a, tender_document, tenant_a, session_factory
+):
     import httpx
 
     from app.services import tender_document_processing as processing
@@ -204,9 +206,14 @@ async def test_the_tender_detail_summarises_a_processed_document(client_a, tende
 
         processing.download_document = patched
         try:
-            await client_a.post(
-                f"/api/v1/tenders/{tender_document.tender_id}"
-                f"/documents/{tender_document.id}/process"
+            from tests.jobs_support import request_processing
+
+            await request_processing(
+                client_a,
+                tenant_a[1].id,
+                tender_document.tender_id,
+                session_factory,
+                json={"document_ids": [str(tender_document.id)]},
             )
         finally:
             processing.download_document = original

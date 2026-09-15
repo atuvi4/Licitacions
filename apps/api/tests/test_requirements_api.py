@@ -1,6 +1,7 @@
 """Endpoints de l'analisi de plecs.
 
-Dades publiques i globals: cal sessio, no pertinenca a cap empresa.
+La lectura es publica i global: cal sessio, no pertinenca a cap empresa.
+L'analisi es demana per empresa i l'executa el worker (`tests/jobs_support.py`).
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from app.models.tender_documents import (
     TenderDocumentFile,
     TenderDocumentPage,
 )
+from tests.jobs_support import request_analysis
 
 PAGE = (
     "8.1.2. Solvencia economica.\n"
@@ -113,24 +115,41 @@ def payload(extraction_id):
     }
 
 
-async def test_analysis_requires_a_session(client, analyzable):
+async def test_analysis_requires_a_session(client, analyzable, tenant_a):
+    _, company = tenant_a
     response = await client.post(
-        f"/api/v1/tenders/{analyzable['document'].tender_id}/analysis/requirements"
+        f"/api/v1/companies/{company.id}/tenders/{analyzable['document'].tender_id}"
+        "/job-requests/analyze-requirements"
     )
     assert response.status_code == 401
 
 
-async def test_runs_the_analysis_and_returns_the_run(client_a, analyzable):
-    fake.queue_response(payload(analyzable["extraction"].id))
-
+async def test_the_old_synchronous_endpoint_no_longer_analyses(client_a, analyzable):
+    """Una peticio HTTP no pot quedar-se oberta minuts: l'endpoint antic es retira."""
     response = await client_a.post(
         f"/api/v1/tenders/{analyzable['document'].tender_id}/analysis/requirements"
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["reused"] is False
-    run = body["run"]
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "endpoint_moved"
+    assert fake.SENT_PAYLOADS == [], "no s'ha cridat el proveidor"
+
+
+async def test_runs_the_analysis_and_returns_the_run(
+    client_a, analyzable, tenant_a, session_factory
+):
+    fake.queue_response(payload(analyzable["extraction"].id))
+    _, company = tenant_a
+    tender_id = analyzable["document"].tender_id
+
+    final = await request_analysis(client_a, company.id, tender_id, session_factory)
+
+    body = final.json()
+    assert body["status"] == "succeeded"
+    assert body["outcome"] == "executed"
+    analysis = (await client_a.get(f"/api/v1/tenders/{tender_id}/analysis/requirements")).json()
+    run = analysis["run"]
+    assert run["id"] == body["result_run_id"]
     assert run["status"] == "completed"
     assert run["is_current"] is True
     assert run["requirements_extracted"] == 1
@@ -138,10 +157,12 @@ async def test_runs_the_analysis_and_returns_the_run(client_a, analyzable):
     assert run["prompt_version"] == "requirements-v1"
 
 
-async def test_reads_requirements_with_full_provenance(client_a, analyzable):
+async def test_reads_requirements_with_full_provenance(
+    client_a, analyzable, tenant_a, session_factory
+):
     fake.queue_response(payload(analyzable["extraction"].id))
     tender_id = analyzable["document"].tender_id
-    await client_a.post(f"/api/v1/tenders/{tender_id}/analysis/requirements")
+    await request_analysis(client_a, tenant_a[1].id, tender_id, session_factory)
 
     response = await client_a.get(f"/api/v1/tenders/{tender_id}/analysis/requirements")
 
@@ -175,22 +196,23 @@ async def test_an_unanalysed_tender_returns_an_empty_analysis(client_a, analyzab
     assert body["requirements"] == []
 
 
-async def test_a_tender_without_text_returns_422(client_a, tender_document):
+async def test_a_tender_without_text_returns_422(client_a, tender_document, tenant_a):
     response = await client_a.post(
-        f"/api/v1/tenders/{tender_document.tender_id}/analysis/requirements"
+        f"/api/v1/companies/{tenant_a[1].id}/tenders/{tender_document.tender_id}"
+        "/job-requests/analyze-requirements"
     )
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "nothing_analyzable"
 
 
-async def test_lists_the_run_history(client_a, analyzable):
+async def test_lists_the_run_history(client_a, analyzable, tenant_a, session_factory):
     fake.queue_response(payload(analyzable["extraction"].id))
     tender_id = analyzable["document"].tender_id
-    await client_a.post(f"/api/v1/tenders/{tender_id}/analysis/requirements")
+    await request_analysis(client_a, tenant_a[1].id, tender_id, session_factory)
     fake.queue_response(payload(analyzable["extraction"].id))
-    await client_a.post(
-        f"/api/v1/tenders/{tender_id}/analysis/requirements", json={"force": True}
+    await request_analysis(
+        client_a, tenant_a[1].id, tender_id, session_factory, json={"force": True}
     )
 
     response = await client_a.get(f"/api/v1/tenders/{tender_id}/analysis/runs")
@@ -201,11 +223,13 @@ async def test_lists_the_run_history(client_a, analyzable):
     assert sum(1 for run in runs if run["is_current"]) == 1, "nomes un run vigent"
 
 
-async def test_reviewing_a_requirement_preserves_the_model_output(client_a, analyzable, session):
+async def test_reviewing_a_requirement_preserves_the_model_output(
+    client_a, analyzable, session, tenant_a, session_factory
+):
     """§26: corregir NO pot esborrar el que va dir el model."""
     fake.queue_response(payload(analyzable["extraction"].id))
     tender_id = analyzable["document"].tender_id
-    await client_a.post(f"/api/v1/tenders/{tender_id}/analysis/requirements")
+    await request_analysis(client_a, tenant_a[1].id, tender_id, session_factory)
 
     requirement = await session.scalar(
         sa.select(Requirement).where(Requirement.tender_id == tender_id)
@@ -233,10 +257,12 @@ async def test_reviewing_a_requirement_preserves_the_model_output(client_a, anal
     assert body["reviewed_at"] is not None
 
 
-async def test_rejecting_a_requirement_keeps_it_auditable(client_a, analyzable, session):
+async def test_rejecting_a_requirement_keeps_it_auditable(
+    client_a, analyzable, session, tenant_a, session_factory
+):
     fake.queue_response(payload(analyzable["extraction"].id))
     tender_id = analyzable["document"].tender_id
-    await client_a.post(f"/api/v1/tenders/{tender_id}/analysis/requirements")
+    await request_analysis(client_a, tenant_a[1].id, tender_id, session_factory)
     requirement = await session.scalar(
         sa.select(Requirement).where(Requirement.tender_id == tender_id)
     )
@@ -261,10 +287,12 @@ async def test_unknown_identifiers_are_404(client_a, analyzable):
     ).status_code == 404
 
 
-async def test_no_response_exposes_a_storage_key(client_a, analyzable):
+async def test_no_response_exposes_a_storage_key(
+    client_a, analyzable, tenant_a, session_factory
+):
     fake.queue_response(payload(analyzable["extraction"].id))
     tender_id = analyzable["document"].tender_id
-    await client_a.post(f"/api/v1/tenders/{tender_id}/analysis/requirements")
+    await request_analysis(client_a, tenant_a[1].id, tender_id, session_factory)
 
     response = await client_a.get(f"/api/v1/tenders/{tender_id}/analysis/requirements")
 

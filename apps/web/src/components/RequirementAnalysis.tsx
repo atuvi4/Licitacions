@@ -24,6 +24,7 @@ import {
   isTrustworthyAnalysis,
 } from "@/lib/compliance";
 import { api } from "@/lib/api";
+import { jobErrorMessage, requestAnalysis, useJobRequest } from "@/lib/jobs";
 import {
   ANALYSIS_DISCLAIMER,
   ANALYSIS_STATE_LABELS,
@@ -153,34 +154,47 @@ function RequirementCard({
 
 export function RequirementAnalysisSection({
   tenderId,
+  companyId,
   analysis,
   loading,
   error,
   onReload,
 }: {
   tenderId: string;
+  companyId: string | null;
   analysis: RequirementAnalysis | null;
   loading: boolean;
   error: string | null;
   onReload: () => Promise<void>;
 }) {
-  const [running, setRunning] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<string | null>(null);
 
   const state = analysisState(analysis);
   const run = analysis?.run ?? null;
 
+  // L'anàlisi s'executa en segon pla: aquí només es demana i se'n segueix
+  // l'estat. Quan acaba, es recarrega el que se n'ha obtingut.
+  const job = useJobRequest(companyId, tenderId, "analyze_tender_requirements", async (done) => {
+    if (done.status === "failed") setActionError(jobErrorMessage(done.error_code));
+    await onReload();
+  });
+  const running = submitting || job.active;
+
   async function analyse(force: boolean) {
-    setRunning(true);
+    if (!companyId) {
+      setActionError("Cal una empresa activa per demanar l'anàlisi.");
+      return;
+    }
+    setSubmitting(true);
     setActionError(null);
     try {
-      await api.post(`/tenders/${tenderId}/analysis/requirements`, { force });
-      await onReload();
+      job.track(await requestAnalysis(companyId, tenderId, force));
     } catch (caught) {
-      setActionError(caught instanceof Error ? caught.message : "No s'ha pogut analitzar.");
+      setActionError(caught instanceof Error ? caught.message : "No s'ha pogut demanar l'anàlisi.");
     } finally {
-      setRunning(false);
+      setSubmitting(false);
     }
   }
 
@@ -222,6 +236,13 @@ export function RequirementAnalysisSection({
                 </Badge>
               ) : (
                 <Badge tone={ANALYSIS_STATE_TONES[state]}>{ANALYSIS_STATE_LABELS[state]}</Badge>
+              )}
+              {job.active && (
+                <span className="text-[12px] text-muted">
+                  {job.request?.progress
+                    ? `Analitzant ${job.request.progress.done}/${job.request.progress.total}`
+                    : "Analitzant en segon pla…"}
+                </span>
               )}
               <Button onClick={() => void analyse(state === "stale")} disabled={running || loading}>
                 {running ? <Spinner /> : run ? "Torna a analitzar" : "Analitza requisits"}

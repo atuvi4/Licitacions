@@ -8,8 +8,8 @@ del model o una pagina que el model no va veure mai.
 
 Com ho dedueix, i fins on arriba:
 
-1. **Refa el pla de chunks** amb la mateixa canonada (`collect_analyzable_documents`,
-   `_cap_pages`, `build_chunks`) i comprova que es el del run: mateix
+1. **Refa el pla de chunks** amb la mateixa canonada (`analysis_input`,
+   `build_chunks`) i comprova que es el del run: mateix
    `input_fingerprint` i mateix `chunks_total`. Si no coincideix, s'atura: un pla
    diferent no diu res d'aquell run.
 2. **Un chunk que ha deixat rastre es un chunk completat.** El rastre es
@@ -50,8 +50,8 @@ from app.models.requirements import (
     RequirementExtractionRun,
 )
 from app.models.tenders import Tender
-from app.services.requirement_analysis import _cap_pages, collect_analyzable_documents
-from app.services.requirement_chunking import build_chunks, compute_input_fingerprint
+from app.services.requirement_analysis import analysis_input
+from app.services.requirement_chunking import build_chunks
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -119,9 +119,9 @@ async def main() -> int:
             if run.chunk_coverage:
                 print("NOTA: aquest run ja porta chunk_coverage; no cal reconstruir res.")
 
-            documents, _ = await collect_analyzable_documents(session, run.tender_id)
-            documents = _cap_pages(documents)
-            fingerprint = compute_input_fingerprint(documents)
+            current = await analysis_input(session, run.tender_id)
+            documents = current.documents
+            fingerprint = current.fingerprint
             chunks = build_chunks(documents)
             if fingerprint != run.input_fingerprint or len(chunks) != run.chunks_total:
                 same = "igual" if fingerprint == run.input_fingerprint else "DIFERENT"

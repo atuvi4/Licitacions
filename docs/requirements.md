@@ -329,9 +329,9 @@ loguegen claus d'API ni el text dels plecs**, només recomptes.
 
 ## Límits coneguts
 
-* **Processament síncron.** L'endpoint bloqueja fins que acaba. La lògica ja viu
-  separada d'HTTP, així que moure-la a un worker no requerirà tocar-la. No s'han
-  fet servir `BackgroundTasks` com a falsa cua durable.
+* **Processament en segon pla.** L'anàlisi la demana una empresa i l'executa el
+  worker de la cua de PostgreSQL; la petició HTTP no espera. No s'han fet servir
+  `BackgroundTasks` com a falsa cua durable. Vegeu [`jobs.md`](jobs.md).
 * **Sense OCR.** Un plec escanejat no té text i queda fora de l'anàlisi.
 * **4C encara no resol les estructures v2 riques.** Agregacions (`max`,
   `average`, `cumulative`), llindars en percentatge, sublímits d'assegurança,

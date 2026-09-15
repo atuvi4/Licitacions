@@ -18,7 +18,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, SessionDep
-from app.core.errors import NotFoundError
+from app.core.errors import EndpointMovedError, NotFoundError
 from app.models.enums import AnalysisRunStatus
 from app.models.requirements import (
     AwardCriterion,
@@ -28,8 +28,6 @@ from app.models.requirements import (
 from app.models.tender_documents import TenderDocumentExtraction
 from app.models.tenders import Tender, TenderDocument
 from app.schemas.requirements import (
-    AnalysisRequest,
-    AnalysisResult,
     AwardCriterionRead,
     EvidenceRead,
     ExtractionRunRead,
@@ -38,9 +36,7 @@ from app.schemas.requirements import (
     ReviewRequest,
 )
 from app.services.requirement_analysis import (
-    analyze_tender_requirements,
-    collect_analyzable_documents,
-    compute_input_fingerprint,
+    analysis_input,
     current_run_for,
 )
 
@@ -96,25 +92,15 @@ def _evidence_reads(item, decoration: dict) -> list[EvidenceRead]:
 
 @router.post(
     "/tenders/{tender_id}/analysis/requirements",
-    response_model=AnalysisResult,
-    summary="Analitza els plecs i extreu-ne els requisits",
+    summary="(Retirat) L'analisi ja no s'executa dins de la peticio",
+    status_code=410,
 )
-async def run_analysis(
-    tender_id: uuid.UUID,
-    session: SessionDep,
-    _: CurrentUser,
-    payload: AnalysisRequest | None = None,
-):
-    tender = await _load_tender(session, tender_id)
-    options = payload or AnalysisRequest()
-    outcome = await analyze_tender_requirements(
-        session,
-        tender,
-        force=options.force,
-        document_ids=options.document_ids or None,
-    )
-    return AnalysisResult(
-        reused=outcome.reused, run=ExtractionRunRead.model_validate(outcome.run)
+async def run_analysis(tender_id: uuid.UUID, _: CurrentUser):
+    """Analitzar dura minuts i no pot mantenir una peticio HTTP oberta."""
+    raise EndpointMovedError(
+        "L'analisi s'executa en segon pla. Demana-la a "
+        "/companies/{company_id}/tenders/{tender_id}/job-requests/analyze-requirements.",
+        details={"tender_id": str(tender_id)},
     )
 
 
@@ -160,9 +146,10 @@ async def read_analysis(tender_id: uuid.UUID, session: SessionDep, _: CurrentUse
         read.evidence = _evidence_reads(criterion, decoration)
         criteria_reads.append(read)
 
-    # Obsolet: els documents han canviat des que es va fer l'analisi.
-    documents, _skipped = await collect_analyzable_documents(session, tender_id)
-    is_stale = bool(documents) and compute_input_fingerprint(documents) != run.input_fingerprint
+    # Obsolet: els documents han canviat des que es va fer l'analisi. Amb la
+    # mateixa definicio d'entrada que l'analisi (sostre de pagines inclos).
+    current = await analysis_input(session, tender_id)
+    is_stale = bool(current.documents) and current.fingerprint != run.input_fingerprint
 
     return RequirementAnalysisRead(
         run=ExtractionRunRead.model_validate(run),

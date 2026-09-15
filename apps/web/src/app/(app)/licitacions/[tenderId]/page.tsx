@@ -26,7 +26,7 @@ import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
 import { TenderChangeHistory } from "@/components/TenderChangeHistory";
 import { WorkspaceLauncher } from "@/components/WorkspaceLauncher";
 import { useSession } from "@/components/SessionProvider";
-import { api } from "@/lib/api";
+import { jobErrorMessage, requestProcessing, useJobRequest } from "@/lib/jobs";
 import { formatDate, formatMoney } from "@/lib/format";
 import { useResource } from "@/lib/hooks";
 import type { TenderMatch } from "@/lib/matching";
@@ -79,7 +79,11 @@ export default function TenderDetailPage() {
   );
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [processing, setProcessing] = useState<string | null>(null);
+  // Documents demanats des d'aquesta pàgina i encara en curs. Si la pàgina es
+  // recarrega amb feina en marxa no se sap quins són, però els botons queden
+  // igualment desactivats fins que acaba.
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  const [submittingProcess, setSubmittingProcess] = useState(false);
   const [processError, setProcessError] = useState<string | null>(null);
 
   function toggleSelected(documentId: string) {
@@ -107,25 +111,39 @@ export default function TenderDetailPage() {
     await Promise.all([analysis.reload(), compliance.reload()]);
   }, [analysis.reload, compliance.reload]);
 
-  async function processOne(documentId: string) {
-    setProcessing(documentId);
+  const processJob = useJobRequest(companyId, tenderId, "process_tender_documents", async (done) => {
+    setProcessingIds(new Set());
+    if (done.status === "failed") setProcessError(jobErrorMessage(done.error_code));
+    else if (done.outcome === "partial") {
+      setProcessError("Algun document no s'ha pogut processar: en veuràs l'error a la seva fila.");
+    }
+    await reloadLifecycle();
+  });
+  const processing = submittingProcess || processJob.active;
+
+  // Una sola feina per a tots els documents: el worker els baixa un rere
+  // l'altre, sense ràfegues contra un servei públic.
+  async function processDocuments(documentIds: string[]) {
+    if (!companyId || documentIds.length === 0) return;
+    setSubmittingProcess(true);
     setProcessError(null);
+    setProcessingIds(new Set(documentIds));
     try {
-      await api.post(`/tenders/${tenderId}/documents/${documentId}/process`, {});
-      await reloadLifecycle();
+      processJob.track(await requestProcessing(companyId, tenderId, documentIds));
     } catch (caught) {
-      setProcessError(caught instanceof Error ? caught.message : "No s'ha pogut processar.");
+      setProcessingIds(new Set());
+      setProcessError(caught instanceof Error ? caught.message : "No s'ha pogut demanar el processat.");
     } finally {
-      setProcessing(null);
+      setSubmittingProcess(false);
     }
   }
 
-  // Seqüencial i no en paral·lel: descarregar plecs de PLACSP en ràfega seria
-  // poc educat amb un servei públic, i el backend és síncron.
+  async function processOne(documentId: string) {
+    await processDocuments([documentId]);
+  }
+
   async function processSelected() {
-    for (const documentId of selected) {
-      await processOne(documentId);
-    }
+    await processDocuments([...selected]);
     setSelected(new Set());
   }
 
@@ -383,7 +401,7 @@ export default function TenderDetailPage() {
             description="Processa un plec per descarregar-ne l'original i extreure'n el text per pàgina."
             action={
               selected.size > 0 ? (
-                <Button onClick={() => void processSelected()} disabled={processing !== null}>
+                <Button onClick={() => void processSelected()} disabled={processing}>
                   Processa {selected.size} document{selected.size > 1 ? "s" : ""}
                 </Button>
               ) : null
@@ -397,7 +415,7 @@ export default function TenderDetailPage() {
               {data.documents.map((document) => {
                 const file = document.latest_file;
                 const state = documentState(file);
-                const busy = processing === document.id;
+                const busy = processingIds.has(document.id);
                 return (
                   <li key={document.id} className="flex items-center gap-4 px-5 py-3">
                     <Checkbox
@@ -442,7 +460,7 @@ export default function TenderDetailPage() {
                       <Button
                         variant="secondary"
                         onClick={() => void processOne(document.id)}
-                        disabled={processing !== null}
+                        disabled={processing}
                       >
                         {busy ? <Spinner /> : file ? "Reprocessa" : "Processa"}
                       </Button>
@@ -457,6 +475,7 @@ export default function TenderDetailPage() {
         {/* ---------------------------------------------- Anàlisi del plec --- */}
         <RequirementAnalysisSection
           tenderId={tenderId}
+          companyId={companyId}
           analysis={analysis.data}
           loading={analysis.loading}
           error={analysis.error}

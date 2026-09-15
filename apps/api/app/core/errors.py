@@ -76,6 +76,48 @@ class AnalysisInProgressError(ConflictError):
     code = "analysis_in_progress"
 
 
+class AnalysisInputChangedError(ConflictError):
+    """Els plecs han canviat des que es va demanar l'analisi.
+
+    No s'analitza en silenci una versio diferent de la confirmada: cal una
+    peticio nova.
+    """
+
+    code = "input_changed"
+
+
+class AnalysisInterruptedError(AppError):
+    """L'execucio s'ha aturat abans d'un chunk perque ha perdut el lease.
+
+    No es un error HTTP: el run queda en curs per reconciliar-lo.
+    """
+
+    code = "analysis_interrupted"
+
+
+class AnalysisRunReclaimedError(ConflictError):
+    """El run ja no esta en curs quan s'intentava tancar: algu l'ha reclamat."""
+
+    code = "analysis_run_reclaimed"
+
+
+class OperationBusyError(ConflictError):
+    """No es pot acceptar la peticio ara mateix. No depen de cap altre tenant."""
+
+    code = "operation_busy"
+
+
+class JobRequestNotPendingError(ConflictError):
+    code = "job_request_not_pending"
+
+
+class EndpointMovedError(AppError):
+    """L'operacio llarga ja no s'executa en una peticio HTTP."""
+
+    status_code = status.HTTP_410_GONE
+    code = "endpoint_moved"
+
+
 class ProviderUnavailableError(AppError):
     """El proveidor d'IA no esta configurat o no ha respost."""
 

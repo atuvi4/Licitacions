@@ -4,10 +4,10 @@ Com el feed de licitacions, aquests endpoints NO pengen de
 `/companies/{company_id}`: els plecs son publics i globals. Cal sessio
 iniciada, no pertinenca a cap empresa.
 
-`POST .../process` es sincron i retorna el resultat final. Una descarrega
-fallida NO es un error de la peticio: la peticio ha fet la seva feina i n'ha
-registrat el resultat, aixi que respon 200 amb `download_status: failed` i el
-seu `error_code`, i la interficie ho pot mostrar a la fila del document.
+El processat ja no es fa aqui: el demana
+`/companies/{company_id}/tenders/{tender_id}/job-requests/process-documents` i
+l'executa el worker. Una descarrega fallida no fa fallar la feina: queda escrita
+a la fila del document amb `download_status: failed` i el seu `error_code`.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from fastapi import APIRouter, Path, Query
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, SessionDep
-from app.core.errors import NotFoundError
+from app.core.errors import EndpointMovedError, NotFoundError
 from app.models.tender_documents import (
     TenderDocumentExtraction,
     TenderDocumentFile,
@@ -31,14 +31,11 @@ from app.schemas.tender_documents import (
     TenderDocumentExtractionRead,
     TenderDocumentFileRead,
     TenderDocumentPageRead,
-    TenderDocumentProcessRequest,
-    TenderDocumentProcessResult,
 )
 from app.schemas.tenders import Page
 from app.services.storage import get_storage
 from app.services.tender_document_processing import (
     current_extraction_for,
-    process_tender_document,
 )
 
 router = APIRouter(tags=["plecs"])
@@ -92,26 +89,15 @@ async def _file_read(session: SessionDep, file: TenderDocumentFile) -> TenderDoc
 
 @router.post(
     "/tenders/{tender_id}/documents/{document_id}/process",
-    response_model=TenderDocumentProcessResult,
-    summary="Processa un document de licitacio",
+    summary="(Retirat) El processat ja no s'executa dins de la peticio",
+    status_code=410,
 )
-async def process_document(
-    tender_id: uuid.UUID,
-    document_id: uuid.UUID,
-    session: SessionDep,
-    _: CurrentUser,
-    payload: TenderDocumentProcessRequest | None = None,
-):
-    document = await _load_document(session, tender_id, document_id)
-    options = payload or TenderDocumentProcessRequest()
-    outcome = await process_tender_document(
-        session,
-        document,
-        force_download=options.force_download,
-        force_reextract=options.force_reextract,
-    )
-    return TenderDocumentProcessResult(
-        reused=outcome.reused, file=await _file_read(session, outcome.file)
+async def process_document(tender_id: uuid.UUID, document_id: uuid.UUID, _: CurrentUser):
+    """Baixar i extreure un plec pot durar massa per a una peticio HTTP."""
+    raise EndpointMovedError(
+        "El processat s'executa en segon pla. Demana'l a "
+        "/companies/{company_id}/tenders/{tender_id}/job-requests/process-documents.",
+        details={"tender_id": str(tender_id), "document_id": str(document_id)},
     )
 
 

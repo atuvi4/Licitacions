@@ -129,8 +129,8 @@ de cloud.
 * **DNS rebinding.** Es valida la IP resolta, però `httpx` torna a resoldre en
   connectar. Tancar-ho vol dir connectar-se a la IP validada i sobreescriure la
   capçalera `Host`. Pendent.
-* **Descàrrega síncrona.** El `POST` bloqueja fins que acaba. La lògica ja viu en
-  un servei pur, així que moure-la a un worker no requerirà tocar-la.
+* **Descàrrega en segon pla.** El processat el demana una empresa i l'executa el
+  worker de la cua; la petició HTTP no espera. Vegeu [`jobs.md`](jobs.md).
 * **Formats no-PDF.** DOCX, XLSX i ZIP es guarden però no se'n llegeix el text.
 
 ## Configuració

@@ -76,6 +76,14 @@ class RequirementExtractionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             postgresql_where=sa.text(_ANALYSIS_IN_FLIGHT),
             sqlite_where=sa.text(_ANALYSIS_IN_FLIGHT),
         ),
+        # Un job d'analisi no pot generar mai dos runs.
+        sa.Index(
+            "uq_requirement_extraction_runs_work_job",
+            "work_job_id",
+            unique=True,
+            postgresql_where=sa.text("work_job_id IS NOT NULL"),
+            sqlite_where=sa.text("work_job_id IS NOT NULL"),
+        ),
         # La cache es busca per aquesta combinacio.
         sa.Index(
             "ix_requirement_extraction_runs_cache",
@@ -95,6 +103,13 @@ class RequirementExtractionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: nomes queda obsoleta si un canvi posterior afecta els documents.
     tender_revision_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("tender_revisions.id", ondelete="SET NULL")
+    )
+    #: El job que ha generat aquest run. **Enllaç canonic** entre l'execucio i el
+    #: seu resultat: s'escriu a la mateixa transaccio que crea el run, i la
+    #: reconciliacio d'un job orfe el busca per aqui. NULL per als runs llancats
+    #: fora de la cua (scripts d'operador, benchmark).
+    work_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("work_jobs.id", ondelete="SET NULL")
     )
     status: Mapped[AnalysisRunStatus] = mapped_column(
         enum_column(AnalysisRunStatus, "analysis_run_status"),
