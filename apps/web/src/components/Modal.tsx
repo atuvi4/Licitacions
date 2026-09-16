@@ -1,5 +1,6 @@
 "use client";
 
+import { X } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
 import { Button, cn } from "@/components/ui";
@@ -32,39 +33,33 @@ export function Modal({ open, title, description, onClose, children, footer, siz
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink/45 p-4 sm:p-8 lg:py-12">
-      <div
-        className="absolute inset-0"
-        aria-hidden
-        onClick={onClose}
-      />
+      <div className="absolute inset-0" aria-hidden onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "animate-fade-in relative z-10 w-full rounded-card border border-border bg-surface shadow-dialog",
+          "animate-fade-in relative z-10 w-full rounded-card border border-border-strong bg-canvas shadow-dialog",
           size === "lg" ? "max-w-3xl" : "max-w-xl",
         )}
       >
-        <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-5 sm:px-6">
+        <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4 sm:px-6">
           <div className="min-w-0">
-            <h2 className="text-section font-semibold text-ink">{title}</h2>
+            <h2 className="font-heading text-[20px] leading-tight font-semibold text-ink">{title}</h2>
             {description && <p className="mt-1 text-body text-muted">{description}</p>}
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Tanca"
-            className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-subtle hover:text-ink"
+            className="-mt-1 -mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-subtle hover:text-ink"
           >
-            <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
-              <path d="M5 5l10 10M15 5L5 15" strokeLinecap="round" />
-            </svg>
+            <X size={16} strokeWidth={1.5} aria-hidden />
           </button>
         </header>
-        <div className="max-h-[70vh] overflow-y-auto px-5 py-5 scroll-thin sm:px-6">{children}</div>
+        <div className="scroll-thin max-h-[70vh] overflow-y-auto px-5 py-5 sm:px-6">{children}</div>
         {footer && (
-          <footer className="flex flex-wrap items-center justify-end gap-2 rounded-b-card border-t border-border bg-canvas/70 px-5 py-4 sm:px-6">
+          <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-border bg-subtle px-5 py-4 sm:px-6">
             {footer}
           </footer>
         )}

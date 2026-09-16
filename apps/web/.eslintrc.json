@@ -1,3 +1,26 @@
 {
-  "extends": ["next/core-web-vitals", "next/typescript"]
+  "extends": ["next/core-web-vitals", "next/typescript"],
+  "rules": {
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": ":matches(JSXElement, JSXFragment) > JSXExpressionContainer CallExpression[callee.object.name='JSON'][callee.property.name='stringify']",
+        "message": "Cap JSON.stringify com a text del JSX: formata el valor amb un diccionari o mostra «Valor no comparable automàticament» i deixa el JSON al title (handoff §3.4)."
+      },
+      {
+        "selector": ":matches(JSXElement, JSXFragment) > JSXExpressionContainer > MemberExpression[property.name=/^(error_code|rule_code|code)$/]",
+        "message": "Cap codi intern com a text del JSX: passa'l pel diccionari de lib/labels.ts o al detall tècnic d'ErrorState (handoff §3.4)."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "src/app/**/licitacions/*/page.tsx",
+        "src/components/ComplianceSection.tsx",
+        "src/components/RequirementAnalysis.tsx"
+      ],
+      "rules": { "no-restricted-syntax": "off" }
+    }
+  ]
 }
