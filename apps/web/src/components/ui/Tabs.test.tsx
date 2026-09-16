@@ -16,7 +16,9 @@ const items = [
 ];
 
 describe("Tabs", () => {
-  beforeEach(() => replace.mockClear());
+  beforeEach(() => {
+    replace.mockClear();
+  });
 
   it("marca la pestanya activa i mostra el recompte", () => {
     render(<Tabs items={items} value="resum" onChange={() => undefined} />);

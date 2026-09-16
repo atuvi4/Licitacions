@@ -8,6 +8,7 @@ interface AppSidebarProps {
   footer: ReactNode;
 }
 
+/** Barra lateral: 232 px en accent-900, marca «LI» i «Licitacions», navegació i peu (handoff L4, mockup 01). */
 export function AppSidebar({ mobileOpen, children, footer }: AppSidebarProps) {
   return (
     <aside
@@ -17,11 +18,14 @@ export function AppSidebar({ mobileOpen, children, footer }: AppSidebarProps) {
         mobileOpen ? "translate-x-0" : "-translate-x-full",
       )}
     >
-      <div className="flex h-topbar shrink-0 items-center gap-3 border-b border-white/10 px-6">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-brand text-caption font-bold tracking-wide text-white" aria-hidden="true">
+      <div className="flex h-topbar shrink-0 items-center gap-2.5 px-5">
+        <span
+          aria-hidden
+          className="grid h-7 w-7 shrink-0 place-items-center bg-brand font-heading text-[13px] font-bold text-white"
+        >
           LI
         </span>
-        <p className="text-section font-semibold tracking-tight text-white">Licitacions</p>
+        <p className="font-heading text-[17px] font-semibold text-white">Licitacions</p>
       </div>
       {children}
       <div className="shrink-0">{footer}</div>

@@ -1,12 +1,12 @@
 "use client";
 
-import { AppShell } from "@/components/AppShell";
 import { SessionProvider } from "@/components/SessionProvider";
+import { AppFrame } from "@/components/shell/AppFrame";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <SessionProvider>
-      <AppShell>{children}</AppShell>
+      <AppFrame>{children}</AppFrame>
     </SessionProvider>
   );
 }

@@ -1,3 +1,6 @@
+import { Building2, ChevronDown } from "lucide-react";
+
+import { cn } from "@/components/ui";
 import type { Membership } from "@/lib/types";
 
 interface CompanySwitcherProps {
@@ -6,41 +9,41 @@ interface CompanySwitcherProps {
   selectCompany: (companyId: string) => void;
 }
 
+const BOX = "flex h-9 min-w-0 items-center gap-2 border border-neutral-400 px-2.5 text-[13.5px] font-medium text-ink";
+
+/**
+ * Empresa activa, sempre visible (handoff L4.10). Amb una sola empresa és text
+ * pla dins la mateixa caixa; amb més d'una, un selector que crida
+ * `selectCompany` (i deixa la clau `licitacions.activeCompany` a la sessió).
+ */
 export function CompanySwitcher({ membership, companies, selectCompany }: CompanySwitcherProps) {
-  const companyName = membership.company.trade_name ?? membership.company.legal_name;
-  const initials = companyName
-    .split(" ")
-    .slice(0, 2)
-    .map((word) => word[0])
-    .join("")
-    .toUpperCase();
+  const name = membership.company.legal_name;
+
+  if (companies.length <= 1) {
+    return (
+      <div className={BOX} title={membership.company.trade_name ?? undefined}>
+        <Building2 size={16} strokeWidth={1.5} aria-hidden className="shrink-0 text-muted" />
+        <span className="truncate">{name}</span>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex min-w-0 items-center gap-3">
-      <span className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-control border border-border bg-subtle text-caption font-semibold text-muted sm:flex" aria-hidden="true">
-        {initials || "LI"}
-      </span>
-      <div className="min-w-0">
-        <p className="text-[11px] leading-4 text-faint">Empresa activa</p>
-        {companies.length > 1 ? (
-          <select
-            value={membership.company_id}
-            onChange={(event) => selectCompany(event.target.value)}
-            aria-label="Empresa activa"
-            className="mt-0.5 block h-7 w-full max-w-72 rounded-control border border-border bg-surface px-2 text-[13px] font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
-          >
-            {companies.map((item) => (
-              <option key={item.company_id} value={item.company_id}>
-                {item.company.trade_name ?? item.company.legal_name}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <p className="truncate text-body font-semibold text-ink" title={membership.company.legal_name}>
-            {companyName}
-          </p>
-        )}
-      </div>
-    </div>
+    <label className={cn(BOX, "relative pr-8")}>
+      <Building2 size={16} strokeWidth={1.5} aria-hidden className="shrink-0 text-muted" />
+      <select
+        value={membership.company_id}
+        onChange={(event) => selectCompany(event.target.value)}
+        aria-label="Empresa activa"
+        className="max-w-64 min-w-0 appearance-none truncate bg-transparent font-medium text-ink outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+      >
+        {companies.map((item) => (
+          <option key={item.company_id} value={item.company_id}>
+            {item.company.legal_name}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={14} strokeWidth={1.5} aria-hidden className="pointer-events-none absolute right-2.5 text-muted" />
+    </label>
   );
 }

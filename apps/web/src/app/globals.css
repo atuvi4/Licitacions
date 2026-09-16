@@ -72,8 +72,8 @@
   --text-kicker--letter-spacing: 0.1em;
 
   --spacing: 0.25rem;
-  --spacing-sidebar: 16rem;
-  --spacing-topbar: 4rem;
+  --spacing-sidebar: 14.5rem; /* 232 px (handoff L4) */
+  --spacing-topbar: 3.5rem; /* 56 px */
   --container-workspace: 72rem;
 
   --radius-control: 0px; /* cap cantonada rodona */
