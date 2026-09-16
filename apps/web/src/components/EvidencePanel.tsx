@@ -5,7 +5,6 @@ import { useState } from "react";
 import { Modal } from "@/components/Modal";
 import { useCompanyPath, useSession } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   EmptyState,
   ErrorNotice,
@@ -13,6 +12,7 @@ import {
   Input,
   LoadingRows,
   Select,
+  StatusPill,
   cn,
 } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -181,7 +181,7 @@ export function EvidencePanel({
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <Badge tone="brand">{RELATIONSHIP_LABELS[item.relationship_type]}</Badge>
+                <span className="text-[12px] text-muted">{RELATIONSHIP_LABELS[item.relationship_type]}</span>
                 <Button
                   size="sm"
                   variant="ghost"
@@ -227,7 +227,7 @@ export function EvidencePanel({
         <form id="evidence-upload" onSubmit={submitUpload} className="space-y-4">
           {mutation.error && !duplicate && <ErrorNotice message={mutation.error} />}
           {duplicate && (
-            <div className="rounded-md border border-warning/30 bg-warning-soft px-4 py-3">
+            <div className="border border-warning/30 bg-warning-soft px-4 py-3">
               <p className="text-[13px] text-warning">
                 Aquest fitxer ja és a la biblioteca com a «{duplicate.name}». No cal pujar-lo
                 dues vegades.
@@ -315,7 +315,7 @@ export function EvidencePanel({
               No hi ha documents disponibles a la biblioteca.
             </p>
           ) : (
-            <ul className="max-h-72 divide-y divide-border overflow-y-auto rounded-md border border-border scroll-thin">
+            <ul className="max-h-72 divide-y divide-border overflow-y-auto border border-border scroll-thin">
               {filteredLibrary.map((document) => (
                 <li key={document.id}>
                   <button
@@ -335,7 +335,11 @@ export function EvidencePanel({
                         {formatFileSize(document.file_size)}
                       </span>
                     </span>
-                    {selected === document.id && <Badge tone="brand">Seleccionat</Badge>}
+                    {selected === document.id && (
+                      <StatusPill level="action" size="sm">
+                        Seleccionat
+                      </StatusPill>
+                    )}
                   </button>
                 </li>
               ))}

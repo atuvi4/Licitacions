@@ -5,7 +5,6 @@ import { useState } from "react";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   Card,
   Checkbox,
@@ -16,6 +15,7 @@ import {
   LoadingRows,
   PageHeader,
   Select,
+  StatusPill,
   Table,
   Td,
   Textarea,
@@ -25,6 +25,7 @@ import {
 import { api, cleanPayload } from "@/lib/api";
 import { optionsFrom, SPECIALIZATION_LABELS } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
+import { activeLevel } from "@/lib/labels";
 import type { Service } from "@/lib/types";
 
 const EMPTY = {
@@ -156,9 +157,9 @@ export default function ServicesPage() {
                       : "—"}
                   </Td>
                   <Td>
-                    <Badge tone={service.active ? "success" : "neutral"}>
+                    <StatusPill level={activeLevel(service.active)} size="sm">
                       {service.active ? "Actiu" : "Inactiu"}
-                    </Badge>
+                    </StatusPill>
                   </Td>
                   <Td className="text-right whitespace-nowrap">
                     <Button size="sm" variant="ghost" onClick={() => openEdit(service)}>

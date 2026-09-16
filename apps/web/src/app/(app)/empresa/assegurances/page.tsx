@@ -6,7 +6,6 @@ import { ConfirmDialog, Modal } from "@/components/Modal";
 import { ResourceTable } from "@/components/ResourceTable";
 import { useCompanyPath } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   Card,
   ErrorNotice,
@@ -14,6 +13,7 @@ import {
   Input,
   PageHeader,
   Select,
+  StatusPill,
   Textarea,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
@@ -25,9 +25,9 @@ import {
   optionsFrom,
   SELECTABLE_INSURANCE_LIMIT_KINDS,
   TEMPORAL_STATUS_LABELS,
-  TEMPORAL_TONE,
 } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
+import { TEMPORAL_LEVEL } from "@/lib/labels";
 import type { Insurance, InsuranceLimit, InsuranceLimitKind } from "@/lib/types";
 
 /** Una fila del formulari de limits. Sense `id` = encara no existeix. */
@@ -250,9 +250,9 @@ export default function InsurancesPage() {
                   <span className="whitespace-nowrap tabular-nums text-muted">
                     {formatDate(insurance.starts_at)} – {formatDate(insurance.expires_at)}
                   </span>
-                  <Badge tone={TEMPORAL_TONE[insurance.temporal_status]} className="ml-2">
+                  <StatusPill level={TEMPORAL_LEVEL[insurance.temporal_status]} size="sm" className="ml-2">
                     {TEMPORAL_STATUS_LABELS[insurance.temporal_status]}
-                  </Badge>
+                  </StatusPill>
                 </>
               ),
             },

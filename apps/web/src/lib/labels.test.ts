@@ -6,7 +6,7 @@ import {
   RECOMMENDATION_LABELS,
   RESULT_LABELS,
 } from "@/lib/compliance";
-import { TEMPORAL_STATUS_LABELS } from "@/lib/format";
+import { AVAILABILITY_LABELS, TEMPORAL_STATUS_LABELS, VERIFICATION_STATUS_LABELS } from "@/lib/format";
 import type { JobRequest } from "@/lib/jobs";
 import { MATCH_STATUS_LABELS } from "@/lib/matching";
 import { ANALYSIS_STATE_LABELS, type ExtractionRun, type RequirementAnalysis } from "@/lib/requirements";
@@ -29,8 +29,10 @@ import {
   ANALYSIS_BASIS_LEVEL,
   ANALYSIS_STATE_LEVEL,
   ANALYSIS_STATUS_TEXT,
+  AVAILABILITY_LEVEL,
   BLOCKER_LEVEL,
   CHECKLIST_LEVEL,
+  COMPLETENESS_LEVEL,
   COVERAGE_LEVEL,
   DECISION_LEVEL,
   DOCUMENT_STATE_LEVEL,
@@ -49,7 +51,10 @@ import {
   TEMPORAL_LEVEL,
   TENDER_STATUS_LEVEL,
   VALIDITY_LEVEL,
+  VERIFICATION_LEVEL,
   WORKSPACE_STATUS_LEVEL,
+  activeLevel,
+  cpvPreferenceLevel,
   deadlineLevel,
   jobErrorAction,
   jobLevel,
@@ -299,5 +304,26 @@ describe("rols humanitzats", () => {
     expect(Object.keys(ROLE_LABELS).sort()).toEqual(["admin", "bid_manager", "owner", "technical", "viewer"]);
     expect(roleLabel("bid_manager")).toBe("Responsable de candidatures");
     expect(roleLabel("auditor")).toBe("auditor");
+  });
+});
+
+describe("nivells del perfil (L8)", () => {
+  it("disponibilitat, verificació i completitud tenen nivell per a cada valor", () => {
+    expect(Object.keys(AVAILABILITY_LEVEL).sort()).toEqual(Object.keys(AVAILABILITY_LABELS).sort());
+    expect(Object.keys(VERIFICATION_LEVEL).sort()).toEqual(Object.keys(VERIFICATION_STATUS_LABELS).sort());
+    expect(Object.keys(COMPLETENESS_LEVEL).sort()).toEqual(["complete", "empty", "partial"]);
+    expect(COMPLETENESS_LEVEL.empty).toBe("blocking");
+    expect(COMPLETENESS_LEVEL.partial).toBe("attention");
+    expect(COMPLETENESS_LEVEL.complete).toBe("ready");
+    expect(VERIFICATION_LEVEL.verified).toBe("ready");
+    expect(VERIFICATION_LEVEL.pending_verification).toBe("neutral");
+  });
+
+  it("els booleans actiu/exclòs surten d'una funció del diccionari, no d'un if al JSX", () => {
+    expect(activeLevel(true)).toBe("ready");
+    expect(activeLevel(false)).toBe("neutral");
+    expect(cpvPreferenceLevel({ active: true, excluded: true })).toBe("blocking");
+    expect(cpvPreferenceLevel({ active: true, excluded: false })).toBe("ready");
+    expect(cpvPreferenceLevel({ active: false, excluded: false })).toBe("neutral");
   });
 });

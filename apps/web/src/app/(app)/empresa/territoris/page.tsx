@@ -5,7 +5,6 @@ import { useState } from "react";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   Card,
   Checkbox,
@@ -16,6 +15,7 @@ import {
   LoadingRows,
   PageHeader,
   Select,
+  StatusPill,
   Table,
   Td,
   Textarea,
@@ -25,6 +25,7 @@ import {
 import { api, cleanPayload } from "@/lib/api";
 import { optionsFrom, TERRITORY_TYPE_LABELS } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
+import { activeLevel } from "@/lib/labels";
 import type { Territory } from "@/lib/types";
 
 const EMPTY = {
@@ -140,9 +141,9 @@ export default function TerritoriesPage() {
                   <Td className="font-mono text-[12px] text-muted">{territory.code ?? "—"}</Td>
                   <Td className="tabular-nums">{territory.priority}</Td>
                   <Td>
-                    <Badge tone={territory.willing_to_work ? "success" : "neutral"}>
+                    <StatusPill level={activeLevel(territory.willing_to_work)} size="sm">
                       {territory.willing_to_work ? "Hi treballem" : "Descartat"}
-                    </Badge>
+                    </StatusPill>
                   </Td>
                   <Td className="text-right whitespace-nowrap">
                     <Button size="sm" variant="ghost" onClick={() => openEdit(territory)}>

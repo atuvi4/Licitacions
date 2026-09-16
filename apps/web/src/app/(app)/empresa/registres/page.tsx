@@ -6,7 +6,6 @@ import { ConfirmDialog, Modal } from "@/components/Modal";
 import { ResourceTable } from "@/components/ResourceTable";
 import { useCompanyPath } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   Card,
   ErrorNotice,
@@ -14,6 +13,7 @@ import {
   Input,
   PageHeader,
   Select,
+  StatusPill,
   Textarea,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
@@ -22,9 +22,9 @@ import {
   optionsFrom,
   REGISTRATION_TYPE_LABELS,
   TEMPORAL_STATUS_LABELS,
-  TEMPORAL_TONE,
 } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
+import { TEMPORAL_LEVEL } from "@/lib/labels";
 import type { Registration } from "@/lib/types";
 
 const EMPTY = {
@@ -148,7 +148,7 @@ export default function RegistrationsPage() {
             {
               header: "Tipus",
               cell: (registration) => (
-                <Badge tone="brand">{REGISTRATION_TYPE_LABELS[registration.type]}</Badge>
+                <span className="text-muted">{REGISTRATION_TYPE_LABELS[registration.type]}</span>
               ),
             },
             {
@@ -168,9 +168,9 @@ export default function RegistrationsPage() {
               cell: (registration) => (
                 <>
                   <span className="tabular-nums">{formatDate(registration.expires_at)}</span>
-                  <Badge tone={TEMPORAL_TONE[registration.temporal_status]} className="ml-2">
+                  <StatusPill level={TEMPORAL_LEVEL[registration.temporal_status]} size="sm" className="ml-2">
                     {TEMPORAL_STATUS_LABELS[registration.temporal_status]}
-                  </Badge>
+                  </StatusPill>
                 </>
               ),
             },

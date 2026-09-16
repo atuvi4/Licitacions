@@ -47,7 +47,26 @@ i `_ds/styles.css`, la font visual.
   no implementats. La completitud del perfil i les caducitats han sortit del
   dashboard i encara no tenen pantalla: **es recuperen a L8** al hub del perfil.
 
-Verificació en tancar L5: `npm test` (105 proves), `npm run typecheck`,
+- **L8 · El nostre perfil.** `/empresa` és el hub del perfil: les **11 àrees**
+  de `completeness.sections[]` en una `DataTable` agrupada pel seu `status`
+  real («Sense dada» amb tint de bloqueig, «Amb dada incompleta», «Al dia»
+  plegat), amb què hi ha (`detail` de l'API), què en depèn (text genèric per
+  clau) i l'acció cap a cada subpàgina (`empresa/areas.ts`). El formulari de
+  dades generals viu a **`/empresa/dades`** sense cap canvi de lògica
+  (mateixes dades, mutacions, `cleanPayload` i `fieldErrors`).
+  `completeness.score` només surt al peu de la taula i al recompte de la barra
+  lateral; `expiry_alerts` es recuperen al hub («Caducitats que t'afecten»,
+  StatusPill de `TEMPORAL_LEVEL`, data real i «en N dies» / «fa N dies»).
+  Perfil a zero → targeta de benvinguda amb els tres primers passos (CPV,
+  territoris, franja d'import a solvència). **C-5** continua documentat i no
+  implementat: cap recompte de licitacions a «Què en depèn» ni cap «Què
+  desbloquejaries avui». `PermissionNote` només apareix davant d'un 403 real
+  de l'API (botó visible i desactivat), sense inventar permisos al client:
+  l'API només comprova la pertinença, i amb el seed cap usuari rep un 403.
+  `Badge` → `StatusPill` (nivells de `lib/labels.ts`) a totes les subpàgines
+  del perfil, `documents`, `experiencia` i `EvidencePanel`.
+
+Verificació en tancar L8: `npm test` (128 proves), `npm run typecheck`,
 `npm run lint`, `npm run build` i `git diff --check` en verd.
 
 ## Accessibilitat
@@ -77,9 +96,8 @@ etiqueta, preexistent, que es resol a **L6**.
 
 | Què | Lot |
 | --- | --- |
-| Completitud per àrees i `expiry_alerts` del dashboard antic (commit `86fd38a`) al hub `/empresa`; formulari actual a `/empresa/dades` | L8 |
 | Etiqueta del `select` d'ordenació a Oportunitats; llegir `?q=` de la cerca global | L6 |
 | Retirar les tres exempcions de la regla de lint (`licitacions/[tenderId]/page.tsx`, `ComplianceSection.tsx`, `RequirementAnalysis.tsx`) | L9, L10 i L11 |
 | Barril amb `EmptyState` tolerant → estricte | L15 |
-| Esborrar `*_TONES`, `deadlineTone`, `Badge`, `AppShell.tsx` i `/ui-preview` | L15 |
+| Esborrar `*_TONES`, `deadlineTone`, `Badge` (ja sense usos a les pàgines del perfil), `AppShell.tsx` i `/ui-preview` | L15 |
 | Captures `after/` i comparació amb `baseline/` | L15 |

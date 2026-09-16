@@ -6,7 +6,6 @@ import { useMemo, useState } from "react";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   Card,
   EmptyState,
@@ -222,7 +221,9 @@ export default function ExperiencePage() {
                         <span className="text-[12px] text-faint">Sense serveis</span>
                       ) : (
                         project.services.map((service) => (
-                          <Badge key={service.id}>{service.name}</Badge>
+                          <span key={service.id} className="bg-subtle px-1.5 py-0.5 text-[12px] text-muted">
+                            {service.name}
+                          </span>
                         ))
                       )}
                     </div>
@@ -325,7 +326,7 @@ export default function ExperiencePage() {
           </div>
 
           <Field label="Serveis executats" hint="Marca els serveis que van intervenir en el projecte.">
-            <div className="flex flex-wrap gap-2 rounded-md border border-border p-3">
+            <div className="flex flex-wrap gap-2 border border-border p-3">
               {(services.data ?? []).length === 0 ? (
                 <span className="text-[12px] text-faint">
                   Encara no hi ha serveis definits. Crea&apos;ls a Empresa → Serveis.
@@ -338,8 +339,8 @@ export default function ExperiencePage() {
                     onClick={() => toggleService(service.id)}
                     className={
                       selectedServices.includes(service.id)
-                        ? "rounded-full border border-brand bg-brand-soft px-3 py-1 text-[12px] font-medium text-brand-strong"
-                        : "rounded-full border border-border-strong px-3 py-1 text-[12px] text-muted hover:bg-subtle"
+                        ? "border border-brand bg-brand-soft px-3 py-1 text-[12px] font-medium text-brand-strong"
+                        : "border border-border-strong px-3 py-1 text-[12px] text-muted hover:bg-subtle"
                     }
                   >
                     {service.name}

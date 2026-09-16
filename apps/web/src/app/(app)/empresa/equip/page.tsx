@@ -6,7 +6,6 @@ import { useState } from "react";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   Card,
   EmptyState,
@@ -17,6 +16,7 @@ import {
   LoadingRows,
   PageHeader,
   Select,
+  StatusPill,
   Table,
   Td,
   Textarea,
@@ -26,6 +26,7 @@ import {
 import { api, cleanPayload } from "@/lib/api";
 import { AVAILABILITY_LABELS, optionsFrom } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
+import { AVAILABILITY_LEVEL } from "@/lib/labels";
 import type { Person } from "@/lib/types";
 
 const EMPTY = {
@@ -37,13 +38,6 @@ const EMPTY = {
   availability_status: "unknown",
   professional_profile: "",
   notes: "",
-};
-
-const AVAILABILITY_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
-  available: "success",
-  partially_available: "warning",
-  unavailable: "danger",
-  unknown: "neutral",
 };
 
 export default function TeamPage() {
@@ -165,9 +159,9 @@ export default function TeamPage() {
                     {person.years_experience !== null ? `${person.years_experience} anys` : "—"}
                   </Td>
                   <Td>
-                    <Badge tone={AVAILABILITY_TONE[person.availability_status]}>
+                    <StatusPill level={AVAILABILITY_LEVEL[person.availability_status]} size="sm">
                       {AVAILABILITY_LABELS[person.availability_status]}
-                    </Badge>
+                    </StatusPill>
                   </Td>
                   <Td className="text-right whitespace-nowrap">
                     <LinkButton href={`/empresa/equip/${person.id}`}>Titulacions</LinkButton>

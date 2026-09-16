@@ -291,8 +291,8 @@ export default function ProjectDetailPage() {
                     onClick={() => void toggleService(service.id)}
                     className={
                       linkedServiceIds.has(service.id)
-                        ? "rounded-full border border-brand bg-brand-soft px-3 py-1 text-[12px] font-medium text-brand-strong"
-                        : "rounded-full border border-border-strong px-3 py-1 text-[12px] text-muted hover:bg-subtle"
+                        ? "border border-brand bg-brand-soft px-3 py-1 text-[12px] font-medium text-brand-strong"
+                        : "border border-border-strong px-3 py-1 text-[12px] text-muted hover:bg-subtle"
                     }
                   >
                     {service.name}
@@ -318,7 +318,7 @@ export default function ProjectDetailPage() {
                 {data.cpvs.map((cpv) => (
                   <span
                     key={cpv.cpv_code}
-                    className="inline-flex items-center gap-2 rounded-full border border-border-strong bg-subtle px-3 py-1 text-[12px]"
+                    className="inline-flex items-center gap-2 border border-border-strong bg-subtle px-3 py-1 text-[12px]"
                   >
                     <span className="font-mono font-medium text-ink">{cpv.cpv_code}</span>
                     <span className="text-muted">{cpv.description}</span>

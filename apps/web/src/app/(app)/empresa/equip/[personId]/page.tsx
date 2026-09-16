@@ -8,7 +8,6 @@ import { ConfirmDialog, Modal } from "@/components/Modal";
 import { ResourceTable } from "@/components/ResourceTable";
 import { useCompanyPath } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   Card,
   CardHeader,
@@ -18,6 +17,7 @@ import {
   PageHeader,
   Select,
   Skeleton,
+  StatusPill,
   Textarea,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
@@ -27,9 +27,9 @@ import {
   optionsFrom,
   QUALIFICATION_TYPE_LABELS,
   TEMPORAL_STATUS_LABELS,
-  TEMPORAL_TONE,
 } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
+import { AVAILABILITY_LEVEL, TEMPORAL_LEVEL } from "@/lib/labels";
 import type { Person, Qualification } from "@/lib/types";
 
 const EMPTY = {
@@ -152,7 +152,9 @@ export default function PersonDetailPage() {
             <div>
               <p className="text-[12px] text-muted">Disponibilitat</p>
               <p className="mt-0.5">
-                <Badge>{AVAILABILITY_LABELS[data.availability_status]}</Badge>
+                <StatusPill level={AVAILABILITY_LEVEL[data.availability_status]} size="sm">
+                  {AVAILABILITY_LABELS[data.availability_status]}
+                </StatusPill>
               </p>
             </div>
             <div>
@@ -218,7 +220,7 @@ export default function PersonDetailPage() {
               {
                 header: "Tipus",
                 cell: (qualification) => (
-                  <Badge tone="brand">{QUALIFICATION_TYPE_LABELS[qualification.type]}</Badge>
+                  <span className="text-muted">{QUALIFICATION_TYPE_LABELS[qualification.type]}</span>
                 ),
               },
               {
@@ -237,9 +239,9 @@ export default function PersonDetailPage() {
                 cell: (qualification) => (
                   <>
                     <span className="tabular-nums">{formatDate(qualification.expires_at)}</span>
-                    <Badge tone={TEMPORAL_TONE[qualification.temporal_status]} className="ml-2">
+                    <StatusPill level={TEMPORAL_LEVEL[qualification.temporal_status]} size="sm" className="ml-2">
                       {TEMPORAL_STATUS_LABELS[qualification.temporal_status]}
-                    </Badge>
+                    </StatusPill>
                   </>
                 ),
               },

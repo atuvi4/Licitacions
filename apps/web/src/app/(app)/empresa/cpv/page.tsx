@@ -5,7 +5,6 @@ import { useState } from "react";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   Card,
   Checkbox,
@@ -15,6 +14,7 @@ import {
   Input,
   LoadingRows,
   PageHeader,
+  StatusPill,
   Table,
   Td,
   Textarea,
@@ -23,6 +23,7 @@ import {
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
 import { useMutation, useResource } from "@/lib/hooks";
+import { cpvPreferenceLevel } from "@/lib/labels";
 import type { CPVPreference } from "@/lib/types";
 
 const EMPTY = {
@@ -167,13 +168,9 @@ export default function CpvPage() {
                   </Td>
                   <Td className="tabular-nums">{cpv.priority}</Td>
                   <Td>
-                    {cpv.excluded ? (
-                      <Badge tone="danger">Exclòs</Badge>
-                    ) : cpv.active ? (
-                      <Badge tone="success">Actiu</Badge>
-                    ) : (
-                      <Badge>Inactiu</Badge>
-                    )}
+                    <StatusPill level={cpvPreferenceLevel(cpv)} size="sm">
+                      {cpv.excluded ? "Exclòs" : cpv.active ? "Actiu" : "Inactiu"}
+                    </StatusPill>
                   </Td>
                   <Td className="text-right whitespace-nowrap">
                     <Button size="sm" variant="ghost" onClick={() => openEdit(cpv)}>

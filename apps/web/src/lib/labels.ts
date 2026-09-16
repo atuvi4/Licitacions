@@ -26,7 +26,12 @@ import { jobErrorMessage, type JobRequest, type JobRequestStatus } from "@/lib/j
 import type { MatchStatus } from "@/lib/matching";
 import type { AnalysisState, RequirementAnalysis } from "@/lib/requirements";
 import type { DocumentState, TenderStatus } from "@/lib/tenders";
-import type { TemporalStatus } from "@/lib/types";
+import type {
+  AvailabilityStatus,
+  CompletenessSection,
+  TemporalStatus,
+  VerificationStatus,
+} from "@/lib/types";
 import type {
   ChecklistItemStatus,
   DocumentValidity,
@@ -283,6 +288,38 @@ export const TEMPORAL_LEVEL: Record<TemporalStatus, Level> = {
   expired: "blocking",
   unknown: "neutral",
 };
+
+export const AVAILABILITY_LEVEL: Record<AvailabilityStatus, Level> = {
+  available: "ready",
+  partially_available: "attention",
+  unavailable: "blocking",
+  unknown: "neutral",
+};
+
+export const VERIFICATION_LEVEL: Record<VerificationStatus, Level> = {
+  verified: "ready",
+  pending_verification: "neutral",
+};
+
+export type CompletenessStatus = CompletenessSection["status"];
+
+/** Estat de cada àrea del perfil (`completeness.sections[].status`). */
+export const COMPLETENESS_LEVEL: Record<CompletenessStatus, Level> = {
+  complete: "ready",
+  partial: "attention",
+  empty: "blocking",
+};
+
+/** Un booleà «actiu» no és un `if` al JSX: el nivell surt d'aquí. */
+export function activeLevel(active: boolean): Level {
+  return active ? "ready" : "neutral";
+}
+
+/** Preferència CPV: exclosa mana sobre activa. */
+export function cpvPreferenceLevel(preference: { active: boolean; excluded: boolean }): Level {
+  if (preference.excluded) return "blocking";
+  return activeLevel(preference.active);
+}
 
 export const CHECKLIST_LEVEL: Record<ChecklistItemStatus, Level> = {
   pending: "neutral",

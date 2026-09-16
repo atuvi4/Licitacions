@@ -6,7 +6,6 @@ import { EvidencePanel } from "@/components/EvidencePanel";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   Card,
   EmptyState,
@@ -16,6 +15,7 @@ import {
   LoadingRows,
   PageHeader,
   Select,
+  StatusPill,
   Table,
   Td,
   Textarea,
@@ -26,10 +26,10 @@ import { api, cleanPayload } from "@/lib/api";
 import {
   formatDate,
   TEMPORAL_STATUS_LABELS,
-  TEMPORAL_TONE,
   VERIFICATION_STATUS_LABELS,
 } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
+import { TEMPORAL_LEVEL, VERIFICATION_LEVEL } from "@/lib/labels";
 import type { Certification } from "@/lib/types";
 
 const EMPTY = {
@@ -157,18 +157,14 @@ export default function CertificationsPage() {
                     <Td className="text-muted">{certification.issuer ?? "—"}</Td>
                     <Td className="tabular-nums">{formatDate(certification.expires_at)}</Td>
                     <Td>
-                      <Badge tone={TEMPORAL_TONE[certification.temporal_status]}>
+                      <StatusPill level={TEMPORAL_LEVEL[certification.temporal_status]} size="sm">
                         {TEMPORAL_STATUS_LABELS[certification.temporal_status]}
-                      </Badge>
+                      </StatusPill>
                     </Td>
                     <Td>
-                      <Badge
-                        tone={
-                          certification.verification_status === "verified" ? "success" : "neutral"
-                        }
-                      >
+                      <StatusPill level={VERIFICATION_LEVEL[certification.verification_status]} size="sm">
                         {VERIFICATION_STATUS_LABELS[certification.verification_status]}
-                      </Badge>
+                      </StatusPill>
                     </Td>
                     <Td className="text-right whitespace-nowrap">
                       <Button

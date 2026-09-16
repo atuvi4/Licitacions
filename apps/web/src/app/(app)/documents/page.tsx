@@ -5,7 +5,6 @@ import { useState } from "react";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useCompanyPath, useSession } from "@/components/SessionProvider";
 import {
-  Badge,
   Button,
   Card,
   EmptyState,
@@ -15,6 +14,7 @@ import {
   LoadingRows,
   PageHeader,
   Select,
+  StatusPill,
   Table,
   Td,
   Textarea,
@@ -31,9 +31,9 @@ import {
   optionsFrom,
   RELATIONSHIP_LABELS,
   TEMPORAL_STATUS_LABELS,
-  TEMPORAL_TONE,
 } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
+import { TEMPORAL_LEVEL } from "@/lib/labels";
 import { fileAccept, uploadHint, validateFile } from "@/lib/uploads";
 import type { DocumentItem, LinkedEntityType } from "@/lib/types";
 
@@ -249,12 +249,13 @@ export default function DocumentsPage() {
                     {document.expires_at ? (
                       <>
                         <span className="tabular-nums">{formatDate(document.expires_at)}</span>
-                        <Badge
-                          tone={TEMPORAL_TONE[document.temporal_status]}
+                        <StatusPill
+                          level={TEMPORAL_LEVEL[document.temporal_status]}
+                          size="sm"
                           className="ml-2"
                         >
                           {TEMPORAL_STATUS_LABELS[document.temporal_status]}
-                        </Badge>
+                        </StatusPill>
                       </>
                     ) : (
                       <span className="text-faint">—</span>
@@ -272,7 +273,7 @@ export default function DocumentsPage() {
                             title="Elimina aquest vincle"
                             onClick={() => void removeLink(document, link.id)}
                             className={cn(
-                              "rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand-strong",
+                              "bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand-strong",
                               "hover:bg-danger-soft hover:text-danger",
                             )}
                           >
