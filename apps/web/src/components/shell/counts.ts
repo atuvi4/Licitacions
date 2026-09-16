@@ -15,12 +15,15 @@ import type { WorkspaceStatus, WorkspaceSummary } from "@/lib/workspace";
 
 const CLOSED: ReadonlySet<WorkspaceStatus> = new Set<WorkspaceStatus>(["submitted", "withdrawn", "no_go_approved"]);
 
-/** Decisions pendents (regla d'«Avui», handoff L5.6): sense decisió o ajornades, i encara obertes. */
+/** Decisió pendent (regla d'«Avui», handoff L5.6): sense decisió o ajornada, i encara oberta. */
+export function isPendingDecision(workspace: WorkspaceSummary): boolean {
+  return (
+    (workspace.human_decision === null || workspace.human_decision === "defer") && !CLOSED.has(workspace.status)
+  );
+}
+
 export function countPendingDecisions(workspaces: WorkspaceSummary[]): number {
-  return workspaces.filter(
-    (workspace) =>
-      (workspace.human_decision === null || workspace.human_decision === "defer") && !CLOSED.has(workspace.status),
-  ).length;
+  return workspaces.filter(isPendingDecision).length;
 }
 
 /** Peu de la barra lateral: què li falta al perfil, si hi falta res. */

@@ -28,7 +28,8 @@ describe("navegació del shell", () => {
   it("els altres destins són actius al seu prefix i prou", () => {
     expect(isNavigationActive("/licitacions/abc", "/licitacions")).toBe(true);
     expect(isNavigationActive("/candidatures", "/licitacions")).toBe(false);
-    expect(isNavigationActive("/dashboard", "/dashboard")).toBe(true);
+    expect(isNavigationActive("/avui", "/avui")).toBe(true);
+    expect(NAVIGATION_GROUPS[0].items[0].href).toBe("/avui");
   });
 
   it("la subnavegació marca només la seva secció", () => {

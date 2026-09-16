@@ -21,7 +21,7 @@ function LoginForm() {
     try {
       await api.post("/auth/login", { email, password });
       const next = searchParams.get("next");
-      router.replace(next && next.startsWith("/") ? next : "/dashboard");
+      router.replace(next && next.startsWith("/") ? next : "/avui");
       router.refresh();
     } catch (caught) {
       setError(

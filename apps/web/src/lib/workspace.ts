@@ -596,9 +596,9 @@ export const DECISION_REASON_LABELS: Record<string, string> = {
 /** Text del comptador de dies. Mai s'amaga un termini passat. */
 export function deadlineLabel(days: number | null): string | null {
   if (days === null) return null;
-  if (days < 0) return `Termini tancat fa ${Math.abs(days)} dia${Math.abs(days) === 1 ? "" : "s"}`;
+  if (days < 0) return `Termini tancat fa ${Math.abs(days)} ${Math.abs(days) === 1 ? "dia" : "dies"}`;
   if (days === 0) return "Venç avui";
-  return `${days} dia${days === 1 ? "" : "s"} restants`;
+  return `${days} ${days === 1 ? "dia" : "dies"} restants`;
 }
 
 export function deadlineTone(days: number | null): Tone {

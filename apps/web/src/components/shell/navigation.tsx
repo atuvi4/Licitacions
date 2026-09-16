@@ -24,9 +24,7 @@ export const NAVIGATION_GROUPS: NavGroup[] = [
   {
     label: "Treball",
     items: [
-      // L5 crea `/avui`; fins llavors el destí és el dashboard actual perquè
-      // cap flux es perdi (contracte 0.2 del handoff).
-      { href: "/dashboard", label: "Avui", icon: CalendarDays, countKey: "avui" },
+      { href: "/avui", label: "Avui", icon: CalendarDays, countKey: "avui" },
       { href: "/licitacions", label: "Oportunitats", icon: Search, countKey: "oportunitats" },
       { href: "/candidatures", label: "Candidatures", icon: FileCheck, countKey: "candidatures" },
     ],

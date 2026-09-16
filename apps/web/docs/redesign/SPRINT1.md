@@ -33,8 +33,21 @@ i `_ds/styles.css`, la font visual.
   per empresa, el centre de feina enllaça a Candidatures. **«Avui» continua
   temporalment a `/dashboard` fins que L5 creï `/avui`** (middleware i
   `app/page.tsx` es canvien a L5, en el mateix lot).
+- **L5 · Avui.** `/avui` és la pantalla d'entrada: «Avui» del shell hi apunta,
+  `/dashboard` hi redirigeix, i el login, `/` i el middleware hi porten (cap
+  moment on el shell digui «Avui» i navegui al dashboard antic). Tres blocs
+  compostos només amb dades existents: **Decisions pendents** (`/workspaces`
+  amb la regla de decisió pendent de `shell/counts.ts`), **Bloquejos i avisos**
+  (`eligibility === "no_go"`, `analysis_outdated`, `deadline_passed`; un termini
+  nul no és un bloqueig) i **Noves per revisar** (`/matches?match_status=
+  candidate&sort=deadline&only_open=true&limit=5`). Cap recompte es mostra com a
+  zero mentre carrega ni quan una crida falla. La recomanació automàtica es
+  mostra sempre com a tal, mai com a decisió humana. **C-3** (no hi ha llista
+  de bloquejadors amb nom) i **C-4** («Només les meves») continuen documentats i
+  no implementats. La completitud del perfil i les caducitats han sortit del
+  dashboard i encara no tenen pantalla: **es recuperen a L8** al hub del perfil.
 
-Verificació en tancar L4: `npm test` (94 proves), `npm run typecheck`,
+Verificació en tancar L5: `npm test` (105 proves), `npm run typecheck`,
 `npm run lint`, `npm run build` i `git diff --check` en verd.
 
 ## Accessibilitat
@@ -64,7 +77,7 @@ etiqueta, preexistent, que es resol a **L6**.
 
 | Què | Lot |
 | --- | --- |
-| Crear `/avui`, apuntar-hi «Avui», `middleware.ts`, `app/page.tsx` i la redirecció de `/dashboard` | L5 |
+| Completitud per àrees i `expiry_alerts` del dashboard antic (commit `86fd38a`) al hub `/empresa`; formulari actual a `/empresa/dades` | L8 |
 | Etiqueta del `select` d'ordenació a Oportunitats; llegir `?q=` de la cerca global | L6 |
 | Retirar les tres exempcions de la regla de lint (`licitacions/[tenderId]/page.tsx`, `ComplianceSection.tsx`, `RequirementAnalysis.tsx`) | L9, L10 i L11 |
 | Barril amb `EmptyState` tolerant → estricte | L15 |
