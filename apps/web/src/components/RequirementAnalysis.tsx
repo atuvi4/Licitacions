@@ -1,87 +1,90 @@
 "use client";
 
 /**
- * Secció "Anàlisi del plec" de la fitxa de licitació.
+ * Secció «Anàlisi del plec» de la fitxa de licitació (handoff L11).
  *
  * Dues regles de presentació que no són estètiques:
  *
  * 1. Cap requisit es mostra sense la seva evidència i el seu enllaç a la font.
  *    Si algun dia la cita desapareix de la targeta, l'usuari deixa de poder
- *    distingir el que diu el plec del que ha dedaït un model.
- * 2. "Veure font" apunta a la revisió d'extracció que va originar la cita, no a
- *    la vigent. Si el document s'ha reextret, la cita continua sent la d'abans:
- *    és exactament el que la fa verificable.
+ *    distingir el que diu el plec del que ha deduït un model.
+ * 2. «Obre la pàgina» apunta a la revisió d'extracció que va originar la cita,
+ *    no a la vigent. Si el document s'ha reextret, la cita continua sent la
+ *    d'abans: és exactament el que la fa verificable.
+ *
+ * I una de flux: cap anàlisi es demana sense haver-ne vist el volum. Sempre
+ * preview → confirmació humana; el botó «Analitza» només demana el preview.
  */
 
-import Link from "next/link";
 import { useState } from "react";
 
-import { Badge, Button, Card, CardHeader, EmptyState, ErrorNotice, Spinner } from "@/components/ui";
-import {
-  ANALYSIS_BASIS_HINTS,
-  ANALYSIS_BASIS_LABELS,
-  ANALYSIS_BASIS_TONES,
-  isTrustworthyAnalysis,
-} from "@/lib/compliance";
-import { api } from "@/lib/api";
 import { AnalysisQuotePanel } from "@/components/AnalysisQuotePanel";
-import { ApiError } from "@/lib/api";
+import { Attribution, Banner, Button, Card, CardHeader, ErrorNotice, ErrorState, EvidenceRef, LinkButton, StatusPill } from "@/components/ui";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ApiError, api } from "@/lib/api";
+import { useResource } from "@/lib/hooks";
 import {
   type AnalysisLimits,
   type AnalysisQuote,
+  type JobRequest,
   confirmAnalysis,
   jobErrorMessage,
   previewAnalysis,
   useJobRequest,
 } from "@/lib/jobs";
-import { useResource } from "@/lib/hooks";
 import {
+  ANALYSIS_BASIS_HINTS,
+  ANALYSIS_BASIS_LABELS,
+  ANALYSIS_BASIS_LEVEL,
   ANALYSIS_DISCLAIMER,
-  ANALYSIS_STATE_LABELS,
-  ANALYSIS_STATE_TONES,
+  ANALYSIS_STATE_LEVEL,
+  ANALYSIS_STATUS_TEXT,
   CATEGORY_LABELS,
   CATEGORY_ORDER,
-  CONFIDENCE_LABELS,
-  CONFIDENCE_TONES,
   EVALUATION_LABELS,
   OBLIGATION_LABELS,
-  OBLIGATION_TONES,
   REVIEW_LABELS,
+  REVIEW_LEVEL,
   SKIP_REASON_LABELS,
   analysisState,
-  type AwardCriterion,
-  type Requirement,
-  type RequirementAnalysis,
-  type RequirementEvidence,
-  type ReviewStatus,
-} from "@/lib/requirements";
+  isTrustworthyAnalysis,
+  jobErrorAction,
+} from "@/lib/labels";
+import type { AwardCriterion, Requirement, RequirementAnalysis, RequirementEvidence, ReviewStatus } from "@/lib/requirements";
 
-function EvidenceLink({
-  tenderId,
-  evidence,
-}: {
-  tenderId: string;
-  evidence: RequirementEvidence;
-}) {
-  const label = evidence.document_name ?? "Document";
-  const href = evidence.tender_document_id
+const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
+const LINK = "text-[13px] text-brand-strong hover:text-accent-800 disabled:cursor-default disabled:text-muted";
+
+function evidenceHref(tenderId: string, evidence: RequirementEvidence): string | null {
+  return evidence.tender_document_id
     ? `/licitacions/${tenderId}/documents/${evidence.tender_document_id}?page=${evidence.page_number}&extraction=${evidence.extraction_id}`
     : null;
+}
 
+/** La cita: línia compacta sempre visible; el text literal, plegat. */
+function Evidence({ tenderId, evidence }: { tenderId: string; evidence: RequirementEvidence[] }) {
+  if (evidence.length === 0) {
+    return <EvidenceRef documentName={null} pageNumber={null} href={null} />;
+  }
   return (
-    <div className="mt-2 rounded-md border border-border bg-canvas px-3 py-2">
-      <p className="text-[12px] text-muted">
-        {label} · p. {evidence.page_number}
-        {evidence.extraction_revision ? ` · revisió ${evidence.extraction_revision}` : ""}
-      </p>
-      <blockquote className="mt-1 border-l-2 border-border-strong pl-2 text-[12px] italic text-ink">
-        {evidence.quote}
-      </blockquote>
-      {href && (
-        <Link href={href} className="mt-1 inline-block text-[12px] text-brand hover:underline">
-          Veure font ↗
-        </Link>
-      )}
+    <div className="space-y-1.5">
+      {evidence.map((item) => (
+        <details key={item.id} className="group">
+          <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+            <EvidenceRef
+              compact
+              documentName={item.document_name}
+              pageNumber={item.page_number}
+              extractionRevision={item.extraction_revision}
+              href={evidenceHref(tenderId, item)}
+            />
+            <span className="ml-2 text-caption text-muted group-open:hidden">· mostra la cita</span>
+          </summary>
+          <blockquote className="mt-1.5 border-l-2 border-accent-500 pl-2.5 text-[13px] leading-relaxed text-ink italic">
+            «{item.quote}»
+          </blockquote>
+        </details>
+      ))}
     </div>
   );
 }
@@ -97,15 +100,17 @@ function ReviewControls({
 }) {
   const options: ReviewStatus[] = ["verified", "needs_review", "rejected"];
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-[12px] text-muted">{REVIEW_LABELS[current]}</span>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <StatusPill level={REVIEW_LEVEL[current]} size="sm">
+        {REVIEW_LABELS[current]}
+      </StatusPill>
       {options.map((status) => (
         <button
           key={status}
           type="button"
           disabled={busy || current === status}
           onClick={() => onReview(status)}
-          className="text-[12px] text-brand hover:underline disabled:cursor-default disabled:text-muted disabled:no-underline"
+          className={`${LINK} min-h-11 md:min-h-0`}
         >
           {REVIEW_LABELS[status]}
         </button>
@@ -114,7 +119,7 @@ function ReviewControls({
   );
 }
 
-function RequirementCard({
+function RequirementRow({
   tenderId,
   requirement,
   onReview,
@@ -126,40 +131,36 @@ function RequirementCard({
   busy: boolean;
 }) {
   return (
-    <li className="px-5 py-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <li className="px-4 py-3.5 sm:px-5">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={OBLIGATION_TONES[requirement.obligation]}>
-              {OBLIGATION_LABELS[requirement.obligation]}
-            </Badge>
+          <p className="text-[14px] font-medium text-ink">{requirement.title}</p>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted">
+            <span className={KICKER}>{OBLIGATION_LABELS[requirement.obligation]}</span>
+            <Attribution kind="ai" confidence={requirement.confidence} />
             {requirement.has_conflict && (
-              <Badge tone="warning">Possible conflicte entre documents</Badge>
+              <StatusPill level="attention" size="sm">
+                Possible conflicte entre documents
+              </StatusPill>
             )}
+          </p>
+          {requirement.description && <p className="mt-1 text-[13px] text-muted">{requirement.description}</p>}
+          <div className="mt-2">
+            <Evidence tenderId={tenderId} evidence={requirement.evidence} />
           </div>
-          <p className="mt-1.5 text-[13px] font-medium text-ink">{requirement.title}</p>
-          {requirement.description && (
-            <p className="mt-0.5 text-[12px] text-muted">{requirement.description}</p>
-          )}
         </div>
-        <Badge tone={CONFIDENCE_TONES[requirement.confidence]}>
-          Confiança {CONFIDENCE_LABELS[requirement.confidence]}
-        </Badge>
-      </div>
-
-      {requirement.evidence.map((evidence) => (
-        <EvidenceLink key={evidence.id} tenderId={tenderId} evidence={evidence} />
-      ))}
-
-      <div className="mt-2">
-        <ReviewControls
-          current={requirement.review_status}
-          busy={busy}
-          onReview={(status) => onReview(requirement.id, status)}
-        />
+        <div className="shrink-0 md:max-w-[40%]">
+          <ReviewControls current={requirement.review_status} busy={busy} onReview={(status) => onReview(requirement.id, status)} />
+        </div>
       </div>
     </li>
   );
+}
+
+type Filter = "all" | "mandatory" | "review" | "scored";
+
+function needsReview(requirement: Requirement): boolean {
+  return requirement.review_status === "needs_review" || requirement.has_conflict || requirement.confidence === "low";
 }
 
 export function RequirementAnalysisSection({
@@ -179,13 +180,13 @@ export function RequirementAnalysisSection({
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [jobFailure, setJobFailure] = useState<JobRequest | null>(null);
   const [reviewing, setReviewing] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>("all");
   // Cap anàlisi es demana sense haver-ne vist el volum: primer el preview.
   const [quote, setQuote] = useState<AnalysisQuote | null>(null);
   const [quoteNotice, setQuoteNotice] = useState<string | null>(null);
-  const limits = useResource<AnalysisLimits>(
-    companyId ? `/companies/${companyId}/analysis-limits` : null,
-  );
+  const limits = useResource<AnalysisLimits>(companyId ? `/companies/${companyId}/analysis-limits` : null);
   const canConfirm = limits.data?.can_confirm ?? false;
 
   const state = analysisState(analysis);
@@ -194,7 +195,10 @@ export function RequirementAnalysisSection({
   // L'anàlisi s'executa en segon pla: aquí només es demana i se'n segueix
   // l'estat. Quan acaba, es recarrega el que se n'ha obtingut.
   const job = useJobRequest(companyId, tenderId, "analyze_tender_requirements", async (done) => {
-    if (done.status === "failed") setActionError(jobErrorMessage(done.error_code));
+    if (done.status === "failed") {
+      setJobFailure(done);
+      setActionError(jobErrorMessage(done.error_code));
+    }
     await onReload();
   });
   const running = submitting || job.active;
@@ -206,6 +210,7 @@ export function RequirementAnalysisSection({
     }
     setSubmitting(true);
     setActionError(null);
+    setJobFailure(null);
     setQuoteNotice(null);
     try {
       setQuote(await previewAnalysis(companyId, tenderId, force));
@@ -260,10 +265,34 @@ export function RequirementAnalysisSection({
 
   const requirements = analysis?.requirements ?? [];
   const criteria = analysis?.award_criteria ?? [];
+  const counts = {
+    all: requirements.length,
+    mandatory: requirements.filter((item) => item.obligation === "mandatory").length,
+    review: requirements.filter(needsReview).length,
+    scored: requirements.filter((item) => item.obligation === "scored").length,
+  };
+  const visible = requirements.filter((item) => {
+    if (filter === "mandatory") return item.obligation === "mandatory";
+    if (filter === "review") return needsReview(item);
+    if (filter === "scored") return item.obligation === "scored";
+    return true;
+  });
   const grouped = CATEGORY_ORDER.map((category) => ({
     category,
-    items: requirements.filter((requirement) => requirement.category === category),
+    items: visible.filter((requirement) => requirement.category === category),
   })).filter((group) => group.items.length > 0);
+
+  const trustworthy = !run || isTrustworthyAnalysis(run.analysis_basis);
+  const failure = jobFailure ?? (job.request?.status === "failed" ? job.request : null);
+  const failureAction = failure ? jobErrorAction(failure.error_code) : null;
+  const mainButtonLabel = run ? "Torna a analitzar" : "Analitza requisits";
+
+  const FILTERS: Array<{ key: Filter; label: string; level: "blocking" | "attention" | "neutral" }> = [
+    { key: "all", label: "Tots", level: "neutral" },
+    { key: "mandatory", label: "Obligatoris", level: "neutral" },
+    { key: "review", label: "Per revisar", level: "attention" },
+    { key: "scored", label: "Puntuables", level: "neutral" },
+  ];
 
   return (
     <>
@@ -272,42 +301,90 @@ export function RequirementAnalysisSection({
           title="Anàlisi del plec"
           description="Extreu els requisits i els criteris d'adjudicació dels documents processats."
           action={
-            <div className="flex items-center gap-2">
-              {/* Amb un motor simulat o sense motor, «Complet» seria una
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Amb un motor simulat o sense motor, «Completa» seria una
                   afirmació falsa sobre el plec: el procés ha acabat, però no
-                  ha llegit res. Es diu el que és, i el distintiu no pot ser
-                  verd. */}
-              {run && !isTrustworthyAnalysis(run.analysis_basis) ? (
-                <Badge tone={ANALYSIS_BASIS_TONES[run.analysis_basis]}>
-                  {ANALYSIS_BASIS_LABELS[run.analysis_basis]}
-                </Badge>
+                  ha llegit res. Es diu el que és, i la pastilla no pot ser
+                  «a punt». */}
+              {run && !trustworthy ? (
+                <StatusPill level={ANALYSIS_BASIS_LEVEL[run.analysis_basis]}>{ANALYSIS_BASIS_LABELS[run.analysis_basis]}</StatusPill>
               ) : (
-                <Badge tone={ANALYSIS_STATE_TONES[state]}>{ANALYSIS_STATE_LABELS[state]}</Badge>
-              )}
-              {job.active && (
-                <span className="text-[12px] text-muted">
-                  {job.request?.progress
-                    ? `Analitzant ${job.request.progress.done}/${job.request.progress.total}`
-                    : "Analitzant en segon pla…"}
-                </span>
+                <StatusPill level={job.active ? "running" : ANALYSIS_STATE_LEVEL[state]}>
+                  {ANALYSIS_STATUS_TEXT(analysis, job.request)}
+                </StatusPill>
               )}
               <Button
+                variant={run ? "secondary" : "primary"}
                 onClick={() => void analyse(state === "stale")}
                 disabled={running || loading || quote !== null}
+                loading={submitting}
               >
-                {running ? <Spinner /> : run ? "Torna a analitzar" : "Analitza requisits"}
+                {mainButtonLabel}
               </Button>
             </div>
           }
         />
 
-        {(error || actionError) && <ErrorNotice message={actionError ?? error ?? ""} />}
+        {job.active && (
+          <div className="border-b border-border px-5 py-4">
+            <p className="flex flex-wrap items-center gap-2">
+              <StatusPill level="running">En curs</StatusPill>
+              <span className="text-[14px] text-ink">
+                Llegint el plec i extraient requisits
+                {job.request?.progress
+                  ? ` · ${job.request.progress.done} de ${job.request.progress.total} fragments`
+                  : " · la font no informa del progrés"}
+              </span>
+            </p>
+            <p className="mt-1.5 text-[13px] text-muted">
+              Pots tancar la pàgina: el seguiment es reprèn en tornar i el resultat quedarà aquí.
+            </p>
+          </div>
+        )}
+
+        {failure && failureAction && !job.active && (
+          <div className="border-b border-border">
+            <ErrorState
+              title={failureAction.title}
+              description={
+                run
+                  ? `L'anàlisi anterior es conserva i és la que veus a sota. ${jobErrorMessage(failure.error_code)}`
+                  : jobErrorMessage(failure.error_code)
+              }
+              action={
+                failureAction.action.kind === "process_first" || failureAction.action.kind === "choose_documents" ? (
+                  <LinkButton href={`/licitacions/${tenderId}?tab=plecs`} variant="primary" size="md">
+                    {failureAction.action.kind === "process_first" ? "Processa els plecs primer" : "Veure els plecs"}
+                  </LinkButton>
+                ) : failureAction.action.kind === "retry" ? (
+                  <Button variant="primary" onClick={() => void analyse(true)} disabled={running || quote !== null}>
+                    Torna-ho a demanar
+                  </Button>
+                ) : (
+                  <Button variant="secondary" onClick={() => setJobFailure(null)}>
+                    D&apos;acord
+                  </Button>
+                )
+              }
+              technical={{
+                code: failure.error_code,
+                requestId: failure.id,
+                at: failure.finished_at ?? undefined,
+                method: "analyze_tender_requirements",
+              }}
+            />
+          </div>
+        )}
+
+        {actionError && !failure && <ErrorNotice message={actionError} />}
+        {error && !actionError && <ErrorNotice message={error} />}
 
         {quote && (
           <AnalysisQuotePanel
             quote={quote}
             notice={quoteNotice}
             canConfirm={canConfirm}
+            confirmRoles={limits.data?.confirm_roles}
             confirming={submitting}
             onConfirm={() => void confirm()}
             onCancel={() => {
@@ -317,164 +394,186 @@ export function RequirementAnalysisSection({
           />
         )}
 
-        {run && !isTrustworthyAnalysis(run.analysis_basis) && (
-          <div className="border-b border-border bg-warning-soft px-5 py-3 text-[13px]">
-            <p className="font-medium">{ANALYSIS_BASIS_LABELS[run.analysis_basis]}</p>
-            <p className="text-muted">{ANALYSIS_BASIS_HINTS[run.analysis_basis]}</p>
+        {run && !trustworthy && (
+          <div className="m-4 flex flex-col gap-1 border border-warning bg-warning-soft px-3.5 py-2.5 sm:flex-row sm:items-center sm:gap-3.5">
+            <span className="shrink-0 font-heading text-[13px] font-semibold tracking-[0.06em] text-warning uppercase">
+              {ANALYSIS_BASIS_LABELS[run.analysis_basis]}
+            </span>
+            <p className="text-body text-ink">{ANALYSIS_BASIS_HINTS[run.analysis_basis]}</p>
           </div>
         )}
 
-        <p className="border-b border-border px-5 py-3 text-[12px] text-muted">
-          {ANALYSIS_DISCLAIMER}
-        </p>
+        {analysis?.is_stale && (
+          <Banner
+            level="attention"
+            kicker="Obsoleta"
+            className="m-4"
+            action={
+              <Button size="sm" variant="secondary" onClick={() => void analyse(true)} disabled={running || quote !== null}>
+                Torna a analitzar
+              </Button>
+            }
+          >
+            Els documents han canviat des d&apos;aquesta anàlisi.
+          </Banner>
+        )}
+
+        {!run && !job.active && !quote && (
+          <EmptyState
+            title="Aquest plec encara no s'ha llegit"
+            description="«0 bloquejos» aquí no vol dir que no n'hi hagi: vol dir que ningú ho ha mirat. Els comptadors es queden a zero fins que hi hagi una anàlisi."
+            action={
+              <Button variant="primary" onClick={() => void analyse(false)} disabled={running || loading}>
+                Analitza els plecs
+              </Button>
+            }
+          />
+        )}
 
         {run && (
-          <dl className="grid grid-cols-2 gap-3 px-5 py-4 text-[13px] md:grid-cols-4">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 px-5 py-4 text-[13px] md:grid-cols-4">
             <div>
-              <dt className="text-muted">Requisits</dt>
-              <dd>{run.requirements_extracted}</dd>
+              <dt className={KICKER}>Requisits</dt>
+              <dd className="mt-0.5 tabular-nums">{run.requirements_extracted}</dd>
             </div>
             <div>
-              <dt className="text-muted">Criteris</dt>
-              <dd>{run.award_criteria_extracted}</dd>
+              <dt className={KICKER}>Criteris</dt>
+              <dd className="mt-0.5 tabular-nums">{run.award_criteria_extracted}</dd>
             </div>
             <div>
-              <dt className="text-muted">Documents · pàgines</dt>
-              <dd>
+              <dt className={KICKER}>Documents · pàgines</dt>
+              <dd className="mt-0.5 tabular-nums">
                 {run.documents_analyzed} · {run.pages_analyzed}
               </dd>
             </div>
             <div>
-              <dt className="text-muted">Chunks</dt>
-              <dd>
-                {run.chunks_completed}/{run.chunks_total}
+              <dt className={KICKER}>Fragments llegits</dt>
+              <dd className="mt-0.5 tabular-nums">
+                {run.chunks_completed} de {run.chunks_total}
+                {run.chunks_failed > 0 && <span className="text-danger"> · {run.chunks_failed} fallits</span>}
               </dd>
             </div>
-            <div>
-              <dt className="text-muted">Candidats rebutjats</dt>
-              <dd>{run.requirements_rejected}</dd>
+            <div className="col-span-2 md:col-span-4">
+              <details>
+                <summary className="cursor-pointer text-caption text-muted">Detall tècnic de l&apos;anàlisi</summary>
+                <p className="mt-1 font-mono text-[11.5px] text-muted">
+                  {ANALYSIS_BASIS_LABELS[run.analysis_basis]} · {run.provider} · {run.model} · {run.extractor_version} ·{" "}
+                  {run.prompt_version} · candidats rebutjats {run.requirements_rejected} · cites rebutjades{" "}
+                  {run.evidence_rejected}
+                  {run.input_tokens !== null && ` · tokens ${run.input_tokens} in / ${run.output_tokens ?? 0} out`}
+                  {run.duration_ms !== null && ` · ${(run.duration_ms / 1000).toFixed(1)} s`}
+                </p>
+              </details>
             </div>
-            <div>
-              <dt className="text-muted">Cites rebutjades</dt>
-              <dd>{run.evidence_rejected}</dd>
-            </div>
-            <div>
-              <dt className="text-muted">Motor</dt>
-              <dd className="truncate">
-                {ANALYSIS_BASIS_LABELS[run.analysis_basis]}
-                <span className="text-faint"> · {run.provider} · {run.model}</span>
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted">Extractor</dt>
-              <dd className="truncate">
-                {run.extractor_version} · {run.prompt_version}
-              </dd>
-            </div>
-            {run.input_tokens !== null && (
-              <div>
-                <dt className="text-muted">Tokens</dt>
-                <dd>
-                  {run.input_tokens} in / {run.output_tokens ?? 0} out
-                </dd>
-              </div>
-            )}
-            {run.duration_ms !== null && (
-              <div>
-                <dt className="text-muted">Durada</dt>
-                <dd>{(run.duration_ms / 1000).toFixed(1)} s</dd>
-              </div>
-            )}
           </dl>
         )}
 
         {run?.error_message && (
-          <p className="border-t border-border px-5 py-3 text-[12px] text-danger">
-            {run.error_code}: {run.error_message}
-          </p>
-        )}
-
-        {analysis?.is_stale && (
-          <p className="border-t border-border px-5 py-3 text-[12px] text-muted">
-            Els documents han canviat des d&apos;aquesta anàlisi. Torna-la a executar per
-            actualitzar-la.
+          <p className="border-t border-border px-5 py-3 text-[13px] text-danger" title={run.error_code ?? undefined}>
+            {jobErrorAction(run.error_code).title}: {run.error_message}
           </p>
         )}
 
         {run?.skipped_documents && run.skipped_documents.length > 0 && (
           <div className="border-t border-border px-5 py-3">
-            <p className="text-[12px] font-medium text-ink">Documents no analitzats</p>
+            <p className={KICKER}>Documents no analitzats</p>
             <ul className="mt-1 space-y-0.5">
               {run.skipped_documents.map((skipped) => (
-                <li key={skipped.tender_document_id} className="text-[12px] text-muted">
-                  {skipped.document_name} —{" "}
-                  {SKIP_REASON_LABELS[skipped.reason] ?? skipped.reason}
+                <li key={skipped.tender_document_id} className="text-[13px] text-muted">
+                  <span className="text-ink">{skipped.document_name}</span> · {SKIP_REASON_LABELS[skipped.reason] ?? "no analitzable"}
                 </li>
               ))}
             </ul>
           </div>
         )}
+
+        <p className="border-t border-border px-5 py-3 text-caption text-muted">{ANALYSIS_DISCLAIMER}</p>
       </Card>
 
-      {grouped.length > 0 && (
+      {requirements.length > 0 && (
         <Card>
-          <CardHeader title={`Requisits (${requirements.length})`} />
-          {grouped.map((group) => (
-            <div key={group.category}>
-              <p className="border-b border-border bg-canvas px-5 py-2 text-[12px] font-medium uppercase tracking-wide text-muted">
-                {CATEGORY_LABELS[group.category]}
-              </p>
-              <ul className="divide-y divide-border">
-                {group.items.map((requirement) => (
-                  <RequirementCard
-                    key={requirement.id}
-                    tenderId={tenderId}
-                    requirement={requirement}
-                    busy={reviewing === requirement.id}
-                    onReview={review}
-                  />
-                ))}
-              </ul>
-            </div>
-          ))}
+          <CardHeader
+            title={`Requisits (${requirements.length})`}
+            description="Proposats per l'anàlisi amb cita i pàgina. Extret no vol dir acreditat: el compliment es compara a sota."
+          />
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5" role="group" aria-label="Filtres de requisits">
+            {FILTERS.map((item) => {
+              const pressed = filter === item.key;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  aria-pressed={pressed}
+                  onClick={() => setFilter(item.key)}
+                  className="flex min-h-11 items-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand md:min-h-0"
+                >
+                  <StatusPill level={pressed ? "action" : item.level} outline>
+                    {item.label}
+                    <span className="tabular-nums">{counts[item.key]}</span>
+                  </StatusPill>
+                </button>
+              );
+            })}
+          </div>
+          {grouped.length === 0 ? (
+            <p className="px-5 py-4 text-[13px] text-muted">Cap requisit en aquest filtre.</p>
+          ) : (
+            grouped.map((group) => (
+              <div key={group.category}>
+                <p className={`${KICKER} border-b border-border bg-subtle px-4 py-1.5 sm:px-5`}>
+                  {CATEGORY_LABELS[group.category]} · {group.items.length}
+                </p>
+                <ul className="divide-y divide-border">
+                  {group.items.map((requirement) => (
+                    <RequirementRow
+                      key={requirement.id}
+                      tenderId={tenderId}
+                      requirement={requirement}
+                      busy={reviewing === requirement.id}
+                      onReview={review}
+                    />
+                  ))}
+                </ul>
+              </div>
+            ))
+          )}
         </Card>
       )}
 
       {criteria.length > 0 && (
         <Card>
-          <CardHeader
-            title={`Criteris d'adjudicació (${criteria.length})`}
-            description="Com es puntuen les ofertes."
-          />
+          <CardHeader title={`Criteris d'adjudicació (${criteria.length})`} description="Com es puntuen les ofertes." />
           <ul className="divide-y divide-border">
             {criteria.map((criterion: AwardCriterion) => (
-              <li key={criterion.id} className="px-5 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-medium text-ink">{criterion.name}</p>
-                    <p className="mt-0.5 text-[12px] text-muted">
-                      {criterion.points !== null ? `${criterion.points} punts` : "sense punts"}
-                      {" · "}
-                      {EVALUATION_LABELS[criterion.evaluation_type]}
-                      {criterion.formula ? ` · ${criterion.formula}` : " · sense fórmula al plec"}
-                    </p>
-                  </div>
-                  <Badge tone={CONFIDENCE_TONES[criterion.confidence]}>
-                    Confiança {CONFIDENCE_LABELS[criterion.confidence]}
-                  </Badge>
+              <li key={criterion.id} className="px-4 py-3.5 sm:px-5">
+                <p className="text-[14px] font-medium text-ink">{criterion.name}</p>
+                <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted">
+                  <span>
+                    {criterion.points !== null ? `${criterion.points} punts` : "sense punts"} · {EVALUATION_LABELS[criterion.evaluation_type]}
+                    {criterion.formula ? ` · ${criterion.formula}` : " · sense fórmula al plec"}
+                  </span>
+                  <Attribution kind="ai" confidence={criterion.confidence} />
+                </p>
+                <div className="mt-2">
+                  <Evidence tenderId={tenderId} evidence={criterion.evidence} />
                 </div>
-                {criterion.evidence.map((evidence) => (
-                  <EvidenceLink key={evidence.id} tenderId={tenderId} evidence={evidence} />
-                ))}
               </li>
             ))}
           </ul>
         </Card>
       )}
 
-      {run && requirements.length === 0 && criteria.length === 0 && (
+      {run && requirements.length === 0 && criteria.length === 0 && !job.active && (
         <Card>
-          <EmptyState title="L'anàlisi no ha trobat requisits amb evidència verificable" />
+          <EmptyState
+            title="L'anàlisi no ha trobat requisits amb evidència verificable"
+            description="El motor només conserva els requisits que pot citar amb document i pàgina. Si el plec en té, cal reprocessar els documents o tornar a analitzar."
+            action={
+              <Button variant="secondary" onClick={() => void analyse(true)} disabled={running || quote !== null}>
+                Torna a analitzar
+              </Button>
+            }
+          />
         </Card>
       )}
     </>

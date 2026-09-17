@@ -55,6 +55,8 @@ import {
   WORKSPACE_STATUS_LEVEL,
   activeLevel,
   QA_LEVEL,
+  REVIEW_LEVEL,
+  STRENGTH_LEVEL,
   changeLevel,
   cpvPreferenceLevel,
   deadlineLevel,
@@ -340,5 +342,12 @@ describe("changeLevel (L9)", () => {
 describe("QA_LEVEL (L10)", () => {
   it("bona → a punt, avisos → atenció, pobra → bloqueig", () => {
     expect(QA_LEVEL).toEqual({ good: "ready", warning: "attention", poor: "blocking" });
+  });
+});
+
+describe("nivells de L11", () => {
+  it("revisió d'un requisit i força de l'evidència de l'empresa", () => {
+    expect(REVIEW_LEVEL).toEqual({ unreviewed: "neutral", verified: "ready", needs_review: "attention", rejected: "neutral" });
+    expect(STRENGTH_LEVEL).toEqual({ strong: "ready", supporting: "neutral", missing: "attention" });
   });
 });

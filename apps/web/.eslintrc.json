@@ -13,13 +13,5 @@
       }
     ]
   },
-  "overrides": [
-    {
-      "files": [
-        "src/components/ComplianceSection.tsx",
-        "src/components/RequirementAnalysis.tsx"
-      ],
-      "rules": { "no-restricted-syntax": "off" }
-    }
-  ]
+  "overrides": []
 }

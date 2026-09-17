@@ -138,7 +138,28 @@ i `_ds/styles.css`, la font visual.
   explicada quan no és la vigent; el model d'extracció no canvia. **C-6
   continua documentat**: cap columna «Què fixa».
 
-Verificació en tancar L10: `npm test` (208 proves), `npm run typecheck`,
+- **L11 · Requisits + Compliment.** Els dos blocs de la pestanya Requisits
+  amb el sistema aplicat, i **`RequirementAnalysisSection` i
+  `ComplianceSection` continuen separats**: la **taula unificada del mockup 05
+  queda ajornada a Sprint 2**. **Preview → confirm preservat** (cap botó que
+  analitzi directament; `AnalysisQuotePanel` com a bloc de confirmació amb
+  `PermissionNote` i `confirm_roles`). Cada requisit i cada avaluació porten
+  la **cita amb document, pàgina i revisió d'extracció** (`EvidenceRef`, enllaç
+  a la revisió citada) i **`Attribution` segons l'origen real**: `ai` (amb la
+  confiança en text) per a l'extracció, `rule` per al càlcul determinista,
+  `human` (nom i data) per a la revisió humana, amb el resultat automàtic
+  original sempre a sota. **Bloquejos, per revisar i indeterminat
+  diferenciats**: grups Bloquegen → Possibles → Per revisar → Sense dades →
+  Acreditats (plegat); `undetermined` en neutre amb bàner i comptadors
+  apagats, mai verd; «Sense dades» no és un no; la recomanació és del motor i
+  la decisió no viu aquí. **`partial` i `failed` visibles** (parcial mai «a
+  punt», fallada com a `ErrorState` del diccionari amb l'anàlisi anterior
+  intacta i el codi al detall tècnic; en curs amb progrés real). Codis
+  interns només al `title` o al detall tècnic. **Les dues últimes exempcions
+  d'ESLint s'han retirat: `.eslintrc.json` queda sense cap override
+  temporal.**
+
+Verificació en tancar L11: `npm test` (222 proves), `npm run typecheck`,
 `npm run lint`, `npm run build` i `git diff --check` en verd.
 
 ## Accessibilitat
@@ -168,7 +189,6 @@ d'ordenació sense etiqueta).
 
 | Què | Lot |
 | --- | --- |
-| Retirar les dues exempcions restants de la regla de lint (`ComplianceSection.tsx`, `RequirementAnalysis.tsx`; la de la fitxa ja s'ha retirat a L9) | L11 |
 | Barril amb `EmptyState` tolerant → estricte | L15 |
 | Esborrar `*_TONES`, `deadlineTone`, `Badge` (ja sense usos a les pàgines del perfil), `AppShell.tsx` i `/ui-preview` | L15 |
 | Captures `after/` i comparació amb `baseline/` | L15 |

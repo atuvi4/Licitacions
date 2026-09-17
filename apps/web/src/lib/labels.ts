@@ -19,12 +19,13 @@ import type {
   AssessmentResult,
   BlockerStatus,
   EligibilityResult,
+  EvidenceStrength,
   RecommendationResult,
 } from "@/lib/compliance";
 import { formatDate } from "@/lib/format";
 import { jobErrorMessage, type JobRequest, type JobRequestStatus } from "@/lib/jobs";
 import type { MatchStatus } from "@/lib/matching";
-import type { AnalysisState, RequirementAnalysis } from "@/lib/requirements";
+import type { AnalysisState, RequirementAnalysis, ReviewStatus } from "@/lib/requirements";
 import type { DocumentState, TenderStatus } from "@/lib/tenders";
 import type {
   AvailabilityStatus,
@@ -320,6 +321,21 @@ export function cpvPreferenceLevel(preference: { active: boolean; excluded: bool
   if (preference.excluded) return "blocking";
   return activeLevel(preference.active);
 }
+
+/** Estat de revisió humana d'un requisit extret. */
+export const REVIEW_LEVEL: Record<ReviewStatus, Level> = {
+  unreviewed: "neutral",
+  verified: "ready",
+  needs_review: "attention",
+  rejected: "neutral",
+};
+
+/** Força de l'evidència de l'empresa per a un requisit. «Sense document» demana atenció, no és un no. */
+export const STRENGTH_LEVEL: Record<EvidenceStrength, Level> = {
+  strong: "ready",
+  supporting: "neutral",
+  missing: "attention",
+};
 
 /** QA del text extret d'un plec (`qa_status` de l'extracció). */
 export const QA_LEVEL: Record<"good" | "warning" | "poor", Level> = {
