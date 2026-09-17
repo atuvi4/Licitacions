@@ -117,7 +117,28 @@ i `_ds/styles.css`, la font visual.
   L'**exempció d'ESLint de la fitxa s'ha eliminat**; queden les de
   `ComplianceSection.tsx` i `RequirementAnalysis.tsx` fins a L11.
 
-Verificació en tancar L9: `npm test` (192 proves), `npm run typecheck`,
+- **L10 · Plecs.** La pestanya Plecs de la fitxa és una `DataTable`
+  (selecció · Document · Text extret · Lectura · Acció) amb `StatusPill` de
+  `DOCUMENT_STATE_LEVEL` i el peu «N triats · Processa N documents»
+  (`licitacions/[tenderId]/documents.ts`). La **selecció només governa el
+  processament**; no limita quins documents utilitza l'anàlisi de requisits:
+  **C-1 continua documentat** i la pantalla ho diu amb aquestes paraules.
+  **JobRequest i polling preservats** (`useJobRequest` de
+  `process_tender_documents`, mateix `onFinished`, `reloadLifecycle` en
+  acabar, seguiment reprès en recarregar); **processament individual i
+  múltiple preservats** (una sola feina per a N documents amb
+  `requestProcessing`); **`partial` i `failed` preservats i visibles**
+  (bàner d'atenció; `ErrorState` amb el títol del diccionari i el codi, l'id
+  i l'hora només al detall tècnic). **Errors humanitzats**: els codis reals de
+  descàrrega i extracció tenen frase i el codi va al `title`. **Permisos
+  visibles i desactivats**: sense `can_process_documents`, botons desactivats
+  i `PermissionNote`. **Text extret i versions coherents**: breadcrumb amb
+  `?tab=plecs`, bàner de lectura (QA i escaneig), targeta de versió, llista
+  de versions amb la revisió d'extracció de cada una i la revisió citada
+  explicada quan no és la vigent; el model d'extracció no canvia. **C-6
+  continua documentat**: cap columna «Què fixa».
+
+Verificació en tancar L10: `npm test` (208 proves), `npm run typecheck`,
 `npm run lint`, `npm run build` i `git diff --check` en verd.
 
 ## Accessibilitat

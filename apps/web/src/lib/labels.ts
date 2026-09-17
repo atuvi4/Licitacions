@@ -321,6 +321,13 @@ export function cpvPreferenceLevel(preference: { active: boolean; excluded: bool
   return activeLevel(preference.active);
 }
 
+/** QA del text extret d'un plec (`qa_status` de l'extracció). */
+export const QA_LEVEL: Record<"good" | "warning" | "poor", Level> = {
+  good: "ready",
+  warning: "attention",
+  poor: "blocking",
+};
+
 /** Un canvi material de la licitació demana atenció; un d'informatiu, no. */
 export function changeLevel(event: { is_material: boolean }): Level {
   return event.is_material ? "attention" : "neutral";
@@ -426,7 +433,7 @@ const NONE = { kind: "none" } as const;
 export const JOB_ERROR_ACTIONS: Record<string, JobErrorAction> = {
   analysis_too_large: {
     title: "El plec és massa gran per llegir-lo d'un cop",
-    // C-1: la tria de documents només afecta el processat; l'anàlisi llegeix tot el plec.
+    // C-1: la selecció només governa el processament; no limita quins documents usa l'anàlisi.
     action: { kind: "choose_documents", label: "Tria menys documents" },
   },
   company_active_limit: {

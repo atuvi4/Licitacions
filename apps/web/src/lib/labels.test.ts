@@ -54,6 +54,7 @@ import {
   VERIFICATION_LEVEL,
   WORKSPACE_STATUS_LEVEL,
   activeLevel,
+  QA_LEVEL,
   changeLevel,
   cpvPreferenceLevel,
   deadlineLevel,
@@ -333,5 +334,11 @@ describe("changeLevel (L9)", () => {
   it("un canvi material demana atenció; un d'informatiu és neutre", () => {
     expect(changeLevel({ is_material: true })).toBe("attention");
     expect(changeLevel({ is_material: false })).toBe("neutral");
+  });
+});
+
+describe("QA_LEVEL (L10)", () => {
+  it("bona → a punt, avisos → atenció, pobra → bloqueig", () => {
+    expect(QA_LEVEL).toEqual({ good: "ready", warning: "attention", poor: "blocking" });
   });
 });

@@ -19,9 +19,16 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/licitacions/t1",
   useSearchParams: () => new URLSearchParams(search),
 }));
+const requestProcessing = vi.fn();
+const track = vi.fn();
+let jobRequest: import("@/lib/jobs").JobRequest | null = null;
 vi.mock("@/lib/jobs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/jobs")>();
-  return { ...actual, useJobRequest: () => ({ request: null, active: false, track: vi.fn() }), requestProcessing: vi.fn() };
+  return {
+    ...actual,
+    useJobRequest: () => ({ request: jobRequest, active: jobRequest?.status === "accepted", track }),
+    requestProcessing: (...args: unknown[]) => requestProcessing(...args),
+  };
 });
 vi.mock("@/components/ComplianceSection", () => ({ ComplianceSection: () => <div data-testid="compliance">Compliment (secció actual)</div> }));
 vi.mock("@/components/RequirementAnalysis", () => ({ RequirementAnalysisSection: () => <div data-testid="analysis">Anàlisi del plec (secció actual)</div> }));
@@ -62,8 +69,8 @@ const detail: TenderDetail = {
   lots: [],
   documents: [
     { id: "d1", name: "Plec administratiu.pdf", document_type: "administrative", url: "https://example.org/d1", latest_file: null },
-    { id: "d2", name: "Plec tècnic.pdf", document_type: "technical", url: "https://example.org/d2", latest_file: { file_id: "f2", version_number: 1, download_status: "failed", file_size: null, sha256: null, extraction_status: null, quality: null, page_count: null, text_char_count: null, ocr_candidate: false, extraction_id: null, processed_at: null, error_code: "download_failed" } },
-    { id: "d3", name: "Annex.pdf", document_type: "other", url: "https://example.org/d3", latest_file: null },
+    { id: "d2", name: "Plec tècnic.pdf", document_type: "technical", url: "https://example.org/d2", latest_file: { file_id: "f2", version_number: 1, download_status: "failed", file_size: null, sha256: null, extraction_status: null, quality: null, page_count: null, text_char_count: null, ocr_candidate: false, extraction_id: null, processed_at: null, error_code: "timeout" } },
+    { id: "d3", name: "Annex.pdf", document_type: "other", url: "https://example.org/d3", published_at: "2026-09-03", latest_file: { file_id: "f3", version_number: 2, download_status: "downloaded", file_size: 120000, sha256: "abc", extraction_status: "extracted", quality: "good", page_count: 12, text_char_count: 34567, ocr_candidate: false, extraction_id: "e3", processed_at: "2026-09-15T10:00:00Z", error_code: null } },
   ] as unknown as TenderDetail["documents"],
   traceability: null,
 };
@@ -111,6 +118,9 @@ describe("Fitxa de licitació", () => {
     post.mockReset();
     push.mockReset();
     replace.mockReset();
+    requestProcessing.mockReset();
+    track.mockReset();
+    jobRequest = null;
     search = "";
   });
 
@@ -169,14 +179,96 @@ describe("Fitxa de licitació", () => {
     expect(screen.getByText("Publicacions de la font")).toBeTruthy();
   });
 
-  it("Plecs conserva el processat i no mostra codis interns com a text", async () => {
+  it("Plecs: taula amb document, text extret, lectura i acció; cap codi intern com a text; C-1 dit clarament", async () => {
     search = "tab=plecs";
     respondWith(base());
     const { container } = render(<TenderDetailPage />);
     await screen.findByText("Plec tècnic.pdf");
-    expect(container.textContent).not.toContain("download_failed");
-    expect(container.querySelector("[title='download_failed']")).not.toBeNull();
-    expect(screen.getAllByRole("button", { name: /Processa|Reprocessa/ }).length).toBeGreaterThanOrEqual(3);
+    const headers = [...container.querySelectorAll("thead th")].map((th) => th.textContent?.trim());
+    expect(headers).toEqual(["", "Document", "Text extret", "Lectura", "Acció"]);
+
+    const rows = [...container.querySelectorAll("tbody tr")];
+    expect(rows).toHaveLength(3);
+    const pill = (row: Element) => [...row.querySelectorAll("[data-level]")].map((p) => `${p.textContent?.trim()}[${p.getAttribute("data-level")}]`);
+    expect(pill(rows[0])).toContain("No descarregat[neutral]");
+    expect(rows[0].textContent).toContain("Processa");
+    expect(pill(rows[1])).toContain("Error[blocking]");
+    expect(rows[1].textContent).toContain("La descàrrega ha esgotat el temps d'espera.");
+    expect(rows[1].textContent).not.toContain("timeout");
+    expect(rows[1].querySelector("[title='timeout']")).not.toBeNull();
+    expect(rows[1].textContent).toContain("Reprocessa");
+    expect(pill(rows[2])).toContain("Text extret[ready]");
+    expect(rows[2].textContent).toContain("12 pàg. · 34.567 caràcters");
+    expect(rows[2].textContent).toContain("v2");
+    expect(rows[2].querySelector("a[href='/licitacions/t1/documents/d3']")?.textContent).toContain("Obre el text");
+    expect(rows[2].querySelector("a[href='https://example.org/d3']")).not.toBeNull();
+
+    // C-1: la tria només processa; no promet limitar l'anàlisi.
+    expect(container.textContent).toContain("La selecció només governa el processament; no limita quins documents utilitza l'anàlisi de requisits.");
+    expect(container.textContent).not.toMatch(/Analitza els \d+ triats/);
+  });
+
+  it("Plecs: triar dos documents crea una sola feina de processat amb els dos ids", async () => {
+    search = "tab=plecs";
+    respondWith(base());
+    requestProcessing.mockResolvedValue({ id: "j1", job_type: "process_tender_documents", tender_id: "t1", status: "accepted", outcome: null, reused_existing: false, result_run_id: null, error_code: null, requested_at: "2026-09-16T10:00:00Z", finished_at: null, progress: null });
+    render(<TenderDetailPage />);
+    await screen.findByText("Plec tècnic.pdf");
+    fireEvent.click(screen.getByLabelText("Selecciona Plec administratiu.pdf"));
+    fireEvent.click(screen.getByLabelText("Selecciona Annex.pdf"));
+    expect(screen.getByText("2 triats")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Processa 2 documents" }));
+    await flush();
+    expect(requestProcessing).toHaveBeenCalledTimes(1);
+    expect(requestProcessing).toHaveBeenCalledWith("c1", "t1", ["d1", "d3"]);
+    expect(track).toHaveBeenCalledWith(expect.objectContaining({ id: "j1", status: "accepted" }));
+  });
+
+  it("Plecs: feina en curs → pastilla amb progrés i accions desactivades; un 200 no vol dir processat", async () => {
+    search = "tab=plecs";
+    jobRequest = { id: "j1", job_type: "process_tender_documents", tender_id: "t1", status: "accepted", outcome: null, reused_existing: false, result_run_id: null, error_code: null, requested_at: "2026-09-16T10:00:00Z", finished_at: null, progress: { done: 1, total: 3 } };
+    respondWith(base());
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByText("Plec tècnic.pdf");
+    expect([...container.querySelectorAll("[data-level='running']")].map((p) => p.textContent?.trim())).toContain("Processant · 1 de 3");
+    const buttons = screen.getAllByRole("button", { name: /Processa|Reprocessa/ });
+    expect(buttons.length).toBeGreaterThanOrEqual(3);
+    for (const button of buttons) expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect([...container.querySelectorAll("tbody [data-level]")].map((p) => p.textContent?.trim())).toContain("No descarregat");
+  });
+
+  it("Plecs: feina fallada → ErrorState amb la frase del diccionari i el codi només al detall tècnic", async () => {
+    search = "tab=plecs";
+    jobRequest = { id: "j1", job_type: "process_tender_documents", tender_id: "t1", status: "failed", outcome: null, reused_existing: false, result_run_id: null, error_code: "worker_lost", requested_at: "2026-09-16T10:00:00Z", finished_at: "2026-09-16T10:01:00Z", progress: null };
+    respondWith(base());
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByText("Plec tècnic.pdf");
+    expect(screen.getByRole("heading", { name: "L'execució es va interrompre. Torna-ho a demanar." })).toBeTruthy();
+    const details = [...container.querySelectorAll("details")].find((d) => d.textContent?.includes("worker_lost"));
+    expect(details).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /interrompre/ }).textContent).not.toContain("worker_lost");
+  });
+
+  it("Plecs: feina parcial → bàner d'atenció; sense permís → botons visibles, desactivats i amb la raó", async () => {
+    search = "tab=plecs";
+    jobRequest = { id: "j1", job_type: "process_tender_documents", tender_id: "t1", status: "succeeded", outcome: "partial", reused_existing: false, result_run_id: null, error_code: null, requested_at: "2026-09-16T10:00:00Z", finished_at: "2026-09-16T10:01:00Z", progress: { done: 3, total: 3 } };
+    respondWith(base({ "/companies/c1/analysis-limits": { can_process_documents: false, can_confirm: false, active_now: 0, confirm_roles: ["owner", "admin"] } }));
+    render(<TenderDetailPage />);
+    await screen.findByText("Plec tècnic.pdf");
+    const banner = screen.getByRole("status");
+    expect(banner.textContent).toContain("Algun document no s'ha pogut processar");
+    expect(screen.getByText(/Només .* pot demanar el processat dels plecs\./)).toBeTruthy();
+    const buttons = screen.getAllByRole("button", { name: /Processa|Reprocessa/ });
+    expect(buttons.length).toBeGreaterThanOrEqual(3);
+    for (const button of buttons) expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("Plecs: sense documents → buit amb sortida a la font", async () => {
+    search = "tab=plecs";
+    respondWith(base({ "/tenders/t1": { ...detail, documents: [] } }));
+    render(<TenderDetailPage />);
+    expect(await screen.findByRole("heading", { name: "Sense documents publicats" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Obre l'expedient a la font/ }).getAttribute("href")).toBe("https://example.org/exp-1");
   });
 
   it("sense candidatura ni pre-fit: no simula res i ofereix les sortides reals", async () => {

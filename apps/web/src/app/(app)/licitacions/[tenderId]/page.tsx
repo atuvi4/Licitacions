@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { ComplianceSection } from "@/components/ComplianceSection";
 import { PreFitPanel, ScoreValue } from "@/components/PreFit";
@@ -20,8 +20,8 @@ import {
   ErrorState,
   LinkButton,
   PageSkeleton,
+  PermissionNote,
   Skeleton,
-  Spinner,
   StatusPill,
   Table,
   Tabs,
@@ -29,13 +29,14 @@ import {
   Th,
   Tr,
 } from "@/components/ui";
+import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ApiError, api } from "@/lib/api";
 import type { Compliance } from "@/lib/compliance";
 import { formatDate, formatMoney } from "@/lib/format";
 import { useResource } from "@/lib/hooks";
 import { type AnalysisLimits, jobErrorMessage, requestProcessing, useJobRequest } from "@/lib/jobs";
-import { DOCUMENT_STATE_LEVEL, TENDER_STATUS_LEVEL, shortSummary } from "@/lib/labels";
+import { DOCUMENT_STATE_LEVEL, TENDER_STATUS_LEVEL, jobErrorAction, shortSummary } from "@/lib/labels";
 import type { TenderMatch } from "@/lib/matching";
 import type { RequirementAnalysis } from "@/lib/requirements";
 import type { TenderHistoryRevision } from "@/lib/tender-changes";
@@ -49,10 +50,12 @@ import {
   formatBytes,
   formatDateTime,
   type TenderDetail,
+  type TenderDocumentMeta,
   type TenderRevision,
 } from "@/lib/tenders";
 import type { WorkspaceDetail } from "@/lib/workspace";
 
+import { extractedText, fileErrorText, jobPill, readingSubtext, selectionLabel, versionText } from "./documents";
 import {
   amountMeta,
   candidatureMeta,
@@ -153,6 +156,9 @@ function TenderDetail() {
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [submittingProcess, setSubmittingProcess] = useState(false);
   const [processError, setProcessError] = useState<string | null>(null);
+  // Els últims documents demanats: si la feina falla, es tornen a demanar els mateixos.
+  const [lastRequested, setLastRequested] = useState<string[]>([]);
+  const documentsTable = useRef<HTMLDivElement | null>(null);
 
   function toggleSelected(documentId: string) {
     setSelected((current) => {
@@ -202,6 +208,7 @@ function TenderDetail() {
     setSubmittingProcess(true);
     setProcessError(null);
     setProcessingIds(new Set(documentIds));
+    setLastRequested(documentIds);
     try {
       processJob.track(await requestProcessing(companyId, tenderId, documentIds));
     } catch (caught) {
@@ -261,6 +268,123 @@ function TenderDetail() {
   const mainCpvs = data.cpvs.filter((cpv) => cpv.is_main);
   const otherCpvs = data.cpvs.filter((cpv) => !cpv.is_main);
   const items = tabItems({ documents: data.documents.length, analysis: analysis.data, compliance: compliance.data });
+
+  const jobState = processJob.request;
+  const jobStatus = jobPill(jobState);
+  const jobFailed = jobState?.status === "failed";
+  const jobPartial = jobState?.status === "succeeded" && jobState.outcome === "partial";
+  const selection = selectionLabel(selected.size);
+  const LINK = "text-[13px] text-brand-strong hover:text-accent-800";
+
+  const documentColumns: Array<DataTableColumn<TenderDocumentMeta>> = [
+    {
+      key: "select",
+      header: "",
+      width: "4%",
+      cell: (document) => (
+        <Checkbox
+          label=""
+          className="min-h-11 md:min-h-0"
+          checked={selected.has(document.id)}
+          onChange={() => toggleSelected(document.id)}
+          aria-label={`Selecciona ${document.name}`}
+        />
+      ),
+    },
+    {
+      key: "document",
+      header: "Document",
+      cell: (document) => {
+        const file = document.latest_file;
+        const version = versionText(file);
+        return (
+          <div className="min-w-0">
+            <p className="truncate font-medium text-ink" title={document.name}>
+              {document.name}
+            </p>
+            <p className="text-caption text-muted">
+              {TENDER_DOCUMENT_LABELS[document.document_type]}
+              {document.published_at && ` · publicat el ${formatDate(document.published_at)}`}
+              {version && ` · ${version}`}
+            </p>
+            {file?.error_code && (
+              <p className="text-caption text-danger" title={file.error_code}>
+                {fileErrorText(file.error_code)}
+              </p>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      key: "text",
+      header: "Text extret",
+      width: "18%",
+      cell: (document) => (
+        <div>
+          <span className="tabular-nums">{extractedText(document.latest_file)}</span>
+          {document.latest_file?.file_size !== null && document.latest_file?.file_size !== undefined && (
+            <p className="text-caption text-muted">{formatBytes(document.latest_file.file_size)}</p>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "reading",
+      header: "Lectura",
+      width: "16%",
+      cell: (document) => {
+        const file = document.latest_file;
+        const state = documentState(file);
+        const subtext = readingSubtext(file);
+        return (
+          <div className="flex flex-col items-start gap-1">
+            {processingIds.has(document.id) ? (
+              <StatusPill level="running" size="sm">
+                Processant
+              </StatusPill>
+            ) : (
+              <StatusPill level={DOCUMENT_STATE_LEVEL[state]} size="sm">
+                {DOCUMENT_STATE_LABELS[state]}
+              </StatusPill>
+            )}
+            {subtext && <span className="text-caption text-muted">{subtext}</span>}
+          </div>
+        );
+      },
+    },
+    {
+      key: "action",
+      header: "Acció",
+      width: "24%",
+      align: "right",
+      cell: (document) => {
+        const file = document.latest_file;
+        return (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 md:justify-end">
+            {file?.extraction_id && (
+              <Link href={`/licitacions/${data.id}/documents/${document.id}`} className={LINK}>
+                Obre el text
+              </Link>
+            )}
+            <a href={document.url} target="_blank" rel="noopener noreferrer" className={LINK}>
+              Origen ↗
+            </a>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="min-h-11 md:min-h-0"
+              onClick={() => void processOne(document.id)}
+              disabled={processing}
+              loading={processingIds.has(document.id)}
+            >
+              {file ? "Reprocessa" : "Processa"}
+            </Button>
+          </div>
+        );
+      },
+    },
+  ];
 
   return (
     <>
@@ -573,83 +697,117 @@ function TenderDetail() {
 
       {/* ============================================================ Plecs === */}
       {tab === "plecs" && (
-        <Card>
-          <CardHeader
-            title={`Documents (${data.documents.length})`}
-            description="Processa un plec per descarregar-ne l'original i extreure'n el text per pàgina."
-            action={
-              selected.size > 0 ? (
-                <Button onClick={() => void processSelected()} disabled={processing}>
-                  Processa {selected.size} document{selected.size > 1 ? "s" : ""}
+        <div className="space-y-4">
+          {jobFailed && jobState ? (
+            <ErrorState
+              title={jobErrorAction(jobState.error_code).title}
+              description="Cap document s'ha perdut: els que ja estaven processats continuen igual. Torna a demanar el processat dels que faltin."
+              action={
+                <Button
+                  variant="primary"
+                  disabled={processing}
+                  onClick={() =>
+                    void processDocuments(lastRequested.length > 0 ? lastRequested : data.documents.map((document) => document.id))
+                  }
+                >
+                  Torna-ho a demanar
                 </Button>
-              ) : null
-            }
-          />
-          {processError && <ErrorNotice message={processError} />}
-          {limits.data && !canProcess && (
-            <p className="px-5 py-2 text-caption text-muted">El teu rol no pot demanar el processat dels plecs.</p>
-          )}
-          {data.documents.length === 0 ? (
-            <p className="px-5 py-4 text-[13px] text-muted">La font no ha publicat cap document per a aquest expedient.</p>
+              }
+              technical={{
+                code: jobState.error_code,
+                requestId: jobState.id,
+                at: jobState.finished_at ?? undefined,
+                method: "process_tender_documents",
+              }}
+            />
+          ) : jobPartial ? (
+            <Banner
+              level="attention"
+              kicker="Processat"
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => documentsTable.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                >
+                  Veure les files
+                </Button>
+              }
+            >
+              Algun document no s&apos;ha pogut processar: en veuràs l&apos;error a la seva fila.
+            </Banner>
           ) : (
-            <ul className="divide-y divide-border">
-              {data.documents.map((document) => {
-                const file = document.latest_file;
-                const state = documentState(file);
-                const busy = processingIds.has(document.id);
-                return (
-                  <li key={document.id} className="flex flex-wrap items-center gap-4 px-5 py-3">
-                    <Checkbox
-                      label=""
-                      checked={selected.has(document.id)}
-                      onChange={() => toggleSelected(document.id)}
-                      aria-label={`Selecciona ${document.name}`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[13px] font-medium text-ink">{document.name}</p>
-                      <p className="text-caption text-muted">
-                        {TENDER_DOCUMENT_LABELS[document.document_type]}
-                        {" · "}
-                        {formatBytes(file?.file_size ?? null)}
-                        {file?.page_count ? ` · ${file.page_count} pàgines` : ""}
-                        {file?.processed_at ? ` · ${formatDate(file.processed_at)}` : ""}
-                      </p>
-                      {file?.error_code && (
-                        <p className="text-caption text-danger" title={file.error_code}>
-                          No s&apos;ha pogut processar aquest document.
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 flex-wrap items-center gap-3">
-                      <StatusPill level={DOCUMENT_STATE_LEVEL[state]} size="sm">
-                        {DOCUMENT_STATE_LABELS[state]}
-                      </StatusPill>
-                      {file?.extraction_id && (
-                        <Link
-                          href={`/licitacions/${data.id}/documents/${document.id}`}
-                          className="text-[13px] text-brand-strong hover:text-accent-800"
-                        >
-                          Text
-                        </Link>
-                      )}
-                      <a
-                        href={document.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[13px] text-brand-strong hover:text-accent-800"
-                      >
-                        Origen ↗
-                      </a>
-                      <Button variant="secondary" size="sm" onClick={() => void processOne(document.id)} disabled={processing}>
-                        {busy ? <Spinner /> : file ? "Reprocessa" : "Processa"}
-                      </Button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+            processError && <ErrorNotice message={processError} />
           )}
-        </Card>
+
+          <Card>
+            <CardHeader
+              title={`Plecs (${data.documents.length})`}
+              description="Processa un plec per descarregar-ne l'original i extreure'n el text per pàgina. La selecció només governa el processament; no limita quins documents utilitza l'anàlisi de requisits."
+              action={jobStatus ? <StatusPill level={jobStatus.level}>{jobStatus.label}</StatusPill> : undefined}
+            />
+            {limits.data && !canProcess && (
+              <div className="border-b border-border px-4 py-3">
+                <PermissionNote
+                  who="qui té permís per processar plecs"
+                  what="demanar el processat dels plecs"
+                  action={<span className="text-muted">Demana-ho a qui administra l&apos;empresa.</span>}
+                >
+                  <Button variant="primary" size="sm" disabled>
+                    Processa els triats
+                  </Button>
+                </PermissionNote>
+              </div>
+            )}
+            {data.documents.length === 0 ? (
+              <EmptyState
+                title="Sense documents publicats"
+                description="La font no ha publicat cap document per a aquest expedient. Quan en publiqui, apareixeran aquí per processar-los."
+                action={
+                  data.source_url ? (
+                    <a
+                      href={data.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ui-action-md inline-flex items-center justify-center border border-border-strong px-3 text-[13.5px] font-semibold text-ink"
+                    >
+                      Obre l&apos;expedient a la font ↗
+                    </a>
+                  ) : (
+                    <LinkButton href="/licitacions" variant="secondary" size="md">
+                      Torna a Oportunitats
+                    </LinkButton>
+                  )
+                }
+              />
+            ) : (
+              <div ref={documentsTable}>
+                <DataTable<TenderDocumentMeta>
+                  columns={documentColumns}
+                  rows={data.documents}
+                  rowKey={(document) => document.id}
+                  isSelected={(document) => selected.has(document.id)}
+                  stackBelow="md"
+                  footer={
+                    selected.size > 0 ? (
+                      <>
+                        <span className="font-medium text-ink">{selection.count}</span>
+                        <Button variant="primary" size="sm" onClick={() => void processSelected()} disabled={processing}>
+                          {selection.action}
+                        </Button>
+                      </>
+                    ) : (
+                      <span>
+                        {data.documents.length} {data.documents.length === 1 ? "document" : "documents"} · tria&apos;n
+                        per processar-los junts
+                      </span>
+                    )
+                  }
+                />
+              </div>
+            )}
+          </Card>
+        </div>
       )}
 
       {/* ======================================================== Requisits === */}
