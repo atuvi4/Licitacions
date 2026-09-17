@@ -9,7 +9,7 @@ import type { WorkspaceSummary } from "@/lib/workspace";
  */
 
 /** Termini ascendent; sense termini al final. Ordenació estable. */
-function byDeadline(a: WorkspaceSummary, b: WorkspaceSummary): number {
+export function byDeadline(a: WorkspaceSummary, b: WorkspaceSummary): number {
   if (a.days_remaining === null && b.days_remaining === null) return 0;
   if (a.days_remaining === null) return 1;
   if (b.days_remaining === null) return -1;

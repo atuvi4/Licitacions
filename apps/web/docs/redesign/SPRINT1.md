@@ -83,7 +83,22 @@ i `_ds/styles.css`, la font visual.
   Responsive: `stackBelow="md"`, cada fila és una targeta. El `select`
   d'ordenació té etiqueta: **Lighthouse accessibilitat = 100**.
 
-Verificació en tancar L6: `npm test` (146 proves), `npm run typecheck`,
+- **L7 · Candidatures (llistat).** `/candidatures` sobre `DataTable` amb
+  grups derivats de `stepOf(status)` («Per decidir», «Preparant», «Per
+  tancar», «Tancades» plegat quan hi ha feina oberta) i ordre per termini dins
+  del grup (`candidatures/groups.ts`). La **recomanació automàtica i la
+  decisió humana van en columnes separades**: la decisió només surt si
+  `human_decision` existeix («Pendent» en atenció si no; «Sense decisió» en
+  una tancada). `submitted`, `withdrawn` i `no_go_approved` es mostren amb
+  tres etiquetes diferents; `undetermined` no es mostra mai com a OK (cap
+  avís, cap verd). Avisos només de camps reals (`deadline_passed`,
+  `eligibility no_go`, `analysis_outdated`) i següent pas derivat només de
+  l'estat. Fila navegable a `/candidatures/{id}` amb ratolí i Enter. Buit B2
+  amb «Veure les N amb més encaix» (`matches/summary.candidates`) o «Veure
+  Oportunitats». Responsive: `stackBelow="md"`, cada candidatura és una
+  targeta.
+
+Verificació en tancar L7: `npm test` (172 proves), `npm run typecheck`,
 `npm run lint`, `npm run build` i `git diff --check` en verd.
 
 ## Accessibilitat
