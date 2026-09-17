@@ -12,45 +12,59 @@ import type { WorkspaceCreateResult, WorkspaceDetail } from "@/lib/workspace";
  * El pas de la fitxa de licitació a la candidatura.
  *
  * Un sol botó que canvia de text: «Obre candidatura» quan encara no n'hi ha cap
- * i «Obre el workspace» quan ja existeix. No hi ha manera d'acabar amb dues
- * candidatures per la mateixa licitació ni prement dues vegades: el POST del
- * servidor és idempotent i retorna la que ja hi hagués.
+ * i «Continua la candidatura» quan ja existeix. No hi ha manera d'acabar amb
+ * dues candidatures per la mateixa licitació ni prement dues vegades: el POST
+ * del servidor és idempotent i retorna la que ja hi hagués.
+ *
+ * Si la pàgina ja ha consultat la candidatura (capçalera de L9), la passa amb
+ * `existing` i `checked` i aquí no es repeteix la crida.
  */
 export function WorkspaceLauncher({
   companyId,
   tenderId,
+  existing: existingProp,
+  checked: checkedProp,
+  className,
 }: {
   companyId: string;
   tenderId: string;
+  existing?: string | null;
+  checked?: boolean;
+  className?: string;
 }) {
   const router = useRouter();
   const mutation = useMutation();
-  const [existing, setExisting] = useState<string | null>(null);
-  const [checked, setChecked] = useState(false);
+  const [ownExisting, setOwnExisting] = useState<string | null>(null);
+  const [ownChecked, setOwnChecked] = useState(false);
+  const managed = checkedProp !== undefined;
 
   useEffect(() => {
+    if (managed) return;
     let cancelled = false;
     async function look() {
       try {
         const found = await api.get<WorkspaceDetail>(
           `/companies/${companyId}/tenders/${tenderId}/workspace`,
         );
-        if (!cancelled) setExisting(found.id);
+        if (!cancelled) setOwnExisting(found.id);
       } catch (caught) {
         // Un 404 aquí no és un error: vol dir que encara no s'ha obert cap
         // candidatura per aquesta licitació.
         if (!cancelled && !(caught instanceof ApiError && caught.status === 404)) {
-          setExisting(null);
+          setOwnExisting(null);
         }
       } finally {
-        if (!cancelled) setChecked(true);
+        if (!cancelled) setOwnChecked(true);
       }
     }
     void look();
     return () => {
       cancelled = true;
     };
-  }, [companyId, tenderId]);
+  }, [companyId, tenderId, managed]);
+
+  const existing = managed ? (existingProp ?? null) : ownExisting;
+  const checked = managed ? checkedProp : ownChecked;
 
   async function openWorkspace() {
     if (existing) {
@@ -69,8 +83,14 @@ export function WorkspaceLauncher({
   if (!checked) return null;
 
   return (
-    <Button variant="primary" size="sm" onClick={() => void openWorkspace()} loading={mutation.saving}>
-      {existing ? "Obre el workspace" : "Obre candidatura"}
+    <Button
+      variant="primary"
+      size="md"
+      onClick={() => void openWorkspace()}
+      loading={mutation.saving}
+      className={className}
+    >
+      {existing ? "Continua la candidatura" : "Obre candidatura"}
     </Button>
   );
 }

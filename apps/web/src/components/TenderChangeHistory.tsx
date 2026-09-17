@@ -16,9 +16,9 @@
 
 import { useState } from "react";
 
-import { Badge, Card, CardHeader, EmptyState, ErrorNotice, Skeleton } from "@/components/ui";
+import { Card, CardHeader, EmptyState, ErrorNotice, Skeleton, StatusPill } from "@/components/ui";
+import { changeLevel } from "@/lib/labels";
 import {
-  changeTone,
   describeChange,
   IMPACT_LABELS,
   triggerLabel,
@@ -28,10 +28,11 @@ import {
 import { formatDateTime } from "@/lib/tenders";
 
 function ChangeRow({ event }: { event: TenderChangeEvent }) {
-  const tone = changeTone(event);
   return (
     <li className="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-1">
-      <Badge tone={tone}>{event.is_material ? "Material" : "Informatiu"}</Badge>
+      <StatusPill level={changeLevel(event)} size="sm">
+        {event.is_material ? "Material" : "Informatiu"}
+      </StatusPill>
       <span className="text-sm text-ink">{describeChange(event)}</span>
       {event.subject && (
         <span className="max-w-full truncate text-[12px] text-faint" title={event.subject}>

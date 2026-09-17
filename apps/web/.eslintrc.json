@@ -16,7 +16,6 @@
   "overrides": [
     {
       "files": [
-        "src/app/**/licitacions/*/page.tsx",
         "src/components/ComplianceSection.tsx",
         "src/components/RequirementAnalysis.tsx"
       ],

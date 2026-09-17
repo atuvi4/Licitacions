@@ -8,6 +8,8 @@ interface Resource<T> {
   data: T | null;
   loading: boolean;
   error: string | null;
+  /** Codi HTTP de l'últim error de l'API (404, 403…), o null. */
+  status: number | null;
   reload: () => Promise<void>;
   setData: (value: T) => void;
 }
@@ -17,15 +19,20 @@ export function useResource<T>(path: string | null): Resource<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<number | null>(null);
 
   const reload = useCallback(async () => {
     if (!path) return;
     setLoading(true);
     setError(null);
+    setStatus(null);
     try {
       setData(await api.get<T>(path));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Error desconegut");
+      // Sense `instanceof`: els tests que simulen `@/lib/api` no exporten la classe.
+      const code = caught && typeof caught === "object" ? (caught as { status?: unknown }).status : undefined;
+      setStatus(typeof code === "number" ? code : null);
     } finally {
       setLoading(false);
     }
@@ -35,7 +42,7 @@ export function useResource<T>(path: string | null): Resource<T> {
     void reload();
   }, [reload]);
 
-  return { data, loading, error, reload, setData };
+  return { data, loading, error, status, reload, setData };
 }
 
 /** Envolta una accio d'escriptura: estat d'enviament i error llegible. */

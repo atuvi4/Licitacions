@@ -321,6 +321,11 @@ export function cpvPreferenceLevel(preference: { active: boolean; excluded: bool
   return activeLevel(preference.active);
 }
 
+/** Un canvi material de la licitació demana atenció; un d'informatiu, no. */
+export function changeLevel(event: { is_material: boolean }): Level {
+  return event.is_material ? "attention" : "neutral";
+}
+
 export const CHECKLIST_LEVEL: Record<ChecklistItemStatus, Level> = {
   pending: "neutral",
   in_progress: "running",

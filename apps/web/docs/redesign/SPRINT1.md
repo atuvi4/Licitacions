@@ -98,7 +98,26 @@ i `_ds/styles.css`, la font visual.
   Oportunitats». Responsive: `stackBelow="md"`, cada candidatura és una
   targeta.
 
-Verificació en tancar L7: `npm test` (172 proves), `npm run typecheck`,
+- **L9 · Fitxa de licitació.** `/licitacions/{id}` té una **capçalera
+  persistent de decisió** (breadcrumb, títol, procediment · tipus · lots ·
+  publicació · font, estat, «Publicada N cops», i les metadades Termini ·
+  Encaix · Requisits · Import · Candidatura, totes de camps reals;
+  `licitacions/[tenderId]/header.ts`) i **quatre pestanyes Resum / Plecs /
+  Requisits / Historial** amb `Tabs` i estat **persistent a `?tab=`**
+  (navegació directa, clic i recàrrega). La **candidatura humana** (estat i
+  `human_decision` de `WorkspaceDetail`, només si existeix) va separada de la
+  recomanació i del pre-fit; un termini nul és desconegut i `undetermined`
+  diu «encara no avaluats». **Plecs i Requisits només s'han reubicat** dins
+  de les pestanyes amb els components i handlers actuals (processat,
+  JobRequest, preview → confirm, revisions, cites, compliment): L10 i L11 els
+  redissenyen. L'**Historial** només mostra dades existents (canvis
+  detectats, publicacions de la font, traçabilitat). `WorkspaceLauncher`
+  accepta la candidatura ja consultada per la pàgina («Obre candidatura» /
+  «Continua la candidatura»); `useResource` exposa `status` per al 404 (E3).
+  L'**exempció d'ESLint de la fitxa s'ha eliminat**; queden les de
+  `ComplianceSection.tsx` i `RequirementAnalysis.tsx` fins a L11.
+
+Verificació en tancar L9: `npm test` (192 proves), `npm run typecheck`,
 `npm run lint`, `npm run build` i `git diff --check` en verd.
 
 ## Accessibilitat
@@ -128,7 +147,7 @@ d'ordenació sense etiqueta).
 
 | Què | Lot |
 | --- | --- |
-| Retirar les tres exempcions de la regla de lint (`licitacions/[tenderId]/page.tsx`, `ComplianceSection.tsx`, `RequirementAnalysis.tsx`) | L9, L10 i L11 |
+| Retirar les dues exempcions restants de la regla de lint (`ComplianceSection.tsx`, `RequirementAnalysis.tsx`; la de la fitxa ja s'ha retirat a L9) | L11 |
 | Barril amb `EmptyState` tolerant → estricte | L15 |
 | Esborrar `*_TONES`, `deadlineTone`, `Badge` (ja sense usos a les pàgines del perfil), `AppShell.tsx` i `/ui-preview` | L15 |
 | Captures `after/` i comparació amb `baseline/` | L15 |

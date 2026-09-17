@@ -122,10 +122,6 @@ export function PreFitDisclaimer({ className }: { className?: string }) {
 
 function FactorRow({ factor }: { factor: MatchFactor }) {
   const unknown = isUnknown(factor);
-  const ratio = unknown ? 0 : (factor.score ?? 0) / factor.max_score;
-  const bar =
-    ratio >= 0.75 ? "bg-success" : ratio >= 0.4 ? "bg-warning" : ratio > 0 ? "bg-danger" : "bg-border-strong";
-
   return (
     <div className="border-t border-border px-5 py-3 first:border-t-0">
       <div className="flex items-baseline justify-between gap-3">
@@ -142,10 +138,6 @@ function FactorRow({ factor }: { factor: MatchFactor }) {
             </>
           )}
         </span>
-      </div>
-
-      <div className="mt-1.5 h-1 w-full overflow-hidden bg-subtle">
-        {!unknown && <div className={cn("h-full", bar)} style={{ width: `${ratio * 100}%` }} />}
       </div>
 
       <p className={cn("mt-1.5 text-caption", unknown ? "text-faint" : "text-muted")}>

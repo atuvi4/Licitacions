@@ -54,6 +54,7 @@ import {
   VERIFICATION_LEVEL,
   WORKSPACE_STATUS_LEVEL,
   activeLevel,
+  changeLevel,
   cpvPreferenceLevel,
   deadlineLevel,
   jobErrorAction,
@@ -325,5 +326,12 @@ describe("nivells del perfil (L8)", () => {
     expect(cpvPreferenceLevel({ active: true, excluded: true })).toBe("blocking");
     expect(cpvPreferenceLevel({ active: true, excluded: false })).toBe("ready");
     expect(cpvPreferenceLevel({ active: false, excluded: false })).toBe("neutral");
+  });
+});
+
+describe("changeLevel (L9)", () => {
+  it("un canvi material demana atenció; un d'informatiu és neutre", () => {
+    expect(changeLevel({ is_material: true })).toBe("attention");
+    expect(changeLevel({ is_material: false })).toBe("neutral");
   });
 });
