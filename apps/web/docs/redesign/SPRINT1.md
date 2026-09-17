@@ -66,14 +66,31 @@ i `_ds/styles.css`, la font visual.
   `Badge` → `StatusPill` (nivells de `lib/labels.ts`) a totes les subpàgines
   del perfil, `documents`, `experiencia` i `EvidencePanel`.
 
-Verificació en tancar L8: `npm test` (128 proves), `npm run typecheck`,
+- **L6 · Oportunitats.** `/licitacions` sobre `DataTable` amb **cinc
+  columnes**: Encaix, Licitació, Termini, Import, Estat. La consulta és la
+  mateixa d'abans: `feedQuery` (`licitacions/query.ts`) reprodueix
+  literalment l'expressió antiga sobre `buildQuery` i està coberta per proves
+  de regressió contra un oracle copiat del codi anterior (6 modes × 5 ordres ×
+  10 jocs de filtres × 3 pàgines). Els **6 modes** són vistes (`StatusPill
+  outline`, activa `action`; «Per revisar» = `candidate`) i els **5 ordres** es
+  conserven. `?q=` de la cerca global i `?match_status=` de la URL s'apliquen
+  de debò a la consulta (el formulari mostra el valor i el `<details>` s'obre).
+  El formulari de filtres és el mateix, sencer, dins d'un `<details>` «Filtres
+  · N actius» plegat per defecte: no se n'elimina cap. El pre-fit continua sent
+  un encaix de metadades i no una probabilitat de guanyar (el disclaimer ho
+  diu; `ScoreValue` com a pastilla per llindar de `scoreTone`). Buits B1/B4 i
+  d'ingesta, `ErrorState` E1, bàner de pre-fits obsolets amb «Recalcula».
+  Responsive: `stackBelow="md"`, cada fila és una targeta. El `select`
+  d'ordenació té etiqueta: **Lighthouse accessibilitat = 100**.
+
+Verificació en tancar L6: `npm test` (146 proves), `npm run typecheck`,
 `npm run lint`, `npm run build` i `git diff --check` en verd.
 
 ## Accessibilitat
 
-Lighthouse (accessibilitat) a `/licitacions`, sobre el build de producció: **95**
-(també després de L4). L'únic audit que falla és el `select` d'ordenació sense
-etiqueta, preexistent, que es resol a **L6**.
+Lighthouse (accessibilitat) a `/licitacions`, sobre el build de producció:
+**100** des de L6 (95 fins a L5; l'únic audit que fallava era el `select`
+d'ordenació sense etiqueta).
 
 ## Decisions que s'aparten del handoff
 
@@ -96,7 +113,6 @@ etiqueta, preexistent, que es resol a **L6**.
 
 | Què | Lot |
 | --- | --- |
-| Etiqueta del `select` d'ordenació a Oportunitats; llegir `?q=` de la cerca global | L6 |
 | Retirar les tres exempcions de la regla de lint (`licitacions/[tenderId]/page.tsx`, `ComplianceSection.tsx`, `RequirementAnalysis.tsx`) | L9, L10 i L11 |
 | Barril amb `EmptyState` tolerant → estricte | L15 |
 | Esborrar `*_TONES`, `deadlineTone`, `Badge` (ja sense usos a les pàgines del perfil), `AppShell.tsx` i `/ui-preview` | L15 |

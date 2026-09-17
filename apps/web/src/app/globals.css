@@ -27,6 +27,8 @@
   --color-brand: #416180; /* accent-700: botó primari, pas actiu, selecció amb text blanc */
   --color-brand-strong: #416180; /* accent-700: enllaços i text sobre fons clar */
   --color-brand-soft: #eef6ff; /* accent-100 */
+  --color-accent-200: #d6ebff; /* fons de la xifra d'encaix < 60 (text accent-900) */
+  --color-accent-300: #b5d9fd; /* fons de la xifra d'encaix 60–79 (text accent-900) */
   --color-accent-500: #749dc4; /* l'acer del sistema: només línies, subratllats i marques, mai sota text */
   --color-accent-600: #597ea3;
   --color-accent-800: #2c455d; /* hover del primari i dels enllaços */

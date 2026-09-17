@@ -7,16 +7,17 @@
  * puntuació que es mostra va acompanyada del motiu, i les dimensions que no
  * s'han pogut avaluar es diuen explícitament en comptes de comptar com a zero.
  * Si algun dia algú vol ensenyar només la xifra, aquest és el lloc on s'ha de
- * discutir.
+ * discutir. El pre-fit no és cap probabilitat de guanyar, i cap component
+ * d'aquí l'anomena així.
  */
 
-import { Badge, Card, cn } from "@/components/ui";
+import { Card, StatusPill, cn } from "@/components/ui";
+import { MATCH_STATUS_LEVEL } from "@/lib/labels";
 import {
   DIMENSION_LABELS,
   DIMENSION_ORDER,
   MATCH_STATUS_HELP,
   MATCH_STATUS_LABELS,
-  MATCH_STATUS_TONE,
   PREFIT_DISCLAIMER,
   isUnknown,
   lotSummary,
@@ -28,13 +29,24 @@ import {
 } from "@/lib/matching";
 import { formatDateTime } from "@/lib/tenders";
 
-const SCORE_TEXT = {
-  success: "text-success",
-  warning: "text-warning",
-  neutral: "text-muted",
+/**
+ * Fons de la xifra (handoff L6.12, B): el llindar de candidatura (60) i el
+ * d'encaix alt (80) surten de `scoreTone`; ≥ 80 va sobre acer sòlid (brand,
+ * AA amb blanc), 60–79 sobre accent-300 i < 60 sobre accent-200.
+ */
+const SCORE_FILL = {
+  success: "bg-brand text-white",
+  warning: "bg-accent-300 text-accent-900",
+  neutral: "bg-accent-200 text-accent-900",
 } as const;
 
-/** El número gran, o un guió si no n'hi ha. Mai un 0 inventat. */
+const SCORE_SIZE = {
+  sm: "min-w-8 px-1.5 text-[13px] leading-5",
+  md: "min-w-9 px-2 text-[15px] leading-6",
+  lg: "min-w-12 px-2.5 text-[22px] leading-8",
+} as const;
+
+/** El número, o un guió si no n'hi ha. Mai un 0 inventat. */
 export function ScoreValue({
   score,
   size = "md",
@@ -42,29 +54,44 @@ export function ScoreValue({
   score: number | null;
   size?: "sm" | "md" | "lg";
 }) {
-  const classes = { sm: "text-[15px]", md: "text-xl", lg: "text-3xl" }[size];
   if (score === null) {
-    return <span className={cn(classes, "font-semibold text-faint tabular-nums")}>—</span>;
+    return (
+      <span className={cn("inline-flex justify-center font-semibold text-faint tabular-nums", SCORE_SIZE[size])}>
+        —
+      </span>
+    );
   }
+  const tone = scoreTone(score);
   return (
-    <span className={cn(classes, "font-semibold tabular-nums", SCORE_TEXT[scoreTone(score)])}>
+    <span
+      data-score-tone={tone}
+      className={cn(
+        "inline-flex items-center justify-center font-semibold tabular-nums",
+        SCORE_SIZE[size],
+        SCORE_FILL[tone],
+      )}
+    >
       {score}
     </span>
   );
 }
 
-/** Distintiu compacte per a una fila del feed. */
+/** Distintiu compacte: xifra, estat del pre-fit i, si cal, avís de càlcul antic. */
 export function PreFitBadge({ match }: { match: TenderMatch | null }) {
   if (!match) {
-    return <span className="text-[12px] text-faint">Sense calcular</span>;
+    return <span className="text-caption text-faint">Sense calcular</span>;
   }
   return (
-    <div className="flex items-center gap-2 whitespace-nowrap">
+    <div className="flex flex-wrap items-center gap-2">
       <ScoreValue score={match.score} />
-      <Badge tone={MATCH_STATUS_TONE[match.status]}>{MATCH_STATUS_LABELS[match.status]}</Badge>
+      <StatusPill level={MATCH_STATUS_LEVEL[match.status]} size="sm">
+        {MATCH_STATUS_LABELS[match.status]}
+      </StatusPill>
       {match.is_stale && (
         <span title="El perfil o la licitació han canviat des de l'últim càlcul.">
-          <Badge tone="warning">Desactualitzat</Badge>
+          <StatusPill level="attention" size="sm">
+            Desactualitzat
+          </StatusPill>
         </span>
       )}
     </div>
@@ -76,23 +103,19 @@ export function PreFitSummary({ match }: { match: TenderMatch | null }) {
   if (!match) return null;
   const lots = lotSummary(match);
   return (
-    <p className="mt-1 text-[12px] text-muted">
+    <p className="mt-1 text-caption text-muted">
       {shortSummary(match)}
       {lots && <span className="text-faint"> · {lots}</span>}
     </p>
   );
 }
 
-/** Avís obligatori: això no ha llegit cap plec. */
+/** Avís obligatori: això no ha llegit cap plec i no és cap probabilitat de guanyar. */
 export function PreFitDisclaimer({ className }: { className?: string }) {
   return (
-    <p
-      className={cn(
-        "rounded-md border border-warning-soft bg-warning-soft/40 px-3 py-2 text-[12px] text-warning",
-        className,
-      )}
-    >
-      {PREFIT_DISCLAIMER}
+    <p className={cn("border border-border-strong bg-subtle px-3 py-2 text-caption text-muted", className)}>
+      {PREFIT_DISCLAIMER} L&apos;encaix mesura la coincidència de CPV, territori, import i termini amb
+      el perfil: no és una probabilitat de guanyar.
     </p>
   );
 }
@@ -121,13 +144,11 @@ function FactorRow({ factor }: { factor: MatchFactor }) {
         </span>
       </div>
 
-      <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle">
-        {!unknown && (
-          <div className={cn("h-full rounded-full", bar)} style={{ width: `${ratio * 100}%` }} />
-        )}
+      <div className="mt-1.5 h-1 w-full overflow-hidden bg-subtle">
+        {!unknown && <div className={cn("h-full", bar)} style={{ width: `${ratio * 100}%` }} />}
       </div>
 
-      <p className={cn("mt-1.5 text-[12px]", unknown ? "text-faint" : "text-muted")}>
+      <p className={cn("mt-1.5 text-caption", unknown ? "text-faint" : "text-muted")}>
         {reasonLabel(factor.reason_code)}
       </p>
 
@@ -149,7 +170,7 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
       <Card>
         <div className="px-5 py-6 text-center">
           <p className="text-[13px] text-muted">Aquesta licitació encara no té pre-fit calculat.</p>
-          <p className="mt-1 text-[12px] text-faint">
+          <p className="mt-1 text-caption text-faint">
             Es calcula per a totes les licitacions ingerides; recalcula&apos;l des del feed.
           </p>
         </div>
@@ -168,16 +189,14 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
     <Card>
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border px-5 py-4">
         <div>
-          <h2 className="text-[15px] font-semibold text-ink">Pre-fit amb el vostre perfil</h2>
-          <p className="mt-0.5 text-[12px] text-muted">{MATCH_STATUS_HELP[match.status]}</p>
+          <h2 className="font-heading text-[17px] font-semibold text-ink">Pre-fit amb el vostre perfil</h2>
+          <p className="mt-0.5 text-caption text-muted">{MATCH_STATUS_HELP[match.status]}</p>
         </div>
-        <div className="text-right">
+        <div className="flex flex-col items-end gap-1.5">
           <ScoreValue score={match.score} size="lg" />
-          <div className="mt-1">
-            <Badge tone={MATCH_STATUS_TONE[match.status]}>
-              {MATCH_STATUS_LABELS[match.status]}
-            </Badge>
-          </div>
+          <StatusPill level={MATCH_STATUS_LEVEL[match.status]} size="sm">
+            {MATCH_STATUS_LABELS[match.status]}
+          </StatusPill>
         </div>
       </div>
 
@@ -188,7 +207,7 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
               ? "Fora de termini"
               : "Descartada per una preferència vostra"}
           </p>
-          <p className="mt-0.5 text-[12px] text-muted">
+          <p className="mt-0.5 text-caption text-muted">
             {reasonLabel(match.exclusion_reason_code)}
             {match.exclusion_kind === "business" && (
               <span className="text-faint">
@@ -208,10 +227,10 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
 
       {unknowns.length > 0 && (
         <div className="border-t border-border bg-subtle px-5 py-3">
-          <p className="text-[12px] font-medium text-ink">
+          <p className="text-caption font-medium text-ink">
             {unknowns.length === 1 ? "Dada no disponible" : "Dades no disponibles"}
           </p>
-          <p className="mt-0.5 text-[12px] text-muted">
+          <p className="mt-0.5 text-caption text-muted">
             {unknowns.map((factor) => DIMENSION_LABELS[factor.dimension]).join(", ")}. No compta
             com a desencaix: senzillament no s&apos;ha pogut valorar. La puntuació surt del{" "}
             {coverage} % del pes que sí que s&apos;ha pogut avaluar.
@@ -223,9 +242,9 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
         <div className="border-t border-border px-5 py-4">
           <div className="flex items-baseline justify-between gap-3">
             <h3 className="text-[13px] font-medium text-ink">Per lots</h3>
-            <span className="text-[12px] text-muted">{lotSummary(match)}</span>
+            <span className="text-caption text-muted">{lotSummary(match)}</span>
           </div>
-          <p className="mt-0.5 text-[12px] text-faint">
+          <p className="mt-0.5 text-caption text-faint">
             La puntuació de l&apos;expedient és la del millor lot, no la mitjana.
           </p>
           <ul className="mt-2 space-y-1.5">
@@ -233,7 +252,7 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
               <li
                 key={lot.id}
                 className={cn(
-                  "flex items-baseline justify-between gap-3 rounded-md px-2.5 py-1.5",
+                  "flex items-baseline justify-between gap-3 px-2.5 py-1.5",
                   lot.tender_lot_id === match.best_lot_id ? "bg-brand-soft" : "bg-subtle",
                 )}
               >
@@ -248,9 +267,9 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <ScoreValue score={lot.score} size="sm" />
-                  <Badge tone={MATCH_STATUS_TONE[lot.status]}>
+                  <StatusPill level={MATCH_STATUS_LEVEL[lot.status]} size="sm">
                     {MATCH_STATUS_LABELS[lot.status]}
-                  </Badge>
+                  </StatusPill>
                 </div>
               </li>
             ))}
