@@ -1,270 +1,394 @@
 "use client";
 
+import { Check } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 
+import { useSession } from "@/components/SessionProvider";
+import { SubmissionPackageSection } from "@/components/SubmissionPackage";
 import { DecisionHistory, DecisionPanel } from "@/components/WorkspaceDecision";
 import { DossierSection } from "@/components/WorkspaceDossier";
-import { SubmissionPackageSection } from "@/components/SubmissionPackage";
+import { BlockerCounters, ChecklistSection, NotesSection, TasksSection } from "@/components/WorkspaceWork";
 import {
-  BlockerCounters,
-  ChecklistSection,
-  NotesSection,
-  TasksSection,
-} from "@/components/WorkspaceWork";
-import { useSession } from "@/components/SessionProvider";
-import { Badge, Card, ErrorNotice, PageHeader, Skeleton } from "@/components/ui";
-import { ELIGIBILITY_LABELS, ELIGIBILITY_TONES, RECOMMENDATION_LABELS } from "@/lib/compliance";
+  Banner,
+  Button,
+  Card,
+  CardHeader,
+  ErrorState,
+  LinkButton,
+  PageHeader,
+  PageSkeleton,
+  StatusPill,
+  cn,
+} from "@/components/ui";
+import { ANALYSIS_BASIS_LABELS, ELIGIBILITY_LABELS, RECOMMENDATION_LABELS } from "@/lib/compliance";
 import { useResource } from "@/lib/hooks";
-import { describeChange } from "@/lib/tender-changes";
+import {
+  ANALYSIS_BASIS_LEVEL,
+  ELIGIBILITY_LEVEL,
+  RECOMMENDATION_LEVEL,
+  WORKSPACE_STATUS_LEVEL,
+  deadlineLevel,
+} from "@/lib/labels";
 import { formatDateTime } from "@/lib/tenders";
 import {
-  DECISION_LABELS,
-  DECISION_REASON_LABELS,
-  DECISION_TONES,
-  OUTDATED_LABELS,
-  READINESS_LABELS,
-  READINESS_TONES,
   WORKSPACE_STATUS_LABELS,
-  WORKSPACE_STATUS_TONES,
   deadlineLabel,
-  deadlineTone,
+  type WorkspaceDecisionType,
   type WorkspaceDetail,
 } from "@/lib/workspace";
 
-function Metric({
-  label,
-  value,
-  hint,
-  children,
+import { STEPS, defaultStep, primaryBanner, stepperItems, type CandidatureStep, type StepItem } from "./steps";
+
+/**
+ * Decidir → Preparar → Tancar. El progrés surt de l'estat real; el pas que
+ * es mira, de la URL (`?pas=`). Enllaços de debò: un enllaç directe, un
+ * refresc i el botó enrere funcionen sense cap estat local.
+ */
+function PhaseStepper({
+  items,
+  current,
+  hrefFor,
 }: {
-  label: string;
-  value?: string | number | null;
-  hint?: string;
-  children?: React.ReactNode;
+  items: StepItem[];
+  current: CandidatureStep;
+  hrefFor: (step: CandidatureStep) => string;
 }) {
+  const active = items.find((item) => item.key === current) ?? items[0];
   return (
-    <div>
-      <p className="text-[12px] uppercase tracking-wide text-muted">{label}</p>
-      <div className="mt-1 text-lg font-semibold text-ink">{children ?? value ?? "—"}</div>
-      {hint && <p className="mt-0.5 text-[12px] text-faint">{hint}</p>}
-    </div>
+    <nav aria-label="Passos de la candidatura" className="border-y border-border">
+      <p className="px-1 pt-2 text-[12.5px] text-muted md:hidden">
+        Pas {active.number} de 3 · <strong className="text-ink">{active.label}</strong>
+      </p>
+      <ol className="flex items-stretch">
+        {items.map((item, index) => {
+          const selected = item.key === current;
+          return (
+            <li key={item.key} data-state={item.state} className="flex min-w-0 flex-1 items-center">
+              <Link
+                href={hrefFor(item.key)}
+                aria-current={selected ? "step" : undefined}
+                className={cn(
+                  "-mb-px flex min-h-11 min-w-0 flex-1 items-center gap-2.5 border-b-2 px-2 py-2.5 md:px-3",
+                  selected ? "border-accent-500" : "border-transparent hover:bg-subtle",
+                )}
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "grid h-6 w-6 shrink-0 place-items-center border font-heading text-[12px] font-semibold",
+                    item.state === "done" && "border-brand bg-brand text-white",
+                    item.state === "on" && "border-brand-strong text-brand-strong",
+                    item.state === "todo" && "border-border-strong text-muted",
+                  )}
+                >
+                  {item.state === "done" ? <Check size={13} strokeWidth={2.5} /> : item.number}
+                </span>
+                <span className="min-w-0">
+                  <span
+                    className={cn(
+                      "font-heading text-[13.5px] font-semibold",
+                      item.state === "todo" && !selected ? "text-muted" : "text-ink",
+                    )}
+                  >
+                    {item.label}
+                  </span>
+                  {item.note && (
+                    <span className="hidden text-[12.5px] text-muted md:inline"> · {item.note}</span>
+                  )}
+                  {item.pill && (
+                    <StatusPill level={item.pill.level} size="sm" className="ml-2 hidden md:inline-flex">
+                      {item.pill.text}
+                    </StatusPill>
+                  )}
+                </span>
+              </Link>
+              {index < items.length - 1 && (
+                <span aria-hidden className="mx-1 hidden h-px w-6 shrink-0 bg-border-strong md:block" />
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      {active.pill && (
+        <p className="px-1 pb-2 md:hidden">
+          <StatusPill level={active.pill.level} size="sm">
+            {active.pill.text}
+          </StatusPill>
+        </p>
+      )}
+    </nav>
+  );
+}
+
+/** Context de la decisió: les quatre coses que no es fusionen, una per fila. */
+function ContextPanel({ workspace }: { workspace: WorkspaceDetail }) {
+  const rows: Array<{ label: string; value: React.ReactNode }> = [
+    {
+      label: "Encaix",
+      value:
+        workspace.prefit_score !== null ? (
+          <>
+            <strong className="text-ink">{workspace.prefit_score}</strong>
+            <span className="text-muted"> sobre 100 · ens interessa?</span>
+          </>
+        ) : (
+          <span className="text-muted">Sense càlcul</span>
+        ),
+    },
+    {
+      label: "Elegibilitat",
+      value: workspace.eligibility ? (
+        <>
+          <StatusPill level={ELIGIBILITY_LEVEL[workspace.eligibility]} size="sm">
+            {ELIGIBILITY_LABELS[workspace.eligibility]}
+          </StatusPill>
+          <span className="ml-1.5 text-muted">podem acreditar que complim?</span>
+        </>
+      ) : (
+        <span className="text-muted">Sense càlcul</span>
+      ),
+    },
+    {
+      label: "Recomanació",
+      value: workspace.recommendation ? (
+        <>
+          <StatusPill level={RECOMMENDATION_LEVEL[workspace.recommendation]} size="sm">
+            {RECOMMENDATION_LABELS[workspace.recommendation]}
+          </StatusPill>
+          <span className="ml-1.5 text-muted">automàtica · no és una decisió</span>
+        </>
+      ) : (
+        <span className="text-muted">Sense càlcul</span>
+      ),
+    },
+    {
+      label: "Anàlisi",
+      value: (
+        <>
+          <StatusPill level={workspace.analysis_outdated ? "attention" : ANALYSIS_BASIS_LEVEL[workspace.analysis_basis]} size="sm">
+            {ANALYSIS_BASIS_LABELS[workspace.analysis_basis]}
+            {workspace.analysis_outdated && " · endarrerida"}
+          </StatusPill>
+        </>
+      ),
+    },
+  ];
+  if (workspace.lot_number !== null) {
+    rows.splice(1, 0, {
+      label: "Lot",
+      value: (
+        <span className="text-ink">
+          {workspace.lot_number}
+          {workspace.lot_title && <span className="text-muted"> · {workspace.lot_title}</span>}
+        </span>
+      ),
+    });
+  }
+  return (
+    <Card>
+      <dl className="px-3.5 py-1 text-[13.5px]">
+        {rows.map((row) => (
+          <div key={row.label} className="flex items-center justify-between gap-3 border-b border-border py-2 last:border-b-0">
+            <dt className="shrink-0 text-muted">{row.label}</dt>
+            <dd className="min-w-0 text-right">{row.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </Card>
   );
 }
 
 export default function WorkspacePage() {
   const params = useParams<{ workspaceId: string }>();
-  const { companyId } = useSession();
-  const { data, loading, error, reload } = useResource<WorkspaceDetail>(
+  const { companyId, user } = useSession();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const { data, error, status, reload } = useResource<WorkspaceDetail>(
     companyId ? `/companies/${companyId}/workspaces/${params.workspaceId}` : null,
   );
 
-  if (error) {
+  // El pas que es mira surt de la URL. Si la URL no ho diu, la primera càrrega
+  // el fixa (a la URL i aquí) a partir de l'estat real. Després només el mou
+  // la persona: amb els enllaços del stepper o amb un GO humà registrat
+  // (`onDecided`). Una recomanació automàtica, un NO-GO, un ajornament o un
+  // POST fallit no canvien de pas. Un refresc o un enllaç directe cauen sempre
+  // al mateix lloc.
+  const param = searchParams?.get("pas") ?? null;
+  const paramStep = param && (STEPS as readonly string[]).includes(param) ? (param as CandidatureStep) : null;
+  const [pinned, setPinned] = useState<CandidatureStep | null>(null);
+  const initialStatus = data?.status ?? null;
+  useEffect(() => {
+    if (!initialStatus || paramStep || pinned) return;
+    const step = defaultStep(initialStatus);
+    setPinned(step);
+    const next = new URLSearchParams(searchParams?.toString() ?? "");
+    next.set("pas", step);
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  }, [initialStatus, paramStep, pinned, pathname, router, searchParams]);
+
+  if (error && !data) {
+    if (status === 404) {
+      return (
+        <ErrorState
+          title="Aquesta candidatura ja no hi és"
+          description="L'enllaç és antic o la candidatura s'ha eliminat. La licitació, si encara existeix, continua a Oportunitats."
+          action={
+            <LinkButton href="/candidatures" variant="primary" size="md">
+              Ves a Candidatures
+            </LinkButton>
+          }
+          secondary={
+            <LinkButton href="/licitacions" variant="secondary" size="md">
+              Obre les oportunitats
+            </LinkButton>
+          }
+        />
+      );
+    }
     return (
-      <>
-        <PageHeader title="Candidatura" />
-        <ErrorNotice message={error} onRetry={() => void reload()} />
-      </>
+      <ErrorState
+        title="No s'ha pogut carregar la candidatura"
+        description={error}
+        action={
+          <Button variant="primary" size="md" onClick={() => void reload()}>
+            Torna-ho a provar
+          </Button>
+        }
+        technical={{ code: status !== null ? String(status) : null, method: "GET" }}
+      />
     );
   }
 
   // Només la PRIMERA càrrega ensenya l'esquelet. Si ja hi ha dades, refrescar
-  // no pot desmuntar la pàgina: desmuntar-la destrueix l'estat local de cada
-  // secció —entre altres coses, el missatge que acaba d'explicar què ha fet
-  // l'acció que l'ha provocada— i fa que tota la pantalla parpellegi a cada
-  // clic.
+  // no pot desmuntar la pàgina: destruiria l'estat local de cada secció i
+  // faria parpellejar tota la pantalla a cada clic.
   if (!data) {
-    return (
-      <>
-        <PageHeader title="Candidatura" />
-        <Skeleton className="h-96 w-full" />
-      </>
-    );
+    return <PageSkeleton variant="decision" title="Candidatura" context="carregant la candidatura…" />;
   }
 
+  const step = paramStep ?? pinned ?? defaultStep(data.status);
+  const items = stepperItems(data);
+  const banner = primaryBanner(data);
+  const signerName = user?.full_name || user?.email || "tu";
   const refresh = async () => {
     await reload();
+  };
+  const hrefFor = (key: CandidatureStep) => {
+    const next = new URLSearchParams(searchParams?.toString() ?? "");
+    next.set("pas", key);
+    return `${pathname}?${next.toString()}`;
+  };
+  // La porta humana: només una decisió GO desada pel backend obre Preparar.
+  // El progrés del stepper continua sortint de l'estat real que torna el
+  // refresc; aquí només es canvia el pas que es mira.
+  const onDecided = async (decision: WorkspaceDecisionType) => {
+    await reload();
+    if (decision !== "go") return;
+    setPinned("preparar");
+    router.replace(hrefFor("preparar"), { scroll: false });
   };
   const days = deadlineLabel(data.days_remaining);
 
   return (
     <>
-      <Link
-        href="/candidatures"
-        className="mb-3 inline-block text-[13px] text-muted hover:text-ink"
-      >
-        ← Torna a Candidatures
-      </Link>
+      <nav aria-label="Camí" className="mb-3 text-[13px] text-muted">
+        <Link href="/candidatures" className="hover:text-ink">
+          Candidatures
+        </Link>
+        <span aria-hidden> › </span>
+        <span>{[data.buyer_name, data.expediente_number].filter(Boolean).join(" · ") || "Candidatura"}</span>
+      </nav>
 
       <PageHeader
         title={data.tender_title ?? "Candidatura"}
         description={
-          [data.expediente_number, data.buyer_name].filter(Boolean).join(" · ") || undefined
+          data.lot_number !== null
+            ? `Lot ${data.lot_number}${data.lot_title ? ` · ${data.lot_title}` : ""}`
+            : undefined
         }
         actions={
-          <div className="flex items-center gap-2">
-            {data.lot_number !== null && <Badge tone="neutral">Lot {data.lot_number}</Badge>}
-            <Badge tone={WORKSPACE_STATUS_TONES[data.status]}>
-              {WORKSPACE_STATUS_LABELS[data.status]}
-            </Badge>
-          </div>
+          <>
+            <StatusPill level={WORKSPACE_STATUS_LEVEL[data.status]}>{WORKSPACE_STATUS_LABELS[data.status]}</StatusPill>
+            <LinkButton href={`/licitacions/${data.tender_id}`} variant="secondary" size="sm">
+              Obre la fitxa de la licitació →
+            </LinkButton>
+          </>
         }
       />
 
-      <div className="space-y-4">
-        {/* El termini mai s'amaga, ni quan ja ha passat. */}
-        {data.deadline_passed && (
-          <div className="rounded-[var(--radius-card)] border border-danger/40 bg-danger-soft px-5 py-4">
-            <p className="text-sm font-semibold text-danger">
-              El termini de presentació ja ha passat
-            </p>
-            <p className="mt-1 text-[13px] text-ink">
-              Va vèncer el {formatDateTime(data.deadline_at)}. El workspace segueix consultable i
-              es pot deixar constància del que es va decidir, però qualsevol GO a partir d&apos;ara
-              exigeix motiu escrit.
-            </p>
-          </div>
-        )}
+      <div className="space-y-5">
+        <PhaseStepper items={items} current={step} hrefFor={hrefFor} />
 
-        {/* Un expedient anul.lat no admet cap preparacio nova. */}
-        {!data.tender_actionable && (
-          <div className="rounded-[var(--radius-card)] border border-danger/40 bg-danger-soft px-5 py-4">
-            <p className="text-sm font-semibold text-danger">
-              L&apos;òrgan ha anul·lat aquesta licitació
-            </p>
-            <p className="mt-1 text-[13px] text-ink">
-              No s&apos;hi pot congelar cap paquet nou. El que ja hi ha —la decisió, la feina i
-              els paquets anteriors— es conserva com a història auditable.
-            </p>
-          </div>
-        )}
+        <p className="flex flex-wrap items-center gap-2 text-[13.5px] text-ink">
+          <span className="text-muted">Termini:</span>
+          {data.deadline_at ? (
+            <>
+              <StatusPill level={deadlineLevel(data.days_remaining)} size="sm">
+                {days ?? formatDateTime(data.deadline_at)}
+              </StatusPill>
+              <span>{formatDateTime(data.deadline_at)}</span>
+            </>
+          ) : (
+            <StatusPill level="neutral" size="sm">
+              Termini no consta
+            </StatusPill>
+          )}
+        </p>
 
-        {/* El lot pot caure sense que caigui l'expedient, i per a qui s'hi
-            presentava es igual de definitiu. */}
-        {data.lot_removed && (
-          <div className="rounded-[var(--radius-card)] border border-danger/40 bg-danger-soft px-5 py-4">
-            <p className="text-sm font-semibold text-danger">
-              El lot d&apos;aquesta candidatura ja no és a la licitació
+        {banner && (
+          <Banner
+            level={banner.level}
+            kicker={banner.kicker}
+            action={
+              <LinkButton href={banner.action.href} variant="secondary" size="sm">
+                {banner.action.label}
+              </LinkButton>
+            }
+          >
+            <p>
+              <strong>{banner.title}</strong>
+              {banner.detail && <span className="text-muted"> {banner.detail}</span>}
             </p>
-            <p className="mt-1 text-[13px] text-ink">
-              La licitació continua, però sense aquest lot. No s&apos;hi pot congelar cap paquet
-              nou; la feina feta i les decisions es conserven com a història auditable.
-            </p>
-          </div>
-        )}
-
-        {/* La decisio no s'esborra: el que caduca es la seva vigencia. */}
-        {data.decision_outdated && (
-          <div className="rounded-[var(--radius-card)] border border-warning/40 bg-warning-soft px-5 py-4">
-            <p className="text-sm font-semibold text-warning">
-              {data.decision_basis_unknown
-                ? "Cal revisar la decisió"
-                : "La licitació ha canviat després de la decisió"}
-            </p>
-            <ul className="mt-1 space-y-0.5">
-              {/* Els canvis ja es llisten a sota un per un: repetir aquí "la
-                  licitació ha canviat" seria dir dues vegades el mateix. Només
-                  hi surten els motius que la llista de canvis no explica. */}
-              {data.decision_reasons
-                .filter((code) => code !== "tender_changed_since_decision")
-                .map((code) => (
-                  <li key={code} className="text-[13px] text-ink">
-                    {DECISION_REASON_LABELS[code] ?? code}
-                  </li>
+            {banner.reasons.length > 0 && (
+              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-[13px] leading-5">
+                {banner.reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
                 ))}
-              {data.changes_since_decision.map((event, index) => (
-                <li key={`${event.change_code}-${index}`} className="text-[13px] text-ink">
-                  {describeChange(event)}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-1 text-[12px] text-muted">
-              La decisió es conserva tal com es va prendre, amb qui la va signar i quan. El que
-              cal revisar és si segueix sent vàlida.
-            </p>
+              </ul>
+            )}
+          </Banner>
+        )}
+
+        {step === "decidir" && (
+          <div className="grid gap-5 lg:grid-cols-12">
+            <div className="lg:col-span-7">
+              <DecisionPanel workspace={data} onDecided={onDecided} signerName={signerName} />
+            </div>
+            <div className="flex flex-col gap-4 lg:col-span-5">
+              <BlockerCounters workspace={data} />
+              <ContextPanel workspace={data} />
+              <DecisionHistory workspace={data} />
+            </div>
           </div>
         )}
 
-        {data.analysis_outdated && (
-          <div className="rounded-[var(--radius-card)] border border-warning/40 bg-warning-soft px-5 py-4">
-            <p className="text-sm font-semibold text-warning">L&apos;anàlisi ha quedat endarrerida</p>
-            <ul className="mt-1 space-y-0.5">
-              {data.outdated_reasons.map((code) => (
-                <li key={code} className="text-[13px] text-ink">
-                  {OUTDATED_LABELS[code] ?? code}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-1 text-[12px] text-muted">
-              No s&apos;ha substituït res: la decisió i la feina fetes es conserven. Prem
-              «Reconcilia amb l&apos;anàlisi» a la checklist quan vulguis incorporar-ho.
-            </p>
-          </div>
+        {step === "preparar" && (
+          <>
+            <DossierSection workspace={data} onChange={refresh} />
+            <ChecklistSection workspace={data} onChange={refresh} />
+            <TasksSection workspace={data} onChange={refresh} />
+            <NotesSection workspace={data} onChange={refresh} />
+          </>
         )}
 
-        {/* ------------------------------------------------- Capçalera --- */}
-        <Card>
-          <div className="grid gap-4 px-5 py-5 sm:grid-cols-2 lg:grid-cols-6">
-            <Metric label="Termini">
-              <span className="text-base">
-                {data.deadline_at ? formatDateTime(data.deadline_at) : "—"}
-              </span>
-              {days && (
-                <Badge tone={deadlineTone(data.days_remaining)} className="ml-2">
-                  {days}
-                </Badge>
-              )}
-            </Metric>
-            <Metric
-              label="Pre-fit"
-              value={data.prefit_score}
-              hint="Ens interessa? (metadades)"
-            />
-            <Metric label="Elegibilitat" hint="Podem acreditar que complim?">
-              {data.eligibility ? (
-                <Badge tone={ELIGIBILITY_TONES[data.eligibility]}>
-                  {ELIGIBILITY_LABELS[data.eligibility]}
-                </Badge>
-              ) : (
-                "Sense càlcul"
-              )}
-            </Metric>
-            <Metric
-              label="Recomanació"
-              hint="El que suggereix el sistema"
-              value={
-                data.recommendation ? RECOMMENDATION_LABELS[data.recommendation] : "Sense càlcul"
-              }
-            />
-            <Metric label="Decisió humana" hint="L&apos;única oficial">
-              {data.human_decision ? (
-                <Badge tone={DECISION_TONES[data.human_decision]}>
-                  {DECISION_LABELS[data.human_decision]}
-                </Badge>
-              ) : (
-                <span className="text-warning">PENDENT</span>
-              )}
-            </Metric>
-            <Metric label="Dossier" hint="Tenim els papers a punt?">
-              <Badge tone={READINESS_TONES[data.readiness]}>
-                {READINESS_LABELS[data.readiness]}
-              </Badge>
-            </Metric>
-          </div>
-        </Card>
+        {step === "tancar" && <SubmissionPackageSection workspace={data} onChange={refresh} />}
 
-        <DecisionPanel workspace={data} onDecided={refresh} />
-        <BlockerCounters workspace={data} />
-        <DossierSection workspace={data} onChange={refresh} />
-        <SubmissionPackageSection workspace={data} onChange={refresh} />
-        <ChecklistSection workspace={data} onChange={refresh} />
-        <TasksSection workspace={data} onChange={refresh} />
-        <NotesSection workspace={data} onChange={refresh} />
-        <DecisionHistory workspace={data} />
-
-        {/* ----------------------------------------------------- Enllaços --- */}
         <Card>
-          <div className="flex flex-wrap gap-4 px-5 py-4 text-[13px]">
+          <CardHeader title="Enllaços" />
+          <div className="flex flex-wrap gap-4 px-3.5 py-3 text-[13px]">
             <Link href={`/licitacions/${data.tender_id}`} className="text-brand hover:underline">
               Veure la licitació i el plec
             </Link>
@@ -275,12 +399,7 @@ export default function WorkspacePage() {
               Documents de l&apos;empresa
             </Link>
             {data.source_url && (
-              <a
-                href={data.source_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-brand hover:underline"
-              >
+              <a href={data.source_url} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">
                 Expedient a la plataforma oficial ↗
               </a>
             )}

@@ -159,7 +159,32 @@ i `_ds/styles.css`, la font visual.
   d'ESLint s'han retirat: `.eslintrc.json` queda sense cap override
   temporal.**
 
-Verificació en tancar L11: `npm test` (222 proves), `npm run typecheck`,
+- **L12 · Candidatura · stepper + Decidir.** `/candidatures/{id}` com a
+  **stepper Decidir → Preparar → Tancar** amb enllaços reals a `?pas=`
+  (enllaç directe, refresc, enrere i endavant funcionen; sense `?pas=` la
+  primera càrrega fixa a la URL el pas real). El **progrés del stepper es
+  deriva del backend** (`stepOf(status)`, `human_decision`, `readiness_blockers`),
+  mai d'un estat local. **Porta humana:** un **GO humà registrat** pel backend
+  refresca el workspace i porta a `?pas=preparar`; la **recomanació automàtica
+  mai avança el flux** (és text amb `Attribution rule`, mai un botó); **NO-GO i
+  Ajornar no van a Preparar**; un POST fallit no canvia de pas. **Contracte real
+  de `reason`** (`DecisionRequest`): opcional, màxim 4000 caràcters, obligatori
+  només per a GO amb avisos oberts (`go_requires_reason`; 422
+  `decision_reason_required` amb els codis); NO-GO i `defer` no en demanen
+  mai; el backend fa la fotografia dels avisos en registrar-la. **Decisions
+  append-only**: cap endpoint per editar ni revertir; l'historial es mostra en
+  l'ordre del backend amb «Vigent» a la primera. **Un sol bàner** per pàgina:
+  anul·lada > lot retirat > termini passat > decisió caducada > anàlisi
+  endarrerida > bloqueigs confirmats > avisos, amb la resta de motius a dins.
+  «Què bloqueja» només amb el contracte real (comptadors dels obligatoris,
+  avisos oberts, termini); `undetermined` = «Cap requisit avaluat», mai verd.
+  **C-3 continua**: el nom de cada bloqueig no és al workspace; enllaç a la
+  pestanya Requisits. **`can_decide === false`** → els tres botons visibles i
+  desactivats dins un `PermissionNote` amb els rols reals de `DECISION_ROLES`
+  (propietari, administrador, responsable de candidatures). Preparar i Tancar
+  conserven les seccions actuals fins a L13/L14.
+
+Verificació en tancar L12: `npm test` (260 proves), `npm run typecheck`,
 `npm run lint`, `npm run build` i `git diff --check` en verd.
 
 ## Accessibilitat
