@@ -14,9 +14,11 @@ import {
   ErrorNotice,
   Field,
   Input,
+  LinkButton,
+  LoadErrorState,
   PageHeader,
+  PageSkeleton,
   Select,
-  Skeleton,
   StatusPill,
   Textarea,
 } from "@/components/ui";
@@ -102,22 +104,24 @@ export default function PersonDetailPage() {
     if (ok) setToDelete(null);
   }
 
-  if (person.error) {
+  if (person.error && !person.data) {
     return (
-      <>
-        <PageHeader title="Persona" />
-        <ErrorNotice message={person.error} onRetry={() => void person.reload()} />
-      </>
+      <LoadErrorState
+        what="la persona"
+        message={person.error}
+        status={person.status}
+        onRetry={() => void person.reload()}
+        secondary={
+          <LinkButton href="/empresa/equip" variant="secondary" size="md">
+            Torna a Equip
+          </LinkButton>
+        }
+      />
     );
   }
 
-  if (person.loading || !person.data) {
-    return (
-      <>
-        <PageHeader title="Persona" />
-        <Skeleton className="h-48 w-full" />
-      </>
-    );
+  if (!person.data) {
+    return <PageSkeleton variant="detail" title="Persona" context="carregant la fitxa de la persona…" />;
   }
 
   const data = person.data;

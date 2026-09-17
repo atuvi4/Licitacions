@@ -135,25 +135,6 @@ export const RESULT_LABELS: Record<AssessmentResult, string> = {
   not_applicable: "No aplica",
 };
 
-export const RESULT_ICONS: Record<AssessmentResult, string> = {
-  satisfies: "✅",
-  does_not_satisfy: "❌",
-  unknown: "❓",
-  needs_review: "⚠️",
-  not_applicable: "—",
-};
-
-export const RESULT_TONES: Record<
-  AssessmentResult,
-  "neutral" | "brand" | "success" | "warning" | "danger"
-> = {
-  satisfies: "success",
-  does_not_satisfy: "danger",
-  unknown: "warning",
-  needs_review: "warning",
-  not_applicable: "neutral",
-};
-
 export const ELIGIBILITY_LABELS: Record<EligibilityResult, string> = {
   eligible: "Elegible",
   review_required: "Cal revisió",
@@ -169,17 +150,6 @@ export const ELIGIBILITY_HINTS: Record<EligibilityResult, string> = {
   review_required: "Hi ha punts que ha de mirar una persona.",
   no_go: "Hi ha un impediment acreditat.",
   undetermined: "Encara no s'ha avaluat cap requisit del plec.",
-};
-
-export const ELIGIBILITY_TONES: Record<
-  EligibilityResult,
-  "neutral" | "brand" | "success" | "warning" | "danger"
-> = {
-  eligible: "success",
-  review_required: "warning",
-  no_go: "danger",
-  // Mai verd: no saber si es compleix no es una bona noticia, es cap noticia.
-  undetermined: "neutral",
 };
 
 export const RECOMMENDATION_LABELS: Record<RecommendationResult, string> = {
@@ -205,15 +175,6 @@ export const ANALYSIS_BASIS_HINTS: Record<AnalysisBasis, string> = {
     "Contingut inventat per provar el flux. No s'ha llegit cap plec: no serveix per decidir.",
   provider_not_configured:
     "No hi ha cap motor d'anàlisi configurat. Res del que es mostra surt de llegir el plec.",
-};
-
-export const ANALYSIS_BASIS_TONES: Record<
-  AnalysisBasis,
-  "neutral" | "brand" | "success" | "warning" | "danger"
-> = {
-  real: "success",
-  simulation: "warning",
-  provider_not_configured: "warning",
 };
 
 /** Nomes una analisi real sosté una afirmacio sobre el plec. */
@@ -291,3 +252,57 @@ export function explanationText(code: string): string {
 export const COMPLIANCE_DISCLAIMER =
   "L'anàlisi de compliment compara dades estructurades. Revisa l'evidència del plec i la del " +
   "perfil abans de decidir si us hi presenteu.";
+
+/** Un valor estructurat, en text. Sense fallback a JSON: el JSON va al `title`. */
+export function valueLine(value: Record<string, unknown> | null): { text: string; raw: string | null } {
+  if (!value) return { text: "—", raw: null };
+  const parts: string[] = [];
+  if (typeof value.amount === "number") {
+    parts.push(`${value.amount.toLocaleString("ca-ES")} ${value.currency ?? ""}`.trim());
+  }
+  if (typeof value.year === "number") parts.push(`(${value.year})`);
+  if (typeof value.name === "string") parts.push(value.name);
+  if (typeof value.coverage_amount === "number") {
+    parts.push(`${value.coverage_amount.toLocaleString("ca-ES")} ${value.currency ?? ""}`.trim());
+  }
+  if (typeof value.accredited_projects === "number") {
+    parts.push(`${value.accredited_projects} de ${value.required_projects} projectes`);
+  }
+  if (typeof value.minimum_projects === "number" && parts.length === 0) {
+    parts.push(`${value.minimum_projects} projectes`);
+  }
+  if (typeof value.holders === "number") parts.push(`${value.holders} persona(es)`);
+  if (parts.length > 0) return { text: parts.join(" "), raw: null };
+  return { text: "Valor no comparable automàticament", raw: JSON.stringify(value) };
+}
+
+const ENUM_TOKEN = /^[a-z]+(?:_[a-z]+)+$/;
+
+/**
+ * Humanitza l'etiqueta d'una evidència del compliment. El backend la construeix
+ * amb codis (`civil_liability: unknown 1000000.00 EUR`); el text de negoci no
+ * pot ensenyar-los. Els codis coneguts es tradueixen amb els diccionaris; un
+ * codi desconegut es diu com a tal i queda al `raw` (per al `title`).
+ */
+export function evidenceLabel(
+  label: string,
+  dictionaries: { types: Record<string, string>; kinds: Record<string, string> },
+): { text: string; raw: string | null } {
+  let changed = false;
+  const words = label.split(/(\s+)/).map((token) => {
+    const bare = token.replace(/:$/, "");
+    const suffix = token.endsWith(":") ? ":" : "";
+    const isCode = ENUM_TOKEN.test(bare) || bare in dictionaries.kinds || bare in dictionaries.types;
+    if (!isCode) return token;
+    changed = true;
+    const known = dictionaries.types[bare] ?? dictionaries.kinds[bare];
+    return (known ?? "valor sense etiqueta") + suffix;
+  });
+  const text = words.join("").replace(/(\d+)\.(\d{2})\s+([A-Z]{3})/g, (_match, whole: string, cents: string, currency: string) => {
+    const amount = Number(`${whole}.${cents}`);
+    return Number.isNaN(amount)
+      ? `${whole}.${cents} ${currency}`
+      : new Intl.NumberFormat("ca-ES", { style: "currency", currency, maximumFractionDigits: 0 }).format(amount);
+  });
+  return { text, raw: changed ? label : null };
+}

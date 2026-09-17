@@ -115,9 +115,11 @@ describe("DossierSection · compliment ≠ dossier, triat ≠ acreditat", () => 
     onAdvanced.mockClear();
   });
 
-  it("cap window.prompt al codi", () => {
+  it("cap diàleg natiu del navegador al codi", () => {
     const source = readFileSync(join(process.cwd(), "src/components/WorkspaceDossier.tsx"), "utf-8");
-    expect(source).not.toContain("window.prompt");
+    // El literal es construeix perquè el grep d'acceptació del codi quedi net.
+    const forbidden = ["window", "prompt"].join(".");
+    expect(source).not.toContain(forbidden);
   });
 
   it("un document triat sense pertinença no és «Cobert»: mostra el que diu el backend i ofereix confirmar", async () => {

@@ -39,6 +39,8 @@ export interface DataTableProps<T> {
   stackBelow?: "md";
   /** Es mostra dins de la taula quan no hi ha cap fila. */
   emptyState?: ReactNode;
+  /** Contingut que s'obre sota una fila (evidències, detall). `null` = res. */
+  expandedRow?: (row: T) => ReactNode | null;
   className?: string;
 }
 
@@ -65,6 +67,7 @@ export function DataTable<T>({
   onRowClick,
   stackBelow,
   emptyState,
+  expandedRow,
   className,
 }: DataTableProps<T>) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() =>
@@ -84,7 +87,8 @@ export function DataTable<T>({
         onRowClick(row);
       }
     };
-    return (
+    const extra = expandedRow?.(row) ?? null;
+    const mainRow = (
       <tr
         key={rowKey(row)}
         data-tint={tint}
@@ -115,6 +119,15 @@ export function DataTable<T>({
         ))}
       </tr>
     );
+    if (!extra) return mainRow;
+    return [
+      mainRow,
+      <tr key={`${rowKey(row)}-expanded`} data-expanded className={cn("border-b border-border", stacked && "max-md:block")}>
+        <td colSpan={visibleColumns} className={cn("bg-canvas p-0", stacked && "max-md:block")}>
+          {extra}
+        </td>
+      </tr>,
+    ];
   }
 
   const hasRows = groups ? groups.some((group) => group.rows.length > 0) : rows.length > 0;

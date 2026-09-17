@@ -170,18 +170,6 @@ export const ANALYSIS_STATE_LABELS: Record<AnalysisState, string> = {
   stale: "Obsolet",
 };
 
-export const ANALYSIS_STATE_TONES: Record<
-  AnalysisState,
-  "neutral" | "brand" | "success" | "warning" | "danger"
-> = {
-  not_analyzed: "neutral",
-  analyzing: "brand",
-  completed: "success",
-  partial: "warning",
-  error: "danger",
-  stale: "warning",
-};
-
 /** Ordre de presentació: primer el que pot excloure. */
 export const CATEGORY_ORDER: RequirementCategory[] = [
   "economic_solvency",
@@ -226,30 +214,10 @@ export const OBLIGATION_LABELS: Record<RequirementObligation, string> = {
   unknown: "No determinat",
 };
 
-export const OBLIGATION_TONES: Record<
-  RequirementObligation,
-  "neutral" | "brand" | "success" | "warning" | "danger"
-> = {
-  // Obligatori NO vol dir no-go: només vol dir que el plec ho exigeix.
-  mandatory: "brand",
-  scored: "success",
-  informative: "neutral",
-  unknown: "neutral",
-};
-
 export const CONFIDENCE_LABELS: Record<ExtractionConfidence, string> = {
   high: "Alta",
   medium: "Mitjana",
   low: "Baixa",
-};
-
-export const CONFIDENCE_TONES: Record<
-  ExtractionConfidence,
-  "neutral" | "success" | "warning" | "danger"
-> = {
-  high: "success",
-  medium: "warning",
-  low: "danger",
 };
 
 export const REVIEW_LABELS: Record<ReviewStatus, string> = {

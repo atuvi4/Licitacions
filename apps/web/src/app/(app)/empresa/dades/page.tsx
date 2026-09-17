@@ -10,6 +10,7 @@ import {
   ErrorNotice,
   Field,
   Input,
+  LoadErrorState,
   LoadingRows,
   PageHeader,
   PermissionNote,
@@ -68,7 +69,7 @@ function toFormState(company: Company): FormState {
 export default function CompanyGeneralPage() {
   const path = useCompanyPath();
   const { refresh } = useSession();
-  const { data, loading, error, reload, setData } = useResource<Company>(path(""));
+  const { data, loading, error, status, reload, setData } = useResource<Company>(path(""));
   const { saving, error: saveError, apiError, fieldErrors, run } = useMutation();
   const [form, setForm] = useState<FormState | null>(null);
   const [saved, setSaved] = useState(false);
@@ -102,13 +103,8 @@ export default function CompanyGeneralPage() {
   // visible i desactivada, amb qui sí que ho pot fer (handoff §2.9).
   const forbidden = apiError?.status === 403;
 
-  if (error) {
-    return (
-      <>
-        <PageHeader title="Dades generals" />
-        <ErrorNotice message={error} onRetry={() => void reload()} />
-      </>
-    );
+  if (error && !data) {
+    return <LoadErrorState what="les dades generals" message={error} status={status} onRetry={() => void reload()} />;
   }
 
   const saveButton = (
@@ -186,6 +182,7 @@ export default function CompanyGeneralPage() {
             <div className="px-5 py-5">
               <Textarea
                 rows={5}
+                aria-label="Descripció de l'empresa"
                 value={form.description ?? ""}
                 onChange={(event) => update("description", event.target.value)}
                 placeholder="Activitat principal, anys d'experiència, capacitats diferencials…"

@@ -8,19 +8,18 @@ import {
   Button,
   Card,
   Checkbox,
+  DataTable,
   EmptyState,
   ErrorNotice,
   Field,
   Input,
-  LoadingRows,
+  LoadErrorState,
   PageHeader,
+  PageSkeleton,
   Select,
   StatusPill,
-  Table,
-  Td,
   Textarea,
-  Th,
-  Tr,
+  type DataTableColumn,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
 import { optionsFrom, SPECIALIZATION_LABELS } from "@/lib/format";
@@ -42,7 +41,7 @@ type FormState = typeof EMPTY;
 export default function ServicesPage() {
   const path = useCompanyPath();
   const url = path("/services");
-  const { data, loading, error, reload } = useResource<Service[]>(url);
+  const { data, loading, error, status, reload } = useResource<Service[]>(url);
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
   const [editing, setEditing] = useState<Service | null>(null);
@@ -101,6 +100,54 @@ export default function ServicesPage() {
 
   const services = data ?? [];
 
+  const columns: Array<DataTableColumn<Service>> = [
+    {
+      key: "service",
+      header: "Servei",
+      cell: (service) => (
+        <>
+          <p className="font-medium">{service.name}</p>
+          {service.description && <p className="mt-0.5 max-w-md truncate text-[12px] text-muted">{service.description}</p>}
+        </>
+      ),
+    },
+    { key: "category", header: "Categoria", hideBelow: "lg", cell: (service) => <span className="text-muted">{service.category ?? "—"}</span> },
+    {
+      key: "specialization",
+      header: "Especialització",
+      hideBelow: "lg",
+      cell: (service) => (
+        <span className="text-muted">{service.specialization_level ? SPECIALIZATION_LABELS[service.specialization_level] : "—"}</span>
+      ),
+    },
+    {
+      key: "state",
+      header: "Estat",
+      width: "12%",
+      cell: (service) => (
+        <StatusPill level={activeLevel(service.active)} size="sm">
+          {service.active ? "Actiu" : "Inactiu"}
+        </StatusPill>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Accions",
+      align: "right",
+      width: "16%",
+      cell: (service) => (
+        <div className="flex flex-wrap justify-end gap-1">
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => openEdit(service)}>
+            Edita
+          </Button>
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => setToDelete(service)}>
+            Elimina
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <>
       <PageHeader
@@ -113,68 +160,35 @@ export default function ServicesPage() {
         }
       />
 
-      {error && <ErrorNotice message={error} onRetry={() => void reload()} />}
+      {error && data && <ErrorNotice message={error} onRetry={() => void reload()} />}
 
-      <Card>
-        {loading ? (
-          <LoadingRows />
-        ) : services.length === 0 ? (
-          <EmptyState
-            title="Encara no hi ha cap servei"
-            description="Defineix els serveis que ofereix l'empresa: fibra òptica, cablejat, CCTV, manteniment, ciberseguretat… el que faci falta."
-            action={
-              <Button variant="primary" onClick={openCreate}>
-                Afegeix el primer servei
-              </Button>
+      {error && !data ? (
+        <LoadErrorState what="els serveis" message={error} status={status} onRetry={() => void reload()} />
+      ) : loading && !data ? (
+        <Card>
+          <PageSkeleton variant="table" columns={["Servei", "Categoria", "Especialització", "Estat", "Accions"]} />
+        </Card>
+      ) : (
+        <Card>
+          <DataTable<Service>
+            columns={columns}
+            rows={services}
+            rowKey={(row) => row.id}
+            stackBelow="md"
+            emptyState={
+        <EmptyState
+          title="Encara no hi ha cap servei"
+          description="Defineix els serveis que ofereix l'empresa: fibra òptica, cablejat, CCTV, manteniment, ciberseguretat… el que faci falta."
+          action={
+            <Button variant="primary" onClick={openCreate}>
+              Afegeix el primer servei
+            </Button>
+          }
+        />
             }
           />
-        ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>Servei</Th>
-                <Th>Categoria</Th>
-                <Th>Especialització</Th>
-                <Th>Estat</Th>
-                <Th className="text-right">Accions</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {services.map((service) => (
-                <Tr key={service.id}>
-                  <Td>
-                    <p className="font-medium">{service.name}</p>
-                    {service.description && (
-                      <p className="mt-0.5 max-w-md truncate text-[12px] text-muted">
-                        {service.description}
-                      </p>
-                    )}
-                  </Td>
-                  <Td className="text-muted">{service.category ?? "—"}</Td>
-                  <Td className="text-muted">
-                    {service.specialization_level
-                      ? SPECIALIZATION_LABELS[service.specialization_level]
-                      : "—"}
-                  </Td>
-                  <Td>
-                    <StatusPill level={activeLevel(service.active)} size="sm">
-                      {service.active ? "Actiu" : "Inactiu"}
-                    </StatusPill>
-                  </Td>
-                  <Td className="text-right whitespace-nowrap">
-                    <Button size="sm" variant="ghost" onClick={() => openEdit(service)}>
-                      Edita
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setToDelete(service)}>
-                      Elimina
-                    </Button>
-                  </Td>
-                </Tr>
-              ))}
-            </tbody>
-          </Table>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <Modal
         open={creating || editing !== null}

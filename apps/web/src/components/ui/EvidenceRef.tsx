@@ -56,7 +56,7 @@ export function EvidenceRef({
       <span className={cn("inline-flex flex-wrap items-baseline gap-x-2 text-caption", className)}>
         <span className="font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase">{line}</span>
         {href && (
-          <Link href={href} className="text-brand-strong hover:text-accent-800">
+          <Link href={href} className="inline-block py-1 text-brand-strong underline decoration-1 underline-offset-2 hover:text-accent-800">
             {linkLabel}
           </Link>
         )}
@@ -74,7 +74,7 @@ export function EvidenceRef({
       )}
       {href && (
         <p className="text-[13px]">
-          <Link href={href} className="text-brand-strong hover:text-accent-800">
+          <Link href={href} className="inline-block py-1 text-brand-strong underline decoration-1 underline-offset-2 hover:text-accent-800">
             {linkLabel}
           </Link>
         </p>

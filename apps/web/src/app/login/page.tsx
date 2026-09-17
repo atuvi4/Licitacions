@@ -55,7 +55,7 @@ function LoginForm() {
       </Field>
 
       {error && (
-        <p className="rounded-md border border-danger/25 bg-danger-soft px-3 py-2 text-[13px] text-danger">
+        <p role="alert" className="border border-danger bg-danger-soft px-3 py-2 text-[13px] text-danger">
           {error}
         </p>
       )}
@@ -72,7 +72,7 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-canvas px-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex items-center gap-2.5">
-          <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand text-xs font-bold text-white">
+          <span className="flex h-8 w-8 items-center justify-center bg-brand font-heading text-xs font-semibold text-white">
             LI
           </span>
           <div>
@@ -81,7 +81,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <div className="rounded-[var(--radius-card)] border border-border bg-surface p-6 shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
+        <div className="rounded-card border border-border bg-surface p-6">
           <h1 className="mb-1 text-base font-semibold text-ink">Inicia la sessió</h1>
           <p className="mb-5 text-[13px] text-muted">
             Accedeix amb el compte que t&apos;han facilitat.

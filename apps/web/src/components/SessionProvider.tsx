@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { Button, EmptyState, ErrorState, PageSkeleton } from "@/components/ui";
 import { ApiError, api } from "@/lib/api";
 import type { ClientConfig, CurrentUser, Membership } from "@/lib/types";
 
@@ -103,29 +104,51 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-8">
-        <p className="text-sm text-danger">{error}</p>
-      </div>
+      <main className="flex min-h-screen items-center justify-center bg-canvas p-6">
+        <ErrorState
+          className="w-full max-w-lg"
+          title="No s'ha pogut carregar la sessió"
+          description={error}
+          action={
+            <Button variant="primary" size="md" onClick={() => void load()}>
+              Torna-ho a provar
+            </Button>
+          }
+          secondary={
+            <Button variant="secondary" size="md" onClick={() => void logout()}>
+              Tanca la sessió
+            </Button>
+          }
+          technical={{ method: "GET" }}
+        />
+      </main>
     );
   }
 
   if (!value) {
+    // Mateix significat que abans: el compte existeix però no pertany a cap
+    // empresa. L'única sortida real és tancar la sessió i entrar amb un altre.
     if (user && user.memberships.length === 0) {
       return (
-        <div className="flex min-h-screen items-center justify-center p-8 text-center">
-          <div>
-            <p className="text-sm font-medium text-ink">Aquest usuari no té cap empresa assignada.</p>
-            <p className="mt-1 text-[13px] text-muted">
-              Demana a un administrador que et doni accés a una empresa.
-            </p>
-          </div>
-        </div>
+        <main className="flex min-h-screen items-center justify-center bg-canvas p-6">
+          <EmptyState
+            className="w-full max-w-lg"
+            title="Aquest usuari no té cap empresa assignada"
+            description="Demana a un administrador que et doni accés a una empresa. Mentrestant no hi ha res a veure aquí."
+            action={
+              <Button variant="primary" size="md" onClick={() => void logout()}>
+                Tanca la sessió
+              </Button>
+            }
+          />
+        </main>
       );
     }
+    // Sense cercle girant: l'esquelet té la forma del que arribarà.
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <span className="h-5 w-5 animate-spin rounded-full border-2 border-brand border-r-transparent" />
-      </div>
+      <main className="min-h-screen bg-canvas px-6 py-8">
+        <PageSkeleton variant="list" title="Licitacions" context="carregant la sessió…" />
+      </main>
     );
   }
 

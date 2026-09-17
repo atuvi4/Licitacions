@@ -13,10 +13,12 @@ import {
   ErrorNotice,
   Field,
   Input,
+  LinkButton,
+  LoadErrorState,
   LoadingRows,
   PageHeader,
+  PageSkeleton,
   Select,
-  Skeleton,
   Textarea,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
@@ -62,7 +64,7 @@ export default function ProjectDetailPage() {
   const path = useCompanyPath();
   const url = path(`/projects/${projectId}`);
 
-  const { data, loading, error, reload, setData } = useResource<Project>(url);
+  const { data, error, status, reload, setData } = useResource<Project>(url);
   const services = useResource<Service[]>(path("/services"));
   const { saving, error: saveError, fieldErrors, run } = useMutation();
 
@@ -120,22 +122,24 @@ export default function ProjectDetailPage() {
     });
   }
 
-  if (error) {
+  if (error && !data) {
     return (
-      <>
-        <PageHeader title="Projecte" />
-        <ErrorNotice message={error} onRetry={() => void reload()} />
-      </>
+      <LoadErrorState
+        what="el projecte"
+        message={error}
+        status={status}
+        onRetry={() => void reload()}
+        secondary={
+          <LinkButton href="/experiencia" variant="secondary" size="md">
+            Torna a Experiència
+          </LinkButton>
+        }
+      />
     );
   }
 
-  if (loading || !data || !form) {
-    return (
-      <>
-        <PageHeader title="Projecte" />
-        <Skeleton className="h-64 w-full" />
-      </>
-    );
+  if (!data || !form) {
+    return <PageSkeleton variant="detail" title="Projecte" context="carregant el projecte…" />;
   }
 
   const linkedServiceIds = new Set(data.services.map((service) => service.id));

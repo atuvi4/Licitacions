@@ -245,6 +245,9 @@ export function SubmissionPackageSection({
             description="Quan el dossier estigui a punt, congela una revisió immutable dels documents que presentaràs."
             action={freezeButton("Congela el paquet", ready)}
           />
+          <p className="px-3.5 pb-3 text-center text-[12.5px] text-muted md:hidden">
+            Congelar i revisar el paquet funciona aquí, però és millor des de l&apos;escriptori.
+          </p>
           {!workspace.workspace_actionable && (
             <p className="px-3.5 pb-3 text-center text-[13px] text-warning">
               Aquesta licitació ja no admet cap presentació nova.
@@ -402,7 +405,7 @@ export function SubmissionPackageSection({
                   <code className="font-mono break-all" title={current.manifest_hash ?? undefined}>
                     {current.manifest_hash_short ?? shortHash(current.manifest_hash)}
                   </code>
-                  <a href={`/bff${root}/packages/${current.id}/manifest`} className="whitespace-nowrap text-brand hover:underline">
+                  <a href={`/bff${root}/packages/${current.id}/manifest`} className="whitespace-nowrap text-brand underline decoration-1 underline-offset-2 hover:text-accent-800">
                     manifest.json
                   </a>
                 </dd>
@@ -560,7 +563,7 @@ export function SubmissionPackageSection({
             <ol className="list-decimal space-y-2 px-3.5 py-3 pl-9 text-[13px] leading-5 text-ink">
               <li>
                 Descarrega el paquet: els {current.coverage.document_count} documents i l&apos;índex amb el manifest (
-                <a href={`/bff${root}/packages/${current.id}/manifest`} className="text-brand hover:underline">
+                <a href={`/bff${root}/packages/${current.id}/manifest`} className="text-brand underline decoration-1 underline-offset-2 hover:text-accent-800">
                   manifest.json
                 </a>
                 ).

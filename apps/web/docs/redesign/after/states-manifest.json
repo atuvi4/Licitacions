@@ -1,0 +1,37 @@
+{
+  "base": "http://localhost:3000",
+  "capturedAt": "2026-09-17T16:35:33.747Z",
+  "viewport": "1440x900",
+  "shots": [
+    {
+      "name": "s1-loading",
+      "url": "/licitacions/4d06df6b-dae0-4f67-91ee-787cae44f713",
+      "note": "Càrrega: PageSkeleton de la fitxa (API retinguda 8 s des del navegador)"
+    },
+    {
+      "name": "s2-404",
+      "url": "/candidatures/00000000-0000-0000-0000-000000000000",
+      "note": "No existeix (E3): candidatura inexistent"
+    },
+    {
+      "name": "s3-disabled",
+      "url": "/candidatures/cf36f9b0-3be2-4a6f-902e-ece3fb049841?pas=tancar",
+      "note": "Acció visible i desactivada amb la raó (aprovació del paquet)"
+    },
+    {
+      "name": "s4-empty-filter",
+      "url": "/licitacions?q=zzzz-cap-resultat-zzzz",
+      "note": "Buit (B4): cerca sense resultats a Oportunitats"
+    },
+    {
+      "name": "s5-empty-work",
+      "url": "/candidatures",
+      "note": "Buit (B2): altre@licitacions.dev sense cap candidatura"
+    },
+    {
+      "name": "s6-empty-config",
+      "url": "/avui",
+      "note": "Buit (B1): Avui de altre@licitacions.dev sense perfil"
+    }
+  ]
+}

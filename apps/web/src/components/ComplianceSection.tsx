@@ -22,6 +22,8 @@ import { useState } from "react";
 import { ScoreValue } from "@/components/PreFit";
 import { Attribution, Banner, Button, Card, CardHeader, ErrorNotice, EvidenceRef, StatusPill } from "@/components/ui";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { evidenceLabel, valueLine } from "@/lib/compliance";
+import { INSURANCE_LIMIT_KIND_LABELS, INSURANCE_TYPE_LABELS } from "@/lib/format";
 import { api } from "@/lib/api";
 import {
   BLOCKER_LABELS,
@@ -40,31 +42,11 @@ import {
 } from "@/lib/labels";
 import type { Assessment, AssessmentResult, Compliance } from "@/lib/compliance";
 
+const EVIDENCE_DICTIONARIES = { types: INSURANCE_TYPE_LABELS as Record<string, string>, kinds: INSURANCE_LIMIT_KIND_LABELS };
+
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 const LINK = "text-[13px] text-brand-strong hover:text-accent-800 disabled:cursor-default disabled:text-muted";
 
-/** Un valor estructurat, en text. Sense fallback a JSON: el JSON va al `title`. */
-export function valueLine(value: Record<string, unknown> | null): { text: string; raw: string | null } {
-  if (!value) return { text: "—", raw: null };
-  const parts: string[] = [];
-  if (typeof value.amount === "number") {
-    parts.push(`${value.amount.toLocaleString("ca-ES")} ${value.currency ?? ""}`.trim());
-  }
-  if (typeof value.year === "number") parts.push(`(${value.year})`);
-  if (typeof value.name === "string") parts.push(value.name);
-  if (typeof value.coverage_amount === "number") {
-    parts.push(`${value.coverage_amount.toLocaleString("ca-ES")} ${value.currency ?? ""}`.trim());
-  }
-  if (typeof value.accredited_projects === "number") {
-    parts.push(`${value.accredited_projects} de ${value.required_projects} projectes`);
-  }
-  if (typeof value.minimum_projects === "number" && parts.length === 0) {
-    parts.push(`${value.minimum_projects} projectes`);
-  }
-  if (typeof value.holders === "number") parts.push(`${value.holders} persona(es)`);
-  if (parts.length > 0) return { text: parts.join(" "), raw: null };
-  return { text: "Valor no comparable automàticament", raw: JSON.stringify(value) };
-}
 
 function explanation(code: string): { text: string; known: boolean } {
   const text = EXPLANATION_LABELS[code];
@@ -174,7 +156,9 @@ function AssessmentRow({
             <ul className="mt-1 space-y-0.5">
               {assessment.evidence.map((evidence) => (
                 <li key={evidence.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted">
-                  <span className="text-ink">{evidence.label}</span>
+                  <span className="text-ink" title={evidenceLabel(evidence.label, EVIDENCE_DICTIONARIES).raw ?? undefined}>
+                    {evidenceLabel(evidence.label, EVIDENCE_DICTIONARIES).text}
+                  </span>
                   <StatusPill level={STRENGTH_LEVEL[evidence.strength]} size="sm">
                     {STRENGTH_LABELS[evidence.strength]}
                   </StatusPill>

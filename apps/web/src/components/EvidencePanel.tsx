@@ -6,14 +6,16 @@ import { Modal } from "@/components/Modal";
 import { useCompanyPath, useSession } from "@/components/SessionProvider";
 import {
   Button,
+  cn,
   EmptyState,
   ErrorNotice,
   Field,
   Input,
+  LoadErrorState,
   LoadingRows,
+  PageSkeleton,
   Select,
   StatusPill,
-  cn,
 } from "@/components/ui";
 import { api } from "@/lib/api";
 import {
@@ -155,18 +157,24 @@ export function EvidencePanel({
         </div>
       </div>
 
-      {error && (
-        <div className="p-4">
-          <ErrorNotice message={error} onRetry={() => void reload()} />
-        </div>
-      )}
-
-      {loading ? (
-        <LoadingRows rows={2} />
+      {error && !data ? (
+        <LoadErrorState what="les evidències" message={error} onRetry={() => void reload()} className="py-8" />
+      ) : loading && !data ? (
+        <PageSkeleton variant="list" context="carregant les evidències…" className="px-5 py-4" />
       ) : evidence.length === 0 ? (
         <EmptyState
           title="Sense evidència documental"
           description="Sense document justificatiu, aquesta dada no es podrà acreditar en una licitació."
+          action={
+            <Button variant="primary" size="md" onClick={() => setMode("upload")}>
+              Puja document
+            </Button>
+          }
+          secondary={
+            <Button variant="secondary" size="md" onClick={() => setMode("library")}>
+              Vincula un d&apos;existent
+            </Button>
+          }
         />
       ) : (
         <ul className="divide-y divide-border">
@@ -311,9 +319,16 @@ export function EvidencePanel({
           {library.loading ? (
             <LoadingRows rows={3} />
           ) : filteredLibrary.length === 0 ? (
-            <p className="py-6 text-center text-[13px] text-muted">
-              No hi ha documents disponibles a la biblioteca.
-            </p>
+            <EmptyState
+              className="py-6"
+              title="Cap document a la biblioteca"
+              description="Els documents que pugis queden a la biblioteca i la propera dada els trobarà ja fets."
+              action={
+                <Button variant="primary" size="md" onClick={() => setMode("upload")}>
+                  Puja document
+                </Button>
+              }
+            />
           ) : (
             <ul className="max-h-72 divide-y divide-border overflow-y-auto border border-border scroll-thin">
               {filteredLibrary.map((document) => (

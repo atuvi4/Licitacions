@@ -11,7 +11,8 @@ export { Attribution, type AttributionKind, type AttributionProps } from "./Attr
 export { EvidenceRef, type EvidenceRefProps } from "./EvidenceRef";
 export { Banner, type BannerLevel, type BannerProps } from "./Banner";
 export { Card, CardHeader, PageHeader } from "./Card";
-export { EmptyState, LegacyEmptyState, type EmptyStateProps } from "./EmptyState";
+export { EmptyState, type EmptyStateProps } from "./EmptyState";
+export { LoadErrorState, type LoadErrorStateProps } from "./LoadErrorState";
 export { ErrorState, type ErrorStateProps } from "./ErrorState";
 export { PermissionNote, type PermissionNoteProps } from "./PermissionNote";
 export { PageSkeleton, type PageSkeletonProps, type PageSkeletonVariant } from "./PageSkeleton";
@@ -26,6 +27,4 @@ export {
 export { Checkbox, Field, Input, Select, Textarea } from "./Form";
 export { Spinner } from "./Spinner";
 export { ErrorNotice, LoadingRows, ResultNotice, Skeleton } from "./Feedback";
-export { Table, Td, Th, Tr } from "./Table";
-export { Badge } from "./Badge";
 export { RegistrationMarks } from "./Marks";

@@ -115,6 +115,7 @@ export default function WorkspacesPage() {
     { key: "deadline", header: "Termini", width: "14%", cell: (workspace) => <DeadlineCell workspace={workspace} /> },
     {
       key: "fit",
+      hideBelow: "lg",
       header: "Encaix",
       width: "8%",
       cell: (workspace) => <ScoreValue score={workspace.prefit_score} size="sm" />,

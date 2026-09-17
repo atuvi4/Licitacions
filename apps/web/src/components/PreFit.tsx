@@ -76,28 +76,6 @@ export function ScoreValue({
   );
 }
 
-/** Distintiu compacte: xifra, estat del pre-fit i, si cal, avís de càlcul antic. */
-export function PreFitBadge({ match }: { match: TenderMatch | null }) {
-  if (!match) {
-    return <span className="text-caption text-faint">Sense calcular</span>;
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <ScoreValue score={match.score} />
-      <StatusPill level={MATCH_STATUS_LEVEL[match.status]} size="sm">
-        {MATCH_STATUS_LABELS[match.status]}
-      </StatusPill>
-      {match.is_stale && (
-        <span title="El perfil o la licitació han canviat des de l'últim càlcul.">
-          <StatusPill level="attention" size="sm">
-            Desactualitzat
-          </StatusPill>
-        </span>
-      )}
-    </div>
-  );
-}
-
 /** Una línia amb el motiu que més pesa i, si n'hi ha, el resum de lots. */
 export function PreFitSummary({ match }: { match: TenderMatch | null }) {
   if (!match) return null;

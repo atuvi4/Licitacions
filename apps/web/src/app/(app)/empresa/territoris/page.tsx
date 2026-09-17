@@ -8,19 +8,18 @@ import {
   Button,
   Card,
   Checkbox,
+  DataTable,
   EmptyState,
   ErrorNotice,
   Field,
   Input,
-  LoadingRows,
+  LoadErrorState,
   PageHeader,
+  PageSkeleton,
   Select,
   StatusPill,
-  Table,
-  Td,
   Textarea,
-  Th,
-  Tr,
+  type DataTableColumn,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
 import { optionsFrom, TERRITORY_TYPE_LABELS } from "@/lib/format";
@@ -40,7 +39,7 @@ const EMPTY = {
 export default function TerritoriesPage() {
   const path = useCompanyPath();
   const url = path("/territories");
-  const { data, loading, error, reload } = useResource<Territory[]>(url);
+  const { data, loading, error, status, reload } = useResource<Territory[]>(url);
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
   const [open, setOpen] = useState(false);
@@ -94,6 +93,39 @@ export default function TerritoriesPage() {
 
   const territories = data ?? [];
 
+  const columns: Array<DataTableColumn<Territory>> = [
+    { key: "name", header: "Territori", cell: (territory) => <span className="font-medium">{territory.name}</span> },
+    { key: "type", header: "Tipus", cell: (territory) => <span className="text-muted">{TERRITORY_TYPE_LABELS[territory.territory_type]}</span> },
+    { key: "code", header: "Codi", hideBelow: "lg", cell: (territory) => <span className="font-mono text-[12px] text-muted">{territory.code ?? "—"}</span> },
+    { key: "priority", header: "Prioritat", hideBelow: "lg", width: "10%", cell: (territory) => <span className="tabular-nums">{territory.priority}</span> },
+    {
+      key: "availability",
+      header: "Disponibilitat",
+      width: "14%",
+      cell: (territory) => (
+        <StatusPill level={activeLevel(territory.willing_to_work)} size="sm">
+          {territory.willing_to_work ? "Hi treballem" : "Descartat"}
+        </StatusPill>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Accions",
+      align: "right",
+      width: "16%",
+      cell: (territory) => (
+        <div className="flex flex-wrap justify-end gap-1">
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => openEdit(territory)}>
+            Edita
+          </Button>
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => setToDelete(territory)}>
+            Elimina
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <>
       <PageHeader
@@ -106,59 +138,35 @@ export default function TerritoriesPage() {
         }
       />
 
-      {error && <ErrorNotice message={error} onRetry={() => void reload()} />}
+      {error && data && <ErrorNotice message={error} onRetry={() => void reload()} />}
 
-      <Card>
-        {loading ? (
-          <LoadingRows />
-        ) : territories.length === 0 ? (
-          <EmptyState
-            title="Cap territori definit"
-            description="Indica municipis, comarques, províncies o comunitats autònomes on l'empresa pot executar contractes."
-            action={
-              <Button variant="primary" onClick={openCreate}>
-                Afegeix un territori
-              </Button>
+      {error && !data ? (
+        <LoadErrorState what="els territoris" message={error} status={status} onRetry={() => void reload()} />
+      ) : loading && !data ? (
+        <Card>
+          <PageSkeleton variant="table" columns={["Territori", "Tipus", "Codi", "Prioritat", "Disponibilitat", "Accions"]} />
+        </Card>
+      ) : (
+        <Card>
+          <DataTable<Territory>
+            columns={columns}
+            rows={territories}
+            rowKey={(row) => row.id}
+            stackBelow="md"
+            emptyState={
+        <EmptyState
+          title="Cap territori definit"
+          description="Indica municipis, comarques, províncies o comunitats autònomes on l'empresa pot executar contractes."
+          action={
+            <Button variant="primary" onClick={openCreate}>
+              Afegeix un territori
+            </Button>
+          }
+        />
             }
           />
-        ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>Territori</Th>
-                <Th>Tipus</Th>
-                <Th>Codi</Th>
-                <Th>Prioritat</Th>
-                <Th>Disponibilitat</Th>
-                <Th className="text-right">Accions</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {territories.map((territory) => (
-                <Tr key={territory.id}>
-                  <Td className="font-medium">{territory.name}</Td>
-                  <Td className="text-muted">{TERRITORY_TYPE_LABELS[territory.territory_type]}</Td>
-                  <Td className="font-mono text-[12px] text-muted">{territory.code ?? "—"}</Td>
-                  <Td className="tabular-nums">{territory.priority}</Td>
-                  <Td>
-                    <StatusPill level={activeLevel(territory.willing_to_work)} size="sm">
-                      {territory.willing_to_work ? "Hi treballem" : "Descartat"}
-                    </StatusPill>
-                  </Td>
-                  <Td className="text-right whitespace-nowrap">
-                    <Button size="sm" variant="ghost" onClick={() => openEdit(territory)}>
-                      Edita
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setToDelete(territory)}>
-                      Elimina
-                    </Button>
-                  </Td>
-                </Tr>
-              ))}
-            </tbody>
-          </Table>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <Modal
         open={open}

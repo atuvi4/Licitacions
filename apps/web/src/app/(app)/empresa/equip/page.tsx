@@ -8,20 +8,19 @@ import { useCompanyPath } from "@/components/SessionProvider";
 import {
   Button,
   Card,
+  DataTable,
   EmptyState,
   ErrorNotice,
   Field,
   Input,
   LinkButton,
-  LoadingRows,
+  LoadErrorState,
   PageHeader,
+  PageSkeleton,
   Select,
   StatusPill,
-  Table,
-  Td,
   Textarea,
-  Th,
-  Tr,
+  type DataTableColumn,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
 import { AVAILABILITY_LABELS, optionsFrom } from "@/lib/format";
@@ -43,7 +42,7 @@ const EMPTY = {
 export default function TeamPage() {
   const path = useCompanyPath();
   const url = path("/people");
-  const { data, loading, error, reload } = useResource<Person[]>(url);
+  const { data, loading, error, status, reload } = useResource<Person[]>(url);
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
   const [open, setOpen] = useState(false);
@@ -102,6 +101,57 @@ export default function TeamPage() {
 
   const people = data ?? [];
 
+  const columns: Array<DataTableColumn<Person>> = [
+    {
+      key: "person",
+      header: "Persona",
+      cell: (person) => (
+        <>
+          <Link href={`/empresa/equip/${person.id}`} className="font-medium text-ink hover:text-brand">
+            {[person.first_name, person.last_name].filter(Boolean).join(" ")}
+          </Link>
+          {person.role && <p className="mt-0.5 text-[12px] text-muted">{person.role}</p>}
+        </>
+      ),
+    },
+    { key: "department", header: "Departament", hideBelow: "lg", cell: (person) => <span className="text-muted">{person.department ?? "—"}</span> },
+    {
+      key: "experience",
+      header: "Experiència",
+      width: "12%",
+      cell: (person) => <span className="tabular-nums">{person.years_experience !== null ? `${person.years_experience} anys` : "—"}</span>,
+    },
+    {
+      key: "availability",
+      header: "Disponibilitat",
+      width: "14%",
+      cell: (person) => (
+        <StatusPill level={AVAILABILITY_LEVEL[person.availability_status]} size="sm">
+          {AVAILABILITY_LABELS[person.availability_status]}
+        </StatusPill>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Accions",
+      align: "right",
+      width: "22%",
+      cell: (person) => (
+        <div className="flex flex-wrap justify-end gap-1">
+          <LinkButton href={`/empresa/equip/${person.id}`} className={"min-h-11 md:min-h-0"}>
+            Titulacions
+          </LinkButton>
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => openEdit(person)}>
+            Edita
+          </Button>
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => setToDelete(person)}>
+            Elimina
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <>
       <PageHeader
@@ -114,70 +164,35 @@ export default function TeamPage() {
         }
       />
 
-      {error && <ErrorNotice message={error} onRetry={() => void reload()} />}
+      {error && data && <ErrorNotice message={error} onRetry={() => void reload()} />}
 
-      <Card>
-        {loading ? (
-          <LoadingRows />
-        ) : people.length === 0 ? (
-          <EmptyState
-            title="Cap persona registrada"
-            description="Registra els perfils clau de l'equip i les seves titulacions. Molts plecs demanen adscriure personal amb una titulació concreta."
-            action={
-              <Button variant="primary" onClick={openCreate}>
-                Afegeix una persona
-              </Button>
+      {error && !data ? (
+        <LoadErrorState what="les persones de l'equip" message={error} status={status} onRetry={() => void reload()} />
+      ) : loading && !data ? (
+        <Card>
+          <PageSkeleton variant="table" columns={["Persona", "Departament", "Experiència", "Disponibilitat", "Accions"]} />
+        </Card>
+      ) : (
+        <Card>
+          <DataTable<Person>
+            columns={columns}
+            rows={people}
+            rowKey={(row) => row.id}
+            stackBelow="md"
+            emptyState={
+        <EmptyState
+          title="Cap persona registrada"
+          description="Registra els perfils clau de l'equip i les seves titulacions. Molts plecs demanen adscriure personal amb una titulació concreta."
+          action={
+            <Button variant="primary" onClick={openCreate}>
+              Afegeix una persona
+            </Button>
+          }
+        />
             }
           />
-        ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>Persona</Th>
-                <Th>Departament</Th>
-                <Th>Experiència</Th>
-                <Th>Disponibilitat</Th>
-                <Th className="text-right">Accions</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {people.map((person) => (
-                <Tr key={person.id}>
-                  <Td>
-                    <Link
-                      href={`/empresa/equip/${person.id}`}
-                      className="font-medium text-ink hover:text-brand"
-                    >
-                      {[person.first_name, person.last_name].filter(Boolean).join(" ")}
-                    </Link>
-                    {person.role && (
-                      <p className="mt-0.5 text-[12px] text-muted">{person.role}</p>
-                    )}
-                  </Td>
-                  <Td className="text-muted">{person.department ?? "—"}</Td>
-                  <Td className="tabular-nums">
-                    {person.years_experience !== null ? `${person.years_experience} anys` : "—"}
-                  </Td>
-                  <Td>
-                    <StatusPill level={AVAILABILITY_LEVEL[person.availability_status]} size="sm">
-                      {AVAILABILITY_LABELS[person.availability_status]}
-                    </StatusPill>
-                  </Td>
-                  <Td className="text-right whitespace-nowrap">
-                    <LinkButton href={`/empresa/equip/${person.id}`}>Titulacions</LinkButton>
-                    <Button size="sm" variant="ghost" onClick={() => openEdit(person)}>
-                      Edita
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setToDelete(person)}>
-                      Elimina
-                    </Button>
-                  </Td>
-                </Tr>
-              ))}
-            </tbody>
-          </Table>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <Modal
         open={open}

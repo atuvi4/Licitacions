@@ -174,4 +174,20 @@ describe("ComplianceSection", () => {
     await flush();
     expect(post).toHaveBeenCalledWith("/companies/c1/tenders/t1/compliance", { force: true });
   });
+
+  it("l'etiqueta d'una evidència del backend no ensenya cap codi cru", async () => {
+    renderSection({
+      ...compliance,
+      assessments: [
+        assessment({
+          evidence: [{ id: "ev9", entity_type: "company_insurance", entity_id: "ins1", document_id: null, label: "civil_liability: unknown 1000000.00 EUR", strength: "strong" }],
+        }),
+      ],
+    });
+    // Una sola avaluació: el grup d'acreditats no va plegat.
+    const row = screen.getByText("Certificat ISO 9001 en vigor").closest("li")!;
+    expect(row.textContent).not.toContain("civil_liability");
+    expect(row.textContent).toContain("Responsabilitat civil");
+    expect(row.querySelector("[title='civil_liability: unknown 1000000.00 EUR']")).not.toBeNull();
+  });
 });

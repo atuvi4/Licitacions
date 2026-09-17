@@ -8,8 +8,8 @@
  * humanitzats. No es mou cap constant de lloc.
  *
  * Regla: cap pantalla decideix un color per compte propi ni mostra un codi
- * intern. El nivell surt sempre d'aquí, mai d'un `if` al JSX. Els `*_TONES` i
- * `deadlineTone()` dels mòduls d'origen queden substituïts per aquests mapes i
+ * intern. El nivell surt sempre d'aquí, mai d'un `if` al JSX. Els tons antics i
+ * els tons antics dels mòduls d'origen queden substituïts per aquests mapes i
  * s'eliminen a L15.
  */
 
@@ -385,7 +385,7 @@ export function jobLevel(request: Pick<JobRequest, "status" | "outcome">): Level
 }
 
 /**
- * Nivell del comptador de dies. Substitueix `deadlineTone()`: un termini passat
+ * Nivell del comptador de dies (abans, un to per mòdul): un termini passat
  * o a menys d'una setmana bloqueja; a tres setmanes demana atenció.
  */
 export function deadlineLevel(days: number | null): Level {

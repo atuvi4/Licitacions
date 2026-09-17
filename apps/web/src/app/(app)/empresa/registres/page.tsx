@@ -11,6 +11,7 @@ import {
   ErrorNotice,
   Field,
   Input,
+  LoadErrorState,
   PageHeader,
   Select,
   StatusPill,
@@ -40,7 +41,7 @@ const EMPTY = {
 export default function RegistrationsPage() {
   const path = useCompanyPath();
   const url = path("/registrations");
-  const { data, loading, error, reload } = useResource<Registration[]>(url);
+  const { data, loading, error, status, reload } = useResource<Registration[]>(url);
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
   const [open, setOpen] = useState(false);
@@ -105,78 +106,82 @@ export default function RegistrationsPage() {
         }
       />
 
-      {error && <ErrorNotice message={error} onRetry={() => void reload()} />}
+      {error && data && <ErrorNotice message={error} onRetry={() => void reload()} />}
 
-      <Card>
-        <ResourceTable
-          rows={data ?? []}
-          loading={loading}
-          rowKey={(registration) => registration.id}
-          onEdit={openEdit}
-          onDelete={setToDelete}
-          evidence={{
-            entityType: "company_registration",
-            defaultRelationship: "accreditation",
-            defaultCategory: "registration",
-            description:
-              "Certificat d'inscripció, resolució o classificació que acredita aquest registre.",
-          }}
-          empty={{
-            title: "Cap registre donat d'alta",
-            description:
-              "Registra la inscripció al ROLECE, al RELI o la classificació empresarial i adjunta'n el certificat.",
-            action: (
-              <Button variant="primary" onClick={openCreate}>
-                Afegeix un registre
-              </Button>
-            ),
-          }}
-          columns={[
-            {
-              header: "Registre",
-              cell: (registration) => (
-                <>
-                  <p className="font-medium">{registration.name}</p>
-                  {registration.registration_number && (
-                    <p className="mt-0.5 font-mono text-[12px] text-muted">
-                      {registration.registration_number}
-                    </p>
-                  )}
-                </>
+      {error && !data ? (
+        <LoadErrorState what="els registres" message={error} status={status} onRetry={() => void reload()} />
+      ) : (
+        <Card>
+          <ResourceTable
+            rows={data ?? []}
+            loading={loading}
+            rowKey={(registration) => registration.id}
+            onEdit={openEdit}
+            onDelete={setToDelete}
+            evidence={{
+              entityType: "company_registration",
+              defaultRelationship: "accreditation",
+              defaultCategory: "registration",
+              description:
+                "Certificat d'inscripció, resolució o classificació que acredita aquest registre.",
+            }}
+            empty={{
+              title: "Cap registre donat d'alta",
+              description:
+                "Registra la inscripció al ROLECE, al RELI o la classificació empresarial i adjunta'n el certificat.",
+              action: (
+                <Button variant="primary" onClick={openCreate}>
+                  Afegeix un registre
+                </Button>
               ),
-            },
-            {
-              header: "Tipus",
-              cell: (registration) => (
-                <span className="text-muted">{REGISTRATION_TYPE_LABELS[registration.type]}</span>
-              ),
-            },
-            {
-              header: "Organisme",
-              cell: (registration) => (
-                <span className="text-muted">{registration.issuer ?? "—"}</span>
-              ),
-              className: "text-muted",
-            },
-            {
-              header: "Emissió",
-              cell: (registration) => formatDate(registration.issued_at),
-              className: "tabular-nums",
-            },
-            {
-              header: "Vigència",
-              cell: (registration) => (
-                <>
-                  <span className="tabular-nums">{formatDate(registration.expires_at)}</span>
-                  <StatusPill level={TEMPORAL_LEVEL[registration.temporal_status]} size="sm" className="ml-2">
-                    {TEMPORAL_STATUS_LABELS[registration.temporal_status]}
-                  </StatusPill>
-                </>
-              ),
-            },
-          ]}
-        />
-      </Card>
+            }}
+            columns={[
+              {
+                header: "Registre",
+                cell: (registration) => (
+                  <>
+                    <p className="font-medium">{registration.name}</p>
+                    {registration.registration_number && (
+                      <p className="mt-0.5 font-mono text-[12px] text-muted">
+                        {registration.registration_number}
+                      </p>
+                    )}
+                  </>
+                ),
+              },
+              {
+                header: "Tipus",
+                cell: (registration) => (
+                  <span className="text-muted">{REGISTRATION_TYPE_LABELS[registration.type]}</span>
+                ),
+              },
+              {
+                header: "Organisme",
+                cell: (registration) => (
+                  <span className="text-muted">{registration.issuer ?? "—"}</span>
+                ),
+                className: "text-muted",
+              },
+              {
+                header: "Emissió",
+                cell: (registration) => formatDate(registration.issued_at),
+                className: "tabular-nums",
+              },
+              {
+                header: "Vigència",
+                cell: (registration) => (
+                  <>
+                    <span className="tabular-nums">{formatDate(registration.expires_at)}</span>
+                    <StatusPill level={TEMPORAL_LEVEL[registration.temporal_status]} size="sm" className="ml-2">
+                      {TEMPORAL_STATUS_LABELS[registration.temporal_status]}
+                    </StatusPill>
+                  </>
+                ),
+              },
+            ]}
+          />
+        </Card>
+      )}
 
       <Modal
         open={open}

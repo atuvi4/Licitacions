@@ -8,17 +8,16 @@ import {
   Button,
   Card,
   CardHeader,
+  DataTable,
   EmptyState,
   ErrorNotice,
   Field,
   Input,
   LoadingRows,
   PageHeader,
-  Table,
-  Td,
+  PageSkeleton,
   Textarea,
-  Th,
-  Tr,
+  type DataTableColumn,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
@@ -114,6 +113,42 @@ export default function SolvencyPage() {
 
   const list = years.data ?? [];
 
+  const yearColumns: Array<DataTableColumn<FinancialYear>> = [
+    { key: "year", header: "Exercici", width: "14%", cell: (year) => <span className="font-medium tabular-nums">{year.year}</span> },
+    { key: "revenue", header: "Facturació", width: "22%", cell: (year) => <span className="tabular-nums">{formatMoney(year.revenue, year.currency)}</span> },
+    { key: "notes", header: "Notes", cell: (year) => <span className="text-muted">{year.notes ?? "—"}</span> },
+    {
+      key: "actions",
+      header: "Accions",
+      align: "right",
+      width: "18%",
+      cell: (year) => (
+        <div className="flex flex-wrap justify-end gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="min-h-11 md:min-h-0"
+            onClick={() => {
+              yearMutation.reset();
+              setForm({
+                year: String(year.year),
+                revenue: year.revenue ?? "",
+                notes: year.notes ?? "",
+              });
+              setEditing(year);
+              setOpen(true);
+            }}
+          >
+            Edita
+          </Button>
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => setToDelete(year)}>
+            Elimina
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <>
       <PageHeader
@@ -142,54 +177,35 @@ export default function SolvencyPage() {
             }
           />
           {years.error && <div className="p-4"><ErrorNotice message={years.error} /></div>}
-          {years.loading ? (
-            <LoadingRows rows={2} />
-          ) : list.length === 0 ? (
-            <EmptyState
-              title="Cap exercici registrat"
-              description="Introdueix la facturació dels darrers anys per poder acreditar la solvència econòmica."
-            />
+          {years.loading && list.length === 0 ? (
+            <PageSkeleton variant="table" columns={["Exercici", "Facturació", "Notes", "Accions"]} />
           ) : (
-            <Table>
-              <thead>
-                <tr>
-                  <Th>Exercici</Th>
-                  <Th>Facturació</Th>
-                  <Th>Notes</Th>
-                  <Th className="text-right">Accions</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((year) => (
-                  <Tr key={year.id}>
-                    <Td className="font-medium tabular-nums">{year.year}</Td>
-                    <Td className="tabular-nums">{formatMoney(year.revenue, year.currency)}</Td>
-                    <Td className="max-w-sm truncate text-muted">{year.notes ?? "—"}</Td>
-                    <Td className="text-right whitespace-nowrap">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          yearMutation.reset();
-                          setForm({
-                            year: String(year.year),
-                            revenue: year.revenue ?? "",
-                            notes: year.notes ?? "",
-                          });
-                          setEditing(year);
-                          setOpen(true);
-                        }}
-                      >
-                        Edita
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setToDelete(year)}>
-                        Elimina
-                      </Button>
-                    </Td>
-                  </Tr>
-                ))}
-              </tbody>
-            </Table>
+            <DataTable<FinancialYear>
+              columns={yearColumns}
+              rows={list}
+              rowKey={(year) => year.id}
+              stackBelow="md"
+              emptyState={
+                <EmptyState
+                  title="Cap exercici registrat"
+                  description="Introdueix la facturació dels darrers anys per poder acreditar la solvència econòmica."
+                  action={
+                    <Button
+                      variant="primary"
+                      size="md"
+                      onClick={() => {
+                        yearMutation.reset();
+                        setForm(EMPTY_YEAR);
+                        setEditing(null);
+                        setOpen(true);
+                      }}
+                    >
+                      Afegeix el primer exercici
+                    </Button>
+                  }
+                />
+              }
+            />
           )}
         </Card>
 

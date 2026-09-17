@@ -18,14 +18,15 @@ export type ButtonSize = "sm" | "md";
  */
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   // Blanc sobre accent-700 (6,5:1); hover un pas més fosc, premut dos.
-  primary: "relative border-brand bg-brand text-white hover:border-accent-800 hover:bg-accent-800 active:border-accent-900 active:bg-accent-900",
+  primary: "relative border-brand bg-brand text-white hover:border-accent-800 hover:bg-accent-800 active:border-accent-900 active:bg-accent-900 max-sm:min-h-12",
   secondary: "border-border-strong bg-transparent text-ink hover:bg-subtle active:bg-neutral-200",
   ghost: "border-transparent bg-transparent text-brand-strong hover:bg-brand-soft hover:text-accent-800 active:bg-brand-soft",
   danger: "border-danger bg-danger text-white hover:opacity-90",
 };
 
+// Sota 640 px cap acció baixa de 44 px, i el sòlid (l'acció principal) de 48 (handoff, Estats transversals 04).
 const BASE_CLASS =
-  "inline-flex items-center justify-center gap-2 rounded-control border font-heading font-semibold tracking-[0.02em] whitespace-nowrap transition-colors duration-150";
+  "inline-flex items-center justify-center gap-2 rounded-control border font-heading font-semibold tracking-[0.02em] whitespace-nowrap transition-colors duration-150 max-sm:min-h-11";
 
 function sizeClass(size: ButtonSize) {
   return size === "sm" ? "ui-action-sm text-[13px]" : "ui-action-md text-[13.5px]";

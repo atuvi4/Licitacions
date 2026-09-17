@@ -403,28 +403,12 @@ export const EVIDENCE_STATUS_LABELS: Record<EvidenceItemStatus, string> = {
   not_applicable: "No aplica",
 };
 
-export const EVIDENCE_STATUS_TONES: Record<EvidenceItemStatus, Tone> = {
-  suggested: "brand",
-  selected: "success",
-  missing: "danger",
-  needs_review: "warning",
-  not_applicable: "neutral",
-};
-
 export const VALIDITY_LABELS: Record<DocumentValidity, string> = {
   valid: "Vigent el dia del termini",
   expires_before_deadline: "Caduca ABANS del termini",
   expired: "Caducat",
   no_expiry: "Sense data de caducitat",
   no_document: "Sense document",
-};
-
-export const VALIDITY_TONES: Record<DocumentValidity, Tone> = {
-  valid: "success",
-  expires_before_deadline: "danger",
-  expired: "danger",
-  no_expiry: "warning",
-  no_document: "neutral",
 };
 
 export const COVERAGE_LABELS: Record<DossierCoverageState, string> = {
@@ -434,25 +418,11 @@ export const COVERAGE_LABELS: Record<DossierCoverageState, string> = {
   not_applicable: "No aplica",
 };
 
-export const COVERAGE_TONES: Record<DossierCoverageState, Tone> = {
-  covered: "success",
-  missing_document: "danger",
-  needs_review: "warning",
-  not_applicable: "neutral",
-};
-
 export const READINESS_LABELS: Record<WorkspaceReadiness, string> = {
   not_started: "Sense començar",
   incomplete: "Incomplet",
   needs_review: "Cal revisar",
   ready_for_final_review: "A punt per a la revisió final",
-};
-
-export const READINESS_TONES: Record<WorkspaceReadiness, Tone> = {
-  not_started: "neutral",
-  incomplete: "warning",
-  needs_review: "warning",
-  ready_for_final_review: "success",
 };
 
 /** Text de cada blocador. Derivat del codi que envia l'API, mai text lliure. */
@@ -490,8 +460,6 @@ export interface WorkspaceCreateResult {
   workspace: WorkspaceSummary;
 }
 
-type Tone = "neutral" | "brand" | "success" | "warning" | "danger";
-
 export const WORKSPACE_STATUS_LABELS: Record<WorkspaceStatus, string> = {
   analysis: "En anàlisi",
   needs_review: "Cal revisió",
@@ -505,29 +473,10 @@ export const WORKSPACE_STATUS_LABELS: Record<WorkspaceStatus, string> = {
   withdrawn: "Retirada",
 };
 
-export const WORKSPACE_STATUS_TONES: Record<WorkspaceStatus, Tone> = {
-  analysis: "neutral",
-  needs_review: "warning",
-  awaiting_decision: "warning",
-  go_approved: "success",
-  no_go_approved: "danger",
-  preparing_bid: "brand",
-  ready_for_final_review: "brand",
-  approved_for_submission: "success",
-  submitted: "success",
-  withdrawn: "neutral",
-};
-
 export const DECISION_LABELS: Record<WorkspaceDecisionType, string> = {
   go: "GO",
   no_go: "NO-GO",
   defer: "Ajornada",
-};
-
-export const DECISION_TONES: Record<WorkspaceDecisionType, Tone> = {
-  go: "success",
-  no_go: "danger",
-  defer: "warning",
 };
 
 export const CHECKLIST_STATUS_LABELS: Record<ChecklistItemStatus, string> = {
@@ -538,26 +487,11 @@ export const CHECKLIST_STATUS_LABELS: Record<ChecklistItemStatus, string> = {
   not_applicable: "No aplica",
 };
 
-export const CHECKLIST_STATUS_TONES: Record<ChecklistItemStatus, Tone> = {
-  pending: "neutral",
-  in_progress: "brand",
-  completed: "success",
-  blocked: "danger",
-  not_applicable: "neutral",
-};
-
 export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   pending: "Pendent",
   in_progress: "En curs",
   completed: "Feta",
   cancelled: "Cancel·lada",
-};
-
-export const TASK_STATUS_TONES: Record<TaskStatus, Tone> = {
-  pending: "neutral",
-  in_progress: "brand",
-  completed: "success",
-  cancelled: "neutral",
 };
 
 /**
@@ -614,12 +548,6 @@ export function deadlineLabel(days: number | null): string | null {
   return `${days} ${days === 1 ? "dia" : "dies"} restants`;
 }
 
-export function deadlineTone(days: number | null): Tone {
-  if (days === null) return "neutral";
-  if (days < 0) return "danger";
-  if (days <= 7) return "warning";
-  return "neutral";
-}
 
 /* -------------------------------------------------------------------------- */
 /* Paquet de presentació (5C)                                                  */
@@ -740,13 +668,6 @@ export const PACKAGE_STATUS_LABELS: Record<SubmissionPackageStatus, string> = {
   frozen: "Congelat",
   approved: "Aprovat per presentar",
   superseded: "Superat",
-};
-
-export const PACKAGE_STATUS_TONES: Record<SubmissionPackageStatus, Tone> = {
-  draft: "neutral",
-  frozen: "brand",
-  approved: "success",
-  superseded: "neutral",
 };
 
 /** Per què el paquet ja no descriu el que hi ha. Codis, mai text lliure. */

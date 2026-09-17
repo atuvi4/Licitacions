@@ -7,20 +7,20 @@ import { useCompanyPath, useSession } from "@/components/SessionProvider";
 import {
   Button,
   Card,
+  cn,
+  DataTable,
   EmptyState,
   ErrorNotice,
   Field,
   Input,
+  LoadErrorState,
   LoadingRows,
   PageHeader,
+  PageSkeleton,
   Select,
   StatusPill,
-  Table,
-  Td,
   Textarea,
-  Th,
-  Tr,
-  cn,
+  type DataTableColumn,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
 import {
@@ -72,7 +72,7 @@ export default function DocumentsPage() {
   const path = useCompanyPath();
   const { config } = useSession();
   const url = path("/documents");
-  const { data, loading, error, reload } = useResource<DocumentItem[]>(url);
+  const { data, loading, error, status, reload } = useResource<DocumentItem[]>(url);
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
   const [search, setSearch] = useState("");
@@ -167,6 +167,117 @@ export default function DocumentsPage() {
     });
   }
 
+  const columns: Array<DataTableColumn<DocumentItem>> = [
+    {
+      key: "document",
+      header: "Document",
+      cell: (document) => (
+        <>
+          <p className="font-medium">{document.name}</p>
+          <p className="mt-0.5 text-[12px] text-muted">
+            {document.original_filename} · {formatFileSize(document.file_size)} · {formatDate(document.uploaded_at)}
+          </p>
+          <p className="mt-0.5 font-mono text-[11px] break-all text-faint" title={document.sha256}>
+            sha256:{document.sha256.slice(0, 12)}…
+          </p>
+        </>
+      ),
+    },
+    { key: "category", header: "Categoria", hideBelow: "lg", cell: (document) => <span className="text-muted">{DOCUMENT_CATEGORY_LABELS[document.category]}</span> },
+    {
+      key: "expiry",
+      header: "Caducitat",
+      width: "18%",
+      cell: (document) =>
+        document.expires_at ? (
+          <>
+            <span className="tabular-nums">{formatDate(document.expires_at)}</span>
+            <StatusPill level={TEMPORAL_LEVEL[document.temporal_status]} size="sm" className="ml-2">
+              {TEMPORAL_STATUS_LABELS[document.temporal_status]}
+            </StatusPill>
+          </>
+        ) : (
+          <span className="text-faint">—</span>
+        ),
+    },
+    {
+      key: "links",
+      header: "Evidència de",
+      cell: (document) =>
+        document.links.length === 0 ? (
+          <span className="text-[12px] text-faint">Sense vincular</span>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {document.links.map((link) => (
+              <button
+                key={link.id}
+                type="button"
+                title="Elimina aquest vincle"
+                onClick={() => void removeLink(document, link.id)}
+                className={cn(
+                  "min-h-11 bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand-strong md:min-h-0",
+                  "hover:bg-danger-soft hover:text-danger",
+                )}
+              >
+                {ENTITY_TYPE_LABELS[link.entity_type]} · {RELATIONSHIP_LABELS[link.relationship_type]} ×
+              </button>
+            ))}
+          </div>
+        ),
+    },
+    {
+      key: "actions",
+      header: "Accions",
+      align: "right",
+      width: "22%",
+      cell: (document) => (
+        <div className="flex flex-wrap justify-end gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="min-h-11 md:min-h-0"
+            onClick={() => void api.download(`${url}/${document.id}/download`, document.original_filename)}
+          >
+            Descarrega
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="min-h-11 md:min-h-0"
+            onClick={() => {
+              reset();
+              setLinkTarget(null);
+              setLinking(document);
+            }}
+          >
+            Vincula
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="min-h-11 md:min-h-0"
+            onClick={() => {
+              reset();
+              setUploadForm({
+                name: document.name,
+                category: document.category,
+                description: document.description ?? "",
+                issued_at: document.issued_at ?? "",
+                expires_at: document.expires_at ?? "",
+              });
+              setEditing(document);
+            }}
+          >
+            Edita
+          </Button>
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => setToDelete(document)}>
+            Elimina
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <>
       <PageHeader
@@ -188,9 +299,16 @@ export default function DocumentsPage() {
         }
       />
 
-      {error && <ErrorNotice message={error} onRetry={() => void reload()} />}
+      <p className="mb-3 text-[12.5px] text-muted md:hidden">
+        Pujar i vincular documents funciona aquí, però és millor des de l&apos;escriptori.
+      </p>
 
-      <Card>
+      {error && data && <ErrorNotice message={error} onRetry={() => void reload()} />}
+
+      {error && !data ? (
+        <LoadErrorState what="els documents" message={error} status={status} onRetry={() => void reload()} />
+      ) : loading && !data ? (
+        <Card>
         <div className="flex flex-wrap items-end gap-3 border-b border-border px-5 py-4">
           <Field label="Cerca" className="min-w-[220px] flex-1">
             <Input
@@ -209,132 +327,74 @@ export default function DocumentsPage() {
           </Field>
         </div>
 
-        {loading ? (
-          <LoadingRows />
-        ) : documents.length === 0 ? (
-          <EmptyState
-            title={(data ?? []).length === 0 ? "La biblioteca és buida" : "Cap resultat"}
-            description={
-              (data ?? []).length === 0
-                ? "Puja certificats, pòlisses, títols o certificats de bona execució. Després els podràs vincular a les dades que justifiquen."
-                : "Prova de canviar els filtres."
+          <PageSkeleton variant="table" columns={["Document", "Categoria", "Caducitat", "Evidència de", "Accions"]} />
+        </Card>
+      ) : (
+        <Card>
+        <div className="flex flex-wrap items-end gap-3 border-b border-border px-5 py-4">
+          <Field label="Cerca" className="min-w-[220px] flex-1">
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Nom del document"
+            />
+          </Field>
+          <Field label="Categoria" className="w-56">
+            <Select
+              value={category}
+              placeholder="Totes"
+              options={optionsFrom(DOCUMENT_CATEGORY_LABELS)}
+              onChange={(event) => setCategory(event.target.value)}
+            />
+          </Field>
+        </div>
+
+          <DataTable<DocumentItem>
+            columns={columns}
+            rows={documents}
+            rowKey={(row) => row.id}
+            stackBelow="md"
+            emptyState={
+        <EmptyState
+          title={(data ?? []).length === 0 ? "La biblioteca és buida" : "Cap resultat"}
+          description={
+            (data ?? []).length === 0
+              ? "Puja certificats, pòlisses, títols o certificats de bona execució. Després els podràs vincular a les dades que justifiquen."
+              : "Prova de canviar els filtres."
+          }
+          action={
+            (data ?? []).length === 0 ? (
+              <Button
+                variant="primary"
+                size="md"
+                onClick={() => {
+                  reset();
+                  setUploadForm(EMPTY_UPLOAD);
+                  setFile(null);
+                  setFileError(null);
+                  setUploadOpen(true);
+                }}
+              >
+                Puja el primer document
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                size="md"
+                onClick={() => {
+                  setSearch("");
+                  setCategory("");
+                }}
+              >
+                Treu els filtres
+              </Button>
+            )
+          }
+        />
             }
           />
-        ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>Document</Th>
-                <Th>Categoria</Th>
-                <Th>Caducitat</Th>
-                <Th>Evidència de</Th>
-                <Th className="text-right">Accions</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {documents.map((document) => (
-                <Tr key={document.id}>
-                  <Td>
-                    <p className="font-medium">{document.name}</p>
-                    <p className="mt-0.5 text-[12px] text-muted">
-                      {document.original_filename} · {formatFileSize(document.file_size)} ·{" "}
-                      {formatDate(document.uploaded_at)}
-                    </p>
-                    <p className="mt-0.5 font-mono text-[11px] text-faint" title={document.sha256}>
-                      sha256:{document.sha256.slice(0, 12)}…
-                    </p>
-                  </Td>
-                  <Td className="text-muted">{DOCUMENT_CATEGORY_LABELS[document.category]}</Td>
-                  <Td>
-                    {document.expires_at ? (
-                      <>
-                        <span className="tabular-nums">{formatDate(document.expires_at)}</span>
-                        <StatusPill
-                          level={TEMPORAL_LEVEL[document.temporal_status]}
-                          size="sm"
-                          className="ml-2"
-                        >
-                          {TEMPORAL_STATUS_LABELS[document.temporal_status]}
-                        </StatusPill>
-                      </>
-                    ) : (
-                      <span className="text-faint">—</span>
-                    )}
-                  </Td>
-                  <Td>
-                    {document.links.length === 0 ? (
-                      <span className="text-[12px] text-faint">Sense vincular</span>
-                    ) : (
-                      <div className="flex flex-wrap gap-1">
-                        {document.links.map((link) => (
-                          <button
-                            key={link.id}
-                            type="button"
-                            title="Elimina aquest vincle"
-                            onClick={() => void removeLink(document, link.id)}
-                            className={cn(
-                              "bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand-strong",
-                              "hover:bg-danger-soft hover:text-danger",
-                            )}
-                          >
-                            {ENTITY_TYPE_LABELS[link.entity_type]} ·{" "}
-                            {RELATIONSHIP_LABELS[link.relationship_type]} ×
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </Td>
-                  <Td className="text-right whitespace-nowrap">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        void api.download(
-                          `${url}/${document.id}/download`,
-                          document.original_filename,
-                        )
-                      }
-                    >
-                      Descarrega
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        reset();
-                        setLinkTarget(null);
-                        setLinking(document);
-                      }}
-                    >
-                      Vincula
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        reset();
-                        setUploadForm({
-                          name: document.name,
-                          category: document.category,
-                          description: document.description ?? "",
-                          issued_at: document.issued_at ?? "",
-                          expires_at: document.expires_at ?? "",
-                        });
-                        setEditing(document);
-                      }}
-                    >
-                      Edita
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setToDelete(document)}>
-                      Elimina
-                    </Button>
-                  </Td>
-                </Tr>
-              ))}
-            </tbody>
-          </Table>
-        )}
-      </Card>
+        </Card>
+      )}
 
       {/* Pujada */}
       <Modal

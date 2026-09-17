@@ -244,6 +244,43 @@ src` (només la prova que ho prohibeix) en verd.
 Verificació en tancar L14: `npm test` (295 proves), `npm run typecheck`,
 `npm run lint`, `npm run build` i `git diff --check` en verd.
 
+- **L15 · Estats transversals + responsive + neteja (últim lot).**
+  **Components antics eliminats** després de confirmar amb `grep` que no
+  tenien cap consumidor: `Badge`, tots els `*_TONES` (compliance, requirements,
+  tenders, workspace), `deadlineTone`, `RESULT_ICONS`, `AppShell.tsx`, les
+  primitives `Table/Th/Td/Tr`, el barril tolerant `ui.tsx` i la galeria
+  `/ui-preview`. **`EmptyState` estricte** a tot arreu (acció obligatòria i
+  real: crear, pujar, treure els filtres, tornar a comprovar, tancar la
+  sessió). **`LoadErrorState`** (E1 / E3 / E4 sobre `ErrorState`, codi només al
+  detall tècnic) a totes les càrregues de pàgina; càrrega amb `PageSkeleton`
+  amb columnes reals; error de mutació a prop de l'acció. **`DataTable`
+  transversal**: `ResourceTable` i les deu taules antigues del perfil,
+  documents, experiència i fitxa (lots i publicacions) hi passen, amb files
+  desplegables (`expandedRow`) per a les evidències. **`SessionProvider` sense
+  empresa** → `EmptyState` amb «Tanca la sessió»; error de sessió amb reintent;
+  cap cercle girant. **Responsive** auditat a 1440 × 900, 1024 × 768, 768 × 1024
+  i 390 × 844 (17 rutes): cap desplaçament horitzontal de pàgina, taules com a
+  targetes sota 768, columnes secundàries `hideBelow="lg"` a tauleta, **controls
+  mòbils a 44 px i el sòlid a 48 px** des de `Button` i `Form`, «Millor des de
+  l'escriptori» com a ajuda a documents i al paquet. **Greps finals = 0**
+  (`Badge\b`, `_TONES`, `deadlineTone`, `window.prompt`, `RESULT_ICONS` i
+  `JSON.stringify` als `.tsx`, overrides d'ESLint). **Lighthouse
+  accessibilitat = 100** a les vuit rutes auditades (Oportunitats, Avui,
+  Requisits, Decidir, Preparar, Tancar, perfil, documents). **`after/` +
+  `AFTER.md`**: 11 pantalles a 1440 i 390 (viewport i pàgina sencera) i sis
+  estats transversals, amb `capture-states.js` i `VIEWPORT` a
+  `capture-baseline.js`. **`useResource.reload` auditat** (63 usos; ara retorna
+  el recurs, els antics l'ignoren, cap doble lectura ni desmuntatge; proves al
+  hook). **Invariants finals** a `lib/invariants.test.ts`: undetermined ≠ sí/no,
+  partial ≠ complete, recomanació ≠ decisió, selected ≠ covered, compliment ≠
+  dossier, aprovació ≠ presentació, zero bloqueigs sense anàlisi ≠ tot bé.
+  Etiquetes d'evidència del backend humanitzades (`evidenceLabel`). **C-1 … C-10
+  continuen oberts** i documentats. Cap canvi a `apps/api`, cap dependència
+  nova, cap crida a cap proveïdor extern.
+
+Verificació en tancar L15: `npm test` (305 proves), `npm run typecheck`,
+`npm run lint`, `npm run build` i `git diff --check` en verd.
+
 ## Accessibilitat
 
 Lighthouse (accessibilitat) a `/licitacions`, sobre el build de producció:
@@ -271,6 +308,5 @@ d'ordenació sense etiqueta).
 
 | Què | Lot |
 | --- | --- |
-| Barril amb `EmptyState` tolerant → estricte | L15 |
-| Esborrar `*_TONES`, `deadlineTone`, `Badge` (ja sense usos a les pàgines del perfil), `AppShell.tsx` i `/ui-preview` | L15 |
-| Captures `after/` i comparació amb `baseline/` | L15 |
+| Taula unificada de Requisits + Compliment (mockup 05) | Sprint 2 |
+| Casos C-1 … C-10 (selecció de plecs per a l'anàlisi, job center, noms de bloqueigs, «només les meves», impacte del perfil, quin document arregla què, submission, diff de revisions, selecció de lot, persona amb permís) | Sprint 2 o posterior |

@@ -11,6 +11,7 @@ import {
   ErrorNotice,
   Field,
   Input,
+  LoadErrorState,
   PageHeader,
   Select,
   StatusPill,
@@ -52,7 +53,7 @@ const EMPTY = {
 export default function InsurancesPage() {
   const path = useCompanyPath();
   const url = path("/insurances");
-  const { data, loading, error, reload } = useResource<Insurance[]>(url);
+  const { data, loading, error, status, reload } = useResource<Insurance[]>(url);
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
   const [open, setOpen] = useState(false);
@@ -165,100 +166,104 @@ export default function InsurancesPage() {
         }
       />
 
-      {error && <ErrorNotice message={error} onRetry={() => void reload()} />}
+      {error && data && <ErrorNotice message={error} onRetry={() => void reload()} />}
 
-      <Card>
-        <ResourceTable
-          rows={data ?? []}
-          loading={loading}
-          rowKey={(insurance) => insurance.id}
-          onEdit={openEdit}
-          onDelete={setToDelete}
-          evidence={{
-            entityType: "company_insurance",
-            defaultRelationship: "policy",
-            defaultCategory: "insurance",
-            description: "Pòlissa, condicions particulars o rebut que acrediten la cobertura.",
-          }}
-          empty={{
-            title: "Cap pòlissa registrada",
-            description:
-              "Registra les assegurances de l'empresa amb el seu import de cobertura i adjunta-hi la pòlissa.",
-            action: (
-              <Button variant="primary" onClick={openCreate}>
-                Afegeix una pòlissa
-              </Button>
-            ),
-          }}
-          columns={[
-            {
-              header: "Tipus",
-              cell: (insurance) => (
-                <>
-                  <p className="font-medium">{INSURANCE_TYPE_LABELS[insurance.type]}</p>
-                  {insurance.policy_number && (
-                    <p className="mt-0.5 font-mono text-[12px] text-muted">
-                      {insurance.policy_number}
-                    </p>
-                  )}
-                </>
+      {error && !data ? (
+        <LoadErrorState what="les pòlisses" message={error} status={status} onRetry={() => void reload()} />
+      ) : (
+        <Card>
+          <ResourceTable
+            rows={data ?? []}
+            loading={loading}
+            rowKey={(insurance) => insurance.id}
+            onEdit={openEdit}
+            onDelete={setToDelete}
+            evidence={{
+              entityType: "company_insurance",
+              defaultRelationship: "policy",
+              defaultCategory: "insurance",
+              description: "Pòlissa, condicions particulars o rebut que acrediten la cobertura.",
+            }}
+            empty={{
+              title: "Cap pòlissa registrada",
+              description:
+                "Registra les assegurances de l'empresa amb el seu import de cobertura i adjunta-hi la pòlissa.",
+              action: (
+                <Button variant="primary" onClick={openCreate}>
+                  Afegeix una pòlissa
+                </Button>
               ),
-            },
-            {
-              header: "Companyia",
-              cell: (insurance) => (
-                <span className="text-muted">{insurance.provider ?? "—"}</span>
-              ),
-            },
-            {
-              header: "Cobertura",
-              cell: (insurance) => {
-                const rows = limitsByPolicy[insurance.id] ?? [];
-                return (
+            }}
+            columns={[
+              {
+                header: "Tipus",
+                cell: (insurance) => (
                   <>
-                    {rows.length > 0 ? (
-                      <ul className="space-y-0.5">
-                        {rows.map((limit) => (
-                          <li key={limit.id} className="whitespace-nowrap">
-                            <span className="text-muted">
-                              {INSURANCE_LIMIT_KIND_LABELS[limit.kind]}:
-                            </span>{" "}
-                            <span className="tabular-nums">
-                              {formatMoney(limit.amount, limit.currency)}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <span className="tabular-nums">
-                        {formatMoney(insurance.coverage_amount, insurance.currency)}
-                      </span>
-                    )}
-                    {insurance.coverage_description && (
-                      <p className="mt-0.5 max-w-xs truncate text-[12px] text-muted">
-                        {insurance.coverage_description}
+                    <p className="font-medium">{INSURANCE_TYPE_LABELS[insurance.type]}</p>
+                    {insurance.policy_number && (
+                      <p className="mt-0.5 font-mono text-[12px] text-muted">
+                        {insurance.policy_number}
                       </p>
                     )}
                   </>
-                );
+                ),
               },
-            },
-            {
-              header: "Vigència",
-              cell: (insurance) => (
-                <>
-                  <span className="whitespace-nowrap tabular-nums text-muted">
-                    {formatDate(insurance.starts_at)} – {formatDate(insurance.expires_at)}
-                  </span>
-                  <StatusPill level={TEMPORAL_LEVEL[insurance.temporal_status]} size="sm" className="ml-2">
-                    {TEMPORAL_STATUS_LABELS[insurance.temporal_status]}
-                  </StatusPill>
-                </>
-              ),
-            },
-          ]}
-        />
-      </Card>
+              {
+                header: "Companyia",
+                cell: (insurance) => (
+                  <span className="text-muted">{insurance.provider ?? "—"}</span>
+                ),
+              },
+              {
+                header: "Cobertura",
+                cell: (insurance) => {
+                  const rows = limitsByPolicy[insurance.id] ?? [];
+                  return (
+                    <>
+                      {rows.length > 0 ? (
+                        <ul className="space-y-0.5">
+                          {rows.map((limit) => (
+                            <li key={limit.id} className="whitespace-nowrap">
+                              <span className="text-muted">
+                                {INSURANCE_LIMIT_KIND_LABELS[limit.kind]}:
+                              </span>{" "}
+                              <span className="tabular-nums">
+                                {formatMoney(limit.amount, limit.currency)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <span className="tabular-nums">
+                          {formatMoney(insurance.coverage_amount, insurance.currency)}
+                        </span>
+                      )}
+                      {insurance.coverage_description && (
+                        <p className="mt-0.5 max-w-xs truncate text-[12px] text-muted">
+                          {insurance.coverage_description}
+                        </p>
+                      )}
+                    </>
+                  );
+                },
+              },
+              {
+                header: "Vigència",
+                cell: (insurance) => (
+                  <>
+                    <span className="whitespace-nowrap tabular-nums text-muted">
+                      {formatDate(insurance.starts_at)} – {formatDate(insurance.expires_at)}
+                    </span>
+                    <StatusPill level={TEMPORAL_LEVEL[insurance.temporal_status]} size="sm" className="ml-2">
+                      {TEMPORAL_STATUS_LABELS[insurance.temporal_status]}
+                    </StatusPill>
+                  </>
+                ),
+              },
+            ]}
+          />
+        </Card>
+      )}
 
       <Modal
         open={open}

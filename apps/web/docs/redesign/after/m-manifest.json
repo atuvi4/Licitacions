@@ -1,0 +1,55 @@
+{
+  "base": "http://localhost:3000",
+  "capturedAt": "2026-09-17T16:35:15.016Z",
+  "viewport": "390x844",
+  "companyId": "8b809a59-fc8a-43ee-b991-37a43c694012",
+  "tenderId": "4d06df6b-dae0-4f67-91ee-787cae44f713",
+  "workspaceId": "cf36f9b0-3be2-4a6f-902e-ece3fb049841",
+  "documentId": "fcf095bc-c62f-4819-b1ee-b2706c1fb7b9",
+  "shots": [
+    {
+      "name": "01-login",
+      "url": "/login"
+    },
+    {
+      "name": "02-dashboard",
+      "url": "/avui"
+    },
+    {
+      "name": "03-licitacions",
+      "url": "/licitacions"
+    },
+    {
+      "name": "04-licitacio-fitxa",
+      "url": "/licitacions/4d06df6b-dae0-4f67-91ee-787cae44f713"
+    },
+    {
+      "name": "05-licitacio-plec-text",
+      "url": "/licitacions/4d06df6b-dae0-4f67-91ee-787cae44f713/documents/fcf095bc-c62f-4819-b1ee-b2706c1fb7b9"
+    },
+    {
+      "name": "06-candidatures",
+      "url": "/candidatures"
+    },
+    {
+      "name": "07-candidatura",
+      "url": "/candidatures/cf36f9b0-3be2-4a6f-902e-ece3fb049841?pas=tancar"
+    },
+    {
+      "name": "08-empresa",
+      "url": "/empresa"
+    },
+    {
+      "name": "09-empresa-solvencia",
+      "url": "/empresa/solvencia"
+    },
+    {
+      "name": "10-experiencia",
+      "url": "/experiencia"
+    },
+    {
+      "name": "11-documents",
+      "url": "/documents"
+    }
+  ]
+}

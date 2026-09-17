@@ -453,7 +453,10 @@ export function RequirementAnalysisSection({
                 {run.chunks_failed > 0 && <span className="text-danger"> · {run.chunks_failed} fallits</span>}
               </dd>
             </div>
-            <div className="col-span-2 md:col-span-4">
+          </dl>
+        )}
+        {run && (
+          <div className="px-5 pb-4">
               <details>
                 <summary className="cursor-pointer text-caption text-muted">Detall tècnic de l&apos;anàlisi</summary>
                 <p className="mt-1 font-mono text-[11.5px] text-muted">
@@ -464,8 +467,7 @@ export function RequirementAnalysisSection({
                   {run.duration_ms !== null && ` · ${(run.duration_ms / 1000).toFixed(1)} s`}
                 </p>
               </details>
-            </div>
-          </dl>
+          </div>
         )}
 
         {run?.error_message && (

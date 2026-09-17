@@ -38,4 +38,39 @@ describe("useResource", () => {
     expect(result.current.error).toBe("xarxa");
     expect(result.current.status).toBeNull();
   });
+
+  it("reload retorna el recurs llegit (o null si falla) i els consumidors antics que l'ignoren continuen igual", async () => {
+    get.mockResolvedValueOnce({ id: "t1" });
+    const { result } = renderHook(() => useResource<{ id: string }>("/tenders/t1"));
+    await flush();
+    get.mockResolvedValueOnce({ id: "t1", status: "ready" });
+    let returned: unknown = "unset";
+    await act(async () => {
+      returned = await result.current.reload();
+    });
+    expect(returned).toEqual({ id: "t1", status: "ready" });
+    expect(result.current.data).toEqual({ id: "t1", status: "ready" });
+    // Cada reload fa exactament una lectura: cap doble crida ni bucle.
+    expect(get).toHaveBeenCalledTimes(2);
+    get.mockRejectedValueOnce(new ApiError(500, "internal_error", "Error intern"));
+    await act(async () => {
+      returned = await result.current.reload();
+    });
+    expect(returned).toBeNull();
+    // Un reload fallit conserva l'última dada bona: la pantalla no es desmunta.
+    expect(result.current.data).toEqual({ id: "t1", status: "ready" });
+    expect(result.current.error).toBe("Error intern");
+    expect(result.current.status).toBe(500);
+  });
+
+  it("amb path null no llegeix res i reload retorna null", async () => {
+    const { result } = renderHook(() => useResource<{ id: string }>(null));
+    await flush();
+    expect(get).not.toHaveBeenCalled();
+    let returned: unknown = "unset";
+    await act(async () => {
+      returned = await result.current.reload();
+    });
+    expect(returned).toBeNull();
+  });
 });

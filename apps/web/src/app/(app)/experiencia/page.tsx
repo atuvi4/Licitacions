@@ -8,19 +8,18 @@ import { useCompanyPath } from "@/components/SessionProvider";
 import {
   Button,
   Card,
+  DataTable,
   EmptyState,
   ErrorNotice,
   Field,
   Input,
   LinkButton,
-  LoadingRows,
+  LoadErrorState,
   PageHeader,
+  PageSkeleton,
   Select,
-  Table,
-  Td,
   Textarea,
-  Th,
-  Tr,
+  type DataTableColumn,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
 import {
@@ -49,7 +48,7 @@ const EMPTY = {
 export default function ExperiencePage() {
   const path = useCompanyPath();
   const url = path("/projects");
-  const { data, loading, error, reload } = useResource<Project[]>(url);
+  const { data, loading, error, status, reload } = useResource<Project[]>(url);
   const services = useResource<Service[]>(path("/services"));
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
@@ -106,6 +105,79 @@ export default function ExperiencePage() {
     );
   }
 
+  const columns: Array<DataTableColumn<Project>> = [
+    {
+      key: "project",
+      header: "Projecte",
+      cell: (project) => (
+        <>
+          <Link href={`/experiencia/${project.id}`} className="font-medium text-ink hover:text-brand">
+            {project.name}
+          </Link>
+          <p className="mt-0.5 text-[12px] text-muted">
+            {PROJECT_STATUS_LABELS[project.status]}
+            {project.location && ` · ${project.location}`}
+          </p>
+        </>
+      ),
+    },
+    {
+      key: "client",
+      header: "Client",
+      cell: (project) => (
+        <>
+          <p className="text-ink">{project.client_name ?? "—"}</p>
+          <p className="text-[12px] text-muted">{CLIENT_TYPE_LABELS[project.client_type]}</p>
+        </>
+      ),
+    },
+    { key: "amount", header: "Import", align: "right", width: "13%", cell: (project) => <span className="tabular-nums">{formatMoney(project.amount, project.currency)}</span> },
+    {
+      key: "period",
+      header: "Període",
+      hideBelow: "lg",
+      cell: (project) => (
+        <span className="whitespace-nowrap text-muted">
+          {formatDate(project.start_date)} – {formatDate(project.end_date)}
+        </span>
+      ),
+    },
+    {
+      key: "services",
+      header: "Serveis",
+      hideBelow: "lg",
+      cell: (project) => (
+        <div className="flex flex-wrap gap-1">
+          {project.services.length === 0 ? (
+            <span className="text-[12px] text-faint">Sense serveis</span>
+          ) : (
+            project.services.map((service) => (
+              <span key={service.id} className="bg-subtle px-1.5 py-0.5 text-[12px] text-muted">
+                {service.name}
+              </span>
+            ))
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Accions",
+      align: "right",
+      width: "16%",
+      cell: (project) => (
+        <div className="flex flex-wrap justify-end gap-1">
+          <LinkButton href={`/experiencia/${project.id}`} className="min-h-11 md:min-h-0">
+            Detall
+          </LinkButton>
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => setToDelete(project)}>
+            Elimina
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <>
       <PageHeader
@@ -126,7 +198,7 @@ export default function ExperiencePage() {
         }
       />
 
-      {error && <ErrorNotice message={error} onRetry={() => void reload()} />}
+      {error && data && <ErrorNotice message={error} onRetry={() => void reload()} />}
 
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
         <div className="rounded-[var(--radius-card)] border border-border bg-surface px-4 py-3">
@@ -147,7 +219,10 @@ export default function ExperiencePage() {
         </div>
       </div>
 
-      <Card>
+      {error && !data ? (
+        <LoadErrorState what="els projectes" message={error} status={status} onRetry={() => void reload()} />
+      ) : loading && !data ? (
+        <Card>
         <div className="flex flex-wrap items-end gap-3 border-b border-border px-5 py-4">
           <Field label="Cerca" className="min-w-[220px] flex-1">
             <Input
@@ -167,79 +242,74 @@ export default function ExperiencePage() {
           </Field>
         </div>
 
-        {loading ? (
-          <LoadingRows />
-        ) : projects.length === 0 ? (
-          <EmptyState
-            title={(data ?? []).length === 0 ? "Cap projecte registrat" : "Cap resultat"}
-            description={
-              (data ?? []).length === 0
-                ? "Registra els projectes executats amb import, dates i serveis. Després podràs adjuntar-hi els certificats de bona execució."
-                : "Prova de canviar els filtres de cerca."
+          <PageSkeleton variant="table" columns={["Projecte", "Client", "Import", "Període", "Serveis", "Accions"]} />
+        </Card>
+      ) : (
+        <Card>
+        <div className="flex flex-wrap items-end gap-3 border-b border-border px-5 py-4">
+          <Field label="Cerca" className="min-w-[220px] flex-1">
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Nom del projecte o client"
+            />
+          </Field>
+          <Field label="Import mínim" className="w-40">
+            <Input
+              type="number"
+              min={0}
+              value={minAmount}
+              onChange={(event) => setMinAmount(event.target.value)}
+              placeholder="150000"
+            />
+          </Field>
+        </div>
+
+          <DataTable<Project>
+            columns={columns}
+            rows={projects}
+            rowKey={(row) => row.id}
+            stackBelow="md"
+            emptyState={
+        <EmptyState
+          title={(data ?? []).length === 0 ? "Cap projecte registrat" : "Cap resultat"}
+          description={
+            (data ?? []).length === 0
+              ? "Registra els projectes executats amb import, dates i serveis. Després podràs adjuntar-hi els certificats de bona execució."
+              : "Prova de canviar els filtres de cerca."
+          }
+          action={
+            (data ?? []).length === 0 ? (
+              <Button
+                variant="primary"
+                size="md"
+                onClick={() => {
+                  reset();
+                  setForm(EMPTY);
+                  setSelectedServices([]);
+                  setOpen(true);
+                }}
+              >
+                Registra el primer projecte
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                size="md"
+                onClick={() => {
+                  setSearch("");
+                  setMinAmount("");
+                }}
+              >
+                Treu els filtres
+              </Button>
+            )
+          }
+        />
             }
           />
-        ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>Projecte</Th>
-                <Th>Client</Th>
-                <Th>Import</Th>
-                <Th>Període</Th>
-                <Th>Serveis</Th>
-                <Th className="text-right">Accions</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {projects.map((project) => (
-                <Tr key={project.id}>
-                  <Td>
-                    <Link
-                      href={`/experiencia/${project.id}`}
-                      className="font-medium text-ink hover:text-brand"
-                    >
-                      {project.name}
-                    </Link>
-                    <p className="mt-0.5 text-[12px] text-muted">
-                      {PROJECT_STATUS_LABELS[project.status]}
-                      {project.location && ` · ${project.location}`}
-                    </p>
-                  </Td>
-                  <Td>
-                    <p className="text-ink">{project.client_name ?? "—"}</p>
-                    <p className="text-[12px] text-muted">
-                      {CLIENT_TYPE_LABELS[project.client_type]}
-                    </p>
-                  </Td>
-                  <Td className="tabular-nums">{formatMoney(project.amount, project.currency)}</Td>
-                  <Td className="whitespace-nowrap text-muted">
-                    {formatDate(project.start_date)} – {formatDate(project.end_date)}
-                  </Td>
-                  <Td>
-                    <div className="flex flex-wrap gap-1">
-                      {project.services.length === 0 ? (
-                        <span className="text-[12px] text-faint">Sense serveis</span>
-                      ) : (
-                        project.services.map((service) => (
-                          <span key={service.id} className="bg-subtle px-1.5 py-0.5 text-[12px] text-muted">
-                            {service.name}
-                          </span>
-                        ))
-                      )}
-                    </div>
-                  </Td>
-                  <Td className="text-right whitespace-nowrap">
-                    <LinkButton href={`/experiencia/${project.id}`}>Detall</LinkButton>
-                    <Button size="sm" variant="ghost" onClick={() => setToDelete(project)}>
-                      Elimina
-                    </Button>
-                  </Td>
-                </Tr>
-              ))}
-            </tbody>
-          </Table>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <Modal
         open={open}

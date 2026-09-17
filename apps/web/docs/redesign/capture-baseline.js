@@ -13,13 +13,16 @@ const OUT = process.env.OUT_DIR;
 const EMAIL = process.env.DEMO_EMAIL || "demo@licitacions.dev";
 const PASSWORD = process.env.DEMO_PASSWORD;
 const PREFIX = process.env.PREFIX || "";
+// VIEWPORT=390x844 for the phone set (default: the 1440x900 desktop of the baseline).
+const [VIEW_W, VIEW_H] = (process.env.VIEWPORT || "1440x900").split("x").map((n) => Number(n));
+const IS_PHONE = VIEW_W < 640;
 if (!OUT) throw new Error("OUT_DIR is required");
 if (!PASSWORD) throw new Error("DEMO_PASSWORD is required (the demo seed password; never hardcode it)");
 fs.mkdirSync(OUT, { recursive: true });
 
 async function main() {
   const browser = await chromium.launch({ channel: "chrome", headless: true });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, locale: "ca-ES" });
+  const context = await browser.newContext({ viewport: { width: VIEW_W, height: VIEW_H }, deviceScaleFactor: 1, locale: "ca-ES", isMobile: IS_PHONE, hasTouch: IS_PHONE });
   const page = await context.newPage();
   const shots = [];
 
@@ -62,7 +65,7 @@ async function main() {
   await snap("10-experiencia", "/experiencia", { settle: 1500 });
   await snap("11-documents", "/documents", { settle: 1500 });
 
-  fs.writeFileSync(path.join(OUT, `${PREFIX}manifest.json`), JSON.stringify({ base: BASE, capturedAt: new Date().toISOString(), companyId, tenderId, workspaceId: ws.id, documentId: doc ? doc.id : null, shots }, null, 2));
+  fs.writeFileSync(path.join(OUT, `${PREFIX}manifest.json`), JSON.stringify({ base: BASE, capturedAt: new Date().toISOString(), viewport: `${VIEW_W}x${VIEW_H}`, companyId, tenderId, workspaceId: ws.id, documentId: doc ? doc.id : null, shots }, null, 2));
   await browser.close();
 }
 

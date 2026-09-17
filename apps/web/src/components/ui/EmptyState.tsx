@@ -35,11 +35,3 @@ export function EmptyState({ title, description, action, secondary, icon, classN
     </div>
   );
 }
-
-/**
- * @deprecated Només per als consumidors anteriors al redisseny, que encara no
- * passen cap acció. S'elimina a L15, quan tots els buits tinguin sortida.
- */
-export function LegacyEmptyState({ action, ...props }: Omit<EmptyStateProps, "action"> & { action?: ReactNode }) {
-  return <EmptyState {...props} action={action ?? null} />;
-}

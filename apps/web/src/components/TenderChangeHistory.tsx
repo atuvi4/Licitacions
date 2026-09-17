@@ -16,7 +16,7 @@
 
 import { useState } from "react";
 
-import { Card, CardHeader, EmptyState, ErrorNotice, Skeleton, StatusPill } from "@/components/ui";
+import { Button, Card, CardHeader, EmptyState, LoadErrorState, PageSkeleton, StatusPill } from "@/components/ui";
 import { changeLevel } from "@/lib/labels";
 import {
   describeChange,
@@ -78,9 +78,9 @@ export function TenderChangeHistory({
         description="Què ha modificat l'òrgan de contractació des que seguim aquest expedient."
       />
       {error ? (
-        <ErrorNotice message={error} onRetry={onReload} />
+        <LoadErrorState what="l'historial de canvis" message={error} onRetry={onReload} />
       ) : loading ? (
-        <Skeleton className="m-5 h-16" />
+        <PageSkeleton variant="list" context="carregant l'historial de canvis…" />
       ) : withChanges.length === 0 ? (
         <EmptyState
           title="Cap canvi detectat"
@@ -88,6 +88,11 @@ export function TenderChangeHistory({
             revisions && revisions.length > 0
               ? "Des que seguim l'expedient, la font no n'ha modificat cap dada."
               : "Encara no s'ha enregistrat cap versió de l'estat d'aquest expedient."
+          }
+          action={
+            <Button variant="secondary" size="md" onClick={onReload}>
+              Torna a comprovar
+            </Button>
           }
         />
       ) : (

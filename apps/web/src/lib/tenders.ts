@@ -370,18 +370,6 @@ export const DOCUMENT_STATE_LABELS: Record<DocumentState, string> = {
   error: "Error",
 };
 
-export const DOCUMENT_STATE_TONES: Record<
-  DocumentState,
-  "neutral" | "success" | "warning" | "danger"
-> = {
-  not_downloaded: "neutral",
-  downloaded: "neutral",
-  extracted: "success",
-  ocr_candidate: "warning",
-  unsupported: "neutral",
-  error: "danger",
-};
-
 /** Mida llegible. `null` quan encara no s'ha descarregat res. */
 export function formatBytes(bytes: number | null): string {
   if (bytes === null || bytes === undefined) return "—";

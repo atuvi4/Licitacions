@@ -8,18 +8,17 @@ import {
   Button,
   Card,
   Checkbox,
+  DataTable,
   EmptyState,
   ErrorNotice,
   Field,
   Input,
-  LoadingRows,
+  LoadErrorState,
   PageHeader,
+  PageSkeleton,
   StatusPill,
-  Table,
-  Td,
   Textarea,
-  Th,
-  Tr,
+  type DataTableColumn,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
 import { useMutation, useResource } from "@/lib/hooks";
@@ -38,7 +37,7 @@ const EMPTY = {
 export default function CpvPage() {
   const path = useCompanyPath();
   const url = path("/cpv-preferences");
-  const { data, loading, error, reload } = useResource<CPVPreference[]>(url);
+  const { data, loading, error, status, reload } = useResource<CPVPreference[]>(url);
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
   const [open, setOpen] = useState(false);
@@ -103,6 +102,47 @@ export default function CpvPage() {
   const actius = cpvs.filter((cpv) => cpv.active && !cpv.excluded).length;
   const exclosos = cpvs.filter((cpv) => cpv.excluded).length;
 
+  const columns: Array<DataTableColumn<CPVPreference>> = [
+    { key: "code", header: "Codi", width: "14%", cell: (cpv) => <span className="font-mono font-medium">{cpv.cpv_code}</span> },
+    {
+      key: "description",
+      header: "Descripció",
+      cell: (cpv) => (
+        <span className="text-muted">
+          {cpv.description ?? "—"}
+          {cpv.notes && <p className="mt-0.5 text-[12px] text-faint">{cpv.notes}</p>}
+        </span>
+      ),
+    },
+    { key: "priority", header: "Prioritat", width: "10%", hideBelow: "lg", cell: (cpv) => <span className="tabular-nums">{cpv.priority}</span> },
+    {
+      key: "state",
+      header: "Estat",
+      width: "12%",
+      cell: (cpv) => (
+        <StatusPill level={cpvPreferenceLevel(cpv)} size="sm">
+          {cpv.excluded ? "Exclòs" : cpv.active ? "Actiu" : "Inactiu"}
+        </StatusPill>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Accions",
+      align: "right",
+      width: "16%",
+      cell: (cpv) => (
+        <div className="flex flex-wrap justify-end gap-1">
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => openEdit(cpv)}>
+            Edita
+          </Button>
+          <Button size="sm" variant="ghost" className="min-h-11 md:min-h-0" onClick={() => setToDelete(cpv)}>
+            Elimina
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <>
       <PageHeader
@@ -115,7 +155,7 @@ export default function CpvPage() {
         }
       />
 
-      {error && <ErrorNotice message={error} onRetry={() => void reload()} />}
+      {error && data && <ErrorNotice message={error} onRetry={() => void reload()} />}
 
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
         <div className="rounded-[var(--radius-card)] border border-border bg-surface px-4 py-3">
@@ -132,60 +172,33 @@ export default function CpvPage() {
         </div>
       </div>
 
-      <Card>
-        {loading ? (
-          <LoadingRows />
-        ) : cpvs.length === 0 ? (
-          <EmptyState
-            title="Cap CPV registrat"
-            description="Afegeix els codis CPV amb què treballeu. El catàleg oficial europeu no està importat: els codis es donen d'alta a mesura que els feu servir."
-            action={
-              <Button variant="primary" onClick={openCreate}>
-                Afegeix un CPV
-              </Button>
+      {error && !data ? (
+        <LoadErrorState what="els codis CPV" message={error} status={status} onRetry={() => void reload()} />
+      ) : loading && !data ? (
+        <Card>
+          <PageSkeleton variant="table" columns={["Codi", "Descripció", "Prioritat", "Estat", "Accions"]} />
+        </Card>
+      ) : (
+        <Card>
+          <DataTable<CPVPreference>
+            columns={columns}
+            rows={cpvs}
+            rowKey={(row) => row.id}
+            stackBelow="md"
+            emptyState={
+        <EmptyState
+          title="Cap CPV registrat"
+          description="Afegeix els codis CPV amb què treballeu. El catàleg oficial europeu no està importat: els codis es donen d'alta a mesura que els feu servir."
+          action={
+            <Button variant="primary" onClick={openCreate}>
+              Afegeix un CPV
+            </Button>
+          }
+        />
             }
           />
-        ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>Codi</Th>
-                <Th>Descripció</Th>
-                <Th>Prioritat</Th>
-                <Th>Estat</Th>
-                <Th className="text-right">Accions</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {cpvs.map((cpv) => (
-                <Tr key={cpv.id}>
-                  <Td className="font-mono font-medium">{cpv.cpv_code}</Td>
-                  <Td className="text-muted">
-                    {cpv.description ?? "—"}
-                    {cpv.notes && (
-                      <p className="mt-0.5 text-[12px] text-faint">{cpv.notes}</p>
-                    )}
-                  </Td>
-                  <Td className="tabular-nums">{cpv.priority}</Td>
-                  <Td>
-                    <StatusPill level={cpvPreferenceLevel(cpv)} size="sm">
-                      {cpv.excluded ? "Exclòs" : cpv.active ? "Actiu" : "Inactiu"}
-                    </StatusPill>
-                  </Td>
-                  <Td className="text-right whitespace-nowrap">
-                    <Button size="sm" variant="ghost" onClick={() => openEdit(cpv)}>
-                      Edita
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setToDelete(cpv)}>
-                      Elimina
-                    </Button>
-                  </Td>
-                </Tr>
-              ))}
-            </tbody>
-          </Table>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <Modal
         open={open}
@@ -242,7 +255,7 @@ export default function CpvPage() {
               onChange={(event) => setForm({ ...form, priority: event.target.value })}
             />
           </Field>
-          <div className="space-y-2 rounded-md border border-border p-3">
+          <div className="space-y-2 border border-border p-3">
             <Checkbox
               label="Actiu (ara mateix ens interessa)"
               checked={form.active}

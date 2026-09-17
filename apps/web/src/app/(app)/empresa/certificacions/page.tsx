@@ -1,26 +1,21 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { useState } from "react";
 
-import { EvidencePanel } from "@/components/EvidencePanel";
+import { ResourceTable } from "@/components/ResourceTable";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
 import {
   Button,
   Card,
-  EmptyState,
   ErrorNotice,
   Field,
   Input,
-  LoadingRows,
+  LoadErrorState,
   PageHeader,
   Select,
   StatusPill,
-  Table,
-  Td,
   Textarea,
-  Th,
-  Tr,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
 import {
@@ -46,14 +41,13 @@ const EMPTY = {
 export default function CertificationsPage() {
   const path = useCompanyPath();
   const url = path("/certifications");
-  const { data, loading, error, reload } = useResource<Certification[]>(url);
+  const { data, loading, error, status, reload } = useResource<Certification[]>(url);
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Certification | null>(null);
   const [form, setForm] = useState(EMPTY);
   const [toDelete, setToDelete] = useState<Certification | null>(null);
-  const [expanded, setExpanded] = useState<string | null>(null);
 
   function openCreate() {
     reset();
@@ -115,93 +109,67 @@ export default function CertificationsPage() {
         }
       />
 
-      {error && <ErrorNotice message={error} onRetry={() => void reload()} />}
+      {error && data && <ErrorNotice message={error} onRetry={() => void reload()} />}
 
-      <Card>
-        {loading ? (
-          <LoadingRows />
-        ) : certifications.length === 0 ? (
-          <EmptyState
-            title="Cap certificació registrada"
-            description="Afegeix les certificacions de l'empresa i adjunta'n el certificat com a evidència."
-            action={
-              <Button variant="primary" onClick={openCreate}>
-                Afegeix una certificació
-              </Button>
-            }
+      {error && !data ? (
+        <LoadErrorState what="les certificacions" message={error} status={status} onRetry={() => void reload()} />
+      ) : (
+        <Card>
+          <ResourceTable
+            rows={certifications}
+            loading={loading}
+            rowKey={(certification) => certification.id}
+            onEdit={openEdit}
+            onDelete={setToDelete}
+            evidence={{
+              entityType: "company_certification",
+              defaultRelationship: "certificate",
+              defaultCategory: "certification",
+              description: "El certificat emès per l'entitat acreditadora.",
+            }}
+            empty={{
+              title: "Cap certificació registrada",
+              description: "Afegeix les certificacions de l'empresa i adjunta'n el certificat com a evidència.",
+              action: (
+                <Button variant="primary" size="md" onClick={openCreate}>
+                  Afegeix una certificació
+                </Button>
+              ),
+            }}
+            columns={[
+              {
+                header: "Certificació",
+                cell: (certification) => (
+                  <>
+                    <p className="font-medium">{certification.name}</p>
+                    {certification.certificate_number && (
+                      <p className="mt-0.5 font-mono text-[12px] text-muted">{certification.certificate_number}</p>
+                    )}
+                  </>
+                ),
+              },
+              { header: "Emissor", hideBelow: "lg", cell: (certification) => <span className="text-muted">{certification.issuer ?? "—"}</span> },
+              { header: "Caducitat", hideBelow: "lg", cell: (certification) => <span className="tabular-nums">{formatDate(certification.expires_at)}</span> },
+              {
+                header: "Vigència",
+                cell: (certification) => (
+                  <StatusPill level={TEMPORAL_LEVEL[certification.temporal_status]} size="sm">
+                    {TEMPORAL_STATUS_LABELS[certification.temporal_status]}
+                  </StatusPill>
+                ),
+              },
+              {
+                header: "Verificació",
+                cell: (certification) => (
+                  <StatusPill level={VERIFICATION_LEVEL[certification.verification_status]} size="sm">
+                    {VERIFICATION_STATUS_LABELS[certification.verification_status]}
+                  </StatusPill>
+                ),
+              },
+            ]}
           />
-        ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>Certificació</Th>
-                <Th>Emissor</Th>
-                <Th>Caducitat</Th>
-                <Th>Vigència</Th>
-                <Th>Verificació</Th>
-                <Th className="text-right">Accions</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {certifications.map((certification) => (
-                <Fragment key={certification.id}>
-                  <Tr>
-                    <Td>
-                      <p className="font-medium">{certification.name}</p>
-                      {certification.certificate_number && (
-                        <p className="mt-0.5 font-mono text-[12px] text-muted">
-                          {certification.certificate_number}
-                        </p>
-                      )}
-                    </Td>
-                    <Td className="text-muted">{certification.issuer ?? "—"}</Td>
-                    <Td className="tabular-nums">{formatDate(certification.expires_at)}</Td>
-                    <Td>
-                      <StatusPill level={TEMPORAL_LEVEL[certification.temporal_status]} size="sm">
-                        {TEMPORAL_STATUS_LABELS[certification.temporal_status]}
-                      </StatusPill>
-                    </Td>
-                    <Td>
-                      <StatusPill level={VERIFICATION_LEVEL[certification.verification_status]} size="sm">
-                        {VERIFICATION_STATUS_LABELS[certification.verification_status]}
-                      </StatusPill>
-                    </Td>
-                    <Td className="text-right whitespace-nowrap">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() =>
-                          setExpanded(expanded === certification.id ? null : certification.id)
-                        }
-                      >
-                        {expanded === certification.id ? "Amaga" : "Evidències"}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => openEdit(certification)}>
-                        Edita
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setToDelete(certification)}>
-                        Elimina
-                      </Button>
-                    </Td>
-                  </Tr>
-                  {expanded === certification.id && (
-                    <tr>
-                      <td colSpan={6} className="border-b border-border bg-canvas/60 p-0">
-                        <EvidencePanel
-                          entityType="company_certification"
-                          entityId={certification.id}
-                          defaultRelationship="certificate"
-                          defaultCategory="certification"
-                        />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
-          </Table>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <Modal
         open={open}

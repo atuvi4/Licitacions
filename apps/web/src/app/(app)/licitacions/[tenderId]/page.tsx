@@ -21,13 +21,8 @@ import {
   LinkButton,
   PageSkeleton,
   PermissionNote,
-  Skeleton,
   StatusPill,
-  Table,
   Tabs,
-  Td,
-  Th,
-  Tr,
 } from "@/components/ui";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -51,6 +46,7 @@ import {
   formatDateTime,
   type TenderDetail,
   type TenderDocumentMeta,
+  type TenderLot,
   type TenderRevision,
 } from "@/lib/tenders";
 import type { WorkspaceDetail } from "@/lib/workspace";
@@ -389,7 +385,7 @@ function TenderDetail() {
   return (
     <>
       <p className="mb-3 text-[13px] text-muted">
-        <Link href="/licitacions" className="text-brand-strong hover:text-accent-800">
+        <Link href="/licitacions" className="text-brand-strong underline decoration-1 underline-offset-2 hover:text-accent-800">
           Oportunitats
         </Link>
         {" › "}
@@ -413,7 +409,7 @@ function TenderDetail() {
                       href={data.source_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-brand-strong hover:text-accent-800"
+                      className="text-brand-strong underline decoration-1 underline-offset-2 hover:text-accent-800"
                     >
                       obre la font ↗
                     </a>
@@ -643,53 +639,46 @@ function TenderDetail() {
               description="Un contracte es pot licitar per lots independents."
             />
             {data.lots.length === 0 ? (
-              <p className="px-5 py-4 text-[13px] text-muted">Aquest expedient no està dividit en lots.</p>
+              <p className="px-3.5 py-3 text-[13px] text-muted">Aquest expedient no està dividit en lots.</p>
             ) : (
-              <Table>
-                <thead>
-                  <tr>
-                    <Th>Lot</Th>
-                    <Th>Títol</Th>
-                    <Th>Import</Th>
-                    <Th>CPV</Th>
-                    <Th>Ubicació</Th>
-                    <Th>Termini</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.lots.map((lot) => (
-                    <Tr key={lot.id}>
-                      <Td className="tabular-nums font-medium">{lot.lot_number ?? lot.external_lot_id}</Td>
-                      <Td className="max-w-sm">{lot.title ?? "—"}</Td>
-                      <Td className="whitespace-nowrap tabular-nums">
-                        {formatMoney(lot.base_budget ?? lot.estimated_value, lot.currency)}
-                      </Td>
-                      <Td>
-                        <div className="flex flex-wrap gap-1">
-                          {lot.cpvs.slice(0, 4).map((cpv) => (
-                            <span
-                              key={cpv.cpv_code}
-                              title={cpv.description ?? undefined}
-                              className="bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-muted"
-                            >
-                              {cpv.cpv_code}
-                            </span>
-                          ))}
-                          {lot.cpvs.length > 4 && (
-                            <span className="text-[11px] text-faint">+{lot.cpvs.length - 4}</span>
-                          )}
-                        </div>
-                      </Td>
-                      <Td className="text-muted">
-                        {[lot.place_of_execution, lot.nuts_code].filter(Boolean).join(" · ") || "—"}
-                      </Td>
-                      <Td className="whitespace-nowrap text-muted">
-                        {lot.deadline_at ? formatDate(lot.deadline_at) : "—"}
-                      </Td>
-                    </Tr>
-                  ))}
-                </tbody>
-              </Table>
+              <DataTable<TenderLot>
+                columns={[
+                  { key: "lot", header: "Lot", width: "8%", cell: (lot) => <span className="font-medium tabular-nums">{lot.lot_number ?? lot.external_lot_id}</span> },
+                  { key: "title", header: "Títol", cell: (lot) => <span>{lot.title ?? "—"}</span> },
+                  {
+                    key: "amount",
+                    header: "Import",
+                    align: "right",
+                    width: "14%",
+                    cell: (lot) => <span className="whitespace-nowrap tabular-nums">{formatMoney(lot.base_budget ?? lot.estimated_value, lot.currency)}</span>,
+                  },
+                  {
+                    key: "cpv",
+                    header: "CPV",
+                    hideBelow: "lg",
+                    cell: (lot) => (
+                      <div className="flex flex-wrap gap-1">
+                        {lot.cpvs.slice(0, 4).map((cpv) => (
+                          <span key={cpv.cpv_code} title={cpv.description ?? undefined} className="bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-muted">
+                            {cpv.cpv_code}
+                          </span>
+                        ))}
+                        {lot.cpvs.length > 4 && <span className="text-[11px] text-faint">+{lot.cpvs.length - 4}</span>}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "place",
+                    header: "Ubicació",
+                    hideBelow: "lg",
+                    cell: (lot) => <span className="text-muted">{[lot.place_of_execution, lot.nuts_code].filter(Boolean).join(" · ") || "—"}</span>,
+                  },
+                  { key: "deadline", header: "Termini", width: "12%", cell: (lot) => <span className="whitespace-nowrap text-muted">{lot.deadline_at ? formatDate(lot.deadline_at) : "—"}</span> },
+                ]}
+                rows={data.lots}
+                rowKey={(lot) => lot.id}
+                stackBelow="md"
+              />
             )}
           </Card>
         </div>
@@ -861,41 +850,43 @@ function TenderDetail() {
               <Fact label="Últim canvi">{formatDateTime(data.last_changed_at)}</Fact>
               <Fact label="Publicacions rebudes">{data.source_publication_count}</Fact>
             </div>
-            {revisions.loading ? (
-              <Skeleton className="m-5 h-16" />
+            {revisions.loading && !revisions.data ? (
+              <PageSkeleton variant="table" columns={["Publicació", "Rebuda", "Publicada per la font", "Hash del contingut", "Mida", "Estat"]} />
             ) : (
-              <Table>
-                <thead>
-                  <tr>
-                    <Th>Publicació</Th>
-                    <Th>Rebuda</Th>
-                    <Th>Publicada per la font</Th>
-                    <Th>Hash del contingut</Th>
-                    <Th>Mida</Th>
-                    <Th>Estat</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(revisions.data ?? []).map((revision) => (
-                    <Tr key={revision.id}>
-                      <Td className="tabular-nums font-medium">{revision.revision_number}</Td>
-                      <Td className="whitespace-nowrap text-muted">{formatDateTime(revision.fetched_at)}</Td>
-                      <Td className="whitespace-nowrap text-muted">{formatDateTime(revision.source_updated_at)}</Td>
-                      <Td>
-                        <span className="font-mono text-[11px] text-faint" title={revision.raw_hash}>
-                          {revision.raw_hash.slice(0, 16)}…
-                        </span>
-                      </Td>
-                      <Td className="tabular-nums text-muted">{(revision.raw_size / 1024).toFixed(1)} KB</Td>
-                      <Td>
-                        <StatusPill level={revision.processing_status === "processed" ? "ready" : "blocking"} size="sm">
-                          {revision.processing_status === "processed" ? "Processada" : "Amb error"}
-                        </StatusPill>
-                      </Td>
-                    </Tr>
-                  ))}
-                </tbody>
-              </Table>
+              <DataTable<TenderRevision>
+                columns={[
+                  { key: "number", header: "Publicació", width: "10%", cell: (revision) => <span className="font-medium tabular-nums">{revision.revision_number}</span> },
+                  { key: "fetched", header: "Rebuda", cell: (revision) => <span className="whitespace-nowrap text-muted">{formatDateTime(revision.fetched_at)}</span> },
+                  { key: "source", header: "Publicada per la font", hideBelow: "lg", cell: (revision) => <span className="whitespace-nowrap text-muted">{formatDateTime(revision.source_updated_at)}</span> },
+                  {
+                    key: "hash",
+                    header: "Hash del contingut",
+                    hideBelow: "lg",
+                    cell: (revision) => (
+                      <code className="font-mono text-[11px] text-faint" title={revision.raw_hash}>
+                        {revision.raw_hash.slice(0, 16)}…
+                      </code>
+                    ),
+                  },
+                  { key: "size", header: "Mida", align: "right", width: "10%", cell: (revision) => <span className="tabular-nums text-muted">{(revision.raw_size / 1024).toFixed(1)} KB</span> },
+                  {
+                    key: "state",
+                    header: "Estat",
+                    width: "12%",
+                    cell: (revision) => (
+                      <StatusPill level={revision.processing_status === "processed" ? "ready" : "blocking"} size="sm">
+                        {revision.processing_status === "processed" ? "Processada" : "Amb error"}
+                      </StatusPill>
+                    ),
+                  },
+                ]}
+                rows={revisions.data ?? []}
+                rowKey={(revision) => revision.id}
+                stackBelow="md"
+                emptyState={
+                  <p className="px-3.5 py-4 text-[13px] text-muted">Encara no s&apos;ha rebut cap publicació d&apos;aquest expedient.</p>
+                }
+              />
             )}
           </Card>
 
