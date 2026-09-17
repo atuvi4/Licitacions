@@ -1,4 +1,13 @@
-import type { Dossier, DossierItem, WorkspaceDecisionEntry, WorkspaceDetail } from "@/lib/workspace";
+import type {
+  Dossier,
+  DossierItem,
+  PackageApproval,
+  PackageDetail,
+  PackageItem,
+  PackageSummary,
+  WorkspaceDecisionEntry,
+  WorkspaceDetail,
+} from "@/lib/workspace";
 
 /** Una candidatura completa i «neta»: sense decisió, elegible, cap avís. */
 export function workspaceFixture(overrides: Partial<WorkspaceDetail> = {}): WorkspaceDetail {
@@ -158,6 +167,117 @@ export function dossierFixture(overrides: Partial<Dossier> = {}): Dossier {
     },
     groups: [],
     superseded_count: 2,
+    ...overrides,
+  };
+}
+
+/** Una fila del manifest: document congelat, vigent, sense canvis. */
+export function packageItemFixture(overrides: Partial<PackageItem> = {}): PackageItem {
+  return {
+    id: "pi1",
+    document_id: "doc1",
+    workspace_evidence_item_id: "i1",
+    requirement_id: "r1",
+    requirement_title: "Volum anual ≥ 1.200.000 €",
+    category: "economic_solvency",
+    filename: "Comptes anuals 2024.pdf",
+    mime_type: "application/pdf",
+    file_size: 1200,
+    document_sha256: "3f9a1c2b4d5e6f708192a3b4c5d6e7f8091a2b3c",
+    position: 0,
+    validity: "valid",
+    document_expires_at: null,
+    changed_since_freeze: false,
+    ...overrides,
+  };
+}
+
+export function packageApprovalFixture(overrides: Partial<PackageApproval> = {}): PackageApproval {
+  return {
+    id: "ap1",
+    package_id: "p1",
+    package_manifest_hash: "9f21c3b7aa11bb22cc33dd44ee55ff6677889900",
+    decision: "approved_for_submission",
+    approved_by: "u1",
+    approved_by_name: "Anna Puig",
+    approved_at: "2026-09-16T10:20:00Z",
+    comment: "Dossier revisat.",
+    readiness_snapshot: "ready_for_final_review",
+    blockers_snapshot: [],
+    ...overrides,
+  };
+}
+
+export function packageSummaryFixture(overrides: Partial<PackageSummary> = {}): PackageSummary {
+  return {
+    id: "p1",
+    workspace_id: "w1",
+    revision_number: 1,
+    status: "frozen",
+    manifest_hash: "9f21c3b7aa11bb22cc33dd44ee55ff6677889900",
+    manifest_hash_short: "9f21c3b7",
+    document_count: 2,
+    mandatory_total: 2,
+    mandatory_covered: 2,
+    deadline_at: "2026-09-21T12:00:00Z",
+    frozen_at: "2026-09-16T09:20:00Z",
+    created_at: "2026-09-16T09:20:00Z",
+    is_approved: false,
+    approved_at: null,
+    approved_by_name: null,
+    tender_changed_since_freeze: false,
+    ...overrides,
+  };
+}
+
+/** Una revisió congelada, a punt, sense aprovar: aprovable. */
+export function packageDetailFixture(overrides: Partial<PackageDetail> = {}): PackageDetail {
+  return {
+    id: "p1",
+    workspace_id: "w1",
+    company_id: "c1",
+    revision_number: 1,
+    status: "frozen",
+    manifest_hash: "9f21c3b7aa11bb22cc33dd44ee55ff6677889900",
+    manifest_hash_short: "9f21c3b7",
+    tender_title: "Obra civil i estesa de fibra òptica",
+    expediente_number: "DIP-2026-077",
+    lot_number: null,
+    deadline_at: "2026-09-21T12:00:00Z",
+    days_remaining: 5,
+    compliance_run_id: "cr1",
+    requirement_run_id: "rr1",
+    prefit_score: 81,
+    coverage: { mandatory_total: 2, mandatory_covered: 2, document_count: 2 },
+    items: [
+      packageItemFixture(),
+      packageItemFixture({
+        id: "pi2",
+        document_id: "doc2",
+        requirement_id: "r2",
+        requirement_title: "Responsabilitat civil ≥ 600.000 €",
+        category: "insurances",
+        filename: "Pòlissa RC 2026.pdf",
+        document_sha256: "7b21e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b",
+        position: 1,
+        document_expires_at: "2026-10-12",
+      }),
+    ],
+    approvals: [],
+    approval: null,
+    readiness: "ready_for_final_review",
+    readiness_blockers: [],
+    stale_reasons: [],
+    is_stale: false,
+    coherent_for_submission: true,
+    analysis_bases: ["real"],
+    simulation_only: false,
+    can_approve: true,
+    can_sign: true,
+    workspace_status: "ready_for_final_review",
+    is_submitted: false,
+    frozen_at: "2026-09-16T09:20:00Z",
+    created_at: "2026-09-16T09:20:00Z",
     ...overrides,
   };
 }

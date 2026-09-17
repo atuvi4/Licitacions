@@ -479,6 +479,11 @@ export function readinessBlockerLabel(code: string): string {
   return READINESS_BLOCKER_LABELS[code] ?? "Bloqueig de preparació no reconegut";
 }
 
+/** Text d'un motiu d'obsolescència del paquet. Un codi desconegut no arriba al text. */
+export function staleReasonLabel(code: string): string {
+  return STALE_REASON_LABELS[code] ?? "Motiu d'obsolescència no reconegut";
+}
+
 export interface WorkspaceCreateResult {
   created: boolean;
   checklist_items_created: number;

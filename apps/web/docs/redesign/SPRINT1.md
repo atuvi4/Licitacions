@@ -216,6 +216,34 @@ Verificació en tancar L13: `npm test` (281 proves), `npm run typecheck`,
 `npm run lint`, `npm run build`, `git diff --check` i `grep -r "window.prompt"
 src` (només la prova que ho prohibeix) en verd.
 
+- **L14 · Candidatura · Tancar completat.** `SubmissionPackage.tsx` reescrit
+  sobre el contracte real de `PackageDetail`. **`freeze` crea revisions
+  immutables** (`POST …/packages`, revisió N+1; una revisió fallida no
+  substitueix res) i **una revisió nova no hereta l'aprovació de l'anterior**.
+  **Manifest visible i verificable**: capçalera «Revisió N del paquet» amb
+  `PACKAGE_STATUS_LEVEL`, data de congelació, hash del manifest i
+  `manifest.json`; `DataTable` amb # · Document · Acredita · Bytes (SHA curt,
+  sencer al `title`) · El dia del termini (`VALIDITY_LEVEL`), files en bloqueig
+  si `changed_since_freeze`, i el peu «El manifest es calcula sobre els bytes,
+  no sobre els noms». **Obsolet o superat → Banner de bloqueig amb tots els
+  motius i «Congela la revisió N+1»**; mai s'aprova en silenci. **`simulation_only`
+  no és aprovable** (botó visible, desactivat, amb la raó). **`can_sign` (rol)
+  separat de `can_approve`** (congelat ∧ dossier a punt ∧ no obsolet ∧ anàlisi
+  real): `PermissionNote` per al rol, raó textual per a la resta. **Aprovació
+  humana append-only** amb `Attribution human`, hash aprovat i comentari,
+  conservada encara que la revisió quedi obsoleta o superada; modal «Estàs
+  aprovant exactament la revisió N» amb el POST real
+  (`{decision: "approved_for_submission", comment}`). **Aprovació ≠ presentació**:
+  panell «Aprovar no és presentar» amb tres passos i el tercer sense botó, i
+  **`is_submitted` sempre visible** («Estat: … · encara no s'ha presentat
+  res»). **C-7 continua**: cap endpoint ni botó de presentació. **C-8
+  continua**: cap comparació de revisions. **Codis d'obsolescència i de
+  readiness sempre humanitzats** (`staleReasonLabel`, `readinessBlockerLabel`,
+  amb prova exhaustiva dels codis del backend).
+
+Verificació en tancar L14: `npm test` (295 proves), `npm run typecheck`,
+`npm run lint`, `npm run build` i `git diff --check` en verd.
+
 ## Accessibilitat
 
 Lighthouse (accessibilitat) a `/licitacions`, sobre el build de producció:

@@ -393,7 +393,7 @@ export default function WorkspacePage() {
           </>
         )}
 
-        {step === "tancar" && <SubmissionPackageSection workspace={data} onChange={refresh} />}
+        {step === "tancar" && <SubmissionPackageSection workspace={data} onChange={refresh} signerName={signerName} />}
 
         <Card>
           <CardHeader title="Enllaços" />
