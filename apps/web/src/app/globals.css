@@ -186,13 +186,3 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
-
-/* Metadades en mides arbitràries (text-[11px] … text-[12.5px]): pes 500 per
-   defecte, com --text-caption. Va a la capa base perquè font-medium/semibold i
-   la resta d'utilitats manin igualment. */
-@layer base {
-  [class*="text-[11"],
-  [class*="text-[12"] {
-    font-weight: 500;
-  }
-}
