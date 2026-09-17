@@ -18,8 +18,14 @@
   --color-border-strong: #98989b; /* neutral-500 */
 
   --color-ink: #1d1f20;
-  --color-muted: #5d5d60; /* neutral-700: cos secundari, contrast 5,9:1 sobre canvas */
-  --color-faint: #6c6c6f; /* metadades: 4,7:1 sobre canvas, el mínim AA per a text normal (el neutral-600 del sistema, #7a7a7d, es queda a 3,8:1) */
+  /* Text secundari i terciari: Barlow en cos petit sobre #f2f2f3 es rentava amb
+     neutral-700 (5,9:1) i #6c6c6f (4,7:1). Es baixen dos passos sense arribar
+     mai a la tinta: el secundari a 8,4:1 i el terciari a 5,9:1 (el nivell que
+     abans tenia el secundari), de manera que continuen diferenciats entre ells
+     i cap dels dos no sembla desactivat. Desactivat = --color-disabled. */
+  --color-muted: #454649; /* cos secundari, descripcions, breadcrumbs: 8,4:1 sobre canvas */
+  --color-faint: #5c5d61; /* metadades, denominadors, subtext: 5,9:1 sobre canvas */
+  --color-disabled: #7a7a7d; /* neutral-600: només controls desactivats (3,8:1, a propòsit) */
 
   /* Acció (acer). El botó primari sòlid i el pas actiu porten text blanc a
      sobre: per complir WCAG AA es fan amb accent-700 (6,5:1), no amb
@@ -69,6 +75,7 @@
   --text-body--line-height: 1.25rem;
   --text-caption: 0.75rem;
   --text-caption--line-height: 1.125rem;
+  --text-caption--font-weight: 500; /* Barlow a 12 px en 400 es desdibuixa sobre el canvas */
   --text-kicker: 0.6875rem; /* rètols de columna i de grup: majúscules, espaiat .1em */
   --text-kicker--line-height: 1rem;
   --text-kicker--letter-spacing: 0.1em;
@@ -177,5 +184,15 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Metadades en mides arbitràries (text-[11px] … text-[12.5px]): pes 500 per
+   defecte, com --text-caption. Va a la capa base perquè font-medium/semibold i
+   la resta d'utilitats manin igualment. */
+@layer base {
+  [class*="text-[11"],
+  [class*="text-[12"] {
+    font-weight: 500;
   }
 }

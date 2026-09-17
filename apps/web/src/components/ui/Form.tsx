@@ -8,7 +8,7 @@ import { cn } from "./cn";
 const CONTROL_CLASS =
   "ui-control rounded-control border border-border-strong bg-surface px-3 text-body text-ink shadow-control transition-colors duration-150 max-sm:min-h-11 " +
   "placeholder:text-faint focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 " +
-  "disabled:cursor-not-allowed disabled:bg-subtle disabled:text-muted";
+  "disabled:cursor-not-allowed disabled:bg-subtle disabled:text-disabled";
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={cn(CONTROL_CLASS, "ui-control-single", className)} />;
