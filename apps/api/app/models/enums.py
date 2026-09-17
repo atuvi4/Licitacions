@@ -889,3 +889,30 @@ class AnalysisQuoteStatus(StrEnum):
     #: Els plecs o el calcul han canviat: s'ha substituit per un preview nou.
     SUPERSEDED = "superseded"
     EXPIRED = "expired"
+
+
+# ---------------------------------------------------------------------------
+# Oferta economica (Sprint 2)
+# ---------------------------------------------------------------------------
+
+
+class PricingBasis(StrEnum):
+    """Com es factura una linia de l'oferta.
+
+    Determina NOMES quants periodes multipliquen el preu unitari; no diu res de
+    com es paga ni de com es comptabilitza. La durada mai s'infereix: una linia
+    `MONTHLY` o `ANNUAL` sense durada efectiva deixa els totals temporals
+    indeterminats, i assumir 12 mesos seria inventar el contracte (C-3).
+    """
+
+    #: Un sol lliurament. El cost real NO depen de la durada: una inversio de
+    #: 24.000 EUR a 24 mesos continua costant 24.000 EUR, i els 1.000 EUR/mes
+    #: son una lectura que no entra en cap suma.
+    ONE_OFF = "one_off"
+    MONTHLY = "monthly"
+    #: Es prorrateja: 30 mesos son 2,5 anualitats. Si un proveidor factura
+    #: periodes sencers, aixo es una altra estructura i no una variant d'aqui.
+    ANNUAL = "annual"
+    #: La quantitat ja son les unitats de tot el contracte: no es multiplica
+    #: mai per la durada.
+    PER_UNIT = "per_unit"
