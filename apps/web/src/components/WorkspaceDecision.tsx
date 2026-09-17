@@ -25,7 +25,7 @@ import {
   DECISION_LEVEL,
   DECISION_PENDING_LEVEL,
   RECOMMENDATION_LEVEL,
-  ROLE_LABELS,
+  whoCanDecide,
 } from "@/lib/labels";
 import { formatDateTime } from "@/lib/tenders";
 import {
@@ -37,8 +37,7 @@ import {
 } from "@/lib/workspace";
 
 /** Els rols que el backend deixa signar (`DECISION_ROLES`). Diccionari, no nom. */
-const DECIDING_ROLES = ["owner", "admin", "bid_manager"] as const;
-const WHO_CAN_DECIDE = `qui té el rol de ${DECIDING_ROLES.map((role) => ROLE_LABELS[role]).join(", ").replace(/, ([^,]*)$/, " o $1")}`;
+const WHO_CAN_DECIDE = whoCanDecide();
 
 /** Longitud màxima del motiu al backend (`DecisionRequest.reason`). */
 const REASON_MAX_LENGTH = 4000;

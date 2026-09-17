@@ -471,6 +471,14 @@ export const READINESS_BLOCKER_LABELS: Record<string, string> = {
     "Hi ha una anàlisi de requisits o un càlcul de compliment més recents: cal reconciliar el dossier.",
 };
 
+/**
+ * Text d'un blocador de readiness. `blockers` és `string[]` al contracte: un
+ * codi que el diccionari no conegui es diu en humà i el codi queda al `title`.
+ */
+export function readinessBlockerLabel(code: string): string {
+  return READINESS_BLOCKER_LABELS[code] ?? "Bloqueig de preparació no reconegut";
+}
+
 export interface WorkspaceCreateResult {
   created: boolean;
   checklist_items_created: number;

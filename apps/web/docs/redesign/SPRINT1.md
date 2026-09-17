@@ -184,8 +184,37 @@ i `_ds/styles.css`, la font visual.
   (propietari, administrador, responsable de candidatures). Preparar i Tancar
   conserven les seccions actuals fins a L13/L14.
 
-Verificació en tancar L12: `npm test` (260 proves), `npm run typecheck`,
-`npm run lint`, `npm run build` i `git diff --check` en verd.
+- **L13 · Candidatura · Preparar completat.** El dossier documental com a
+  `DataTable` per grups (`GROUP_LABELS`, coberts i confirmats plegats al
+  final) amb les columnes Requisit · Compliment · Document triat · Dossier ·
+  Acció. **Compliment ≠ dossier**: el compliment és l'avaluació del motor
+  (`RESULT_LEVEL`), el dossier és si el paper hi és, acredita el requisit i
+  serà vigent (`COVERAGE_LEVEL`). **`selected` ≠ `covered`**: només
+  `coverage === "covered"` del backend surt en verd; un document triat amb
+  pertinença no establerta es mostra tal com el backend el deixa («Cal
+  revisar»). **Triar document i confirmar pertinença són dos gestos separats**
+  (`PATCH …/dossier/{item}` i `POST …/dossier/{item}/relevance`).
+  **`confirmRelevance` amb `Modal`** («Per què aquest document acredita
+  aquest requisit?») en lloc de `window.prompt`, amb el contracte real de
+  `note` (mínim 1, màxim 2000, `strip` al servidor). **Vigència contra el
+  termini del backend** (`validity`, mai recalculada): «Caduca el {data} ·
+  abans del termini» en bloqueig. **Blocadors de readiness literals i
+  humanitzats** (`READINESS_BLOCKER_LABELS`, numerats; un codi desconegut es
+  diu «Bloqueig de preparació no reconegut» i el codi queda al `title`; prova
+  exhaustiva dels nou codis del backend). **`advance` correcte** (`POST
+  …/readiness/advance`, només per als rols de decisió) rellegeix el workspace
+  i, si l'estat real ja és `ready_for_final_review`, obre `?pas=tancar`; un
+  409 `workspace_not_ready` mostra els blocadors del backend i no mou res.
+  **`advance` ≠ presentar**: «Passar-lo a revisió final no presenta res».
+  **`sync` i `superseded_count`** preservats («Actualitza propostes»,
+  `ResultNotice`, «N ítems a l'històric»). **Checklist, tasques i notes**
+  restilitzats amb `DataTable`, `StatusPill` i `Attribution`, mateixos
+  endpoints, payloads i reconciliació. **C-6 continua**: cap metadada de quin
+  document arregla què; no s'inventa res. `Card` accepta `id` («#tasques»).
+
+Verificació en tancar L13: `npm test` (281 proves), `npm run typecheck`,
+`npm run lint`, `npm run build`, `git diff --check` i `grep -r "window.prompt"
+src` (només la prova que ho prohibeix) en verd.
 
 ## Accessibilitat
 

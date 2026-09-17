@@ -833,7 +833,9 @@ function TenderDetail() {
             loading={compliance.loading}
             error={compliance.error}
             prefitScore={match.data?.score ?? null}
-            onReload={compliance.reload}
+            onReload={async () => {
+              await compliance.reload();
+            }}
           />
         </div>
       )}

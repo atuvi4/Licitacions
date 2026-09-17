@@ -21,7 +21,14 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/candidatures/w1",
   useSearchParams: () => new URLSearchParams(search),
 }));
-vi.mock("@/components/WorkspaceDossier", () => ({ DossierSection: () => <div data-testid="dossier">Dossier (secció actual)</div> }));
+vi.mock("@/components/WorkspaceDossier", () => ({
+  DossierSection: ({ onAdvanced }: { onAdvanced?: () => Promise<void> }) => (
+    <div data-testid="dossier">
+      Dossier (secció actual)
+      <button type="button" onClick={() => void onAdvanced?.()}>simula advance acceptat</button>
+    </div>
+  ),
+}));
 vi.mock("@/components/SubmissionPackage", () => ({ SubmissionPackageSection: () => <div data-testid="package">Paquet (secció actual)</div> }));
 vi.mock("@/components/WorkspaceWork", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/WorkspaceWork")>();
@@ -276,5 +283,34 @@ describe("Candidatura · stepper i Decidir", () => {
     expect(push).not.toHaveBeenCalled();
     expect(screen.getByText("Ens presentem a aquesta licitació?")).toBeTruthy();
     expect(step("Decidir").closest("[data-state]")?.getAttribute("data-state")).toBe("on");
+  });
+
+  it("advance acceptat: es rellegeix el workspace i, si ja és a revisió final, s'obre Tancar", async () => {
+    search = "pas=preparar";
+    const go = decisionFixture();
+    get.mockResolvedValueOnce(workspaceFixture({ status: "preparing_bid", human_decision: "go", latest_decision: go, decisions: [go] }));
+    get.mockResolvedValueOnce(workspaceFixture({ status: "ready_for_final_review", human_decision: "go", latest_decision: go, decisions: [go], readiness: "ready_for_final_review", readiness_blockers: [] }));
+    render(<WorkspacePage />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "simula advance acceptat" }));
+    await flush();
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(step("Tancar").closest("[data-state]")?.getAttribute("data-state")).toBe("on");
+    expect(step("Preparar").closest("[data-state]")?.getAttribute("data-state")).toBe("done");
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(replace).toHaveBeenCalledWith("/candidatures/w1?pas=tancar", { scroll: false });
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("advance «acceptat» però l'estat real no ha canviat: cap navegació", async () => {
+    search = "pas=preparar";
+    get.mockResolvedValue(workspaceFixture({ status: "preparing_bid", human_decision: "go", latest_decision: decisionFixture(), decisions: [decisionFixture()] }));
+    render(<WorkspacePage />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "simula advance acceptat" }));
+    await flush();
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(replace).not.toHaveBeenCalled();
+    expect(screen.getByTestId("dossier")).toBeTruthy();
   });
 });

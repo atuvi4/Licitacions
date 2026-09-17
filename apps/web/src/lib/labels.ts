@@ -535,3 +535,12 @@ export function roleLabel(role: string | null | undefined): string {
   if (!role) return "—";
   return ROLE_LABELS[role] ?? role;
 }
+
+/** Els rols que el backend deixa signar decisions i avançar el dossier (`DECISION_ROLES`). */
+export const DECISION_ROLES = ["owner", "admin", "bid_manager"] as const;
+
+/** «qui té el rol de …», per a un `PermissionNote`. Rol, mai nom de persona. */
+export function whoCanDecide(): string {
+  const labels = DECISION_ROLES.map((role) => ROLE_LABELS[role]);
+  return `qui té el rol de ${labels.slice(0, -1).join(", ")} o ${labels[labels.length - 1]}`;
+}

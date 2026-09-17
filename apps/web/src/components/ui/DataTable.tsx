@@ -159,7 +159,7 @@ export function DataTable<T>({
                         type="button"
                         aria-expanded={!isCollapsed}
                         onClick={() => setCollapsed((current) => ({ ...current, [group.key]: !isCollapsed }))}
-                        className="flex w-full items-center gap-2.5 text-left"
+                        className="flex min-h-11 w-full items-center gap-2.5 text-left md:min-h-0"
                       >
                         <span className={KICKER}>
                           <span>{group.label}</span> · <span className="tabular-nums">{group.rows.length}</span>

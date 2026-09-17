@@ -12,14 +12,18 @@ export function Card({
   className,
   children,
   frame = false,
+  id,
 }: {
   className?: string;
   children: ReactNode;
   /** Vora neutral-500 + marques de registre. Només decisió, aprovació i benvinguda. */
   frame?: boolean;
+  /** Àncora per a enllaços interns («#tasques»). */
+  id?: string;
 }) {
   return (
     <section
+      id={id}
       className={cn("relative rounded-card border bg-transparent", frame ? "border-border-strong" : "border-border", className)}
     >
       {frame && <RegistrationMarks size="md" tone="accent" />}

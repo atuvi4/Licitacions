@@ -3,25 +3,48 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-import { Badge, Button, Card, CardHeader, ResultNotice, Select, Skeleton } from "@/components/ui";
+import { Modal } from "@/components/Modal";
+import {
+  Banner,
+  Button,
+  Card,
+  CardHeader,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  Field,
+  LinkButton,
+  PageSkeleton,
+  PermissionNote,
+  ResultNotice,
+  Select,
+  StatusPill,
+  Textarea,
+  type DataTableColumn,
+  type DataTableGroup,
+  type RowTint,
+} from "@/components/ui";
 import { api } from "@/lib/api";
-import { RESULT_ICONS, RESULT_LABELS, type AssessmentResult } from "@/lib/compliance";
+import { RESULT_LABELS, type AssessmentResult } from "@/lib/compliance";
 import { formatDate } from "@/lib/format";
 import { useMutation } from "@/lib/hooks";
 import {
+  COVERAGE_LEVEL,
+  EVIDENCE_STATUS_LEVEL,
+  RESULT_LEVEL,
+  VALIDITY_LEVEL,
+  whoCanDecide,
+} from "@/lib/labels";
+import {
   COVERAGE_LABELS,
-  reconciliationMessage,
+  EVIDENCE_STATUS_LABELS,
+  GROUP_LABELS,
+  RELEVANCE_ESTABLISHED,
   RELEVANCE_HINTS,
   RELEVANCE_LABELS,
-  COVERAGE_TONES,
-  EVIDENCE_STATUS_LABELS,
-  EVIDENCE_STATUS_TONES,
-  GROUP_LABELS,
-  READINESS_BLOCKER_LABELS,
-  READINESS_LABELS,
-  READINESS_TONES,
   VALIDITY_LABELS,
-  VALIDITY_TONES,
+  readinessBlockerLabel,
+  reconciliationMessage,
   type Dossier,
   type DossierItem,
   type DossierSyncResult,
@@ -34,37 +57,72 @@ interface CompanyDocument {
   name: string;
 }
 
+/** Longitud màxima del motiu de pertinença al backend (`RelevanceConfirmRequest.note`). */
+const RELEVANCE_NOTE_MAX_LENGTH = 2000;
+
+const STATUS_OPTIONS = (Object.keys(EVIDENCE_STATUS_LABELS) as EvidenceItemStatus[]).map((value) => ({
+  value,
+  label: EVIDENCE_STATUS_LABELS[value],
+}));
+
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/** Cap deducció: el tint només repeteix el que el backend ja ha dit. */
+function tintOf(item: DossierItem): RowTint | undefined {
+  if (item.coverage === "missing_document") return "blocking";
+  if (item.validity === "expired" || item.validity === "expires_before_deadline") return "blocking";
+  if (item.document && !RELEVANCE_ESTABLISHED.has(item.relevance)) return "attention";
+  return undefined;
+}
+
 /**
- * El dossier documental.
+ * El dossier documental (handoff L13, mockup 10 i cas 5).
  *
- * La columna que importa i que no existeix enlloc més: **Compliment** i
- * **Dossier** de costat. Un requisit pot estar en «Compleix» i tenir el dossier
- * en «Falta document»; això no és una contradicció, és el motiu pel qual
- * aquesta pantalla existeix. Saber que facturem prou no vol dir tenir els
- * comptes anuals a la carpeta.
- *
- * Res d'aquí tria cap document sol: un «Proposat» ho és fins que algú prem
- * «Selecciona», i llavors queda escrit qui i quan.
+ * Dues preguntes que no es barregen mai: **Compliment** (podem acreditar-ho?)
+ * i **Dossier** (el paper hi és, acredita el requisit i serà vigent el dia
+ * del termini?). I dos gestos separats, tal com fa el backend: triar un
+ * document (`PATCH`) i confirmar que acredita el requisit (`POST …/relevance`,
+ * amb motiu obligatori i signatura). Un document triat sense pertinença
+ * establerta no cobreix res: la cobertura la calcula el backend i aquí només
+ * es mostra.
  */
 export function DossierSection({
   workspace,
   onChange,
+  onAdvanced,
 }: {
   workspace: WorkspaceDetail;
   onChange: () => Promise<void>;
+  /**
+   * Només després d'un `advance` que el backend ha acceptat. Qui ho rep
+   * refresca el workspace i, si l'estat real ja és a revisió final, canvia de
+   * pas. Si no es passa, es fa servir `onChange`.
+   */
+  onAdvanced?: () => Promise<void>;
 }) {
   const base = `/companies/${workspace.company_id}/workspaces/${workspace.id}`;
   const [dossier, setDossier] = useState<Dossier | null>(null);
   const [documents, setDocuments] = useState<CompanyDocument[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const mutation = useMutation();
+  const [rowSaving, setRowSaving] = useState(false);
+  const relevanceMutation = useMutation();
   const [outcome, setOutcome] = useState<ReturnType<typeof reconciliationMessage> | null>(null);
+  const [rowError, setRowError] = useState<{ itemId: string; message: string } | null>(null);
+  const [confirming, setConfirming] = useState<DossierItem | null>(null);
+  const [note, setNote] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       setDossier(await api.get<Dossier>(`${base}/dossier`));
       setDocuments(await api.get<CompanyDocument[]>(`/companies/${workspace.company_id}/documents`));
+    } catch (caught) {
+      setLoadError(caught instanceof Error ? caught.message : "Error desconegut");
     } finally {
       setLoading(false);
     }
@@ -89,52 +147,267 @@ export function DossierSection({
     if (ok) await onChange();
   }
 
-  async function patch(itemId: string, body: Record<string, unknown>) {
-    const ok = await mutation.run(async () => {
+  // Les accions d'una fila deixen l'error a la fila mateixa, no al peu.
+  async function rowAction(itemId: string, action: () => Promise<void>) {
+    setRowError(null);
+    setRowSaving(true);
+    try {
+      await action();
+      await onChange();
+    } catch (caught) {
+      setRowError({ itemId, message: caught instanceof Error ? caught.message : "No s'ha pogut desar." });
+    } finally {
+      setRowSaving(false);
+    }
+  }
+
+  function patch(itemId: string, body: Record<string, unknown>) {
+    return rowAction(itemId, async () => {
       setDossier(await api.patch<Dossier>(`${base}/dossier/${itemId}`, body));
     });
-    if (ok) await onChange();
   }
 
-  async function confirmRelevance(itemId: string) {
-    // Confirmar la pertinença és una afirmació humana i porta motiu. El
-    // demanem abans de res: sense el perquè, la confirmació no val.
-    const note = window.prompt(
-      "Per què aquest document acredita aquest requisit? " +
-        "Quedarà registrat amb el teu nom i la data.",
-    );
-    if (note === null || !note.trim()) return;
-    const ok = await mutation.run(async () => {
-      setDossier(
-        await api.post<Dossier>(`${base}/dossier/${itemId}/relevance`, { note: note.trim() }),
-      );
-    });
-    if (ok) await onChange();
-  }
-
-  async function createTask(itemId: string) {
-    const ok = await mutation.run(async () => {
+  function createTask(itemId: string) {
+    return rowAction(itemId, async () => {
       await api.post(`${base}/dossier/${itemId}/task`, {});
     });
-    if (ok) await onChange();
+  }
+
+  function openConfirm(item: DossierItem) {
+    relevanceMutation.reset();
+    setNote("");
+    setConfirming(item);
+  }
+
+  async function confirmRelevance() {
+    if (!confirming) return;
+    const itemId = confirming.id;
+    const ok = await relevanceMutation.run(async () => {
+      setDossier(await api.post<Dossier>(`${base}/dossier/${itemId}/relevance`, { note: note.trim() }));
+    });
+    if (ok) {
+      setConfirming(null);
+      await onChange();
+    }
   }
 
   async function advance() {
     const ok = await mutation.run(async () => {
       await api.post(`${base}/readiness/advance`, {});
     });
+    // Si falla, no es mou res: ni el dossier ni el pas. L'error diu què falta.
     if (ok) {
       await load();
-      await onChange();
+      await (onAdvanced ?? onChange)();
     }
   }
 
-  if (loading && !dossier) {
-    return <Skeleton className="h-64 w-full" />;
+  if (loadError && !dossier) {
+    return (
+      <ErrorState
+        title="No s'ha pogut carregar el dossier"
+        description={loadError}
+        action={
+          <Button variant="primary" size="md" onClick={() => void load()}>
+            Torna-ho a provar
+          </Button>
+        }
+      />
+    );
   }
-  if (!dossier) return null;
+  if (!dossier) {
+    return loading ? (
+      <PageSkeleton variant="table" title="Dossier documental" columns={["Requisit", "Compliment", "Document triat", "Dossier", "Acció"]} />
+    ) : null;
+  }
 
   const { coverage, readiness } = dossier;
+  const requirementsHref = `/licitacions/${workspace.tender_id}?tab=requisits`;
+  const openTasks = workspace.tasks.filter((task) => task.status === "pending" || task.status === "in_progress").length;
+  const isReady = readiness.state === "ready_for_final_review";
+  const alreadyInFinalReview = workspace.status === "ready_for_final_review";
+  const advanceBlockers =
+    mutation.apiError?.code === "workspace_not_ready"
+      ? ((mutation.apiError.details.blockers as string[] | undefined) ?? [])
+      : [];
+  const advanceForbidden = mutation.apiError?.status === 403;
+
+  // Els coberts i confirmats van plegats al final: la feina pendent primer.
+  const groups: Array<DataTableGroup<DossierItem>> = dossier.groups
+    .map((group) => ({
+      key: group.group,
+      label: GROUP_LABELS[group.group] ?? group.group,
+      rows: group.items.filter((item) => item.coverage !== "covered"),
+    }))
+    .filter((group) => group.rows.length > 0);
+  const covered = dossier.groups.flatMap((group) => group.items.filter((item) => item.coverage === "covered"));
+  if (covered.length > 0) {
+    groups.push({ key: "__covered", label: "Coberts i confirmats", rows: covered, collapsed: true });
+  }
+
+  const columns: Array<DataTableColumn<DossierItem>> = [
+    {
+      key: "requirement",
+      header: "Requisit",
+      width: "28%",
+      cell: (item) => (
+        <div className="min-w-0">
+          <p className="text-[14px] leading-5 font-medium text-ink">{item.requirement_title ?? item.label}</p>
+          <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted">
+            {item.mandatory ? (
+              <StatusPill level="attention" size="sm" outline>
+                Obligatori
+              </StatusPill>
+            ) : (
+              <span>Valorable</span>
+            )}
+            {item.source === "manual" && <span>· afegit a mà</span>}
+            {item.requirement_id && (
+              <Link href={requirementsHref} className="text-brand hover:underline">
+                Veure font del plec →
+              </Link>
+            )}
+          </p>
+          {item.requirement_quote && (
+            <details className="mt-1 text-[12.5px] text-muted">
+              <summary className="cursor-pointer">Cita del plec</summary>
+              <p className="mt-1 italic">“{item.requirement_quote}”</p>
+            </details>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "compliance",
+      header: "Compliment",
+      width: "13%",
+      cell: (item) => {
+        const result = item.assessment_result as AssessmentResult | null;
+        return result ? (
+          <StatusPill level={RESULT_LEVEL[result]} size="sm">
+            {RESULT_LABELS[result]}
+          </StatusPill>
+        ) : (
+          <span className="text-[12.5px] text-muted">— sense avaluació</span>
+        );
+      },
+    },
+    {
+      key: "document",
+      header: "Document triat",
+      width: "24%",
+      cell: (item) => (
+        <div className="min-w-0">
+          {item.document ? (
+            <>
+              <p className="text-[13.5px] leading-5 text-ink">{item.document.name}</p>
+              <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted">
+                <StatusPill level={VALIDITY_LEVEL[item.validity]} size="sm">
+                  {VALIDITY_LABELS[item.validity]}
+                </StatusPill>
+              </p>
+              {item.validity === "expires_before_deadline" && item.document.expires_at && (
+                <p className="mt-1 text-[12.5px] leading-5 font-medium text-danger">
+                  Caduca el {formatDate(item.document.expires_at)} · abans del termini
+                  {dossier.deadline_at && ` (${formatDate(dossier.deadline_at)})`}
+                </p>
+              )}
+              {item.validity === "expired" && item.document.expires_at && (
+                <p className="mt-1 text-[12.5px] leading-5 font-medium text-danger">
+                  Caducat el {formatDate(item.document.expires_at)}
+                </p>
+              )}
+              {item.validity === "valid" && item.document.expires_at && (
+                <p className="mt-1 text-[12.5px] leading-5 text-muted">Caduca el {formatDate(item.document.expires_at)}</p>
+              )}
+              {item.selected_by_name && item.selected_at && (
+                <p className="mt-1 text-[12.5px] leading-5 text-muted">
+                  Triat per {item.selected_by_name} · {formatDate(item.selected_at)}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-[13.5px] leading-5 font-medium text-danger">Cap document triat</p>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "dossier",
+      header: "Dossier",
+      width: "17%",
+      cell: (item) => (
+        <div className="min-w-0">
+          <p className="flex flex-wrap items-center gap-1.5">
+            {item.coverage ? (
+              <StatusPill level={COVERAGE_LEVEL[item.coverage]} size="sm">
+                {COVERAGE_LABELS[item.coverage]}
+              </StatusPill>
+            ) : (
+              <span className="text-[12.5px] text-muted">—</span>
+            )}
+            <StatusPill level={EVIDENCE_STATUS_LEVEL[item.status]} size="sm" outline>
+              {EVIDENCE_STATUS_LABELS[item.status]}
+            </StatusPill>
+          </p>
+          {item.document && item.relevance === "human_confirmed" && (
+            <p className="mt-1 text-[12.5px] leading-5 text-muted" title={item.relevance_note ?? undefined}>
+              Confirmat per {item.relevance_confirmed_by_name ?? "una persona"}
+              {item.relevance_confirmed_at && ` · ${formatDate(item.relevance_confirmed_at)}`}
+            </p>
+          )}
+          {item.document && item.relevance === "linked_evidence" && (
+            <p className="mt-1 text-[12.5px] leading-5 text-muted">Lligat a l&apos;evidència del compliment</p>
+          )}
+          {item.document && !RELEVANCE_ESTABLISHED.has(item.relevance) && (
+            <p className="mt-1 text-[12.5px] leading-5 text-warning">
+              {RELEVANCE_LABELS[item.relevance]}
+              <span className="block text-muted">{RELEVANCE_HINTS[item.relevance]}</span>
+            </p>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "action",
+      header: "Acció",
+      width: "18%",
+      cell: (item) => (
+        <div className="flex flex-col items-stretch gap-1.5">
+          <Select
+            aria-label="Canvia document"
+            className="min-h-11 w-full md:min-h-0"
+            value=""
+            placeholder="Canvia document"
+            disabled={rowSaving}
+            options={documents.map((document) => ({ value: document.id, label: document.name }))}
+            onChange={(event) =>
+              event.target.value && void patch(item.id, { document_id: event.target.value, status: "selected" })
+            }
+          />
+          <Select
+            aria-label="Estat de la peça"
+            className="min-h-11 w-full md:min-h-0"
+            value={item.status}
+            disabled={rowSaving}
+            options={STATUS_OPTIONS}
+            onChange={(event) => void patch(item.id, { status: event.target.value })}
+          />
+          {item.document && !RELEVANCE_ESTABLISHED.has(item.relevance) && (
+            <Button variant="primary" size="sm" className="min-h-11 md:min-h-0" disabled={rowSaving} onClick={() => openConfirm(item)}>
+              Confirma que acredita
+            </Button>
+          )}
+          {(item.status === "missing" || !item.document) && (
+            <Button variant="secondary" size="sm" className="min-h-11 md:min-h-0" disabled={rowSaving} onClick={() => void createTask(item.id)}>
+              Crea tasca
+            </Button>
+          )}
+          {rowError?.itemId === item.id && <p className="text-[12.5px] leading-5 text-danger">{rowError.message}</p>}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <Card>
@@ -142,287 +415,187 @@ export function DossierSection({
         title="Dossier documental"
         description="Amb quins documents acreditarem cada requisit. No és el compliment."
         action={
-          <Button size="sm" onClick={() => void sync()} loading={mutation.saving}>
+          <Button size="sm" variant="secondary" onClick={() => void sync()} loading={mutation.saving}>
             Actualitza propostes
           </Button>
         }
       />
       {outcome && (
-        <div className="px-5 pt-4">
-          <ResultNotice
-            message={outcome.message}
-            detail={outcome.detail}
-            tone={outcome.tone}
-            onDismiss={() => setOutcome(null)}
-          />
+        <div className="px-3.5 pt-3">
+          <ResultNotice message={outcome.message} detail={outcome.detail} tone={outcome.tone} onDismiss={() => setOutcome(null)} />
         </div>
       )}
 
-      {/* --------------------------------------------------- Capçalera --- */}
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border px-5 py-4">
-        <div>
-          <p className="text-[12px] uppercase tracking-wide text-muted">Readiness</p>
-          <Badge tone={READINESS_TONES[readiness.state]} className="mt-1">
-            {READINESS_LABELS[readiness.state]}
-          </Badge>
-        </div>
-        <p className="text-sm text-ink">
-          <span className="font-semibold tabular-nums">
-            {coverage.covered}/{coverage.mandatory_total}
-          </span>{" "}
-          requisits obligatoris coberts
-        </p>
-        {coverage.missing_document > 0 && (
-          <p className="text-sm text-danger">
-            {coverage.missing_document} document{coverage.missing_document === 1 ? "" : "s"} que
-            falta{coverage.missing_document === 1 ? "" : "n"}
-          </p>
-        )}
-        {coverage.needs_review > 0 && (
-          <p className="text-sm text-warning">{coverage.needs_review} per revisar</p>
-        )}
-        {coverage.expired_documents > 0 && (
-          <p className="text-sm text-danger">
-            {coverage.expired_documents} caduca{coverage.expired_documents === 1 ? "" : "n"} abans
-            del termini
-          </p>
-        )}
-        {/* Si el plec s'ha reanalitzat, la feina feta sobre les exigències
-            d'abans deixa de sortir a la llista. No desapareix, i dir-ho aquí
-            evita que sembli que s'ha perdut. */}
-        {dossier.superseded_count > 0 && (
-          <p className="text-sm text-muted">
-            {dossier.superseded_count} a l&apos;històric (el plec ja no ho demana)
-          </p>
-        )}
-      </div>
-
-      {readiness.blockers.length > 0 && (
-        <div className="border-b border-border px-5 py-4">
-          <p className="text-[13px] font-semibold text-muted">Què falta per a la revisió final</p>
-          <ul className="mt-1.5 space-y-1">
-            {readiness.blockers.map((code) => (
-              <li key={code} className="text-[13px] text-ink">
-                • {READINESS_BLOCKER_LABELS[code] ?? code}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {readiness.state === "ready_for_final_review" &&
-        workspace.status !== "ready_for_final_review" && (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-success-soft px-5 py-4">
-            <p className="text-[13px] text-ink">
-              El dossier sembla complet. Passar-lo a revisió final <strong>no</strong> presenta
-              res: només diu que ja es pot revisar.
+      <div className="px-3.5 pt-3">
+        {!isReady ? (
+          <Banner
+            level="attention"
+            kicker="Dossier incomplet"
+            action={
+              <LinkButton href="#tasques" variant="secondary" size="sm">
+                {openTasks > 0 ? `${plural(openTasks, "tasca oberta", "tasques obertes")} →` : "Crea una tasca →"}
+              </LinkButton>
+            }
+          >
+            <p>
+              <strong>
+                {coverage.covered} de {coverage.mandatory_total} requisits obligatoris coberts i confirmats.
+              </strong>{" "}
+              Per passar a la revisió final:
             </p>
-            <Button variant="primary" size="sm" onClick={() => void advance()} loading={mutation.saving}>
-              Passa a revisió final
-            </Button>
+            {readiness.blockers.length > 0 && (
+              <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-[13px] leading-5">
+                {readiness.blockers.map((code) => (
+                  <li key={code} title={code}>
+                    {readinessBlockerLabel(code)}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Banner>
+        ) : alreadyInFinalReview ? (
+          <Banner level="ready" kicker="A revisió final">
+            <p>
+              <strong>El dossier ja és a revisió final.</strong> Presentar-lo és un pas posterior i separat, al pas
+              Tancar.
+            </p>
+          </Banner>
+        ) : (
+          <Banner
+            level="ready"
+            kicker="Dossier complet"
+            action={
+              workspace.can_decide ? (
+                <Button variant="primary" size="sm" onClick={() => void advance()} loading={mutation.saving}>
+                  Passa a revisió final
+                </Button>
+              ) : (
+                <PermissionNote who={whoCanDecide()} what="passar-lo a revisió final">
+                  <Button variant="primary" size="sm" disabled>
+                    Passa a revisió final
+                  </Button>
+                </PermissionNote>
+              )
+            }
+          >
+            <p>
+              <strong>
+                {coverage.covered} de {coverage.mandatory_total} requisits obligatoris coberts i confirmats.
+              </strong>{" "}
+              Passar-lo a revisió final no presenta res. Només diu que ja es pot revisar.
+            </p>
+          </Banner>
+        )}
+        {advanceBlockers.length > 0 && (
+          <div className="mt-2 border border-danger bg-danger-soft px-3.5 py-2.5 text-[13px] leading-5">
+            <p className="font-semibold text-danger">El backend no ha deixat passar a revisió final. Falta:</p>
+            <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-ink">
+              {advanceBlockers.map((code) => (
+                <li key={code} title={code}>
+                    {readinessBlockerLabel(code)}
+                  </li>
+              ))}
+            </ol>
           </div>
         )}
-
-      {mutation.error && <p className="px-5 py-3 text-xs text-danger">{mutation.error}</p>}
-
-      {/* -------------------------------------------------------- Grups --- */}
-      {dossier.groups.length === 0 ? (
-        <p className="px-5 py-6 text-[13px] text-muted">
-          Encara no hi ha cap peça. Si el compliment ja està calculat, prem «Actualitza
-          propostes».
-        </p>
-      ) : (
-        dossier.groups.map((group) => (
-          <section key={group.group} className="border-b border-border last:border-b-0">
-            <h3 className="bg-subtle px-5 py-2 text-[12px] font-semibold uppercase tracking-wide text-muted">
-              {GROUP_LABELS[group.group] ?? group.group}
-            </h3>
-            <ul className="divide-y divide-border">
-              {group.items.map((item) => (
-                <DossierRow
-                  key={item.id}
-                  item={item}
-                  workspace={workspace}
-                  documents={documents}
-                  saving={mutation.saving}
-                  onPatch={patch}
-                  onCreateTask={createTask}
-                  onConfirmRelevance={confirmRelevance}
-                />
-              ))}
-            </ul>
-          </section>
-        ))
-      )}
-    </Card>
-  );
-}
-
-function DossierRow({
-  item,
-  workspace,
-  documents,
-  saving,
-  onPatch,
-  onCreateTask,
-  onConfirmRelevance,
-}: {
-  item: DossierItem;
-  workspace: WorkspaceDetail;
-  documents: CompanyDocument[];
-  saving: boolean;
-  onPatch: (itemId: string, body: Record<string, unknown>) => Promise<void>;
-  onCreateTask: (itemId: string) => Promise<void>;
-  onConfirmRelevance: (itemId: string) => Promise<void>;
-}) {
-  const result = item.assessment_result as AssessmentResult | null;
-
-  return (
-    <li className="px-5 py-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-sm text-ink">
-            {item.requirement_title ?? item.label}
-            {item.mandatory && (
-              <Badge tone="warning" className="ml-2">
-                Obligatori
-              </Badge>
-            )}
+        {advanceForbidden && (
+          <p className="mt-2 text-[13px] leading-5 text-warning">
+            {mutation.error} Només {whoCanDecide()} pot passar-lo a revisió final.
           </p>
-          {item.requirement_quote && (
-            <p className="mt-1 line-clamp-2 text-[12px] italic text-faint">
-              “{item.requirement_quote}”
-            </p>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {/* Les dues respostes, de costat i sense fusionar-les. */}
-          {result && (
-            <Badge tone="neutral">
-              Compliment: {RESULT_ICONS[result]} {RESULT_LABELS[result]}
-            </Badge>
-          )}
-          {item.coverage && (
-            <Badge tone={COVERAGE_TONES[item.coverage]}>
-              Dossier: {COVERAGE_LABELS[item.coverage]}
-            </Badge>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
-        <div>
-          <p className="text-[12px] text-muted">Document</p>
-          {item.document ? (
-            <p className="mt-0.5 text-[13px] text-ink">
-              {item.document.name}
-              <span className="ml-2 text-[12px] text-faint">
-                {item.document.expires_at
-                  ? `caduca ${formatDate(item.document.expires_at)}`
-                  : "sense caducitat"}
-              </span>
-              <Badge tone={VALIDITY_TONES[item.validity]} className="ml-2">
-                {VALIDITY_LABELS[item.validity]}
-              </Badge>
-            </p>
-          ) : (
-            <p className="mt-0.5 text-[13px] text-danger">Cap document seleccionat</p>
-          )}
-          {item.selected_by_name && item.selected_at && (
-            <p className="mt-0.5 text-[12px] text-faint">
-              Triat per {item.selected_by_name} · {formatDate(item.selected_at)}
-            </p>
-          )}
-
-          {/* Triar un paper i confirmar que és el paper adequat són dues
-              afirmacions diferents. La fila les separa: si ningú no ha dit la
-              segona, el dossier no compta aquest document com a cobertura. */}
-          {item.document && (
-            <div className="mt-2">
-              {item.relevance === "human_confirmed" ? (
-                <p className="text-[12px] text-muted">
-                  <Badge tone="success">Pertinença confirmada</Badge>{" "}
-                  {item.relevance_confirmed_by_name}
-                  {item.relevance_confirmed_at &&
-                    ` · ${formatDate(item.relevance_confirmed_at)}`}
-                  {item.relevance_note && (
-                    <span className="block text-faint">“{item.relevance_note}”</span>
-                  )}
-                </p>
-              ) : item.relevance === "linked_evidence" ? (
-                <p className="text-[12px] text-muted">
-                  {RELEVANCE_HINTS[item.relevance]}
-                </p>
-              ) : (
-                <div className="rounded-md border border-warning/30 bg-warning-soft px-3 py-2">
-                  <p className="text-[12px] font-medium text-warning">
-                    {RELEVANCE_LABELS[item.relevance]}
-                  </p>
-                  <p className="text-[12px] text-muted">{RELEVANCE_HINTS[item.relevance]}</p>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    className="mt-1.5"
-                    disabled={saving}
-                    onClick={() => onConfirmRelevance(item.id)}
-                  >
-                    Confirma que acredita el requisit
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge tone={EVIDENCE_STATUS_TONES[item.status]}>
-            {EVIDENCE_STATUS_LABELS[item.status]}
-          </Badge>
-          <Select
-            className="w-44"
-            value=""
-            placeholder="Canvia document"
-            options={documents.map((document) => ({ value: document.id, label: document.name }))}
-            onChange={(event) =>
-              event.target.value &&
-              void onPatch(item.id, { document_id: event.target.value, status: "selected" })
-            }
-          />
-          <Select
-            className="w-40"
-            value={item.status}
-            options={(Object.keys(EVIDENCE_STATUS_LABELS) as EvidenceItemStatus[]).map(
-              (value) => ({ value, label: EVIDENCE_STATUS_LABELS[value] }),
-            )}
-            onChange={(event) => void onPatch(item.id, { status: event.target.value })}
-          />
-          {(item.status === "missing" || !item.document) && (
-            <Button size="sm" onClick={() => void onCreateTask(item.id)} disabled={saving}>
-              Crea tasca
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-2 flex flex-wrap gap-3 text-[12px]">
-        <Link
-          href={`/licitacions/${workspace.tender_id}`}
-          className="text-brand hover:underline"
-        >
-          Veure font del plec
-        </Link>
-        <Link
-          href={`/licitacions/${workspace.tender_id}#compliment`}
-          className="text-brand hover:underline"
-        >
-          Veure compliment
-        </Link>
-        {item.document && (
-          <Link href="/documents" className="text-brand hover:underline">
-            Veure document de l&apos;empresa
-          </Link>
+        )}
+        {mutation.error && advanceBlockers.length === 0 && !advanceForbidden && (
+          <p className="mt-2 text-[13px] leading-5 text-danger">{mutation.error}</p>
         )}
       </div>
-    </li>
+
+      <div className="mt-3">
+        {dossier.groups.length === 0 ? (
+          <EmptyState
+            title="Encara no hi ha cap peça"
+            description="El dossier es proposa a partir del compliment calculat. Proposar no tria res: cada document el confirma una persona."
+            action={
+              <Button variant="primary" size="md" onClick={() => void sync()} loading={mutation.saving}>
+                Actualitza propostes
+              </Button>
+            }
+          />
+        ) : (
+          <DataTable
+            columns={columns}
+            rows={[]}
+            groups={groups}
+            rowKey={(item) => item.id}
+            rowTint={tintOf}
+            stackBelow="md"
+            footer={
+              <>
+                <span>
+                  <strong className="text-ink">Compliment</strong> és si podem acreditar-ho; <strong className="text-ink">Dossier</strong>{" "}
+                  és si el paper hi és.
+                </span>
+                {dossier.superseded_count > 0 && (
+                  <span>
+                    {plural(dossier.superseded_count, "ítem", "ítems")} a l&apos;històric: el plec ja no ho demana
+                  </span>
+                )}
+              </>
+            }
+          />
+        )}
+      </div>
+
+      <Modal
+        open={confirming !== null}
+        title="Per què aquest document acredita aquest requisit?"
+        description="Triar un document i confirmar que és l'adequat són dues afirmacions diferents. Aquesta quedarà amb el teu nom, la data i el motiu."
+        onClose={() => {
+          if (!relevanceMutation.saving) setConfirming(null);
+        }}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConfirming(null)} disabled={relevanceMutation.saving}>
+              Cancel·la
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => void confirmRelevance()}
+              loading={relevanceMutation.saving}
+              disabled={note.trim().length === 0}
+            >
+              Confirma que acredita
+            </Button>
+          </>
+        }
+      >
+        {confirming && (
+          <div className="space-y-4">
+            <dl className="grid gap-3 border border-border bg-subtle px-4 py-3 text-[13px] sm:grid-cols-2">
+              <div>
+                <dt className="text-muted">Requisit</dt>
+                <dd className="mt-0.5 text-ink">{confirming.requirement_title ?? confirming.label}</dd>
+              </div>
+              <div>
+                <dt className="text-muted">Document triat</dt>
+                <dd className="mt-0.5 text-ink">{confirming.document?.name ?? "—"}</dd>
+              </div>
+            </dl>
+            <Field
+              label="Motiu"
+              hint={`${note.length} de ${RELEVANCE_NOTE_MAX_LENGTH} caràcters · obligatori`}
+              error={relevanceMutation.error ?? undefined}
+              required
+            >
+              <Textarea
+                rows={4}
+                maxLength={RELEVANCE_NOTE_MAX_LENGTH}
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder="Per exemple: «És el certificat de bona execució de l'obra que el plec cita, signat per l'òrgan.»"
+              />
+            </Field>
+          </div>
+        )}
+      </Modal>
+    </Card>
   );
 }

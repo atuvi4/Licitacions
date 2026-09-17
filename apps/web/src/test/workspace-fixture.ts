@@ -1,4 +1,4 @@
-import type { WorkspaceDecisionEntry, WorkspaceDetail } from "@/lib/workspace";
+import type { Dossier, DossierItem, WorkspaceDecisionEntry, WorkspaceDetail } from "@/lib/workspace";
 
 /** Una candidatura completa i «neta»: sense decisió, elegible, cap avís. */
 export function workspaceFixture(overrides: Partial<WorkspaceDetail> = {}): WorkspaceDetail {
@@ -88,6 +88,76 @@ export function decisionFixture(overrides: Partial<WorkspaceDecisionEntry> = {})
     automated_recommendation: "go_candidate",
     deadline_passed: false,
     open_warnings: ["mandatory_unknown", "mandatory_needs_review"],
+    ...overrides,
+  };
+}
+
+/** Una peça del dossier: obligatòria, amb document triat i pertinença establerta. */
+export function dossierItemFixture(overrides: Partial<DossierItem> = {}): DossierItem {
+  return {
+    id: "i1",
+    workspace_id: "w1",
+    requirement_id: "r1",
+    checklist_item_id: null,
+    requirement_title: "Comptes de l'últim exercici dipositats",
+    requirement_category: "economic_solvency",
+    requirement_quote: "Comptes anuals dipositats al Registre Mercantil",
+    assessment_result: "satisfies",
+    mandatory: true,
+    label: "Comptes anuals",
+    status: "selected",
+    source: "compliance",
+    company_evidence_type: "company_document",
+    company_evidence_id: "ce1",
+    document: {
+      id: "doc1",
+      name: "Comptes anuals 2025.pdf",
+      category: "accounts",
+      mime_type: "application/pdf",
+      file_size: 1200,
+      sha256: "abc",
+      issued_at: "2026-03-01",
+      expires_at: null,
+      uploaded_at: "2026-03-02T10:00:00Z",
+    },
+    validity: "no_expiry",
+    coverage: "covered",
+    relevance: "linked_evidence",
+    selected_by: "u1",
+    selected_by_name: "Anna Puig",
+    selected_at: "2026-09-10T09:00:00Z",
+    relevance_confirmed_by_name: null,
+    relevance_confirmed_at: null,
+    relevance_note: null,
+    notes: null,
+    created_at: "2026-09-10T09:00:00Z",
+    updated_at: "2026-09-10T09:00:00Z",
+    ...overrides,
+  };
+}
+
+export function dossierFixture(overrides: Partial<Dossier> = {}): Dossier {
+  return {
+    workspace_id: "w1",
+    workspace_status: "preparing_bid",
+    deadline_at: "2026-09-21T12:00:00Z",
+    coverage: {
+      mandatory_total: 24,
+      covered: 20,
+      missing_document: 2,
+      needs_review: 2,
+      not_applicable: 0,
+      expired_documents: 1,
+      optional_total: 3,
+      optional_covered: 1,
+    },
+    readiness: {
+      state: "incomplete",
+      blockers: ["mandatory_evidence_missing", "mandatory_document_expired", "mandatory_relevance_unproven"],
+      is_submitted: false,
+    },
+    groups: [],
+    superseded_count: 2,
     ...overrides,
   };
 }

@@ -10,7 +10,8 @@ interface Resource<T> {
   error: string | null;
   /** Codi HTTP de l'últim error de l'API (404, 403…), o null. */
   status: number | null;
-  reload: () => Promise<void>;
+  /** Torna a llegir i retorna el que ha tornat l'API (o null si ha fallat). */
+  reload: () => Promise<T | null>;
   setData: (value: T) => void;
 }
 
@@ -21,18 +22,21 @@ export function useResource<T>(path: string | null): Resource<T> {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<number | null>(null);
 
-  const reload = useCallback(async () => {
-    if (!path) return;
+  const reload = useCallback(async (): Promise<T | null> => {
+    if (!path) return null;
     setLoading(true);
     setError(null);
     setStatus(null);
     try {
-      setData(await api.get<T>(path));
+      const value = await api.get<T>(path);
+      setData(value);
+      return value;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Error desconegut");
       // Sense `instanceof`: els tests que simulen `@/lib/api` no exporten la classe.
       const code = caught && typeof caught === "object" ? (caught as { status?: unknown }).status : undefined;
       setStatus(typeof code === "number" ? code : null);
+      return null;
     } finally {
       setLoading(false);
     }

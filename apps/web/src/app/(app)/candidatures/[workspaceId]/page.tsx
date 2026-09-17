@@ -290,6 +290,15 @@ export default function WorkspacePage() {
     setPinned("preparar");
     router.replace(hrefFor("preparar"), { scroll: false });
   };
+  // «Passa a revisió final» acceptat pel backend: es rellegeix el workspace i,
+  // només si l'estat real reflecteix la transició, s'obre Tancar. Un advance
+  // fallit no arriba aquí.
+  const onAdvanced = async () => {
+    const next = await reload();
+    if (next?.status !== "ready_for_final_review") return;
+    setPinned("tancar");
+    router.replace(hrefFor("tancar"), { scroll: false });
+  };
   const days = deadlineLabel(data.days_remaining);
 
   return (
@@ -377,7 +386,7 @@ export default function WorkspacePage() {
 
         {step === "preparar" && (
           <>
-            <DossierSection workspace={data} onChange={refresh} />
+            <DossierSection workspace={data} onChange={refresh} onAdvanced={onAdvanced} />
             <ChecklistSection workspace={data} onChange={refresh} />
             <TasksSection workspace={data} onChange={refresh} />
             <NotesSection workspace={data} onChange={refresh} />

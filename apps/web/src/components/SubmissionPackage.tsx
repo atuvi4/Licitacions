@@ -11,7 +11,7 @@ import { formatDateTime } from "@/lib/tenders";
 import {
   PACKAGE_STATUS_LABELS,
   PACKAGE_STATUS_TONES,
-  READINESS_BLOCKER_LABELS,
+  readinessBlockerLabel,
   STALE_REASON_LABELS,
   VALIDITY_LABELS,
   VALIDITY_TONES,
@@ -189,7 +189,7 @@ export function SubmissionPackageSection({
               <ul className="mt-1 space-y-0.5">
                 {current.readiness_blockers.map((code) => (
                   <li key={code} className="text-[13px] text-ink">
-                    • {READINESS_BLOCKER_LABELS[code] ?? code}
+                    • {readinessBlockerLabel(code)}
                   </li>
                 ))}
               </ul>
