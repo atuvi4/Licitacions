@@ -2403,6 +2403,38 @@ async def test_el_manifest_no_porta_cap_xifra_interna(db, client_a, ready, role)
     assert "4242" not in response.text
 
 
+async def test_un_error_amb_dades_estructurades_segueix_sent_un_error_llegible(
+    db, client_a, ready
+):
+    """Un 409 no es pot convertir en un 500 pel cami de tornada.
+
+    `PackageIntegrityError` porta als seus `details` la llista de fitxers que
+    no quadren, i cada entrada duu l'identificador del document. Es informacio
+    correcta i util; el que fallava era la frontera HTTP, que la volia
+    serialitzar tal qual. El client rebia un 500 sense codi ni detall, just quan
+    mes falta li feia saber QUIN fitxer no hi era.
+    """
+    document = ready["document"]
+    # La comprovacio del congelat es superficial —existencia i mida— perque
+    # congelar es barat i repetible. Amb una mida que no quadra n'hi ha prou.
+    await db.execute(
+        sa.update(Document).where(Document.id == document.id).values(file_size=999_999)
+    )
+    await db.commit()
+    root = f"/api/v1/companies/{ready['company'].id}/workspaces/{ready['workspace'].id}"
+
+    response = await client_a.post(f"{root}/packages")
+
+    assert response.status_code == 409, response.text
+    error = response.json()["error"]
+    assert error["code"] == "package_integrity_failed"
+    issues = error["details"]["issues"]
+    assert issues
+    # L'identificador hi ha de ser, i com a cadena: es el que permet a qui rep
+    # l'error dir de quin document parla.
+    assert any(str(document.id) == issue.get("document_id") for issue in issues)
+
+
 # --------------------------------------------------------------------------- #
 # Historia i vigencia son coses diferents (C-17)                                #
 # --------------------------------------------------------------------------- #

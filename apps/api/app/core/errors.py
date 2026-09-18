@@ -7,9 +7,11 @@ Totes les respostes d'error tenen la mateixa forma:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -169,7 +171,26 @@ class UnsupportedMediaTypeError(AppError):
 
 
 def error_payload(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message, "details": details or {}}}
+    """El cos d'un error, amb els `details` ja en tipus que el JSON entengui.
+
+    Els detalls son dades del domini: identificadors, dates, imports, enums i
+    llistes d'aixo. Son informacio correcta i sovint es el mes util de l'error
+    —quin fitxer no quadra, quins blocadors queden— pero si arriben aqui tal
+    qual, el serialitzador els rebutja i un 409 llegible es converteix en un 500
+    sense codi ni detall, precisament quan mes falta fa saber que ha passat.
+
+    Es fa servir `jsonable_encoder`, que ja resol UUID, dates, enums, models i
+    estructures niades, i no un convertidor propi en paral·lel. L'unic afegit es
+    `Decimal` com a CADENA: aixi ho serialitza la resta de l'API i convertir-lo
+    a coma flotant, com fa l'encoder per defecte, perdria decimals d'un import.
+    """
+    return {
+        "error": {
+            "code": code,
+            "message": message,
+            "details": jsonable_encoder(details or {}, custom_encoder={Decimal: str}),
+        }
+    }
 
 
 _STATUS_CODE_NAMES = {
