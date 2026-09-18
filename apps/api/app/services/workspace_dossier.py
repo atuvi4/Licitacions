@@ -729,6 +729,24 @@ class ReadinessPlan:
         return package.status
 
 
+async def final_gate(
+    session: AsyncSession, workspace: BidWorkspace
+) -> ReadinessResult:
+    """El veredicte que decideix si una candidatura pot estar a revisio final.
+
+    El dossier per si sol ja no es prou: des d'S6 tambe hi compten la solucio
+    tecnica i l'oferta economica. Aquest modul segueix sent el dossier i no sap
+    avaluar-los; nomes demana el veredicte agregat i el rep amb la forma que ja
+    feia servir, per no obrir una segona transicio en paral·lel.
+
+    La importacio va aqui dins i no a dalt perque l'agregador consumeix aquest
+    modul: al reves seria un cicle. Es l'unic punt de contacte entre els dos.
+    """
+    from app.services import workspace_readiness
+
+    return (await workspace_readiness.final_readiness(session, workspace)).as_readiness_result()
+
+
 async def plan_readiness(
     session: AsyncSession,
     workspace: BidWorkspace,
@@ -743,7 +761,12 @@ async def plan_readiness(
     real mentre nomes s'estava comprovant que les dades es llegien be.
     """
     result = readiness or await evaluate_workspace_readiness(session, workspace)
-    target, superseded = await _reconciled_status(session, workspace, result)
+    # El que es MOSTRA es el dossier; el que DECIDEIX l'estat es la porta final.
+    # Separar-ho es el que permet ensenyar "el dossier esta complet" i alhora no
+    # deixar arribar a revisio final una candidatura sense oferta.
+    target, superseded = await _reconciled_status(
+        session, workspace, await final_gate(session, workspace)
+    )
     return ReadinessPlan(
         readiness=result,
         status=target or workspace.status,
@@ -869,10 +892,11 @@ async def advance_to_final_review(
     workspace_service.assert_can_decide(role)
     # Es recalcula aqui i ara. L'estat guardat no serveix de credencial ni per
     # arribar a la revisio final ni, el dia que existeixi, per presentar.
-    readiness = await reconcile_readiness(session, workspace)
+    await reconcile_readiness(session, workspace)
+    readiness = await final_gate(session, workspace)
     if not readiness.is_ready:
         raise WorkspaceNotReadyError(
-            "El dossier encara no esta a punt per a la revisio final.",
+            "La candidatura encara no esta a punt per a la revisio final.",
             details={"blockers": list(readiness.blockers)},
         )
 

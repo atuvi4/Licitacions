@@ -82,6 +82,7 @@ from app.workspace.relevance import (
     required_document_count,
 )
 from app.workspace.transitions import TransitionActor
+from tests.conftest import satisfy_final_gate
 
 DEADLINE = datetime.now(UTC) + timedelta(days=40)
 TODAY = date.today()
@@ -865,6 +866,7 @@ async def test_ready_for_final_review_is_not_submitted(db, certified):
     await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
+    await satisfy_final_gate(db, workspace, user)
 
     await service.advance_to_final_review(
         db, workspace, user=user, role=MembershipRole.OWNER
@@ -1169,9 +1171,13 @@ async def test_the_full_dossier_workflow(db, client_a, tenant_a, tender, extract
     assert row["relevance_confirmed_by_name"]
     assert row["relevance_note"]
 
-    # 8. Ara si: el dossier esta a punt per a la revisio final.
+    # 8. El dossier ja esta a punt...
     readiness = (await client_a.get(f"{base}/readiness")).json()
     assert readiness["state"] == "ready_for_final_review", readiness["blockers"]
+
+    # ...pero des d'S6 la porta final tambe mira l'oferta economica i l'abast
+    # tecnic: un dossier impecable ja no basta per si sol.
+    await satisfy_final_gate(db, workspace, user)
 
     advanced = (await client_a.post(f"{base}/readiness/advance")).json()
     assert advanced["state"] == "ready_for_final_review"
@@ -1271,10 +1277,77 @@ async def make_ready(db, certified) -> WorkspaceEvidenceItem:
     await service.update_item(
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
+    await satisfy_final_gate(db, workspace, user)
     await service.advance_to_final_review(db, workspace, user=user, role=MembershipRole.OWNER)
     await db.refresh(workspace)
     assert workspace.status == WorkspaceStatus.READY_FOR_FINAL_REVIEW
     return item
+
+
+async def test_the_final_gate_is_one_door_and_not_three(db, certified):
+    """Regressio: el dossier per si sol ja no obre la porta.
+
+    Abans d'S6, un dossier impecable bastava per arribar a `ready_for_final_review`.
+    Ara la mateixa transicio tambe mira l'abast tecnic (C-14) i l'oferta
+    economica (C-15), i ho fa pel MATEIX cami: no hi ha una segona porta.
+    """
+    from decimal import Decimal
+
+    from app.models.enums import PricingBasis
+    from app.services import economic_offer, technical_scope
+
+    workspace, user = certified["workspace"], certified["user"]
+    await approve(db, workspace, user)
+    await service.sync_dossier(db, workspace, user_id=user.id)
+    await db.commit()
+    item = await item_of(db, workspace)
+    await service.update_item(
+        db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
+    )
+
+    # A. El dossier SI que esta a punt...
+    assert (await service.evaluate_workspace_readiness(db, workspace)).is_ready
+    with pytest.raises(service.WorkspaceNotReadyError) as primera:
+        await service.advance_to_final_review(
+            db, workspace, user=user, role=MembershipRole.OWNER
+        )
+    assert "technical_scope_unreviewed" in primera.value.details["blockers"]
+
+    # B. ...i amb l'abast revisat, encara falta l'oferta.
+    await economic_offer.create_offer(db, workspace, user=user)
+    await technical_scope.confirm(db, workspace, user=user)
+    with pytest.raises(service.WorkspaceNotReadyError) as segona:
+        await service.advance_to_final_review(
+            db, workspace, user=user, role=MembershipRole.OWNER
+        )
+    assert "economic_lot_empty" in segona.value.details["blockers"]
+    assert "technical_scope_unreviewed" not in segona.value.details["blockers"]
+
+    # C. Amb l'oferta amb preu, la porta s'obre.
+    offer = await economic_offer.get_offer(db, workspace)
+    section = await economic_offer.create_section(
+        db, offer, offer.lots[0], title="Oferta", expected_revision=offer.revision, user=user
+    )
+    await db.refresh(offer)
+    await economic_offer.create_line(
+        db,
+        workspace,
+        offer,
+        section,
+        expected_revision=offer.revision,
+        user=user,
+        concept="Servei",
+        quantity=Decimal("1"),
+        pricing_basis=PricingBasis.ONE_OFF,
+        offered_unit_price_ex_vat=Decimal("1000"),
+    )
+
+    await service.advance_to_final_review(
+        db, workspace, user=user, role=MembershipRole.OWNER
+    )
+
+    await db.refresh(workspace)
+    assert workspace.status == WorkspaceStatus.READY_FOR_FINAL_REVIEW
 
 
 async def test_removing_a_mandatory_document_takes_the_workspace_back(db, certified):
@@ -1329,6 +1402,7 @@ async def test_reopening_a_mandatory_task_takes_the_workspace_back(db, client_a,
     assert (await client_a.get(f"{base}/readiness")).json()["state"] == "ready_for_final_review"
 
     # Reobrir-la el torna a treure de llest.
+    await satisfy_final_gate(db, workspace, user)
     await service.advance_to_final_review(db, workspace, user=user, role=MembershipRole.OWNER)
     await db.refresh(workspace)
     assert workspace.status == WorkspaceStatus.READY_FOR_FINAL_REVIEW

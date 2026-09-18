@@ -83,6 +83,7 @@ from app.workspace.transitions import (
     TransitionActor,
     assert_transition,
 )
+from tests.conftest import satisfy_final_gate
 from tests.dml import DmlRecorder
 
 DEADLINE = datetime.now(UTC) + timedelta(days=40)
@@ -271,6 +272,7 @@ async def ready(db, tenant_a, tender, extraction_run):
         db, workspace, item, status=EvidenceItemStatus.SELECTED, user=user
     )
     assert (await dossier_service.evaluate_workspace_readiness(db, workspace)).is_ready
+    await satisfy_final_gate(db, workspace, user)
     return {
         "user": user,
         "company": company,
@@ -329,6 +331,31 @@ async def approve(db, ready, package, *, role=MembershipRole.OWNER, comment="Dos
         decision=PackageApprovalDecision.APPROVED_FOR_SUBMISSION,
         comment=comment,
     )
+
+
+async def test_un_paquet_no_saprova_amb_la_candidatura_incompleta(db, ready):
+    """El gate del paquet passa per la MATEIXA porta que la revisio final.
+
+    Abans d'S6 aquest punt nomes mirava el dossier. Si s'hi hagues quedat, una
+    oferta economica buidada despres de congelar el paquet no hauria impedit
+    aprovar-lo, i el paquet diria que esta tot a punt quan no ho esta.
+    """
+    from app.services import economic_offer
+
+    package = await freeze(db, ready)
+    workspace, user = ready["workspace"], ready["user"]
+
+    # Es buida l'oferta: arxivar l'unica linia deixa el lot sense res a oferir.
+    offer = await economic_offer.get_offer(db, workspace)
+    linia = offer.lots[0].sections[0].lines[0]
+    await economic_offer.archive_line(
+        db, offer, linia, expected_revision=offer.revision, user=user
+    )
+
+    with pytest.raises(service.PackageNotReadyError) as error:
+        await approve(db, ready, package)
+
+    assert "economic_lot_empty" in error.value.details["blockers"]
 
 
 # --------------------------------------------------------------------------- #

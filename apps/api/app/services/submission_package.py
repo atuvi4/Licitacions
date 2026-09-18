@@ -556,10 +556,14 @@ async def approve_package(
                 details={"analysis_bases": sorted(str(basis) for basis in bases)},
             )
 
-        readiness = await dossier_service.reconcile_readiness(session, workspace)
+        await dossier_service.reconcile_readiness(session, workspace)
+        # La mateixa porta que la revisio final: si no, s'hi podria aprovar un
+        # paquet d'una candidatura sense oferta economica o sense l'abast tecnic
+        # revisat, que es exactament el que S6 ha vingut a impedir.
+        readiness = await dossier_service.final_gate(session, workspace)
         if not readiness.is_ready:
             raise PackageNotReadyError(
-                "El dossier ja no esta a punt: no es pot aprovar aquest paquet.",
+                "La candidatura ja no esta a punt: no es pot aprovar aquest paquet.",
                 details={"blockers": list(readiness.blockers)},
             )
 

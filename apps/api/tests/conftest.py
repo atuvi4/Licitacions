@@ -284,6 +284,46 @@ async def create_user_with_company(
     return user, company
 
 
+async def satisfy_final_gate(db, workspace, user) -> None:
+    """El que S6 afegeix al cami real cap a la revisio final.
+
+    Des d'S6, "a punt" ja no es nomes el dossier: tambe cal una oferta economica
+    amb preu (C-15) i que algu hagi revisat quins requisits necessiten solucio
+    tecnica (C-14). Els tests que porten una candidatura fins al final han de
+    passar per aqui, com hi passaria una persona.
+    """
+    from decimal import Decimal
+
+    from app.models.enums import PricingBasis
+    from app.services import economic_offer, technical_scope
+
+    await economic_offer.create_offer(db, workspace, user=user)
+    # Es torna a llegir amb `get_offer`: el que retorna `create_offer` no porta
+    # les colleccions carregades i tocar-les aqui seria una carrega mandrosa.
+    offer = await economic_offer.get_offer(db, workspace)
+    lot = offer.lots[0]
+    section = await economic_offer.create_section(
+        db, offer, lot, title="Oferta", expected_revision=offer.revision, user=user
+    )
+    await db.refresh(offer)
+    await economic_offer.create_line(
+        db,
+        workspace,
+        offer,
+        section,
+        expected_revision=offer.revision,
+        user=user,
+        concept="Servei",
+        quantity=Decimal("1"),
+        pricing_basis=PricingBasis.ONE_OFF,
+        offered_unit_price_ex_vat=Decimal("1000"),
+        vat_rate=Decimal("21"),
+    )
+    # L'abast tecnic es revisa l'ULTIM: confirmar-lo abans de crear res deixaria
+    # l'empremta enrere i la revisio quedaria caducada tot seguit.
+    await technical_scope.confirm(db, workspace, user=user)
+
+
 @pytest.fixture
 async def tenant_a(db) -> tuple[User, Company]:
     return await create_user_with_company(

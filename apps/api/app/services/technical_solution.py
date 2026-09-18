@@ -34,8 +34,9 @@ from app.models.enums import (
 from app.models.identity import User
 from app.models.requirements import Requirement
 from app.models.workspace import BidWorkspace, WorkspaceTechnicalSolution
+from app.services import technical_scope
 from app.services.bid_workspace import assert_assignable
-from app.workspace.checklist import applies_to_workspace_lot, checklist_title
+from app.workspace.checklist import checklist_title
 from app.workspace.relevance import requirement_fingerprint
 from app.workspace.technical_solution import (
     StaleInput,
@@ -264,15 +265,17 @@ async def create_from_requirement(
             Requirement.tender_id == workspace.tender_id,
         )
     )
-    if requirement is None or not applies_to_workspace_lot(
-        requirement, workspace.tender_lot_id
+    scope = await technical_scope.resolve(session, workspace)
+    if requirement is None or not technical_scope.in_scope(
+        requirement, lot_ids=scope.tender_lot_ids, lot_mode=scope.lot_mode
     ):
         # Mateixa resposta que per a un identificador inventat: si un requisit
-        # d'una altra licitacio —o d'un altre lot— dones un error diferent,
-        # provant identificadors se'n podria deduir l'existencia.
+        # d'una altra licitacio —o d'un lot al qual no ens presentem— dones un
+        # error diferent, provant identificadors se'n podria deduir l'existencia.
         #
-        # El lot importa tant com la licitacio: un workspace de lot nomes hereta
-        # els requisits del seu lot i els generals, igual que la checklist.
+        # Qui decideix que es "aplicable" es `technical_scope` i ningu mes: amb
+        # candidatura global i plec amb lots, ho diuen els blocs de preus actius
+        # de l'oferta (C-16), i aquesta regla no pot viure en dos llocs.
         raise NotFoundError("Requisit no trobat en aquesta licitacio.")
 
     existing = await session.scalar(

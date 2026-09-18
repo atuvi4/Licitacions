@@ -172,6 +172,49 @@ def test_un_lot_arxivat_no_ocupa_la_unicitat():
     )
 
 
+_SCOPE_COLUMNS = (
+    "technical_scope_reviewed_at",
+    "technical_scope_reviewed_by",
+    "technical_scope_fingerprint",
+)
+
+
+def test_la_revisio_de_l_abast_tecnic_es_pot_aplicar_i_desfer():
+    """0025 -> 0026 -> 0025, amb els tres camps i la seva clau forana."""
+    up = _offline_sql("upgrade", "0025_economic_offer:0026_technical_scope_review")
+    down = _offline_sql("downgrade", "0026_technical_scope_review:0025_economic_offer")
+
+    for column in _SCOPE_COLUMNS:
+        assert f"ADD COLUMN {column}" in up
+        assert f"DROP COLUMN {column}" in down
+    assert "fk_bid_workspaces_technical_scope_reviewer" in up
+    assert "fk_bid_workspaces_technical_scope_reviewer" in down
+
+
+def test_els_tres_camps_neixen_buits():
+    """Cap candidatura existent no queda revisada en silenci (C-5).
+
+    Si la migracio omplis res —una data, un usuari, una empremta— tots els
+    workspaces d'avui passarien per revisats sense que ningu ho hagues mirat.
+    """
+    up = _offline_sql("upgrade", "0025_economic_offer:0026_technical_scope_review")
+
+    for column in _SCOPE_COLUMNS:
+        assert f"ADD COLUMN {column}" in up
+        assert f"ALTER COLUMN {column} SET NOT NULL" not in up
+        assert f"ALTER COLUMN {column} SET DEFAULT" not in up
+    assert "UPDATE bid_workspaces" not in up
+
+
+def test_qui_va_revisar_es_pot_donar_de_baixa_sense_esborrar_la_revisio():
+    """SET NULL: la revisio segueix havent passat encara que l'usuari marxi."""
+    up = _offline_sql("upgrade", "0025_economic_offer:0026_technical_scope_review")
+
+    fk = [line for line in up.splitlines() if "technical_scope_reviewer" in line]
+    assert fk
+    assert any("ON DELETE SET NULL" in line for line in fk)
+
+
 def _columns_created_by_migrations(ddl: str) -> dict[str, set[str]]:
     tables: dict[str, set[str]] = {}
     for match in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\);", ddl, re.S):

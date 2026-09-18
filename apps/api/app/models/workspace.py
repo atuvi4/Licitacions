@@ -119,6 +119,28 @@ class BidWorkspace(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, Base)
         ),
     )
 
+    # --- Revisio humana de l'abast tecnic (C-14) ---------------------------- #
+    #
+    # Sense aixo, zero solucions tecniques voldria dir dues coses alhora: "cap
+    # requisit en necessita" i "ningu no s'ho ha mirat encara". Amb una
+    # confirmacio humana vigent, zero solucions es una resposta; sense, es una
+    # pregunta oberta.
+    #
+    # Tots tres son NULL per defecte, i NULL vol dir NO revisat: cap workspace
+    # existent no queda validat en silenci (C-5).
+    technical_scope_reviewed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True)
+    )
+    technical_scope_reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "users.id", ondelete="SET NULL", name="fk_bid_workspaces_technical_scope_reviewer"
+        ),
+    )
+    #: Sobre QUE es va confirmar. Si l'abast d'ara no hi coincideix, la revisio
+    #: deixa de ser vigent; no s'esborra, es deriva en llegir.
+    technical_scope_fingerprint: Mapped[str | None] = mapped_column(sa.String(64))
+
     #: Fotografia del pre-fit quan es va obrir/refrescar el workspace. NO es
     #: fusiona mai amb l'elegibilitat: son dues preguntes diferents.
     prefit_score: Mapped[int | None] = mapped_column(sa.Integer)
