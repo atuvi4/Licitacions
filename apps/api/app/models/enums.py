@@ -156,6 +156,10 @@ class AuditAction(StrEnum):
     CREATE = "create"
     UPDATE = "update"
     DELETE = "delete"
+    #: Deixar de comptar sense esborrar (C-9). No es `DELETE`: la fila es queda,
+    #: i dir-ne esborrat al registre seria descriure malament el que va passar.
+    #: No canvia l'amplada de la columna, que la fixa `login_failed`.
+    ARCHIVE = "archive"
     LOGIN = "login"
     LOGIN_FAILED = "login_failed"
     LOGOUT = "logout"

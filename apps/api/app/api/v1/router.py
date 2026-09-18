@@ -17,6 +17,7 @@ from app.api.v1.routers import (
     credentials,
     documents,
     dossier,
+    economic_offer,
     insurance_limits,
     job_requests,
     matching,
@@ -55,6 +56,7 @@ company_scoped.include_router(workspaces.router)
 # Dossier documental: penja del workspace, que ja es de tenant.
 company_scoped.include_router(dossier.router)
 company_scoped.include_router(technical_solutions.router)
+company_scoped.include_router(economic_offer.router)
 # Paquet de presentacio i aprovacio final humana.
 company_scoped.include_router(submission.router)
 # Feina llarga: la peticio es de l'empresa; l'execucio, global.

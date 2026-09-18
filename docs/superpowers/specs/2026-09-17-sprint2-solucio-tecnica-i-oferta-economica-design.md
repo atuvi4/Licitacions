@@ -403,6 +403,44 @@ els dominis de Preparar.
 
 ---
 
+## C-13 · Label canònic d'`EconomicOfferLot`
+
+**Decisió (tancada).** El label el genera **sempre el backend**: no és entrada del
+client, no es construeix a cada endpoint i no es deriva al frontend. És una
+**fotografia humana** del lot en el moment que es crea la fila econòmica.
+
+Amb un lot del plec, a partir de dues dades netejades —`identifier`
+(`lot_number` si no és nul, si no `external_lot_id` sense espais, si no res) i
+`title` (sense espais, si no res):
+
+| Cas | Label |
+| --- | --- |
+| identifier i title | `Lot {identifier} · {title}` |
+| identifier sol | `Lot {identifier}` |
+| title sol | `{title}` |
+| cap dels dos | `Lot sense identificador` |
+
+Sense lots al plec (CAS B de C-1), el label és exactament **`Oferta global`**.
+
+Es comprova `lot_number is not None` i no la seva veracitat —el lot 0 és un lot—,
+es retallen els espais, i no hi ha cap heurística lingüística: no es mira si el
+títol ja diu «Lot». El resultat es retalla a 300 caràcters de manera
+determinista, que és l'amplada de la columna: qui ha de decidir què hi cap és el
+domini, no un error de PostgreSQL.
+
+**Conseqüència.** És una fotografia, i per tant **no es recalcula mai**. Si el
+plec canvia el títol del lot, la fila econòmica conserva el seu label i no hi ha
+cap sincronització; si un lot arxivat es torna a seleccionar, la fila **nova**
+deriva el label de les dades d'aquell moment. Un POST idempotent que retorna una
+fila activa que ja existia no recalcula el label, no incrementa la revisió i no
+deixa cap rastre nou d'auditoria.
+
+La lògica viu en **un sol helper pur** (`app/offer/lot_label.py`), que utilitzen
+els tres camins de creació de C-1: la inicialització automàtica del cas lligat a
+un lot, la del cas global i la selecció explícita de lots.
+
+---
+
 ## Ordre d'implementació
 
 | Lot | Contingut | Estat |
