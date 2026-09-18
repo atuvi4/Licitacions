@@ -176,6 +176,9 @@ Els blocadors nous entren a `ReadinessInput` i `evaluate_readiness()`
 vol dir que cada domini aporta els seus codis i que un domini no emmascara els
 altres: els blocadors s'acumulen, no es substitueixen.
 
+L'abast dels blocadors de solució tècnica el limita **C-11**: no n'hi haurà cap
+per als requisits que no tenen fila de solució.
+
 «No inventar valors» té una conseqüència directa i acceptada: els workspaces
 que existeixen avui **no** tindran oferta i, per tant, no arribaran a
 `ready_for_final_review` fins que algú n'hi posi una o fins que quedi explícit
@@ -319,6 +322,84 @@ textos de la UI surten del diccionari de `apps/web/src/lib/labels.ts`, mai d'un
 «Exclusivament humà» vol dir que `validated` no és accessible des del `PATCH`
 genèric: hi ha un endpoint propi de validació, amb qui signa, quan i per què.
 Cap IA escriu res en aquesta capa.
+
+---
+
+## C-11 · Qui decideix que un requisit necessita solució tècnica
+
+**Decisió**
+
+- **No** hi haurà cap `/sync` automàtic de requisits a solucions tècniques.
+- **No** s'inferirà per categoria quins requisits necessiten solució tècnica.
+- La selecció és **humana**. A la UI, un requisit tindrà una acció equivalent a
+  «Defineix una solució tècnica», que crea explícitament una
+  `WorkspaceTechnicalSolution` amb `source = requirement`, el `requirement_id`
+  del requisit escollit i `status = not_started`.
+
+**Conseqüència**
+
+Hi ha **dos camins de creació diferenciats**, i el client no tria mai el
+`source`: el servidor el fixa. La creació manual lliure deixa `requirement_id`
+NULL i `source = manual`; la creació des d'un requisit és un endpoint propi
+(`.../technical-solutions/from-requirement`) i és l'únic camí que escriu
+`source = requirement`.
+
+La conseqüència important és per a la **readiness de S6** (veure C-5): a la V1
+**no** s'implementarà cap blocador `technical_solution_missing` sobre requisits
+que no tenen fila de solució. Ningú no ha declarat que en necessitin, i el
+sistema no té cap base factual per afirmar que n'hi falta una: inferir-ho seria
+inventar una obligació. Es preserva així la distinció que sosté tot el domini,
+`unknown` ≠ `missing`.
+
+Sí que podran ser blocadors, perquè parlen de files que **existeixen** i que per
+tant algú ha declarat necessàries:
+
+| Codi | Quan |
+| --- | --- |
+| `technical_solution_unvalidated` | hi ha solució i ningú no l'ha validada |
+| `technical_solution_validation_stale` | hi ha validació, però ja no és vigent |
+
+---
+
+## C-12 · Política d'edició després d'un freeze o en estats terminals
+
+**Pendent de decidir.** Aquí no s'hi fixa cap regla: es documenta el que hi ha
+avui i es deixa per a S6/S7, perquè és transversal i no pot decidir-la un lot.
+
+**Què fa el sistema avui** (auditat el 2026-09-18 sobre `WorkspaceChecklistItem`,
+`WorkspaceTask`, `WorkspaceNote` i el dossier / `WorkspaceEvidenceItem`):
+
+- **No hi ha cap regla transversal de «workspace encara editable».** Cap dels
+  camins d'escriptura de Preparar consulta `workspace.status`. Ni
+  `no_go_approved`, ni `withdrawn`, ni `submitted`, ni
+  `ready_for_final_review`, ni `approved_for_submission` bloquegen res.
+- `is_submitted()` (`app/workspace/transitions.py`) existeix, però **només
+  s'utilitza com a indicador de lectura** a dos llocs
+  (`routers/dossier.py`, `routers/submission.py`): pinta l'estat, no barra el pas.
+- **La immutabilitat viu al paquet, no a la candidatura.** Des de `frozen`, la
+  revisió del paquet és una fotografia immutable; el que es fa amb els canvis
+  posteriors no és impedir-los, sinó **detectar-los**: en aprovar,
+  `evaluate_staleness()` compara i, si el que hi ha ara ja no és el que es va
+  congelar, el paquet passa a `superseded` i l'aprovació es rebutja
+  (`services/submission_package.py`).
+
+O sigui que el patró real del projecte és **«Preparar continua editable i la
+fotografia se n'assabenta»**, no «després del freeze no es toca res».
+
+**Conseqüència per a S3.** `WorkspaceTechnicalSolution` es comporta igual que la
+resta de Preparar: es pot editar i validar en qualsevol estat. **No s'hi ha posat
+cap política pròpia**, perquè una regla exclusiva per a la solució tècnica faria
+que el pas Preparar es comportés de dues maneres diferents segons la pestanya.
+
+**Què cal decidir, i on:**
+
+| Pregunta | Lot |
+| --- | --- |
+| Hi ha d'haver un estat a partir del qual Preparar deixi de ser editable, per a **tots** els dominis? | S6 |
+| La solució tècnica ha d'entrar a `evaluate_staleness()`, perquè editar-la després d'un freeze superi el paquet com ja fa el dossier? | S7 (amb C-4) |
+
+Mentre no es decideixi, val el comportament d'avui, que és el mateix per a tots
+els dominis de Preparar.
 
 ---
 

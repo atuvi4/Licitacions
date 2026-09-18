@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,6 +28,8 @@ from app.models.enums import (
     EvidenceItemStatus,
     RecommendationResult,
     RequirementCategory,
+    TechnicalSolutionSource,
+    TechnicalSolutionStatus,
     WorkspaceDecisionType,
     WorkspaceReadiness,
     WorkspaceStatus,
@@ -458,3 +461,113 @@ class DossierSyncResult(BaseModel):
     #: que no fa res ho ha de poder dir. Codis; el text el posa la interficie.
     reason: str | None = None
     dossier: DossierRead
+
+
+# --------------------------------------------------------------------------- #
+# Solucio tecnica                                                               #
+# --------------------------------------------------------------------------- #
+
+#: Els estats que pot escriure una persona treballant. `validated` NO hi es: no
+#: s'hi arriba ni creant ni editant, nomes signant a `/validation`. Que no hi
+#: sigui al tipus vol dir que l'API el rebutja abans d'arribar al servei, i que
+#: no apareix com a opcio a la documentacio OpenAPI.
+TechnicalSolutionWorkStatus = Literal["not_started", "drafting", "needs_validation"]
+
+
+class TechnicalSolutionCreateRequest(BaseModel):
+    """Creacio manual. `source` i `requirement_id` NO hi son, i es a proposit.
+
+    Qui decideix que un requisit necessita solucio es una persona (C-11), i ho
+    diu per l'altre endpoint. Si aquests dos camps s'acceptessin aqui, una fila
+    manual podria disfressar-se de decisio sobre el plec.
+    """
+
+    title: str = Field(min_length=1, max_length=500)
+    #: Sense limit de llargada, i a proposit: es el cos de la proposta
+    #: tecnica, `Text` a la base, i cap decisio de producte no en fixa cap
+    #: maxim. La resta de camps lliures d'aquest fitxer si que en porten
+    #: perque son etiquetes i notes, no documents.
+    proposed_solution: str | None = None
+    supplier_name: str | None = Field(default=None, max_length=300)
+    product_name: str | None = Field(default=None, max_length=300)
+    owner_id: uuid.UUID | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+    status: TechnicalSolutionWorkStatus | None = None
+
+
+class TechnicalSolutionFromRequirementRequest(BaseModel):
+    """Assenyalar un requisit. El titol i l'estat inicial els posa el servidor."""
+
+    requirement_id: uuid.UUID
+
+
+class TechnicalSolutionUpdateRequest(BaseModel):
+    """Nomes els camps de treball.
+
+    `source`, `requirement_id`, `company_id`, `workspace_id`, `created_by` i
+    `created_at` no hi son: son immutables. Enviar-los no fa res.
+    """
+
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    #: Sense limit de llargada, i a proposit: es el cos de la proposta
+    #: tecnica, `Text` a la base, i cap decisio de producte no en fixa cap
+    #: maxim. La resta de camps lliures d'aquest fitxer si que en porten
+    #: perque son etiquetes i notes, no documents.
+    proposed_solution: str | None = None
+    supplier_name: str | None = Field(default=None, max_length=300)
+    product_name: str | None = Field(default=None, max_length=300)
+    owner_id: uuid.UUID | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+    status: TechnicalSolutionWorkStatus | None = None
+
+
+class TechnicalSolutionValidationRequest(BaseModel):
+    """Validar sempre amb motiu, com la confirmacio de pertinenca del dossier."""
+
+    note: str = Field(min_length=1, max_length=2000)
+
+
+class TechnicalSolutionRead(ORMModel):
+    """La fila sencera, amb la vigencia de la validacio DERIVADA.
+
+    `validation_stale` no es cap columna: es calcula en llegir comparant les
+    empremtes signades amb les d'ara. La firma (`validated_by`, `validated_at`,
+    `validated_note`) no s'esborra mai encara que hagi caducat: es historia.
+    """
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    requirement_id: uuid.UUID | None = None
+    title: str
+    proposed_solution: str | None = None
+    supplier_name: str | None = None
+    product_name: str | None = None
+    owner_id: uuid.UUID | None = None
+    status: TechnicalSolutionStatus
+    source: TechnicalSolutionSource
+    notes: str | None = None
+
+    validated_by: uuid.UUID | None = None
+    validated_at: datetime | None = None
+    validated_note: str | None = None
+    validated_requirement_fingerprint: str | None = None
+    validated_content_fingerprint: str | None = None
+
+    validation_stale: bool = False
+    validation_stale_reasons: list[str] = Field(default_factory=list)
+
+    created_by: uuid.UUID | None = None
+    updated_by: uuid.UUID | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TechnicalSolutionCreateResult(BaseModel):
+    """`created=False` vol dir que aquell requisit ja en tenia una i s'ha obert.
+
+    Mateixa forma que `WorkspaceCreateResult`: al projecte, tornar a demanar una
+    cosa que ja existeix no es un error, s'obre el que hi havia.
+    """
+
+    created: bool
+    solution: TechnicalSolutionRead
