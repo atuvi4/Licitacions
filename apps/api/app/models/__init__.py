@@ -14,6 +14,12 @@ from app.models.documents import Document, DocumentLink
 from app.models.identity import Company, CompanyMembership, User
 from app.models.jobs import JobRequest, WorkJob
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
+from app.models.offer import (
+    EconomicOffer,
+    EconomicOfferLine,
+    EconomicOfferLot,
+    EconomicOfferSection,
+)
 from app.models.people import CompanyPerson, PersonQualification
 from app.models.profile import (
     CompanyContractPreferences,
@@ -88,6 +94,10 @@ __all__ = [
     "CompanyTerritory",
     "Document",
     "DocumentLink",
+    "EconomicOffer",
+    "EconomicOfferLine",
+    "EconomicOfferLot",
+    "EconomicOfferSection",
     "IngestionRun",
     "JobRequest",
     "PersonQualification",

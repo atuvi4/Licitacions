@@ -76,6 +76,102 @@ def test_la_solucio_tecnica_es_pot_aplicar_i_desfer():
     assert f"DROP TABLE {table}" in down
 
 
+_OFFER_TABLES = (
+    "economic_offers",
+    "economic_offer_lots",
+    "economic_offer_sections",
+    "economic_offer_lines",
+)
+
+
+def test_l_oferta_economica_es_pot_aplicar_i_desfer():
+    """0024 -> 0025 -> 0024, amb les quatre taules i el que les protegeix.
+
+    Es mira l'SQL i no nomes que la revisio existeixi: una migracio que crea
+    indexs i no els treu fa que tornar enrere i reaplicar falli, i aixo nomes es
+    veu quan ja ha passat en un desplegament.
+    """
+    up = _offline_sql("upgrade", "0024_technical_solution:0025_economic_offer")
+    down = _offline_sql("downgrade", "0025_economic_offer:0024_technical_solution")
+
+    for table in _OFFER_TABLES:
+        assert f"CREATE TABLE {table}" in up
+        assert f"DROP TABLE {table}" in down
+
+    created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
+    dropped = set(re.findall(r"DROP INDEX (\w+)", down))
+    assert created
+    assert created == dropped
+
+
+def test_els_rangs_de_l_oferta_els_imposa_la_base():
+    """Els CHECK han de ser a l'esquema.
+
+    `sa.Enum(native_enum=False)` nomes genera un VARCHAR: si `pricing_basis`
+    depengues d'aixo, la base acceptaria qualsevol cadena que hi capigues.
+    """
+    up = _offline_sql("upgrade", "0024_technical_solution:0025_economic_offer")
+
+    esperats = {
+        "ck_economic_offers_revision_non_negative",
+        "ck_economic_offer_lots_duration_at_least_one",
+        "ck_economic_offer_lots_position_non_negative",
+        "ck_economic_offer_sections_position_non_negative",
+        "ck_economic_offer_lines_basis_valid",
+        "ck_economic_offer_lines_quantity_non_negative",
+        "ck_economic_offer_lines_duration_override_at_least_one",
+        "ck_economic_offer_lines_unit_cost_non_negative",
+        "ck_economic_offer_lines_offered_price_non_negative",
+        "ck_economic_offer_lines_tender_max_non_negative",
+        "ck_economic_offer_lines_vat_rate_range",
+        "ck_economic_offer_lines_position_non_negative",
+    }
+
+    assert esperats <= set(re.findall(r"CONSTRAINT (\w+) CHECK", up))
+    assert "pricing_basis IN ('one_off', 'monthly', 'annual', 'per_unit')" in up
+
+
+def test_l_oferta_no_perd_de_quin_lot_son_els_preus():
+    """RESTRICT al lot del plec, CASCADE dins de l'agregat, SET NULL als vincles."""
+    up = _offline_sql("upgrade", "0024_technical_solution:0025_economic_offer")
+
+    esperat = {
+        "fk_economic_offers_workspace_id_bid_workspaces": "CASCADE",
+        "fk_economic_offer_lots_offer_id_economic_offers": "CASCADE",
+        "fk_economic_offer_lots_tender_lot_id_tender_lots": "RESTRICT",
+        "fk_economic_offer_sections_offer_lot_id_economic_offer_lots": "CASCADE",
+        "fk_economic_offer_lines_section_id_economic_offer_sections": "CASCADE",
+        "fk_economic_offer_lines_requirement_id_requirements": "SET NULL",
+        "fk_economic_offer_lines_technical_solution": "SET NULL",
+    }
+
+    clauses = dict(
+        re.findall(r"CONSTRAINT (fk_economic\w+) FOREIGN KEY.*?ON DELETE ([A-Z ]+)", up)
+    )
+    for name, action in esperat.items():
+        assert clauses.get(name, "").strip() == action, name
+
+
+def test_un_lot_arxivat_no_ocupa_la_unicitat():
+    """Les dues unicitats de lot son parcials, i el `WHERE` ho ha de dir.
+
+    Sense `archived_at IS NULL` a la condicio, arxivar un bloc de preus i tornar
+    a comencar seria impossible sense esborrar historia.
+    """
+    up = _offline_sql("upgrade", "0024_technical_solution:0025_economic_offer")
+
+    assert (
+        "CREATE UNIQUE INDEX uq_economic_offer_lots_tender_lot "
+        "ON economic_offer_lots (offer_id, tender_lot_id) "
+        "WHERE tender_lot_id IS NOT NULL AND archived_at IS NULL" in up
+    )
+    assert (
+        "CREATE UNIQUE INDEX uq_economic_offer_lots_global "
+        "ON economic_offer_lots (offer_id) "
+        "WHERE tender_lot_id IS NULL AND archived_at IS NULL" in up
+    )
+
+
 def _columns_created_by_migrations(ddl: str) -> dict[str, set[str]]:
     tables: dict[str, set[str]] = {}
     for match in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\);", ddl, re.S):
