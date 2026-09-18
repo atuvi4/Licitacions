@@ -40,6 +40,42 @@ def migration_sql() -> str:
     return result.stdout
 
 
+def _offline_sql(*args: str) -> str:
+    """SQL d'un tram concret de migracions, sense connectar-se enlloc."""
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", *args, "--sql"],
+        capture_output=True,
+        text=True,
+        cwd=API_ROOT,
+        env={**os.environ, "DATABASE_URL": OFFLINE_URL},
+    )
+    assert result.returncode == 0, f"alembic ha fallat:\n{result.stderr[-2000:]}"
+    return result.stdout
+
+
+def test_la_solucio_tecnica_es_pot_aplicar_i_desfer():
+    """0023 -> 0024 -> 0023: el que una revisio crea, el seu downgrade ho treu.
+
+    No n'hi ha prou que existeixi un `downgrade()`: ha de desfer exactament el
+    que s'ha aplicat. Una revisio que crea una taula i en deixa els indexs
+    enrere fa que tornar enrere i reaplicar falli, i aixo nomes es veu quan ja
+    ha passat en un desplegament.
+    """
+    table = "workspace_technical_solutions"
+    up = _offline_sql("upgrade", "0023_analysis_quotes:0024_technical_solution")
+    down = _offline_sql("downgrade", "0024_technical_solution:0023_analysis_quotes")
+
+    assert f"CREATE TABLE {table}" in up
+    assert "uq_workspace_technical_solutions_requirement" in up
+    assert "WHERE requirement_id IS NOT NULL" in up
+
+    created_indexes = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
+    dropped_indexes = set(re.findall(r"DROP INDEX (\w+)", down))
+    assert created_indexes
+    assert created_indexes == dropped_indexes
+    assert f"DROP TABLE {table}" in down
+
+
 def _columns_created_by_migrations(ddl: str) -> dict[str, set[str]]:
     tables: dict[str, set[str]] = {}
     for match in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\);", ddl, re.S):

@@ -892,6 +892,36 @@ class AnalysisQuoteStatus(StrEnum):
 
 
 # ---------------------------------------------------------------------------
+# Solucio tecnica (Sprint 2)
+#
+# "Com oferirem aquest requisit?" NO es "el complim?" (aixo es
+# `CompanyRequirementAssessment`) ni "amb quin paper ho acreditem?" (aixo es
+# `WorkspaceEvidenceItem`). Tres preguntes, tres taules.
+# ---------------------------------------------------------------------------
+
+
+class TechnicalSolutionStatus(StrEnum):
+    """On es una proposta de solucio.
+
+    `VALIDATED` NOMES l'escriu una persona, amb signatura, data i motiu. Cap
+    regla automatica i cap model hi arriba: es la mateixa separacio que ja
+    protegeix `WorkspaceDecision` i la confirmacio de pertinenca del dossier.
+    """
+
+    NOT_STARTED = "not_started"
+    DRAFTING = "drafting"
+    NEEDS_VALIDATION = "needs_validation"
+    VALIDATED = "validated"
+
+
+class TechnicalSolutionSource(StrEnum):
+    """D'on surt la fila: d'un requisit del plec o de la ma d'algu."""
+
+    REQUIREMENT = "requirement"
+    MANUAL = "manual"
+
+
+# ---------------------------------------------------------------------------
 # Oferta economica (Sprint 2)
 # ---------------------------------------------------------------------------
 

@@ -5,6 +5,7 @@
                                     |- WorkspaceChecklistItem
                                     |- WorkspaceEvidenceItem   (el dossier documental)
                                     |- WorkspaceTask
+                                    |- WorkspaceTechnicalSolution
                                     |- WorkspaceNote
 
 Tres decisions sostenen aquesta capa:
@@ -42,6 +43,8 @@ from app.models.enums import (
     EvidenceItemSource,
     EvidenceItemStatus,
     RequirementCategory,
+    TechnicalSolutionSource,
+    TechnicalSolutionStatus,
     WorkspaceDecisionType,
     WorkspaceStatus,
     WorkspaceTaskStatus,
@@ -144,6 +147,9 @@ class BidWorkspace(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, Base)
         back_populates="workspace", cascade="all, delete-orphan"
     )
     notes: Mapped[list[WorkspaceNote]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+    technical_solutions: Mapped[list[WorkspaceTechnicalSolution]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"
     )
 
@@ -507,3 +513,144 @@ class WorkspaceEvidenceItem(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMix
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<WorkspaceEvidenceItem {self.status} doc={self.document_id}>"
+
+
+class WorkspaceTechnicalSolution(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, Base):
+    """Com oferirem un requisit concret en aquesta candidatura.
+
+    Es la tercera baula d'una cadena que el sistema no ha de fondre mai:
+
+    * `CompanyRequirementAssessment` respon **"podem complir-ho i acreditar-ho?"**;
+    * aixo respon **"com ho oferirem concretament?"**;
+    * `WorkspaceEvidenceItem` respon **"amb quin paper ho acreditem?"**;
+    * l'oferta economica respondra **"quant costa i quin preu hi posem?"**.
+
+    Complir un requisit i saber com resoldre'l son coses diferents: una empresa
+    pot complir de sobres i no haver decidit encara amb quin equip ho fara, i
+    pot tenir la solucio claríssima i no complir. Barrejar-ho faria que una de
+    les dues respostes tapes l'altra.
+
+    Tres regles del model:
+
+    * **Una solucio per requisit i candidatura.** L'index unic parcial es el que
+      fa que sincronitzar dues vegades no dupliqui res; les files manuals porten
+      `requirement_id` NULL i no hi entren, com a `WorkspaceChecklistItem`.
+    * **`validated` nomes l'escriu una persona.** Queda lligat al requisit i al
+      contingut concrets amb dues empremtes: si el plec canvia el que demana o
+      algu reescriu la proposta, la validacio deixa de valer sense haver
+      d'esborrar res. Es el mateix mecanisme que la confirmacio de pertinenca
+      del dossier.
+    * **El proveidor i el producte son text.** No hi ha cap cataleg ni cap taula
+      de proveidors: aixo queda fora de l'MVP, i una FK ara obligaria a inventar
+      entitats per poder escriure un nom.
+
+    La coherencia de `validated` —que porti signatura, data, motiu i les dues
+    empremtes— la imposa el servei, no l'esquema: mentre la solucio es un
+    esborrany aquests camps han de poder ser buits.
+    """
+
+    __tablename__ = "workspace_technical_solutions"
+    __table_args__ = (
+        # Els valors dels enums els imposa la BASE, no nomes Python.
+        # `enum_column()` es materialitza com un VARCHAR sense CHECK (SQLAlchemy
+        # nomes el crea amb `create_constraint=True`), i sense aquests dos
+        # constraints un INSERT que no passi per l'ORM hi pot escriure
+        # qualsevol cadena que capiga al VARCHAR.
+        sa.CheckConstraint(
+            "status IN ({})".format(
+                ", ".join(f"'{member.value}'" for member in TechnicalSolutionStatus)
+            ),
+            name="status_valid",
+        ),
+        sa.CheckConstraint(
+            "source IN ({})".format(
+                ", ".join(f"'{member.value}'" for member in TechnicalSolutionSource)
+            ),
+            name="source_valid",
+        ),
+        sa.Index("ix_workspace_technical_solutions_workspace", "workspace_id"),
+        sa.Index("ix_workspace_technical_solutions_owner", "owner_id"),
+        # Una solucio per requisit dins d'una candidatura. Les manuals tenen
+        # `requirement_id` NULL i, com que a SQL NULL no es igual a NULL, no
+        # xoquen mai entre elles.
+        sa.Index(
+            "uq_workspace_technical_solutions_requirement",
+            "workspace_id",
+            "requirement_id",
+            unique=True,
+            postgresql_where=sa.text("requirement_id IS NOT NULL"),
+            sqlite_where=sa.text("requirement_id IS NOT NULL"),
+        ),
+    )
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey("bid_workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    #: Quin requisit del plec resol. `None` a les files manuals. Si una
+    #: extraccio nova se'l emporta, la solucio es conserva sense vincle: la
+    #: feina escrita no la pot esborrar un recalcul.
+    requirement_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("requirements.id", ondelete="SET NULL")
+    )
+
+    title: Mapped[str] = mapped_column(sa.String(500), nullable=False)
+    #: El cos de la proposta: que oferirem i com.
+    proposed_solution: Mapped[str | None] = mapped_column(sa.Text)
+
+    #: Text lliure, sense cataleg ni FK (veure el docstring de la classe).
+    supplier_name: Mapped[str | None] = mapped_column(sa.String(300))
+    product_name: Mapped[str | None] = mapped_column(sa.String(300))
+
+    #: Qui se n'encarrega. Que pertanyi a l'empresa ho comprova el servei, com
+    #: passa amb `assigned_to` de les tasques.
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+    status: Mapped[TechnicalSolutionStatus] = mapped_column(
+        enum_column(TechnicalSolutionStatus, "technical_solution_status"),
+        nullable=False,
+        default=TechnicalSolutionStatus.NOT_STARTED,
+    )
+    #: D'on surt la fila. **Sense valor per defecte, i a proposit:** es
+    #: provenance, i un defecte faria que una fila creada per un cami que
+    #: s'oblidi de dir-ho passes per "surt d'un requisit del plec" sense que
+    #: ningu ho hagi afirmat. L'escriu qui la crea: `requirement` al sync,
+    #: `manual` a la creacio a ma.
+    source: Mapped[TechnicalSolutionSource] = mapped_column(
+        enum_column(TechnicalSolutionSource, "technical_solution_source"),
+        nullable=False,
+    )
+    notes: Mapped[str | None] = mapped_column(sa.Text)
+
+    # --- Validacio humana --------------------------------------------------- #
+    #
+    # Tenir una proposta escrita i donar-la per bona son dues afirmacions
+    # diferents, i la segona nomes la pot fer una persona.
+    validated_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    validated_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    #: Per que aquesta solucio resol aquesta exigencia. El servei l'exigira per
+    #: validar; aqui es nullable perque un esborrany encara no en te.
+    validated_note: Mapped[str | None] = mapped_column(sa.Text)
+    #: Empremta del requisit tal com era en validar-lo. SHA-256 en hexadecimal,
+    #: la mateixa amplada i el mateix calcul que al dossier.
+    validated_requirement_fingerprint: Mapped[str | None] = mapped_column(sa.String(64))
+    #: Empremta de la proposta signada. Si algu la reescriu, ningu no ha validat
+    #: el que hi ha ara.
+    validated_content_fingerprint: Mapped[str | None] = mapped_column(sa.String(64))
+
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+    workspace: Mapped[BidWorkspace] = relationship(back_populates="technical_solutions")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<WorkspaceTechnicalSolution {self.status} {self.title[:40]}>"

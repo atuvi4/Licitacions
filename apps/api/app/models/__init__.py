@@ -57,6 +57,7 @@ from app.models.workspace import (
     WorkspaceEvidenceItem,
     WorkspaceNote,
     WorkspaceTask,
+    WorkspaceTechnicalSolution,
 )
 
 __all__ = [
@@ -118,5 +119,6 @@ __all__ = [
     "WorkspaceEvidenceItem",
     "WorkspaceNote",
     "WorkspaceTask",
+    "WorkspaceTechnicalSolution",
     "project_services",
 ]
