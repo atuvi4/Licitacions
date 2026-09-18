@@ -568,8 +568,20 @@ async def build_scenario() -> list[dict[str, str]]:
         await complete_company_evidence(client, base)
 
         flows = []
-        for label, tender_id in tenders:
-            flows.append(await run_tender_flow(client, base, label=label, tender_id=tender_id))
+        for index, (label, tender_id) in enumerate(tenders):
+            flows.append(
+                await run_tender_flow(
+                    client,
+                    base,
+                    label=label,
+                    tender_id=tender_id,
+                    # Nomes la segona congela, i ho demana explicitament: es la
+                    # que ensenya que un paquet sostingut per una simulacio no es
+                    # pot aprovar. L'estrella es queda a punt perque es pugui
+                    # recorrer el pas a ma.
+                    freeze_package_at_end=index > 0,
+                )
+            )
     return flows
 
 
@@ -584,8 +596,283 @@ async def check_star_candidate(client, base: str, tender_id: str) -> None:  # ty
         )
 
 
-async def run_tender_flow(client, base: str, *, label: str, tender_id: str) -> dict[str, str]:  # type: ignore[no-untyped-def]
-    """Documents, analisi, compliment, candidatura, GO, dossier i paquet."""
+#: El requisit del plec de demo que demana una resposta tecnica. La resta
+#: —solvencia, assegurança, ISO, experiencia— s'acrediten amb papers, no amb una
+#: proposta: qui decideix quins en necessiten es una persona (C-11), i aqui la
+#: persona es aquest seed.
+DEMO_TECHNICAL_REQUIREMENT = "Memoria tecnica"
+
+#: Durada del contracte. El plec de demo la declara (12 mesos a `PlannedPeriod`)
+#: pero el model no la guarda: no hi ha camp de durada a `Tender`. Per tant es
+#: entrada MANUAL de la preparacio (C-3), no una extraccio, i per aixo s'escriu
+#: aqui amb el mateix endpoint que faria servir una persona.
+DEMO_DURATION_MONTHS = 12
+
+
+async def seed_demo_technical(client, base: str, workspace_id: str, tender_id: str) -> list[dict]:  # type: ignore[no-untyped-def]
+    """Les solucions tecniques de la demo, pel flux real d'S3.
+
+    Res no s'escriu a ma: es crea pel mateix `from-requirement` que premeria una
+    persona, s'omple amb un `PATCH` i es valida amb l'endpoint de validacio, que
+    es l'unic que pot deixar una solucio en `validated` i el que calcula les
+    empremtes.
+    """
+    url = f"{base}/workspaces/{workspace_id}/technical-solutions"
+    existing = expect(await client.get(url), 200)
+    if existing:
+        print(f"  ja hi ha {len(existing)} solucions tecniques")
+        return existing
+
+    analysis = expect(await client.get(f"/api/v1/tenders/{tender_id}/analysis/requirements"), 200)
+    requirement = next(
+        (
+            item
+            for item in analysis.get("requirements", [])
+            if DEMO_TECHNICAL_REQUIREMENT.lower() in (item.get("title") or "").lower()
+        ),
+        None,
+    )
+    if requirement is None:
+        raise DemoStepFailed(
+            f"El plec de demo no porta cap requisit {DEMO_TECHNICAL_REQUIREMENT!r}: "
+            "revisa el corpus de fixtures, no aquest seed."
+        )
+
+    created = expect(
+        await client.post(f"{url}/from-requirement", json={"requirement_id": requirement["id"]}),
+        200,
+    )
+    solution = created["solution"]
+    expect(
+        await client.patch(
+            f"{url}/{solution['id']}",
+            json={
+                "proposed_solution": (
+                    "Memoria signada per enginyer de telecomunicacio col·legiat. "
+                    "Desplegament FTTH amb topologia en anell entre els tres nodes "
+                    "municipals i escomeses GPON als punts de servei. Redundancia "
+                    "de cami a l'anell troncal i electronica d'acces gestionada."
+                ),
+                "status": "needs_validation",
+            },
+        ),
+        200,
+    )
+    expect(
+        await client.post(
+            f"{url}/{solution['id']}/validation",
+            json={
+                "note": (
+                    "[DEMO] Revisada l'arquitectura i la redundancia contra el que "
+                    "demana el plec."
+                )
+            },
+        ),
+        200,
+    )
+
+    # Una solucio manual: l'equipament no respon a cap exigencia concreta del
+    # plec, pero forma part del que oferim i la pantalla l'ha de poder ensenyar.
+    manual = expect(
+        await client.post(
+            url,
+            json={
+                "title": "Electronica de xarxa i equipament d'acces",
+                "proposed_solution": (
+                    "Commutadors d'acces gestionats als tres nodes i terminals "
+                    "optics d'usuari als punts de servei, amb configuracio i "
+                    "inventari lliurats en posar en servei."
+                ),
+                "supplier_name": "Distribucions Xarxa SL",
+                "product_name": "Serie AX-2400",
+                "status": "needs_validation",
+            },
+        ),
+        201,
+    )
+    expect(
+        await client.post(
+            f"{url}/{manual['id']}/validation",
+            json={"note": "[DEMO] Equipament comprovat contra el dimensionament."},
+        ),
+        200,
+    )
+
+    solutions = expect(await client.get(url), 200)
+    print(f"  {len(solutions)} solucions tecniques validades")
+    return solutions
+
+
+#: L'oferta de la demo. Preus plausibles i dins del pressupost del plec
+#: (240.000 EUR sense IVA): no busca marges perfectes, busca ser llegible.
+DEMO_SECTIONS: tuple[tuple[str, tuple[dict, ...]], ...] = (
+    (
+        "Equipament",
+        (
+            {
+                "concept": "Commutadors d'acces gestionats",
+                "quantity": "6",
+                "pricing_basis": "one_off",
+                "offered_unit_price_ex_vat": "1850.00",
+                "unit_cost_ex_vat": "1420.00",
+                "vat_rate": "21.00",
+            },
+            {
+                "concept": "Terminals optics d'usuari (ONT)",
+                "quantity": "40",
+                "pricing_basis": "per_unit",
+                "offered_unit_price_ex_vat": "95.00",
+                "unit_cost_ex_vat": "68.00",
+                "tender_max_unit_price_ex_vat": "110.00",
+                "vat_rate": "21.00",
+            },
+        ),
+    ),
+    (
+        "Implantacio",
+        (
+            {
+                "concept": "Desplegament de fibra i fusions",
+                "quantity": "1",
+                "pricing_basis": "one_off",
+                "offered_unit_price_ex_vat": "78000.00",
+                "unit_cost_ex_vat": "61000.00",
+                "vat_rate": "21.00",
+                "link": True,
+            },
+            {
+                "concept": "Posada en servei i documentacio",
+                "quantity": "1",
+                "pricing_basis": "one_off",
+                "offered_unit_price_ex_vat": "9500.00",
+                "unit_cost_ex_vat": "7200.00",
+                "vat_rate": "21.00",
+            },
+        ),
+    ),
+    (
+        "Serveis recurrents",
+        (
+            {
+                "concept": "Manteniment preventiu i correctiu",
+                "quantity": "1",
+                "pricing_basis": "monthly",
+                "offered_unit_price_ex_vat": "1450.00",
+                "unit_cost_ex_vat": "1010.00",
+                "vat_rate": "21.00",
+            },
+            {
+                "concept": "Suport 24x7 amb acord de nivell de servei",
+                "quantity": "1",
+                "pricing_basis": "monthly",
+                "offered_unit_price_ex_vat": "620.00",
+                "unit_cost_ex_vat": "430.00",
+                "vat_rate": "21.00",
+            },
+        ),
+    ),
+)
+
+
+async def seed_demo_economic(client, base: str, workspace_id: str, solutions: list[dict]) -> dict:  # type: ignore[no-untyped-def]
+    """L'oferta economica de la demo, pels serveis d'S5.
+
+    Cada mutacio llegeix la revisio vigent i l'envia com a `expected_revision`,
+    com hauria de fer qualsevol client: el seed no te cap privilegi sobre la
+    concurrencia.
+    """
+    url = f"{base}/workspaces/{workspace_id}/economic-offer"
+    opened = expect(await client.post(url), 200)
+    offer = opened["offer"]
+    if offer["lots"] and offer["lots"][0]["sections"]:
+        print(f"  l'oferta ja hi era ({offer['lots'][0]['label']})")
+        return offer
+
+    lot = offer["lots"][0]
+    offer = expect(
+        await client.patch(
+            f"{url}/lots/{lot['id']}",
+            json={
+                "duration_months": DEMO_DURATION_MONTHS,
+                "expected_revision": offer["revision"],
+            },
+        ),
+        200,
+    )
+
+    lligada = next((s for s in solutions if s.get("requirement_id")), None)
+    for title, lines in DEMO_SECTIONS:
+        offer = expect(
+            await client.post(
+                f"{url}/lots/{lot['id']}/sections",
+                json={"title": title, "expected_revision": offer["revision"]},
+            ),
+            200,
+        )
+        section = offer["lots"][0]["sections"][-1]
+        for line in lines:
+            payload = {k: v for k, v in line.items() if k != "link"}
+            payload["expected_revision"] = offer["revision"]
+            if line.get("link") and lligada is not None:
+                # La linia que respon a la memoria tecnica: la pantalla ha de
+                # poder ensenyar que aquest import respon a aquella solucio.
+                payload["requirement_id"] = lligada["requirement_id"]
+                payload["technical_solution_id"] = lligada["id"]
+            offer = expect(
+                await client.post(f"{url}/sections/{section['id']}/lines", json=payload), 200
+            )
+
+    totals = offer["totals"]
+    limit = offer["lots"][0]["limit"]
+    print(
+        f"  oferta: {len(offer['lots'][0]['sections'])} seccions, "
+        f"{totals['line_count']} linies, {totals['total_revenue']} EUR"
+        f" (maxim del plec: {limit['tender_max']})"
+    )
+    if limit["exceeds_lot_max"]:
+        raise DemoStepFailed("L'oferta de demo supera el pressupost del plec.")
+    return offer
+
+
+async def confirm_demo_scope(client, base: str, workspace_id: str) -> dict:  # type: ignore[no-untyped-def]
+    """Una persona diu que ha revisat quins requisits necessiten solucio (C-14).
+
+    Va DESPRES de crear les solucions i de fixar els lots oferts: l'empremta
+    cobreix les dues coses, i confirmar abans deixaria la revisio caducada tot
+    seguit.
+    """
+    final = expect(
+        await client.post(f"{base}/workspaces/{workspace_id}/technical-scope/review"), 200
+    )
+    tecnic = final["technical"]
+    if not tecnic["scope_reviewed"] or tecnic["scope_stale"]:
+        raise DemoStepFailed(
+            "L'abast tecnic no ha quedat revisat i vigent: "
+            f"reviewed={tecnic['scope_reviewed']} stale={tecnic['scope_stale']}"
+        )
+    print(
+        f"  abast revisat: {tecnic['requirements_in_scope']} requisits, "
+        f"caducat={tecnic['scope_stale']}"
+    )
+    return final
+
+
+async def run_tender_flow(  # type: ignore[no-untyped-def]
+    client,
+    base: str,
+    *,
+    label: str,
+    tender_id: str,
+    freeze_package_at_end: bool = False,
+) -> dict[str, str]:
+    """Documents, analisi, compliment, candidatura, GO, dossier i Sprint 2.
+
+    Per defecte **no congela cap paquet**: deixa la candidatura a punt i prou.
+    Congelar es un pas que la demo ha de poder ensenyar en directe, i un default
+    que el fes sol tornaria a deixar una fotografia que ningu no ha demanat.
+    Nomes la segona licitacio el demana explicitament, per ensenyar que un
+    paquet sostingut per una simulacio no es pot aprovar.
+    """
     import sqlalchemy as sa
 
     from app.db.session import SessionFactory
@@ -655,6 +942,38 @@ async def run_tender_flow(client, base: str, *, label: str, tender_id: str) -> d
             f"{label}: el dossier no esta a punt ({readiness['state']}, "
             f"blocadors {readiness['blockers']}). No s'ha congelat cap paquet."
         )
+
+    step(f"{label} | solucio tecnica")
+    solutions = await seed_demo_technical(client, base, workspace_id, tender_id)
+
+    step(f"{label} | oferta economica")
+    await seed_demo_economic(client, base, workspace_id, solutions)
+
+    # L'ULTIM pas dels tres: l'empremta de l'abast cobreix els requisits, els
+    # lots oferts i quines solucions s'han declarat necessaries.
+    step(f"{label} | revisio de l'abast tecnic")
+    final = await confirm_demo_scope(client, base, workspace_id)
+
+    step(f"{label} | porta final")
+    if not final["ready_for_final_review"]:
+        raise DemoStepFailed(
+            f"{label}: la candidatura no esta a punt "
+            f"(blocadors {[f['code'] for f in final['findings'] if f['severity'] == 'blocker']})."
+        )
+    print("  a punt per a la revisio final, sense blocadors")
+
+    if not freeze_package_at_end:
+        # La candidatura estrella es queda just ABANS de congelar: la demo ha de
+        # poder ensenyar en directe congelar, veure el manifest v2 i provar
+        # d'aprovar. Congelar-la aqui li trauria el pas mes interessant.
+        print("  paquet: no se'n congela cap (queda per fer a la demo)")
+        return {
+            "label": label,
+            "tender_id": tender_id,
+            "document_id": document_id,
+            "workspace_id": workspace_id,
+            "package_id": None,
+        }
 
     step(f"{label} | paquet")
     packages_url = f"{base}/workspaces/{workspace_id}/packages"
