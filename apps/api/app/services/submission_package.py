@@ -49,6 +49,7 @@ from app.services import workspace_dossier as dossier_service
 from app.services.storage import StorageError, get_storage
 from app.services.tender_lifecycle import load_change_log, revision_of
 from app.workspace.dossier import UNUSABLE_VALIDITIES
+from app.workspace.manifest import MANIFEST_VERSION
 from app.workspace.transitions import TransitionActor
 
 #: Qui pot signar l'aprovacio final. La mateixa politica de 5A: no s'inventa cap
@@ -280,10 +281,14 @@ async def freeze_package(
             },
         )
 
-    readiness = await dossier_service.reconcile_readiness(session, workspace)
+    await dossier_service.reconcile_readiness(session, workspace)
+    # La MATEIXA porta que la revisio final i que l'aprovacio: congelar una
+    # fotografia que despres no es podra aprovar nomes serveix per fer perdre el
+    # temps a qui la congela.
+    readiness = await dossier_service.final_gate(session, workspace)
     if not readiness.is_ready:
         raise PackageNotReadyError(
-            "El dossier encara no esta a punt per congelar-lo.",
+            "La candidatura encara no esta a punt per congelar-la.",
             details={"blockers": list(readiness.blockers)},
         )
 
@@ -496,7 +501,14 @@ async def evaluate_staleness(
     selected, _payload, digest = await dossier_service.current_manifest(
         session, workspace, revision_number=package.revision_number
     )
-    if digest != package.manifest_hash:
+    version = (package.manifest_json or {}).get("manifest_version")
+    if version is not None and version != MANIFEST_VERSION:
+        # Causa coneguda i concreta (C-17): aquell manifest no descrivia ni la
+        # solucio tecnica ni l'oferta economica, aixi que no es pot afirmar que
+        # segueixi sent el que es presentaria. Comparar-ne el hash no diria res
+        # —son formats diferents— i dir-ne nomes "ha canviat" amagaria el motiu.
+        reasons.append("manifest_version_outdated")
+    elif digest != package.manifest_hash:
         reasons.append("manifest_changed")
 
     # Un document del paquet que hagi deixat de servir per al termini invalida el

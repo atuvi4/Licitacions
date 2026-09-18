@@ -17,6 +17,7 @@ Cap crida a cap proveidor: congelar es copiar i fer un hash.
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -25,6 +26,7 @@ import pytest
 import sqlalchemy as sa
 
 from app.core.errors import NotFoundError, PermissionDeniedError
+from app.models.audit import AuditLog
 from app.models.compliance import CompanyComplianceRun
 from app.models.credentials import CompanyCertification, CompanyInsurance
 from app.models.documents import Document, DocumentLink
@@ -38,6 +40,7 @@ from app.models.enums import (
     LinkedEntityType,
     MembershipRole,
     PackageApprovalDecision,
+    PricingBasis,
     RequirementCategory,
     RequirementObligation,
     RequirementOperator,
@@ -45,12 +48,13 @@ from app.models.enums import (
     ReviewStatus,
     SourceType,
     SubmissionPackageStatus,
+    TechnicalSolutionSource,
     TenderDocumentType,
     WorkspaceDecisionType,
     WorkspaceReadiness,
     WorkspaceStatus,
 )
-from app.models.identity import Company
+from app.models.identity import Company, CompanyMembership
 from app.models.requirements import Requirement, RequirementExtractionRun
 from app.models.sources import Source
 from app.models.submission import (
@@ -66,11 +70,13 @@ from app.models.tenders import Tender, TenderDocument
 from app.models.workspace import WorkspaceEvidenceItem
 from app.services import bid_workspace as workspace_service
 from app.services import submission_package as service
+from app.services import technical_scope as scope_service
 from app.services import tender_lifecycle as lifecycle
 from app.services import workspace_dossier as dossier_service
 from app.services.compliance_analysis import analyze_company_compliance
 from app.services.storage import get_storage
 from app.workspace.manifest import (
+    MANIFEST_VERSION_V1,
     ManifestDocument,
     ManifestInput,
     build_manifest,
@@ -363,6 +369,89 @@ async def test_un_paquet_no_saprova_amb_la_candidatura_incompleta(db, ready):
 # --------------------------------------------------------------------------- #
 
 
+def _solution(n: int):
+    from app.workspace.manifest import ManifestSolution
+
+    return ManifestSolution(
+        solution_id=uuid.UUID(int=n), title=f"Solucio {n}", proposed_solution="x"
+    )
+
+
+def _line(position: int, n: int):
+    from app.workspace.manifest import ManifestOfferLine
+
+    return ManifestOfferLine(
+        line_id=uuid.UUID(int=n), position=position, concept=f"Linia {n}"
+    )
+
+
+def test_l_ordre_d_entrada_no_canvia_el_hash_quan_no_significa_res():
+    """Les solucions tecniques no tenen posicio: l'ordre es de la consulta.
+
+    Si el hash en depengues, el mateix paquet donaria hashos diferents segons
+    com la base hagues retornat les files aquell dia.
+    """
+    from app.workspace.manifest import ManifestInput, build_manifest
+
+    base = {
+        "revision_number": 1,
+        "workspace_id": uuid.UUID(int=1),
+        "company_id": uuid.UUID(int=2),
+        "tender_id": uuid.UUID(int=3),
+    }
+    _p1, un = build_manifest(
+        ManifestInput(**base, solutions=(_solution(7), _solution(4)))
+    )
+    _p2, altre = build_manifest(
+        ManifestInput(**base, solutions=(_solution(4), _solution(7)))
+    )
+
+    assert un == altre
+
+
+def test_la_posicio_de_l_oferta_si_que_significa_alguna_cosa():
+    """L'ordre de les linies es part del document que s'ofereix."""
+    from app.workspace.manifest import (
+        ManifestInput,
+        ManifestOffer,
+        ManifestOfferLot,
+        ManifestOfferSection,
+        build_manifest,
+    )
+
+    base = {
+        "revision_number": 1,
+        "workspace_id": uuid.UUID(int=1),
+        "company_id": uuid.UUID(int=2),
+        "tender_id": uuid.UUID(int=3),
+    }
+
+    def oferta(primera: int, segona: int):
+        return ManifestOffer(
+            currency="EUR",
+            lots=(
+                ManifestOfferLot(
+                    lot_id=uuid.UUID(int=9),
+                    label="Oferta global",
+                    position=0,
+                    sections=(
+                        ManifestOfferSection(
+                            section_id=uuid.UUID(int=8),
+                            title="Inversio",
+                            position=0,
+                            lines=(_line(0, primera), _line(1, segona)),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+    _p1, un = build_manifest(ManifestInput(**base, offer=oferta(4, 7)))
+    _p2, altre = build_manifest(ManifestInput(**base, offer=oferta(7, 4)))
+
+    assert un != altre
+
+
 def sample_manifest(**overrides) -> ManifestInput:
     data = {
         "revision_number": 1,
@@ -452,11 +541,14 @@ def test_the_document_order_inside_the_manifest_is_stable():
 def test_the_manifest_carries_what_it_was_measured_against():
     payload, _digest = build_manifest(sample_manifest())
 
-    assert payload["manifest_version"] == "submission-manifest-v1"
-    assert payload["analysis"]["compliance_run_id"] == str(uuid.UUID(int=5))
-    assert payload["analysis"]["requirement_run_id"] == str(uuid.UUID(int=4))
+    assert payload["manifest_version"] == "submission-manifest-v2"
+    # La base d'aprovacio i el contingut van separats des de la v2: es pot
+    # llegir per que un paquet ha quedat obsolet, no nomes que ho ha quedat.
+    analisi = payload["approval_basis"]["analysis"]
+    assert analisi["compliance_run_id"] == str(uuid.UUID(int=5))
+    assert analisi["requirement_run_id"] == str(uuid.UUID(int=4))
     assert payload["tender"]["deadline_at"].startswith("2026-12-01")
-    assert payload["coverage"]["document_count"] == 1
+    assert payload["content"]["coverage"]["document_count"] == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -583,7 +675,7 @@ async def test_the_manifest_survives_the_live_entities_going_away(db, ready):
     manifest congelat no en depen de cap.
     """
     package = await freeze(db, ready)
-    snapshot = dict(package.manifest_json["documents"][0])
+    snapshot = dict(package.manifest_json["content"]["documents"][0])
 
     await db.delete(await db.get(WorkspaceEvidenceItem, ready["evidence_item"].id))
     await db.delete(await db.get(Requirement, ready["requirement"].id))
@@ -592,7 +684,7 @@ async def test_the_manifest_survives_the_live_entities_going_away(db, ready):
     await db.commit()
 
     await db.refresh(package)
-    assert package.manifest_json["documents"][0] == snapshot
+    assert package.manifest_json["content"]["documents"][0] == snapshot
     assert package.items[0].document_sha256 == snapshot["sha256"]
     assert package.items[0].filename == snapshot["filename"], (
         "el nom d'aquell dia, no el d'ara"
@@ -905,7 +997,10 @@ async def test_the_api_serves_the_frozen_manifest_bytes(db, client_a, ready):
     assert response.headers["x-manifest-sha256"] == package.manifest_hash
     assert "attachment" in response.headers["content-disposition"]
     assert response.json()["revision_number"] == 1
-    assert response.json()["documents"][0]["sha256"] == ready["document"].sha256
+    assert (
+        response.json()["content"]["documents"][0]["sha256"]
+        == ready["document"].sha256
+    )
 
 
 async def test_the_api_refuses_to_approve_a_stale_package_and_says_why(
@@ -1244,7 +1339,10 @@ async def test_the_retained_bytes_still_hash_to_the_package_item(db, client_a, r
     payload = await get_storage().download(item.storage_key)
     assert hashlib.sha256(payload).hexdigest() == item.document_sha256
     # I el manifest aprovat segueix apuntant a aquest mateix hash.
-    assert package.manifest_json["documents"][0]["sha256"] == item.document_sha256
+    assert (
+        package.manifest_json["content"]["documents"][0]["sha256"]
+        == item.document_sha256
+    )
     approval = service.approval_of(package)
     assert approval.package_manifest_hash == package.manifest_hash
 
@@ -1830,3 +1928,698 @@ async def test_reading_never_writes_even_when_the_stored_state_is_stale(
     assert package.status == (
         SubmissionPackageStatus.SUPERSEDED if approved else SubmissionPackageStatus.FROZEN
     )
+
+
+# --------------------------------------------------------------------------- #
+# S7 · Manifest v2: que es presentaria i sobre que es va decidir                 #
+# --------------------------------------------------------------------------- #
+
+
+async def _offer_of(db, ready):
+    from app.services import economic_offer
+
+    return await economic_offer.get_offer(db, ready["workspace"])
+
+
+async def _line_of(db, ready):
+    offer = await _offer_of(db, ready)
+    return offer, offer.lots[0].sections[0].lines[0]
+
+
+async def _hash_now(db, ready, package) -> str:
+    _rows, _payload, digest = await dossier_service.current_manifest(
+        db, ready["workspace"], revision_number=package.revision_number
+    )
+    return digest
+
+
+async def _patch_line(db, ready, **fields):
+    from app.services import economic_offer
+
+    offer, line = await _line_of(db, ready)
+    return await economic_offer.update_line(
+        db,
+        ready["workspace"],
+        offer,
+        line,
+        fields=fields,
+        expected_revision=offer.revision,
+        user=ready["user"],
+    )
+
+
+async def _with_validated_solution(db, ready):
+    """Una solucio tecnica manual, validada: sense validar no es podria congelar."""
+    from app.services import technical_solution
+
+    workspace, user = ready["workspace"], ready["user"]
+    solution = await technical_solution.create_manual(
+        db,
+        workspace,
+        title="Centraleta amb dos nodes",
+        proposed_solution="Dos nodes actius en alta disponibilitat",
+        supplier_name="Proveidor SL",
+        product_name="Model X",
+        user=user,
+    )
+    return await technical_solution.validate_solution(
+        db, workspace, solution, note="Revisat", user=user
+    )
+
+
+# --- El cost intern no es contingut presentat -------------------------------- #
+
+
+async def test_canviar_nomes_el_cost_intern_no_toca_el_manifest(db, ready):
+    """El test que separa "gestio interna" de "el que presentem".
+
+    El cost puja la revisio de l'oferta —es una modificacio, i el locking ho ha
+    de veure— pero no canvia ni una coma del que s'oferiria. Si el manifest se'n
+    ressentis, cada ajust intern de marge invalidaria un paquet aprovat.
+    """
+    package = await freeze(db, ready)
+    abans = package.manifest_hash
+    offer_abans = await _offer_of(db, ready)
+    revisio_abans = offer_abans.revision
+
+    await _patch_line(db, ready, unit_cost_ex_vat=Decimal("123.45"))
+
+    offer = await _offer_of(db, ready)
+    assert offer.revision == revisio_abans + 1, "el locking si que ho ha de veure"
+    assert await _hash_now(db, ready, package) == abans
+    report = await service.evaluate_staleness(db, ready["workspace"], package)
+    assert not report.is_stale, report.reasons
+    # I es pot seguir aprovant exactament el mateix paquet.
+    approval = await approve(db, ready, package)
+    assert approval.package_manifest_hash == abans
+
+
+@pytest.mark.parametrize(
+    "camp,valor",
+    [
+        ("notes", "Nota interna de negociacio"),
+        ("tender_max_unit_price_ex_vat", Decimal("5000")),
+    ],
+)
+async def test_hi_ha_camps_economics_que_no_son_el_que_presentem(db, ready, camp, valor):
+    """Les notes son internes, i el maxim transcrit es una anotacio de
+    verificacio nostra: no s'ofereix, i el plec ja te els seus mecanismes."""
+    package = await freeze(db, ready)
+    abans = package.manifest_hash
+
+    await _patch_line(db, ready, **{camp: valor})
+
+    assert await _hash_now(db, ready, package) == abans
+
+
+# --- Solucio tecnica ---------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "camp,valor",
+    [
+        ("proposed_solution", "Una altra arquitectura"),
+        ("title", "Un altre titol"),
+        ("supplier_name", "Un altre proveidor"),
+        ("product_name", "Un altre model"),
+    ],
+)
+async def test_canviar_el_que_soferiria_tecnicament_supera_el_paquet(
+    db, ready, camp, valor
+):
+    from app.services import technical_solution
+
+    solution = await _with_validated_solution(db, ready)
+    package = await freeze(db, ready)
+
+    await technical_solution.update_solution(
+        db, ready["workspace"], solution, **{camp: valor}, user=ready["user"]
+    )
+
+    assert await _hash_now(db, ready, package) != package.manifest_hash
+    report = await service.evaluate_staleness(db, ready["workspace"], package)
+    assert "manifest_changed" in report.reasons
+
+
+@pytest.mark.parametrize(
+    "camp,valor", [("notes", "Recordatori intern"), ("owner_id", "USER")]
+)
+async def test_el_treball_intern_de_la_solucio_no_toca_el_manifest(db, ready, camp, valor):
+    from app.services import technical_solution
+
+    solution = await _with_validated_solution(db, ready)
+    package = await freeze(db, ready)
+    valor = ready["user"].id if valor == "USER" else valor
+
+    await technical_solution.update_solution(
+        db, ready["workspace"], solution, **{camp: valor}, user=ready["user"]
+    )
+
+    assert await _hash_now(db, ready, package) == package.manifest_hash
+
+
+async def test_revalidar_el_mateix_contingut_no_supera_el_paquet(db, ready):
+    """Qui signa i quan no son al manifest: nomes SOBRE QUE es va signar.
+
+    Si hi fossin, tornar a validar el mateix per deixar constancia invalidaria un
+    paquet aprovat sense que hagues canviat res del que s'ofereix.
+    """
+    from app.services import technical_solution
+
+    solution = await _with_validated_solution(db, ready)
+    package = await freeze(db, ready)
+    signatura_abans = solution.validated_at
+
+    await technical_solution.validate_solution(
+        db, ready["workspace"], solution, note="Ho torno a mirar", user=ready["user"]
+    )
+
+    assert solution.validated_at != signatura_abans
+    assert await _hash_now(db, ready, package) == package.manifest_hash
+
+
+async def test_una_validacio_sobre_un_contingut_nou_si_que_supera_el_paquet(db, ready):
+    from app.services import technical_solution
+
+    solution = await _with_validated_solution(db, ready)
+    package = await freeze(db, ready)
+
+    await technical_solution.update_solution(
+        db, ready["workspace"], solution, proposed_solution="Una altra cosa",
+        user=ready["user"],
+    )
+    await technical_solution.validate_solution(
+        db, ready["workspace"], solution, note="Revisat de nou", user=ready["user"]
+    )
+
+    assert await _hash_now(db, ready, package) != package.manifest_hash
+
+
+async def test_canviar_l_abast_tecnic_supera_el_paquet(db, ready):
+    """L'abast es base d'aprovacio: si el plec demana una altra cosa, qui va
+    aprovar no va aprovar aixo, encara que cap text ofert hagi canviat."""
+    await _with_validated_solution(db, ready)
+    package = await freeze(db, ready)
+
+    await db.execute(
+        sa.update(Requirement)
+        .where(Requirement.id == ready["requirement"].id)
+        .values(title="Ara el plec demana una altra cosa")
+    )
+    await db.commit()
+
+    assert await _hash_now(db, ready, package) != package.manifest_hash
+
+
+# --- Dossier: la base de la pertinenca (C-18) --------------------------------- #
+
+
+async def test_qui_va_confirmar_la_pertinenca_no_es_al_manifest(db, ready):
+    """Que l'usuari es doni de baixa no pot superar un paquet."""
+    package = await freeze(db, ready)
+    item = ready["evidence_item"]
+
+    item.relevance_note = "Un altre motiu"
+    item.relevance_confirmed_by = None
+    await db.commit()
+
+    assert await _hash_now(db, ready, package) == package.manifest_hash
+
+
+@pytest.mark.parametrize(
+    "camp", ["relevance_requirement_fingerprint", "relevance_document_id"]
+)
+async def test_canviar_sobre_que_es_va_confirmar_supera_el_paquet(db, ready, camp):
+    package = await freeze(db, ready)
+    item = ready["evidence_item"]
+    valor = "a" * 64 if "fingerprint" in camp else ready["document"].id
+
+    setattr(item, camp, valor)
+    await db.commit()
+
+    assert await _hash_now(db, ready, package) != package.manifest_hash
+
+
+# --- Oferta economica ---------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "camp,valor",
+    [
+        ("offered_unit_price_ex_vat", Decimal("2500")),
+        ("quantity", Decimal("7")),
+        ("pricing_basis", PricingBasis.MONTHLY),
+        ("duration_months_override", 12),
+        ("vat_rate", Decimal("10")),
+        ("supplier_name", "Un altre proveidor"),
+        ("product_name", "Un altre model"),
+        ("position", 5),
+    ],
+)
+async def test_canviar_el_que_soferiria_economicament_supera_el_paquet(
+    db, ready, camp, valor
+):
+    package = await freeze(db, ready)
+
+    await _patch_line(db, ready, **{camp: valor})
+
+    assert await _hash_now(db, ready, package) != package.manifest_hash
+
+
+async def test_canviar_la_durada_del_lot_supera_el_paquet(db, ready):
+    from app.services import economic_offer
+
+    package = await freeze(db, ready)
+    offer = await _offer_of(db, ready)
+
+    await economic_offer.update_lot(
+        db,
+        offer,
+        offer.lots[0],
+        duration_months=24,
+        expected_revision=offer.revision,
+        user=ready["user"],
+    )
+
+    assert await _hash_now(db, ready, package) != package.manifest_hash
+
+
+async def test_canviar_la_moneda_supera_el_paquet(db, ready):
+    from app.services import economic_offer
+
+    package = await freeze(db, ready)
+    offer = await _offer_of(db, ready)
+
+    await economic_offer.update_offer(
+        db, offer, currency="USD", expected_revision=offer.revision, user=ready["user"]
+    )
+
+    assert await _hash_now(db, ready, package) != package.manifest_hash
+
+
+@pytest.mark.parametrize("nivell", ["line", "section", "lot"])
+async def test_arxivar_treu_la_fila_del_que_soferiria(db, ready, nivell):
+    """Arxivat vol dir que ja no compta: el manifest nomes porta actius."""
+    from app.services import economic_offer
+
+    package = await freeze(db, ready)
+    offer, line = await _line_of(db, ready)
+    workspace, user = ready["workspace"], ready["user"]
+
+    if nivell == "line":
+        await economic_offer.archive_line(
+            db, offer, line, expected_revision=offer.revision, user=user
+        )
+    elif nivell == "section":
+        section = offer.lots[0].sections[0]
+        await economic_offer.archive_section(
+            db, offer, section, expected_revision=offer.revision, user=user
+        )
+    else:
+        # El bloc global d'una candidatura sense lots no es pot arxivar (C-1):
+        # es comprova que la regla d'S5 segueix manant sobre el manifest.
+        with pytest.raises(economic_offer.LotSelectionNotAllowedError):
+            await economic_offer.archive_lot(
+                db, workspace, offer, offer.lots[0],
+                expected_revision=offer.revision, user=user,
+            )
+        return
+
+    assert await _hash_now(db, ready, package) != package.manifest_hash
+
+
+# --- Derivats presentables ------------------------------------------------------ #
+
+
+async def test_el_manifest_porta_els_imports_que_calcula_el_motor(db, ready):
+    """Els imports congelats son els d'S1, no una segona aritmetica.
+
+    Trenta mesos a base anual son 2,5 anualitats (C-8), i el manifest ho ha de
+    dir amb els mateixos numeros que veuria qui aprova.
+    """
+    from app.services import economic_offer
+
+    offer = await _offer_of(db, ready)
+    await economic_offer.update_lot(
+        db, offer, offer.lots[0], duration_months=30,
+        expected_revision=offer.revision, user=ready["user"],
+    )
+    await _patch_line(
+        db,
+        ready,
+        pricing_basis=PricingBasis.ANNUAL,
+        quantity=Decimal("1"),
+        offered_unit_price_ex_vat=Decimal("1200"),
+        vat_rate=Decimal("21"),
+    )
+
+    package = await freeze(db, ready)
+
+    linia = package.manifest_json["content"]["economic"]["lots"][0]["sections"][0]["lines"][0]
+    assert linia["periods"] == "2.5"
+    assert linia["effective_duration_months"] == 30
+    assert linia["amounts"]["revenue"] == "3000.00"
+    assert linia["amounts"]["vat_amount"] == "630.00"
+    assert linia["amounts"]["total_with_vat"] == "3630.00"
+    assert package.manifest_json["content"]["economic"]["amounts"]["revenue"] == "3000.00"
+
+
+async def test_un_import_indeterminat_segueix_sent_indeterminat(db, ready):
+    """`None` no es zero: una oferta sense durada no suma res, i dir-ne 0 seria
+    presentar un total que ningu no ha calculat."""
+    package_previ = await freeze(db, ready)
+    await _patch_line(db, ready, pricing_basis=PricingBasis.MONTHLY)
+
+    _rows, payload, _digest = await dossier_service.current_manifest(
+        db, ready["workspace"], revision_number=package_previ.revision_number + 1
+    )
+
+    linia = payload["content"]["economic"]["lots"][0]["sections"][0]["lines"][0]
+    assert linia["periods"] is None
+    assert linia["amounts"]["revenue"] is None
+
+
+# --- Manifests antics (C-17) ----------------------------------------------------- #
+
+
+async def _make_legacy(db, package):
+    """Simula un paquet congelat abans d'S7, sense reescriure'n res mes."""
+    payload = dict(package.manifest_json)
+    payload["manifest_version"] = MANIFEST_VERSION_V1
+    package.manifest_json = payload
+    package.manifest_hash = manifest_hash(payload)
+    await db.commit()
+    await db.refresh(package)
+    return package
+
+
+async def test_un_paquet_antic_ja_aprovat_es_queda_com_esta(db, ready):
+    """Es la fotografia real del que es va aprovar aquell dia."""
+    package = await freeze(db, ready)
+    approval = await approve(db, ready, package)
+    hash_aprovat = approval.package_manifest_hash
+    await _make_legacy(db, package)
+    hash_v1, json_v1 = package.manifest_hash, dict(package.manifest_json)
+
+    await dossier_service.reconcile_readiness(db, ready["workspace"])
+    await db.refresh(package)
+
+    assert package.status == SubmissionPackageStatus.APPROVED
+    assert package.manifest_hash == hash_v1
+    assert package.manifest_json == json_v1
+    # L'aprovacio segueix dient exactament quin manifest es va aprovar.
+    desada = await db.get(SubmissionPackageApproval, approval.id)
+    assert desada.package_manifest_hash == hash_aprovat
+
+
+async def test_un_paquet_antic_sense_aprovar_no_es_pot_aprovar(db, ready):
+    """Aquell manifest no deia res de la solucio tecnica ni de l'oferta: no es
+    pot afirmar que sigui el que es presentaria."""
+    package = await _make_legacy(db, await freeze(db, ready))
+
+    report = await service.evaluate_staleness(db, ready["workspace"], package)
+
+    assert "manifest_version_outdated" in report.reasons
+    assert "manifest_changed" not in report.reasons
+    with pytest.raises(service.PackageStaleError) as error:
+        await approve(db, ready, package)
+    assert "manifest_version_outdated" in error.value.details["reasons"]
+
+
+async def test_congelar_de_nou_dona_sempre_la_versio_vigent(db, ready):
+    await _make_legacy(db, await freeze(db, ready))
+
+    nou = await freeze(db, ready)
+
+    assert nou.manifest_json["manifest_version"] == "submission-manifest-v2"
+    assert nou.revision_number == 2
+
+
+# --- Seguretat: el manifest el pot descarregar qualsevol membre ------------------- #
+
+
+def _keys(node) -> set[str]:
+    """Totes les claus del document, a qualsevol fondaria."""
+    if isinstance(node, dict):
+        return set(node) | {k for value in node.values() for k in _keys(value)}
+    if isinstance(node, list):
+        return {k for item in node for k in _keys(item)}
+    return set()
+
+
+@pytest.mark.parametrize(
+    "role", [MembershipRole.OWNER, MembershipRole.TECHNICAL, MembershipRole.VIEWER]
+)
+async def test_el_manifest_no_porta_cap_xifra_interna(db, client_a, ready, role):
+    """El manifest es descarregable per qualsevol membre: si hi entres el cost,
+    obriries per aqui el que C-6 tanca a l'oferta."""
+    await _patch_line(db, ready, unit_cost_ex_vat=Decimal("4242.42"))
+    package = await freeze(db, ready)
+    await db.execute(
+        sa.update(CompanyMembership)
+        .where(
+            CompanyMembership.user_id == ready["user"].id,
+            CompanyMembership.company_id == ready["company"].id,
+        )
+        .values(role=role)
+    )
+    await db.commit()
+
+    root = f"/api/v1/companies/{ready['company'].id}/workspaces/{ready['workspace'].id}"
+    response = await client_a.get(f"{root}/packages/{package.id}/manifest")
+
+    assert response.status_code == 200
+    prohibides = {
+        "unit_cost_ex_vat",
+        "total_cost",
+        "margin_amount",
+        "margin_on_sales_pct",
+        "markup_on_cost_pct",
+        "monthly_equivalent_cost",
+        "incomplete_cost_lines",
+    }
+    assert not (_keys(json.loads(response.text)) & prohibides)
+    assert "4242.42" not in response.text
+    assert "4242" not in response.text
+
+
+# --------------------------------------------------------------------------- #
+# Historia i vigencia son coses diferents (C-17)                                #
+# --------------------------------------------------------------------------- #
+
+
+async def _statuses(db, ready) -> list:
+    """Com veu els paquets qui els llista, despres de reconciliar.
+
+    Es llegeix la columna directament: expirar la sessio sencera s'enduria els
+    objectes de la fixture i el test fallaria per una altra cosa.
+    """
+    await dossier_service.reconcile_readiness(db, ready["workspace"])
+    rows = await db.execute(
+        sa.select(SubmissionPackage.status).where(
+            SubmissionPackage.workspace_id == ready["workspace"].id
+        )
+    )
+    return list(rows.scalars().all())
+
+
+async def test_un_paquet_antic_aprovat_no_queda_superat_ni_llegint_lo(db, ready):
+    package = await freeze(db, ready)
+    await approve(db, ready, package)
+    await _make_legacy(db, package)
+
+    assert await _statuses(db, ready) == [SubmissionPackageStatus.APPROVED]
+    await db.refresh(package)
+    assert package.status == SubmissionPackageStatus.APPROVED
+
+
+async def test_un_paquet_antic_aprovat_es_queda_encara_que_tot_hagi_canviat(db, ready):
+    """L'estat diu que va passar amb AQUELLA fotografia, no si avui seria la
+    candidata. Per saber aixo ultim hi ha la revisio nova."""
+    package = await freeze(db, ready)
+    approval = await approve(db, ready, package)
+    await _make_legacy(db, package)
+    hash_v1, json_v1 = package.manifest_hash, dict(package.manifest_json)
+
+    # Es canvia tot el que es presentaria.
+    await _patch_line(
+        db, ready, concept="Una altra cosa", offered_unit_price_ex_vat=Decimal("99999")
+    )
+
+    assert await _statuses(db, ready) == [SubmissionPackageStatus.APPROVED]
+    await db.refresh(package)
+    assert package.manifest_hash == hash_v1
+    assert package.manifest_json == json_v1
+    desada = await db.get(SubmissionPackageApproval, approval.id)
+    assert desada.package_manifest_hash == approval.package_manifest_hash
+
+
+async def test_un_paquet_antic_sense_aprovar_ja_surt_superat(db, ready):
+    """No cal esperar que algu provi d'aprovar-lo: amb el contracte d'avui
+    aquella fotografia ja no es aprovable, i llegir-la ho ha de dir."""
+    package = await _make_legacy(db, await freeze(db, ready))
+
+    assert await _statuses(db, ready) == [SubmissionPackageStatus.SUPERSEDED]
+    await db.refresh(package)
+    assert package.status == SubmissionPackageStatus.SUPERSEDED
+
+
+async def test_un_paquet_antic_aprovat_no_impedeix_congelar_ne_un_de_nou(db, ready):
+    package_v1 = await freeze(db, ready)
+    await approve(db, ready, package_v1)
+    await _make_legacy(db, package_v1)
+
+    nou = await freeze(db, ready)
+
+    await db.refresh(package_v1)
+    assert package_v1.status == SubmissionPackageStatus.APPROVED
+    assert package_v1.manifest_json["manifest_version"] == MANIFEST_VERSION_V1
+    assert nou.revision_number == package_v1.revision_number + 1
+    assert nou.manifest_json["manifest_version"] == "submission-manifest-v2"
+
+
+# --------------------------------------------------------------------------- #
+# Un gate que falla no deixa fotografies a mitges                               #
+# --------------------------------------------------------------------------- #
+
+
+async def test_un_freeze_rebutjat_no_deixa_cap_rastre(db, ready):
+    """Si la porta final diu que no, no pot quedar un paquet a mig fer.
+
+    Un paquet buit o sense peces seria pitjor que cap: algu el veuria a la
+    llista i es pensaria que hi ha una fotografia del que presentaria.
+    """
+    from app.services import economic_offer
+
+    user = ready["user"]
+    # Es buida l'oferta: aixo deixa un blocador economic a la porta final.
+    offer, line = await _line_of(db, ready)
+    await economic_offer.archive_line(
+        db, offer, line, expected_revision=offer.revision, user=user
+    )
+
+    async def compta(model) -> int:
+        return (await db.execute(sa.select(sa.func.count()).select_from(model))).scalar_one()
+
+    paquets = await compta(SubmissionPackage)
+    peces = await compta(SubmissionPackageItem)
+    aprovacions = await compta(SubmissionPackageApproval)
+    rastres = await compta(AuditLog)
+
+    with pytest.raises(service.PackageNotReadyError) as error:
+        await freeze(db, ready)
+
+    assert "economic_lot_empty" in error.value.details["blockers"]
+    assert await compta(SubmissionPackage) == paquets
+    assert await compta(SubmissionPackageItem) == peces
+    assert await compta(SubmissionPackageApproval) == aprovacions
+    assert await compta(AuditLog) == rastres
+
+
+# --------------------------------------------------------------------------- #
+# Les files historiques no contaminen el paquet actual (C-16)                   #
+# --------------------------------------------------------------------------- #
+
+
+def _technical_ids(package) -> set[str]:
+    content = {s["solution_id"] for s in package.manifest_json["content"]["technical"]}
+    basis = {
+        v["solution_id"]
+        for v in package.manifest_json["approval_basis"]["technical_validations"]
+    }
+    assert content == basis, "les dues meitats han de parlar de les mateixes files"
+    return content
+
+
+async def test_una_solucio_fora_de_l_abast_no_entra_al_paquet(db, ready):
+    """Es historia: resolia un requisit que aquesta candidatura ja no te davant."""
+    from app.services import technical_solution
+
+    workspace, user = ready["workspace"], ready["user"]
+    manual = await _with_validated_solution(db, ready)
+
+    # Un requisit d'una extraccio SUPERADA: existeix, pero ja no es el que
+    # aquesta candidatura te davant, i per tant no forma part de l'abast.
+    vell = RequirementExtractionRun(
+        tender_id=ready["tender"].id,
+        status=AnalysisRunStatus.COMPLETED,
+        input_fingerprint=uuid.uuid4().hex * 2,
+        extractor_version="tender-requirements-v1",
+        prompt_version="requirements-v1",
+        schema_version="requirements-schema-v1",
+        provider="fake",
+        model="fake",
+        is_current=False,
+    )
+    db.add(vell)
+    await db.flush()
+    superat = Requirement(
+        run_id=vell.id,
+        tender_id=ready["tender"].id,
+        category=RequirementCategory.CERTIFICATION,
+        obligation=RequirementObligation.MANDATORY,
+        scope=RequirementScope.TENDER,
+        title="El que demanava el plec abans",
+        confidence=ExtractionConfidence.HIGH,
+        review_status=ReviewStatus.UNREVIEWED,
+        dedup_key=uuid.uuid4().hex,
+    )
+    db.add(superat)
+    await db.flush()
+    fora = await technical_solution.create_manual(
+        db, workspace, title="D'una extraccio anterior", proposed_solution="x", user=user
+    )
+    fora.source = TechnicalSolutionSource.REQUIREMENT
+    fora.requirement_id = superat.id
+    await db.commit()
+    await scope_service.confirm(db, workspace, user=user)
+
+    package = await freeze(db, ready)
+
+    assert _technical_ids(package) == {str(manual.id)}
+
+
+async def test_una_solucio_que_ha_perdut_el_requisit_tampoc_hi_entra(db, ready):
+    from app.services import technical_solution
+
+    workspace, user = ready["workspace"], ready["user"]
+    manual = await _with_validated_solution(db, ready)
+    orfe = await technical_solution.create_manual(
+        db, workspace, title="Orfe", proposed_solution="x", user=user
+    )
+    orfe.source = TechnicalSolutionSource.REQUIREMENT
+    orfe.requirement_id = None
+    await db.commit()
+
+    package = await freeze(db, ready)
+
+    assert _technical_ids(package) == {str(manual.id)}
+
+
+async def test_una_solucio_manual_si_que_entra_al_paquet(db, ready):
+    manual = await _with_validated_solution(db, ready)
+
+    package = await freeze(db, ready)
+
+    assert str(manual.id) in _technical_ids(package)
+    contingut = package.manifest_json["content"]["technical"][0]
+    assert contingut["proposed_solution"] == "Dos nodes actius en alta disponibilitat"
+
+
+# --------------------------------------------------------------------------- #
+# El comptador de concurrencia no es contingut presentat                        #
+# --------------------------------------------------------------------------- #
+
+
+async def test_la_revisio_de_l_oferta_no_es_al_manifest(db, ready):
+    """`EconomicOffer.revision` es locking intern.
+
+    Si hi fos, editar el cost —que puja la revisio— canviaria el manifest per la
+    porta del darrere i tornaria a lligar el paquet a informacio interna.
+    """
+    await _patch_line(db, ready, unit_cost_ex_vat=Decimal("500"))
+    package = await freeze(db, ready)
+
+    economic = package.manifest_json["content"]["economic"]
+
+    assert "revision" not in _keys(economic)

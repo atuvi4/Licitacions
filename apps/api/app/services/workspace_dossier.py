@@ -72,7 +72,7 @@ from app.workspace.lineage import (
     human_weight,
     plan_migration,
 )
-from app.workspace.manifest import ManifestDocument, ManifestInput, build_manifest
+from app.workspace.manifest import MANIFEST_VERSION
 from app.workspace.relevance import (
     ESTABLISHED,
     RelevanceInput,
@@ -573,56 +573,21 @@ async def current_manifest(
 ) -> tuple[list[DossierRow], dict, str]:
     """El manifest del que es presentaria ARA, amb el seu hash.
 
-    Viu aqui i no a la capa de paquets perque es el dossier qui sap descriure's;
-    el paquet nomes compara. Aixi tambe hi ha UNA sola implementacio: congelar i
-    detectar obsolescencia han de produir exactament el mateix hash o la
-    comparacio no voldria dir res.
-    """
-    state = await workspace_service.load_state(session, workspace)
-    dossier = await load_dossier(session, workspace)
-    rows = selected_rows(dossier)
+    Des d'S7 el manifest cobreix tres dominis —dossier, solucio tecnica i oferta
+    economica— i muntar-lo ja no es feina del dossier: viu a
+    `services/submission_manifest`. Aquesta funcio es queda com a punt d'entrada
+    perque qui la cridava no hagi de saber que ha canviat de casa, i perque
+    segueixi havent-hi UNA sola implementacio: congelar i detectar obsolescencia
+    han de produir exactament el mateix hash.
 
-    documents = tuple(
-        ManifestDocument(
-            position=position,
-            document_id=row.document.id,
-            filename=row.document.name,
-            sha256=row.document.sha256,
-            file_size=row.document.file_size,
-            mime_type=row.document.mime_type,
-            category=(
-                row.requirement.category.value
-                if row.requirement
-                else RequirementCategory.OTHER.value
-            ),
-            requirement_id=row.item.requirement_id,
-            requirement_title=(
-                row.checklist_item.title
-                if row.checklist_item
-                else (row.requirement.title if row.requirement else None)
-            ),
-            expires_at=row.document.expires_at,
-        )
-        for position, row in enumerate(rows)
+    La importacio va aqui dins perque aquell modul consumeix aquest: al reves
+    seria un cicle.
+    """
+    from app.services import submission_manifest
+
+    return await submission_manifest.current_manifest(
+        session, workspace, revision_number=revision_number
     )
-    payload, digest = build_manifest(
-        ManifestInput(
-            revision_number=revision_number,
-            workspace_id=workspace.id,
-            company_id=workspace.company_id,
-            tender_id=workspace.tender_id,
-            tender_lot_id=workspace.tender_lot_id,
-            expediente_number=state.tender.expediente_number,
-            deadline_at=state.deadline_at,
-            requirement_run_id=state.requirement_run.id if state.requirement_run else None,
-            compliance_run_id=state.compliance_run.id if state.compliance_run else None,
-            prefit_score=state.prefit_score,
-            mandatory_total=dossier.counters.mandatory_total,
-            mandatory_covered=dossier.counters.covered,
-            documents=documents,
-        )
-    )
-    return rows, payload, digest
 
 
 # --------------------------------------------------------------------------- #
@@ -829,28 +794,54 @@ async def _reconciled_status(
       alguna cosa": aixo ho diu l'historial d'aprovacions, que es immutable i no
       es toca mai.
     """
+    latest = await _latest_package(session, workspace)
+
+    # Un manifest d'un format anterior no es pot comparar per hash —son dues
+    # serialitzacions diferents i el resultat seria sempre "ha canviat"— aixi que
+    # el que compta es si algu ja el va aprovar (C-17):
+    #
+    # * aprovat: es queda aprovat. L'estat diu que va passar amb AQUELLA
+    #   fotografia, no si avui seria la candidata;
+    # * nomes congelat: queda superat ja, sense esperar que ningu provi
+    #   d'aprovar-lo, perque amb el contracte d'avui no ho es.
+    #
+    # Aixo es mira ABANS que l'estat del workspace: passa igual si la
+    # candidatura esta a revisio final o ja aprovada.
+    outdated = (
+        latest is not None
+        and latest.status == SubmissionPackageStatus.FROZEN
+        and (latest.manifest_json or {}).get("manifest_version")
+        not in (None, MANIFEST_VERSION)
+    )
+    legacy_superseded = latest.id if outdated else None
+
     if workspace.status == WorkspaceStatus.READY_FOR_FINAL_REVIEW:
-        return (None if readiness.is_ready else WorkspaceStatus.PREPARING_BID), None
+        return (
+            None if readiness.is_ready else WorkspaceStatus.PREPARING_BID
+        ), legacy_superseded
 
     if workspace.status != WorkspaceStatus.APPROVED_FOR_SUBMISSION:
-        return None, None
+        return None, legacy_superseded
 
-    latest = await _latest_package(session, workspace)
     latest_status = latest.status if latest is not None else None
-    superseded: uuid.UUID | None = None
-    if latest is not None and latest.status in (
+    superseded: uuid.UUID | None = legacy_superseded
+    if outdated:
+        latest_status = SubmissionPackageStatus.SUPERSEDED
+    elif latest is not None and latest.status in (
         SubmissionPackageStatus.FROZEN,
         SubmissionPackageStatus.APPROVED,
     ):
         # El paquet ja no descriu el que hi ha: queda superat. L'aprovacio que
         # tingues segueix sent valida per a AQUELLA fotografia; el que deixa de
         # ser cert es que sigui la fotografia d'ara.
-        _rows, _payload, digest = await current_manifest(
-            session, workspace, revision_number=latest.revision_number
-        )
-        if digest != latest.manifest_hash:
-            superseded = latest.id
-            latest_status = SubmissionPackageStatus.SUPERSEDED
+        version = (latest.manifest_json or {}).get("manifest_version")
+        if version is None or version == MANIFEST_VERSION:
+            _rows, _payload, digest = await current_manifest(
+                session, workspace, revision_number=latest.revision_number
+            )
+            if digest != latest.manifest_hash:
+                superseded = latest.id
+                latest_status = SubmissionPackageStatus.SUPERSEDED
 
     if latest_status == SubmissionPackageStatus.APPROVED and readiness.is_ready:
         return None, superseded
