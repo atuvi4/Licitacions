@@ -39,6 +39,7 @@ vi.mock("@/components/WorkspaceDossier", () => ({
 }));
 vi.mock("@/components/SubmissionPackage", () => ({ SubmissionPackageSection: () => <div data-testid="package">Paquet (secció actual)</div> }));
 const leaveGuard = vi.fn(async () => true);
+vi.mock("@/components/EconomicOfferSection", () => ({ EconomicOfferSection: () => <div data-testid="oferta">Oferta econòmica (secció)</div> }));
 vi.mock("@/components/TechnicalSolutionSection", () => ({
   TechnicalSolutionSection: ({ registerLeaveGuard }: { registerLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void }) => (
     <div data-testid="solucio">
@@ -430,13 +431,14 @@ describe("Candidatura · Preparar per àrees", () => {
     expect(screen.getByTestId("notes")).toBeTruthy();
   });
 
-  it("l'àrea que encara no existeix ho diu, sense ensenyar dades inventades", async () => {
+  it("area=oferta obre l'oferta econòmica, i ja no queda cap àrea buida", async () => {
     search = "pas=preparar&area=oferta";
     const { container } = render(<WorkspacePage />);
     await flush();
-    expect(container.textContent).toContain("Encara no està disponible");
-    expect(container.querySelector("table")).toBeNull();
+    expect(screen.getByTestId("oferta")).toBeTruthy();
+    expect(container.textContent).not.toContain("Encara no està disponible");
     expect(screen.queryByTestId("dossier")).toBeNull();
+    expect(screen.queryByTestId("solucio")).toBeNull();
   });
 
   it("area=solucio obre la solució tècnica", async () => {

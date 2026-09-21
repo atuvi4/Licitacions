@@ -6,6 +6,7 @@ import { useParams, usePathname, useRouter, useSearchParams } from "next/navigat
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 
 import { useSession } from "@/components/SessionProvider";
+import { EconomicOfferSection } from "@/components/EconomicOfferSection";
 import { SubmissionPackageSection } from "@/components/SubmissionPackage";
 import { TechnicalSolutionSection } from "@/components/TechnicalSolutionSection";
 import { DecisionHistory, DecisionPanel } from "@/components/WorkspaceDecision";
@@ -225,29 +226,6 @@ function ContextPanel({ workspace }: { workspace: WorkspaceDetail }) {
   );
 }
 
-/**
- * L'àrea que encara no té pantalla.
- *
- * Existeix perquè la navegació sigui completa —els problemes de la preparació
- * final ja hi porten— i diu què és i què hi haurà. El que no fa és ensenyar
- * dades inventades: una taula d'exemple aquí seria indistingible d'una de real
- * amb les dades encara no carregades.
- */
-function AreaPlaceholder() {
-  return (
-    <Card>
-      <CardHeader title="Oferta econòmica" />
-      <p className="px-3.5 py-6 text-body text-muted">
-        Aquí es prepararà l&apos;oferta: lots, seccions, línies, preus i totals. Encara no està disponible.
-      </p>
-    </Card>
-  );
-}
-
-/**
- * La preparació final s'obre per sobre de tota la candidatura perquè el capçal
- * i qualsevol secció que la pugui canviar comparteixin la mateixa lectura.
- */
 export default function WorkspacePage() {
   const params = useParams<{ workspaceId: string }>();
   const { companyId } = useSession();
@@ -472,7 +450,7 @@ function WorkspaceView() {
             />
 
             {area === "solucio" && <TechnicalSolutionSection workspace={data} registerLeaveGuard={registerLeaveGuard} />}
-            {area === "oferta" && <AreaPlaceholder />}
+            {area === "oferta" && <EconomicOfferSection workspace={data} registerLeaveGuard={registerLeaveGuard} />}
             {area === "dossier" && <DossierSection workspace={data} onChange={refresh} onAdvanced={onAdvanced} />}
             {area === "pla" && (
               <>
