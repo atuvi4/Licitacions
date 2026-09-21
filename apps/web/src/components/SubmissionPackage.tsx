@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ManifestView } from "@/components/ManifestView";
 import { Modal } from "@/components/Modal";
+import { useReadiness } from "@/components/ReadinessProvider";
 import {
   Attribution,
   Banner,
@@ -21,8 +23,11 @@ import {
   type DataTableColumn,
 } from "@/components/ui";
 import { api } from "@/lib/api";
+import { formatAmount, type EconomicOffer } from "@/lib/economic";
 import { formatDate, formatFileSize } from "@/lib/format";
-import { useMutation } from "@/lib/hooks";
+import { useMutation, useResource } from "@/lib/hooks";
+import { MANIFEST_FORMAT_LABELS } from "@/lib/submission";
+import { blockerCount, type FinalReadiness } from "@/lib/readiness";
 import { PACKAGE_STATUS_LEVEL, VALIDITY_LEVEL, deadlineLevel, whoCanDecide } from "@/lib/labels";
 import { formatDateTime } from "@/lib/tenders";
 import {
@@ -38,6 +43,8 @@ import {
   type PackageSummary,
   type WorkspaceDetail,
 } from "@/lib/workspace";
+
+const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
 /** Longitud màxima del comentari d'aprovació al backend (`ApprovalRequest.comment`). */
 const COMMENT_MAX_LENGTH = 4000;
@@ -60,6 +67,65 @@ function shortHash(hash: string | null | undefined): string {
  * `is_stale` + `stale_reasons`, `simulation_only`, `approval` (immutable) i
  * `is_submitted`. Cap estat de negoci local; cap endpoint que no existeixi.
  */
+/**
+ * Què es congelaria, abans de fer-ho.
+ *
+ * Només dades que existeixen de debò: la cobertura del dossier que ja porta la
+ * candidatura, l'abast tècnic que diu S6 i el total de l'oferta que dona S5. El
+ * que no arriba, no es pinta: una cobertura «requisit → solució» inventada aquí
+ * seria indistingible d'una de real.
+ */
+function ReadySummary({
+  workspace,
+  readiness,
+  offer,
+}: {
+  workspace: WorkspaceDetail;
+  readiness: FinalReadiness | null;
+  offer: EconomicOffer | null;
+}) {
+  const coverage = workspace.dossier_coverage;
+  const technical = readiness?.technical ?? null;
+  return (
+    <Card>
+      <CardHeader title="Preparació completa" description="Cap bloqueig pendent. Això és el que quedaria congelat." />
+      <dl className="grid gap-x-8 gap-y-3 px-3.5 py-3 sm:grid-cols-3">
+        {coverage && (
+          <div>
+            <dt className={KICKER}>Dossier</dt>
+            <dd className="text-body text-ink">
+              {coverage.covered} de {coverage.mandatory_total} requisits obligatoris coberts
+            </dd>
+          </div>
+        )}
+        {technical && (
+          <div>
+            <dt className={KICKER}>Solució tècnica</dt>
+            <dd className="text-body text-ink">
+              {technical.scope_reviewed ? "Abast revisat" : "Abast sense revisar"}
+              {technical.requirements_in_scope > 0 && (
+                <span className="text-muted">
+                  {" · "}
+                  {technical.requirements_in_scope} {technical.requirements_in_scope === 1 ? "requisit" : "requisits"} a l&apos;abast
+                </span>
+              )}
+            </dd>
+          </div>
+        )}
+        {offer && (
+          <div>
+            <dt className={KICKER}>Oferta</dt>
+            <dd className="text-body text-ink">
+              {formatAmount(offer.totals.total_revenue, offer.currency)}
+              <span className="text-muted"> sense IVA</span>
+            </dd>
+          </div>
+        )}
+      </dl>
+    </Card>
+  );
+}
+
 export function SubmissionPackageSection({
   workspace,
   onChange,
@@ -79,6 +145,19 @@ export function SubmissionPackageSection({
   const [comment, setComment] = useState("");
   const freezeMutation = useMutation();
   const approveMutation = useMutation();
+  // El veredicte final el dona S6 i viu al context: aquí no se'n fa cap segona
+  // versió. Si no es pot llegir, no es pot congelar: desconegut no és «a punt».
+  const readiness = useReadiness();
+  const ready = readiness.data?.ready_for_final_review === true;
+  const blockers = readiness.data ? blockerCount(readiness.data.findings) : 0;
+  const [decision, setDecision] = useState<"approved_for_submission" | "rejected">("approved_for_submission");
+  // Quina revisió té el manifest obert. No es demana cap manifest fins que algú
+  // en vol veure un: l'historial pot tenir-ne molts i carregar-los tots per
+  // ensenyar-ne un seria fer N peticions per no res.
+  const [manifestFor, setManifestFor] = useState<PackageSummary | null>(null);
+  const freezing = useRef(false);
+  // Només abans de congelar: el total real de l'oferta per al resum previ.
+  const offerForSummary = useResource<EconomicOffer>(ready ? `${root}/economic-offer` : null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,19 +178,28 @@ export function SubmissionPackageSection({
   }, [load]);
 
   async function freeze() {
+    // El ref es marca abans de qualsevol `await`: quan arriba el segon clic
+    // d'un doble clic, l'estat encara no ha repintat el botó desactivat.
+    if (freezing.current) return;
+    freezing.current = true;
     const ok = await freezeMutation.run(async () => {
       await api.post<FreezeResult>(`${root}/packages`, {});
     });
-    // Si falla, la revisió actual es queda tal com es veia.
+    // Si falla, la revisió actual es queda tal com es veia. Tant si va bé com
+    // si el servidor rebutja la porta, es torna a preguntar la preparació: el
+    // que sabíem fa un segon pot haver deixat de ser cert.
+    freezing.current = false;
+    await readiness.invalidate();
     if (ok) {
       await load();
       await onChange();
     }
   }
 
-  function openApproval() {
+  function openApproval(next: "approved_for_submission" | "rejected" = "approved_for_submission") {
     approveMutation.reset();
     setComment("");
+    setDecision(next);
     setConfirming(true);
   }
 
@@ -119,8 +207,10 @@ export function SubmissionPackageSection({
     if (!current) return;
     const packageId = current.id;
     const ok = await approveMutation.run(async () => {
+      // El comentari és opcional al contracte (`ApprovalRequest.comment`), i
+      // aquí tampoc no es fa obligatori.
       await api.post(`${root}/packages/${packageId}/approvals`, {
-        decision: "approved_for_submission",
+        decision,
         comment: comment.trim() || null,
       });
     });
@@ -128,6 +218,7 @@ export function SubmissionPackageSection({
       setConfirming(false);
       setComment("");
       await load();
+      await readiness.invalidate();
       await onChange();
     }
   }
@@ -150,6 +241,7 @@ export function SubmissionPackageSection({
   }
 
   const requirementsHref = `/candidatures/${workspace.id}?pas=preparar`;
+  const prepareHref = requirementsHref;
   const canFreeze = workspace.can_decide && workspace.workspace_actionable;
   const freezeBlockers = freezeMutation.apiError?.code === "package_not_ready"
     ? ((freezeMutation.apiError.details.blockers as string[] | undefined) ?? [])
@@ -214,36 +306,42 @@ export function SubmissionPackageSection({
 
   // ----------------------------------------------------------------- Buit ---
   if (!current) {
-    const ready = workspace.readiness === "ready_for_final_review";
     return (
       <div className="space-y-4">
         {!ready && (
           <Banner
             level="attention"
-            kicker="Dossier incomplet"
+            kicker={readiness.data ? "Preparació incompleta" : "Preparació desconeguda"}
             action={
-              <LinkButton href={requirementsHref} variant="secondary" size="sm">
+              <LinkButton href={prepareHref} variant="secondary" size="sm">
                 Torna a Preparar →
               </LinkButton>
             }
           >
-            <p>
-              <strong>El dossier encara no està a punt per congelar-lo.</strong> Per poder-ho fer:
-            </p>
-            <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-[13px] leading-5">
-              {workspace.readiness_blockers.map((code) => (
-                <li key={code} title={code}>
-                  {readinessBlockerLabel(code)}
-                </li>
-              ))}
-            </ol>
+            {readiness.data ? (
+              <p>
+                <strong>
+                  Queden {blockers} {blockers === 1 ? "bloqueig" : "bloquejos"} per resoldre.
+                </strong>{" "}
+                <span className="text-muted">
+                  Fins que no estiguin resolts no es pot congelar cap revisió. El calaix de preparació final diu quins són i
+                  hi porta.
+                </span>
+              </p>
+            ) : (
+              <p>
+                <strong>No s&apos;ha pogut llegir la preparació final.</strong>{" "}
+                <span className="text-muted">Mentre no es pugui llegir, no es pot dir que la candidatura estigui a punt.</span>
+              </p>
+            )}
           </Banner>
         )}
+        {ready && <ReadySummary workspace={workspace} readiness={readiness.data} offer={offerForSummary.data} />}
         <Card>
           <EmptyState
             title="Encara no s'ha congelat cap paquet"
-            description="Quan el dossier estigui a punt, congela una revisió immutable dels documents que presentaràs."
-            action={freezeButton("Congela el paquet", ready)}
+            description="Congelar fixa una revisió immutable del que presentaries: els documents, la solució tècnica i l'oferta."
+            action={freezeButton("Congela la proposta", ready)}
           />
           <p className="px-3.5 pb-3 text-center text-[12.5px] text-muted md:hidden">
             Congelar i revisar el paquet funciona aquí, però és millor des de l&apos;escriptori.
@@ -253,7 +351,14 @@ export function SubmissionPackageSection({
               Aquesta licitació ja no admet cap presentació nova.
             </p>
           )}
-          {freezeError && <div className="px-3.5 pb-3">{freezeError}</div>}
+          {freezeError && (
+            <div className="space-y-2 px-3.5 pb-3">
+              {freezeError}
+              <LinkButton href={prepareHref} variant="secondary" size="sm">
+                Torna a Preparar →
+              </LinkButton>
+            </div>
+          )}
           <div className="border-t border-border px-3.5 py-3">{statusLine(workspace.status, workspace.status === "submitted")}</div>
         </Card>
       </div>
@@ -263,6 +368,9 @@ export function SubmissionPackageSection({
   // --------------------------------------------------------- Paquet actual ---
   const changed = current.items.filter((item) => item.changed_since_freeze).length;
   const superseded = current.status === "superseded";
+  // El format d'una revisió no viatja a la llista; l'únic que el delata de
+  // manera fiable és el motiu de caducitat que emet el servidor.
+  const legacyFormat = current.stale_reasons.includes("manifest_version_outdated");
   const obsolete = current.is_stale || superseded;
   const nextRevision = current.revision_number + 1;
   const approval = current.approval;
@@ -444,7 +552,7 @@ export function SubmissionPackageSection({
                     {current.coverage.document_count} documents · {current.coverage.mandatory_covered} de{" "}
                     {current.coverage.mandatory_total} obligatoris coberts
                   </span>
-                  <span>El manifest es calcula sobre els bytes, no sobre els noms.</span>
+                  <span>El manifest congela la identitat, les metadades i el hash dels documents, juntament amb el contingut tècnic i econòmic.</span>
                 </>
               }
             />
@@ -468,6 +576,14 @@ export function SubmissionPackageSection({
                   <code className="font-mono text-[12.5px] text-muted" title={revision.manifest_hash ?? undefined}>
                     {revision.manifest_hash_short ?? shortHash(revision.manifest_hash)}
                   </code>
+                  {revision.id === current.id && legacyFormat && (
+                    <StatusPill level="neutral" size="sm" outline>
+                      {MANIFEST_FORMAT_LABELS.legacy}
+                    </StatusPill>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => setManifestFor(revision)}>
+                    Veure el manifest
+                  </Button>
                   {revision.is_approved && (
                     <span className="text-muted">
                       aprovada per {revision.approved_by_name ?? "una persona"}
@@ -524,7 +640,7 @@ export function SubmissionPackageSection({
                       size="md"
                       className="min-h-12 justify-center text-[16px]"
                       disabled={approveDisabled}
-                      onClick={openApproval}
+                      onClick={() => openApproval("approved_for_submission")}
                     >
                       Aprova per presentar
                     </Button>
@@ -534,6 +650,14 @@ export function SubmissionPackageSection({
                         Aprova per presentar
                       </Button>
                     </PermissionNote>
+                  )}
+                  {/* Rebutjar també és una decisió humana del contracte, i no
+                      demana que la candidatura estigui a punt: es pot dir que
+                      no a una revisió que ja no serveix. */}
+                  {current.can_sign && !superseded && (
+                    <Button variant="secondary" size="sm" onClick={() => openApproval("rejected")}>
+                      Rebutja aquesta revisió
+                    </Button>
                   )}
                   {disabledReason && (
                     <div className="text-[13px] leading-5 text-warning">
@@ -576,10 +700,24 @@ export function SubmissionPackageSection({
         </div>
       </div>
 
+      {manifestFor && (
+        <ManifestView
+          // La clau força un visor nou per revisió: cap estat de l'anterior
+          // sobreviu al canvi.
+          key={manifestFor.id}
+          open
+          root={root}
+          packageId={manifestFor.id}
+          revisionNumber={manifestFor.revision_number}
+          manifestHash={manifestFor.manifest_hash}
+          onClose={() => setManifestFor(null)}
+        />
+      )}
+
       <Modal
         open={confirming}
         title={`Estàs aprovant exactament la revisió ${current.revision_number} d'aquest paquet`}
-        description="Quedarà registrat qui aprova, quan i contra quin manifest. No es desfà."
+        description={decision === "rejected" ? "Quedarà registrat qui rebutja, quan i contra quin manifest. La revisió es conserva a l'historial." : "Quedarà registrat qui aprova, quan i contra quin manifest. No es desfà."}
         onClose={() => {
           if (!approveMutation.saving) setConfirming(false);
         }}

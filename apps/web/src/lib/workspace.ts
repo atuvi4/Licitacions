@@ -672,7 +672,9 @@ export const PACKAGE_STATUS_LABELS: Record<SubmissionPackageStatus, string> = {
 
 /** Per què el paquet ja no descriu el que hi ha. Codis, mai text lliure. */
 export const STALE_REASON_LABELS: Record<string, string> = {
-  manifest_changed: "Els documents del paquet ja no són els que hi ha ara.",
+  manifest_changed: "La candidatura actual ja no coincideix amb aquesta revisió congelada.",
+  manifest_version_outdated:
+    "Aquesta revisió es va congelar amb un format anterior, que no descrivia ni la solució tècnica ni l'oferta econòmica.",
   compliance_run_changed: "S'ha recalculat el compliment després de congelar.",
   requirement_run_changed: "Hi ha una anàlisi de requisits més recent.",
   document_expired_for_deadline:
