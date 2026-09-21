@@ -139,6 +139,28 @@ la font manual. Longitud 43 caràcters, molt per sota de `String(500)`.
 | **Comportament al POST** | `201` amb la licitació creada, `owner_company_id` = l'empresa del path, `source_id` = Source MANUAL global |
 | **Retry / idempotency** | L'assistent genera un `client_token` en obrir el formulari i l'envia a cada intent. Un reintent col·lideix amb `UNIQUE(source_id, external_id)`; el servei captura la col·lisió i retorna **`200`** amb la licitació existent si és de la mateixa empresa, o **`409 tender_external_id_conflict`** si és d'una altra. Sense `client_token`, un reintent crea un esborrany separat, visible i arxivable |
 
+### Organismes de contractació — delta descobert a S3-S1
+
+`Buyer` no tenia tenancy. Com que el wizard ha de poder escriure un organisme que
+cap font sindicada no porta, **`buyers.owner_company_id` segueix exactament la
+mateixa regla que `tenders.owner_company_id`**: `NULL` és públic i canònic, amb
+valor és privat de l'empresa que el va escriure. Una importació privada **no pot
+publicar en silenci** al catàleg global.
+
+| Regla | |
+|---|---|
+| Identitat | `UNIQUE(source_id, external_identifier)`; el manual és `manual:<buyer_client_token>`, amb un token **propi i diferent del de la licitació** |
+| Reutilitzar-ne un | Global o de la mateixa empresa. D'una altra: **404** |
+| Modificar-ne un | **Mai** des del wizard. No hi ha PATCH de `Buyer` a Sprint 3 |
+| `buyer_id` i `buyer_manual` | **Excloents**; cap dels dos també val (`buyer_id` és nul·lable) |
+| Selecció a la UI | **Company-scoped**, mai una ruta user-global que barregi privats de dues empreses del mateix usuari |
+| Esborrat | `ON DELETE CASCADE`, auditat: `tenders.buyer_id` ja va amb `SET NULL`, així que no queda cap licitació impossible, i `NULL` no coincideix mai amb l'empresa esborrada |
+| Deduplicació | **Cap.** Ni fuzzy matching de noms ni automatismes |
+
+**Migració 0028 s'amplia a «manual ingestion support»** — organismes privats **i**
+el fonament d'esquema de pujada de documents (`source_url` nul·lable, `origin`,
+`uploaded_by`) — per no haver de crear una revisió extra i **no renumerar 0029–0037**.
+
 ### Per què queda resolt
 
 Dues empreses que importen l'expedient `2024-3137` obtenen `external_id` diferents
@@ -572,7 +594,7 @@ fixture desa **totes dues xifres** amb nota explícita.
 ```
 0026_technical_scope_review                       ← head actual
 0027  Tender tenancy + manual tender foundation + matching isolation
-0028  manual document upload
+0028  manual ingestion support (organismes privats + fonament de pujada)
 0029  document review / staleness
 0030  tender_source_refs
 0031  manual requirements

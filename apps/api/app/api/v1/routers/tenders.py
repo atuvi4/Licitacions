@@ -17,12 +17,14 @@ import uuid
 from typing import Annotated, Literal
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import noload, selectinload
 
 from app.api.deps import CompanyCtx, CurrentUser, SessionDep
 from app.api.v1.tender_filters import TenderFilters, tender_filters
 from app.core.errors import NotFoundError
+from app.matching.service import MatchingService
+from app.models.audit import AuditAction
 from app.models.cpv import CPVCode
 from app.models.sources import IngestionRun, Source, SourceRecord
 from app.models.tender_documents import (
@@ -36,6 +38,8 @@ from app.schemas.tenders import (
     BuyerRead,
     BuyerSummary,
     IngestionRunRead,
+    ManualTenderCreate,
+    ManualTenderCreateResult,
     Page,
     TenderChangeEventRead,
     TenderCPVRead,
@@ -49,6 +53,7 @@ from app.schemas.tenders import (
     TenderRevisionRead,
     TenderTraceability,
 )
+from app.services import audit, manual_tender
 from app.tenders.visibility import visible_to_company, visible_to_user
 
 router = APIRouter(tags=["licitacions"])
@@ -74,6 +79,71 @@ async def _cpv_descriptions(session, codes: set[str]) -> dict[str, str]:
         sa.select(CPVCode.code, CPVCode.description).where(CPVCode.code.in_(codes))
     )
     return {code: description for code, description in rows}
+
+
+@router.post(
+    "/companies/{company_id}/tenders",
+    response_model=ManualTenderCreateResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Obre una licitacio a ma",
+)
+async def create_manual_tender(
+    payload: ManualTenderCreate, session: SessionDep, ctx: CompanyCtx, response: Response
+):
+    """Idempotent pel `client_token`: un reintent recupera la que ja hi havia.
+
+    Quan la troba respon **200** en comptes de 201, perque no ha creat res. Si
+    el mateix token torna amb una licitacio materialment diferent —altre titol,
+    altre expedient, altre organisme— no se sobreescriu: es un `409`.
+
+    Despres de crear-la se'n recalcula el pre-fit **nomes d'aquesta licitacio**,
+    que es el que la fa apareixer a Oportunitats. Si en surt `insufficient_data`
+    es correcte: desconegut no es «no».
+    """
+    manual_tender.assert_can_create(ctx.membership.role)
+    buyer = payload.buyer_manual
+    tender, created = await manual_tender.create_manual_tender(
+        session,
+        company_id=ctx.company_id,
+        user=ctx.user,
+        data=manual_tender.ManualTenderInput(
+            client_token=payload.client_token,
+            title=payload.title,
+            expediente_number=payload.expediente_number,
+            buyer_id=payload.buyer_id,
+            buyer_manual=(
+                manual_tender.ManualBuyerInput(
+                    client_token=buyer.client_token,
+                    name=buyer.name,
+                    tax_identifier=buyer.tax_identifier,
+                    nuts_code=buyer.nuts_code,
+                )
+                if buyer is not None
+                else None
+            ),
+        ),
+    )
+
+    if created:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.CREATE,
+            entity_type="tender",
+            entity_id=tender.id,
+            summary=manual_tender.audit_summary(
+                licitacio=tender.id, expedient=tender.expediente_number
+            ),
+        )
+        await MatchingService(session).recalculate(ctx.company_id, tender_ids=[tender.id])
+        await session.commit()
+    else:
+        response.status_code = status.HTTP_200_OK
+
+    return ManualTenderCreateResult(
+        created=created, tender=await _tender_detail(session, tender.id, ctx.user.id)
+    )
 
 
 @router.get("/tenders", response_model=Page[TenderListItem], summary="Feed de licitacions")
@@ -267,9 +337,9 @@ async def _document_summaries(
     return summaries
 
 
-@router.get("/tenders/{tender_id}", response_model=TenderDetail, summary="Fitxa de licitacio")
-async def get_tender(tender_id: uuid.UUID, session: SessionDep, user: CurrentUser):
-    tender = await _load_tender(session, tender_id, user.id)
+async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> TenderDetail:
+    """La fitxa sencera, amb el filtre de visibilitat de `_load_tender`."""
+    tender = await _load_tender(session, tender_id, user_id)
 
     codes = {item.cpv_code for item in tender.cpvs}
     for lot in tender.lots:
@@ -357,6 +427,11 @@ async def get_tender(tender_id: uuid.UUID, session: SessionDep, user: CurrentUse
             raw_hash=record.raw_hash if record else None,
         ),
     )
+
+
+@router.get("/tenders/{tender_id}", response_model=TenderDetail, summary="Fitxa de licitacio")
+async def get_tender(tender_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    return await _tender_detail(session, tender_id, user.id)
 
 
 @router.get(

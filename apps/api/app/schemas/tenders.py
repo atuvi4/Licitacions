@@ -10,7 +10,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
     ContractType,
@@ -272,3 +272,44 @@ class TenderHistoryRevisionRead(ORMModel):
     created_at: datetime
     change_summary: dict[str, Any] | None = None
     events: list[TenderChangeEventRead] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Alta manual (S3-S1)                                                           #
+# --------------------------------------------------------------------------- #
+
+
+class ManualBuyerCreate(BaseModel):
+    """Un organisme escrit a ma. Privat de l'empresa que l'escriu."""
+
+    #: Estable durant tots els reintents de la MATEIXA alta. Diferent del token
+    #: de la licitacio: el mateix organisme pot servir per a mes d'un expedient.
+    client_token: uuid.UUID
+    name: str = Field(min_length=1, max_length=500)
+    tax_identifier: str | None = Field(default=None, max_length=64)
+    nuts_code: str | None = Field(default=None, max_length=10)
+
+
+class ManualTenderCreate(BaseModel):
+    """El minim per obrir un expedient. La resta s'edita despres."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: El genera el formulari en obrir-se i no canvia entre reintents. D'aqui
+    #: surt `external_id`, que no es deriva mai del numero d'expedient.
+    client_token: uuid.UUID
+    title: str = Field(min_length=1, max_length=1000)
+    #: El que dona l'organisme. **No es unic**: dos organismes diferents en
+    #: poden fer servir el mateix.
+    expediente_number: str | None = Field(default=None, max_length=200)
+    #: Un organisme que ja existeix —global o de la mateixa empresa— o un de nou.
+    #: Excloents. Cap dels dos tambe val: l'expedient pot comencar sense.
+    buyer_id: uuid.UUID | None = None
+    buyer_manual: ManualBuyerCreate | None = None
+
+
+class ManualTenderCreateResult(BaseModel):
+    """`created=False` vol dir que el reintent ha trobat la que ja hi havia."""
+
+    created: bool
+    tender: TenderDetail
