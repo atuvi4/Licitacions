@@ -240,6 +240,11 @@ export const PACKAGE_STATUS_LEVEL: Record<SubmissionPackageStatus, Level> = {
   superseded: "neutral",
 };
 
+/** Nivell d'un estat de paquet. Un de desconegut queda neutre, mai en «ready». */
+export function packageStatusLevel(status: string): Level {
+  return (PACKAGE_STATUS_LEVEL as Record<string, Level>)[status] ?? "neutral";
+}
+
 export const ANALYSIS_STATE_LEVEL: Record<AnalysisState, Level> = {
   not_analyzed: "neutral",
   analyzing: "running",

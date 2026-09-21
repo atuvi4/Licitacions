@@ -266,6 +266,17 @@ function WorkspaceView() {
   // caure en una pantalla diferent de la que algú va desar.
   const paramArea = searchParams?.get("area") ?? null;
   const area: PrepareArea = isPrepareArea(paramArea) ? paramArea : "dossier";
+  // Una guarda pertany a l'àrea que la va registrar. Es descarta en canviar
+  // d'àrea i no quan la secció es desmunta: si depengués de la neteja de cada
+  // secció, oblidar-se'n en una deixaria l'anterior preguntant per feina que ja
+  // no hi és. Va al render i no a un efecte perquè els efectes dels fills
+  // s'executen abans que els del pare, i el pare esborraria la guarda que el
+  // fill acaba de registrar.
+  const guardArea = useRef<PrepareArea | null>(null);
+  if (guardArea.current !== area) {
+    guardArea.current = area;
+    leaveGuard.current = null;
+  }
   const [pinned, setPinned] = useState<CandidatureStep | null>(null);
   const initialStatus = data?.status ?? null;
   useEffect(() => {

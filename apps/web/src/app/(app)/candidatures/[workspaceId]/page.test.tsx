@@ -39,7 +39,15 @@ vi.mock("@/components/WorkspaceDossier", () => ({
 }));
 vi.mock("@/components/SubmissionPackage", () => ({ SubmissionPackageSection: () => <div data-testid="package">Paquet (secció actual)</div> }));
 const leaveGuard = vi.fn(async () => true);
-vi.mock("@/components/EconomicOfferSection", () => ({ EconomicOfferSection: () => <div data-testid="oferta">Oferta econòmica (secció)</div> }));
+const economicGuard = vi.fn(async () => true);
+vi.mock("@/components/EconomicOfferSection", () => ({
+  EconomicOfferSection: ({ registerLeaveGuard }: { registerLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void }) => (
+    <div data-testid="oferta">
+      Oferta econòmica (secció)
+      <button type="button" onClick={() => registerLeaveGuard?.(economicGuard)}>oferta amb canvis</button>
+    </div>
+  ),
+}));
 vi.mock("@/components/TechnicalSolutionSection", () => ({
   TechnicalSolutionSection: ({ registerLeaveGuard }: { registerLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void }) => (
     <div data-testid="solucio">
@@ -591,5 +599,120 @@ describe("Candidatura · canvis sense desar i els tres passos", () => {
     expect(leaveGuard).toHaveBeenCalledTimes(1);
     expect(push).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("Candidatura · integració final d'Sprint 2", () => {
+  const go = () => ({ status: "preparing_bid" as const, human_decision: "go" as const, latest_decision: decisionFixture(), decisions: [decisionFixture()] });
+
+  beforeEach(() => {
+    get.mockReset();
+    readiness.mockReset();
+    readiness.mockResolvedValue(readinessFixture());
+    post.mockReset();
+    push.mockClear();
+    replace.mockClear();
+    leaveGuard.mockReset();
+    leaveGuard.mockResolvedValue(true);
+    economicGuard.mockReset();
+    economicGuard.mockResolvedValue(true);
+    search = "pas=preparar&area=solucio";
+    get.mockResolvedValue(workspaceFixture(go()));
+  });
+
+  const stepLink = (name: string) => screen.getByRole("link", { name: new RegExp(`^${name}`) });
+
+  it("la guarda d'una àrea no sobreviu quan se'n va", async () => {
+    const view = render(<WorkspacePage />);
+    await flush();
+    // La solució tècnica registra que té feina sense desar...
+    fireEvent.click(screen.getByRole("button", { name: "simula canvis sense desar" }));
+    await flush();
+    expect(leaveGuard).not.toHaveBeenCalled();
+
+    // ...i se'n va a l'oferta, que no en registra cap.
+    search = "pas=preparar&area=oferta";
+    view.rerender(<WorkspacePage />);
+    await flush();
+    expect(screen.getByTestId("oferta")).toBeTruthy();
+    expect(screen.queryByTestId("solucio")).toBeNull();
+
+    // Ara anar a Tancar no ha de preguntar res: la guarda anterior ja no hi és.
+    await act(async () => {
+      fireEvent.click(stepLink("Tancar"));
+    });
+    await flush();
+    expect(leaveGuard).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("cada àrea fa la seva pregunta, i només una", async () => {
+    search = "pas=preparar&area=oferta";
+    render(<WorkspacePage />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "oferta amb canvis" }));
+    await flush();
+    economicGuard.mockResolvedValue(false);
+
+    await act(async () => {
+      fireEvent.click(stepLink("Decidir"));
+    });
+    await flush();
+    expect(economicGuard).toHaveBeenCalledTimes(1);
+    expect(leaveGuard).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("després de desar, la navegació deixa de preguntar", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "simula canvis sense desar" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "simula desat" }));
+    await flush();
+
+    await act(async () => {
+      fireEvent.click(stepLink("Tancar"));
+    });
+    expect(leaveGuard).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("Preparar continua editable amb una revisió congelada i aprovada (C-12)", async () => {
+    get.mockResolvedValue(workspaceFixture({ ...go(), status: "approved_for_submission" }));
+    render(<WorkspacePage />);
+    await flush();
+    // L'àrea continua sent la de sempre, sense cap mode de només lectura.
+    expect(screen.getByTestId("solucio")).toBeTruthy();
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(document.body.textContent).not.toMatch(/bloquejada|només lectura|no es pot editar/i);
+  });
+
+  it("una revisió obsoleta tampoc no tanca Preparar", async () => {
+    get.mockResolvedValue(workspaceFixture({ ...go(), status: "ready_for_final_review" }));
+    search = "pas=preparar&area=oferta";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByTestId("oferta")).toBeTruthy();
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
+  });
+
+  it("els tres passos continuen sent enllaços de debò", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    for (const step of ["Decidir", "Preparar", "Tancar"]) {
+      const link = stepLink(step) as HTMLAnchorElement;
+      expect(link.tagName).toBe("A");
+      expect(link.getAttribute("href")).toContain("?pas=");
+    }
+    // Amb modificador, el clic no s'intercepta: obrir en una pestanya nova
+    // ha de continuar funcionant.
+    fireEvent.click(screen.getByRole("button", { name: "simula canvis sense desar" }));
+    await flush();
+    await act(async () => {
+      fireEvent.click(stepLink("Tancar"), { metaKey: true });
+    });
+    expect(leaveGuard).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
   });
 });

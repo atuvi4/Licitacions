@@ -670,6 +670,15 @@ export const PACKAGE_STATUS_LABELS: Record<SubmissionPackageStatus, string> = {
   superseded: "Superat",
 };
 
+/**
+ * Nom d'un estat de paquet. Un estat que aquesta versió no conegui es mostra
+ * amb el seu codi: una pastilla muda no diria res, i inventar-li un nom seria
+ * pitjor. El que no fa mai és passar per aprovat.
+ */
+export function packageStatusLabel(status: string): string {
+  return (PACKAGE_STATUS_LABELS as Record<string, string>)[status] ?? status;
+}
+
 /** Per què el paquet ja no descriu el que hi ha. Codis, mai text lliure. */
 export const STALE_REASON_LABELS: Record<string, string> = {
   manifest_changed: "La candidatura actual ja no coincideix amb aquesta revisió congelada.",

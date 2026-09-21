@@ -28,10 +28,10 @@ import { formatDate, formatFileSize } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
 import { MANIFEST_FORMAT_LABELS } from "@/lib/submission";
 import { blockerCount, type FinalReadiness } from "@/lib/readiness";
-import { PACKAGE_STATUS_LEVEL, VALIDITY_LEVEL, deadlineLevel, whoCanDecide } from "@/lib/labels";
+import { VALIDITY_LEVEL, deadlineLevel, packageStatusLevel, whoCanDecide } from "@/lib/labels";
 import { formatDateTime } from "@/lib/tenders";
 import {
-  PACKAGE_STATUS_LABELS,
+  packageStatusLabel,
   VALIDITY_LABELS,
   WORKSPACE_STATUS_LABELS,
   deadlineLabel,
@@ -157,7 +157,10 @@ export function SubmissionPackageSection({
   const [manifestFor, setManifestFor] = useState<PackageSummary | null>(null);
   const freezing = useRef(false);
   // Només abans de congelar: el total real de l'oferta per al resum previ.
-  const offerForSummary = useResource<EconomicOffer>(ready ? `${root}/economic-offer` : null);
+  // Només quan de debò es pintarà el resum previ: amb una revisió ja congelada
+  // aquesta lectura no ensenyaria res.
+  const needsSummary = ready && !loading && current === null;
+  const offerForSummary = useResource<EconomicOffer>(needsSummary ? `${root}/economic-offer` : null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -382,7 +385,7 @@ export function SubmissionPackageSection({
     else if (current.is_stale) disabledReason = "Desactivat perquè aquesta revisió ja no descriu els documents d'ara.";
     else if (current.simulation_only) disabledReason = "Paquet de simulació: no es pot aprovar.";
     else if (current.readiness_blockers.length > 0) disabledReason = "El dossier ja no està a punt:";
-    else if (current.status !== "frozen") disabledReason = `Aquesta revisió és «${PACKAGE_STATUS_LABELS[current.status]}» i no es pot aprovar.`;
+    else if (current.status !== "frozen") disabledReason = `Aquesta revisió és «${packageStatusLabel(current.status)}» i no es pot aprovar.`;
     else disabledReason = "El backend no permet aprovar aquesta revisió ara mateix.";
   }
   const approveDisabled = !current.can_approve || !current.can_sign;
@@ -500,7 +503,7 @@ export function SubmissionPackageSection({
           <Card>
             <CardHeader
               title={`Revisió ${current.revision_number} del paquet`}
-              action={<StatusPill level={PACKAGE_STATUS_LEVEL[current.status]}>{PACKAGE_STATUS_LABELS[current.status]}</StatusPill>}
+              action={<StatusPill level={packageStatusLevel(current.status)}>{packageStatusLabel(current.status)}</StatusPill>}
             />
             <dl className="grid gap-x-4 gap-y-2 px-3.5 py-3 text-[13px] sm:grid-cols-2 lg:grid-cols-4">
               <div>
@@ -564,8 +567,8 @@ export function SubmissionPackageSection({
               {revisions.map((revision) => (
                 <li key={revision.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3.5 py-2.5 text-[13px]">
                   <span className="font-medium text-ink">Revisió {revision.revision_number}</span>
-                  <StatusPill level={PACKAGE_STATUS_LEVEL[revision.status]} size="sm">
-                    {PACKAGE_STATUS_LABELS[revision.status]}
+                  <StatusPill level={packageStatusLevel(revision.status)} size="sm">
+                    {packageStatusLabel(revision.status)}
                   </StatusPill>
                   {revision.id === current.id && (
                     <StatusPill level="action" size="sm" outline>

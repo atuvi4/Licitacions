@@ -310,6 +310,15 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
 
   const [sectionFor, setSectionFor] = useState<string | null>(null);
   const [sectionTitle, setSectionTitle] = useState("");
+  /**
+   * Es pregunta en OBRIR el diàleg, no en desar-lo: si s'esperés al desat, la
+   * confirmació s'obriria a sota d'aquest modal i qui la respon no la veuria.
+   */
+  async function openSection(lotId: string) {
+    if (!(await confirmDiscard())) return;
+    setSectionTitle("");
+    setSectionFor(lotId);
+  }
   async function createSection() {
     if (!sectionFor || sectionTitle.trim() === "") return;
     const lotId = sectionFor;
@@ -475,7 +484,7 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
         const duration = durationOf(row.line);
         return (
           <div>
-            <span className={cn(duration.source === "unknown" && "text-warning")}>{duration.label}</span>
+            <span className={cn(duration.source === "unknown" && "text-danger")}>{duration.label}</span>
             {duration.hint && <p className="text-caption leading-4 text-muted">{duration.hint}</p>}
           </div>
         );
@@ -493,7 +502,7 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
         return (
           <div>
             {line.offered_unit_price_ex_vat === null ? (
-              <span className="text-warning">Sense preu</span>
+              <span className="text-danger">Sense preu</span>
             ) : (
               <span>
                 {formatAmount(line.offered_unit_price_ex_vat, currency)}
@@ -780,7 +789,7 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
               }
               action={
                 canEdit ? (
-                  <Button variant="secondary" size="sm" onClick={() => setSectionFor(lot.id)}>
+                  <Button variant="secondary" size="sm" onClick={() => void openSection(lot.id)}>
                     Afegeix una secció
                   </Button>
                 ) : undefined

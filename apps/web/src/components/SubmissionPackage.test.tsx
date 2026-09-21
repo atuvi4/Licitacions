@@ -738,6 +738,29 @@ describe("Tancar · el manifest de cada revisió", () => {
   });
 });
 
+describe("Tancar · estats que aquesta versió no coneix", () => {
+  beforeEach(() => {
+    readiness = readinessFixture();
+    get.mockReset();
+    post.mockReset();
+    onChange.mockClear();
+  });
+
+  it("un estat de paquet desconegut es mostra amb el seu codi i no passa per aprovat", async () => {
+    const unknown = { ...packageDetailFixture(), status: "una_cosa_nova" } as unknown as PackageDetail;
+    const summary = { ...packageSummaryFixture(), status: "una_cosa_nova" } as unknown as PackageSummary;
+    mockLoad([summary], { p1: unknown });
+    const { container } = renderSection();
+    await flush();
+    // Es diu el que és, no una pastilla muda.
+    expect(container.textContent).toContain("una_cosa_nova");
+    // I la pastilla d'aquell estat queda neutra, mai en «a punt».
+    const pill = [...container.querySelectorAll("[data-level]")].find((node) => node.textContent === "una_cosa_nova")!;
+    expect(pill.getAttribute("data-level")).toBe("neutral");
+    expect(container.textContent).not.toContain("Aprovat per presentar");
+  });
+});
+
 describe("Tancar · qui pot congelar", () => {
   beforeEach(() => {
     readiness = readinessFixture();

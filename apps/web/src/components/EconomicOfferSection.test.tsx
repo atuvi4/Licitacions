@@ -179,6 +179,33 @@ describe("Oferta econòmica · lectura", () => {
     expect(rowOf("Commutadors d'accés 48p").textContent).not.toContain("21");
   });
 
+  it("el que bloqueja es pinta com a bloqueig, no com a avís", async () => {
+    // `economic_offer_price_missing` i `economic_duration_missing` són
+    // blockers a S6, igual que superar el màxim: han de llegir-se igual.
+    offer = offerFixture({
+      lots: [
+        lotFixture({
+          sections: [
+            sectionFixture({
+              lines: [
+                lineFixture({ id: "a", concept: "Sense preu ofert", offered_unit_price_ex_vat: null }),
+                lineFixture({ id: "b", concept: "Sense durada", pricing_basis: "monthly", effective_duration_months: null }),
+                lineFixture({ id: "c", concept: "Amb IVA pendent", vat_rate: null }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    await mount();
+    expect(rowOf("Sense preu ofert").querySelector(".text-danger")?.textContent).toBe("Sense preu");
+    expect(rowOf("Sense durada").querySelector(".text-danger")?.textContent).toBe("Durada pendent");
+    // L'IVA sense definir sí que és un avís.
+    const vat = rowOf("Amb IVA pendent");
+    expect(vat.querySelector(".text-warning")?.textContent).toBe("IVA sense definir");
+    expect(vat.querySelector(".text-danger")).toBeNull();
+  });
+
   it("màxim del plec: conegut, superat i desconegut", async () => {
     offer = offerFixture({
       lots: [
@@ -367,6 +394,19 @@ describe("Oferta econòmica · edició", () => {
     expect(path).toBe("/companies/c1/workspaces/w1/economic-offer/sections/sec1/lines");
     expect(body).toEqual({ concept: "Fibra", quantity: "3", pricing_basis: "one_off", expected_revision: 4 });
     expect(getReadiness).toHaveBeenCalledTimes(2);
+  });
+
+  it("amb una línia bruta, afegir secció pregunta ABANS d'obrir el diàleg", async () => {
+    // Si preguntés en desar, la confirmació quedaria sota el modal de secció.
+    await mount();
+    await click("Edita", rowOf("Commutadors d'accés 48p"));
+    fireEvent.change(screen.getByLabelText(/Preu ofert/), { target: { value: "1900" } });
+    await flush();
+    await click(/Afegeix una secció/);
+    const dialogs = screen.getAllByRole("dialog");
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0].textContent).toContain("Canvis sense desar");
+    expect(screen.queryByLabelText(/Títol/)).toBeNull();
   });
 
   it("crea una secció", async () => {
