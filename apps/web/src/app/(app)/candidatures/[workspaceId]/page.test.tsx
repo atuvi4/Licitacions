@@ -1,16 +1,23 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { readinessFixture } from "@/test/readiness-fixture";
 import { decisionFixture, workspaceFixture } from "@/test/workspace-fixture";
 
 const get = vi.fn();
+const readiness = vi.fn();
 const post = vi.fn();
 const push = vi.fn();
 const replace = vi.fn();
 let search = "";
+// La preparació final és un recurs a part: si totes dues lectures anessin al
+// mateix mock, els `toHaveBeenCalledTimes` d'aquest fitxer deixarien de parlar
+// de la candidatura i les cues de `mockResolvedValueOnce` es barrejarien.
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, api: { ...actual.api, get: (...args: unknown[]) => get(...args), post: (...args: unknown[]) => post(...args) } };
+  const route = (path: unknown, ...rest: unknown[]) =>
+    typeof path === "string" && path.includes("/final-readiness") ? readiness(path, ...rest) : get(path, ...rest);
+  return { ...actual, api: { ...actual.api, get: route, post: (...args: unknown[]) => post(...args) } };
 });
 vi.mock("@/components/SessionProvider", () => ({
   useSession: () => ({ companyId: "c1", user: { id: "u1", email: "anna@example.org", full_name: "Anna Puig" } }),
@@ -22,9 +29,10 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(search),
 }));
 vi.mock("@/components/WorkspaceDossier", () => ({
-  DossierSection: ({ onAdvanced }: { onAdvanced?: () => Promise<void> }) => (
+  DossierSection: ({ onChange, onAdvanced }: { onChange?: () => Promise<void>; onAdvanced?: () => Promise<void> }) => (
     <div data-testid="dossier">
       Dossier (secció actual)
+      <button type="button" onClick={() => void onChange?.()}>simula desat del dossier</button>
       <button type="button" onClick={() => void onAdvanced?.()}>simula advance acceptat</button>
     </div>
   ),
@@ -55,6 +63,8 @@ function step(name: string) {
 describe("Candidatura · stepper i Decidir", () => {
   beforeEach(() => {
     get.mockReset();
+    readiness.mockReset();
+    readiness.mockResolvedValue(readinessFixture());
     post.mockReset();
     push.mockClear();
     replace.mockClear();
@@ -81,7 +91,9 @@ describe("Candidatura · stepper i Decidir", () => {
     render(<WorkspacePage />);
     await flush();
     expect(screen.getByTestId("dossier")).toBeTruthy();
-    expect(screen.getByTestId("checklist")).toBeTruthy();
+    // El pla de treball ja no comparteix pantalla amb el dossier: viu a la seva
+    // àrea. Sense `area`, Preparar obre el dossier, que és el que ensenyava.
+    expect(screen.queryByTestId("checklist")).toBeNull();
     expect(screen.queryByText("Ens presentem a aquesta licitació?")).toBeNull();
     expect(step("Preparar").getAttribute("aria-current")).toBe("step");
     expect(step("Decidir").getAttribute("aria-current")).toBeNull();
@@ -311,6 +323,155 @@ describe("Candidatura · stepper i Decidir", () => {
     await flush();
     expect(get).toHaveBeenCalledTimes(2);
     expect(replace).not.toHaveBeenCalled();
+    expect(screen.getByTestId("dossier")).toBeTruthy();
+  });
+});
+
+describe("Candidatura · Preparar per àrees", () => {
+  const go = () => ({ status: "preparing_bid" as const, human_decision: "go" as const, latest_decision: decisionFixture(), decisions: [decisionFixture()] });
+
+  beforeEach(() => {
+    get.mockReset();
+    readiness.mockReset();
+    readiness.mockResolvedValue(readinessFixture());
+    post.mockReset();
+    push.mockClear();
+    replace.mockClear();
+    search = "pas=preparar";
+    get.mockResolvedValue(workspaceFixture(go()));
+  });
+
+  const areas = () => screen.getAllByRole("tab").map((tab) => tab.textContent);
+
+  it("quatre àrees, i cap «visió general»", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    expect(areas()).toEqual(["Solució tècnica", "Oferta econòmica", "Dossier", "Pla de treball"]);
+    expect(areas()).not.toContain("Visió general");
+  });
+
+  it("sense àrea a la URL, Preparar obre el dossier: cap enllaç antic no canvia de pantalla", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByTestId("dossier")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Dossier" }).getAttribute("aria-selected")).toBe("true");
+    // Fixar el pas no ha d'afegir cap àrea a la URL.
+    expect(replace).not.toHaveBeenCalledWith(expect.stringContaining("area="), expect.anything());
+  });
+
+  it("una àrea desconeguda cau al dossier en comptes de deixar la pantalla buida", async () => {
+    search = "pas=preparar&area=visio-general";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByTestId("dossier")).toBeTruthy();
+  });
+
+  it("un enllaç directe obre l'àrea que demana", async () => {
+    search = "pas=preparar&area=oferta";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByRole("tab", { name: "Oferta econòmica" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByTestId("dossier")).toBeNull();
+    expect(screen.queryByTestId("checklist")).toBeNull();
+  });
+
+  it("canviar d'àrea escriu `area` a la URL, conserva el pas i deixa tornar enrere", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    fireEvent.click(screen.getByRole("tab", { name: "Solució tècnica" }));
+    // `push`, no `replace`: Enrere ha de desfer el canvi d'àrea, igual que
+    // desfà un enllaç del calaix de preparació.
+    expect(push).toHaveBeenCalledWith("/candidatures/w1?pas=preparar&area=solucio", { scroll: false });
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("l'àrea la mana la URL: Enrere i Endavant tornen a pintar el que toca", async () => {
+    search = "pas=preparar&area=oferta";
+    const primer = render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByRole("tab", { name: "Oferta econòmica" }).getAttribute("aria-selected")).toBe("true");
+    primer.unmount();
+    // El navegador torna a l'entrada anterior: no hi ha cap estat local que
+    // contradigui la URL, així que la pantalla la segueix.
+    search = "pas=preparar&area=pla";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByRole("tab", { name: "Pla de treball" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("checklist")).toBeTruthy();
+  });
+
+  it("el dossier només surt a la seva àrea", async () => {
+    search = "pas=preparar&area=pla";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.queryByTestId("dossier")).toBeNull();
+  });
+
+  it("el pla de treball reuneix checklist, tasques i notes", async () => {
+    search = "pas=preparar&area=pla";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByTestId("checklist")).toBeTruthy();
+    expect(screen.getByTestId("tasks")).toBeTruthy();
+    expect(screen.getByTestId("notes")).toBeTruthy();
+  });
+
+  it("les àrees que encara no existeixen ho diuen, sense ensenyar dades inventades", async () => {
+    search = "pas=preparar&area=solucio";
+    const { container } = render(<WorkspacePage />);
+    await flush();
+    expect(container.textContent).toContain("Encara no està disponible");
+    expect(container.querySelector("table")).toBeNull();
+    expect(screen.queryByTestId("dossier")).toBeNull();
+  });
+
+  it("les àrees són de Preparar: als altres passos no hi surten", async () => {
+    search = "pas=decidir";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+  });
+
+  it("la preparació final es llegeix un cop i es veu al capçal", async () => {
+    readiness.mockResolvedValue(readinessFixture({ findings: [{ code: "economic_lot_empty", severity: "blocker", domain: "economic", entity_id: null, context: {} }] }));
+    render(<WorkspacePage />);
+    await flush();
+    expect(readiness).toHaveBeenCalledTimes(1);
+    expect(readiness).toHaveBeenCalledWith("/companies/c1/workspaces/w1/final-readiness");
+    expect(screen.getByText("1 bloqueig")).toBeTruthy();
+  });
+
+  it("un desat del dossier torna a preguntar la preparació final i el capçal canvia", async () => {
+    const blocker = { code: "mandatory_evidence_missing", severity: "blocker" as const, domain: "dossier" as const, entity_id: null, context: {} };
+    readiness.mockResolvedValueOnce(readinessFixture({ findings: [blocker] }));
+    readiness.mockResolvedValueOnce(readinessFixture());
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByText("1 bloqueig")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "simula desat del dossier" }));
+    await flush();
+
+    expect(readiness).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("A punt")).toBeTruthy();
+    expect(screen.queryByText("1 bloqueig")).toBeNull();
+    // Sense recarregar la pàgina: la secció no s'ha desmuntat.
+    expect(screen.getByTestId("dossier")).toBeTruthy();
+  });
+
+  it("sense mutacions no es torna a preguntar res: no hi ha cap sondeig", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    await flush();
+    expect(readiness).toHaveBeenCalledTimes(1);
+  });
+
+  it("si la preparació falla, la candidatura es continua podent fer servir", async () => {
+    readiness.mockRejectedValue(Object.assign(new Error("Error intern"), { status: 500 }));
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByText("Preparació desconeguda")).toBeTruthy();
+    expect(screen.queryByText("A punt")).toBeNull();
     expect(screen.getByTestId("dossier")).toBeTruthy();
   });
 });

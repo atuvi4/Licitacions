@@ -17,6 +17,7 @@ export { ErrorState, type ErrorStateProps } from "./ErrorState";
 export { PermissionNote, type PermissionNoteProps } from "./PermissionNote";
 export { PageSkeleton, type PageSkeletonProps, type PageSkeletonVariant } from "./PageSkeleton";
 export { Tabs, type TabItem, type TabsProps } from "./Tabs";
+export { Drawer, type DrawerProps } from "./Drawer";
 export {
   DataTable,
   type DataTableColumn,

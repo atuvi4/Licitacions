@@ -19,6 +19,14 @@ export interface TabsProps {
   onChange: (key: string) => void;
   /** Paràmetre de la URL que guarda l'estat. */
   param?: string;
+  /**
+   * Si el canvi deixa entrada a l'historial. Per defecte no: en pestanyes que
+   * miren facetes del mateix objecte, Enrere ha de sortir de l'objecte i no
+   * desfer set canvis de pestanya. On les pestanyes separen feines diferents
+   * —i on s'hi arriba des d'enllaços que sí que empenyen— val «push», perquè
+   * Enrere torni on s'era.
+   */
+  history?: "replace" | "push";
   className?: string;
 }
 
@@ -31,9 +39,11 @@ const COUNT_CLASS: Partial<Record<Level, string>> = {
 
 /**
  * Navegació dins d'un objecte (handoff §2.11): màxim 4 pestanyes, estat a la
- * URL (`?tab=`) per enllaçar i compartir, sense scroll en canviar.
+ * URL (`?tab=`) per enllaçar i compartir, sense scroll en canviar. L'estat surt
+ * sempre de la URL, així que Enrere i Endavant tornen a pintar el que toca
+ * sense cap estat local que els contradigui.
  */
-export function Tabs({ items, value, onChange, param = "tab", className }: TabsProps) {
+export function Tabs({ items, value, onChange, param = "tab", history = "replace", className }: TabsProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -42,7 +52,9 @@ export function Tabs({ items, value, onChange, param = "tab", className }: TabsP
     onChange(key);
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     params.set(param, key);
-    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    const href = `${pathname}?${params.toString()}`;
+    if (history === "push") router.push(href, { scroll: false });
+    else router.replace(href, { scroll: false });
   }
 
   return (

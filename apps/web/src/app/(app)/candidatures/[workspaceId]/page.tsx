@@ -20,10 +20,14 @@ import {
   PageHeader,
   PageSkeleton,
   StatusPill,
+  Tabs,
   cn,
 } from "@/components/ui";
+import { ReadinessControl } from "@/components/ReadinessControl";
+import { ReadinessProvider, useInvalidateReadiness } from "@/components/ReadinessProvider";
 import { ANALYSIS_BASIS_LABELS, ELIGIBILITY_LABELS, RECOMMENDATION_LABELS } from "@/lib/compliance";
 import { useResource } from "@/lib/hooks";
+import { PREPARE_AREAS, PREPARE_AREA_LABELS, isPrepareArea, type PrepareArea } from "@/lib/readiness";
 import {
   ANALYSIS_BASIS_LEVEL,
   ELIGIBILITY_LEVEL,
@@ -200,7 +204,49 @@ function ContextPanel({ workspace }: { workspace: WorkspaceDetail }) {
   );
 }
 
+/**
+ * Les dues àrees que encara no tenen pantalla.
+ *
+ * Existeixen perquè la navegació sigui completa des del primer dia —els
+ * problemes de la preparació final ja hi porten— i diuen què són i què hi
+ * haurà. El que no fan és ensenyar dades inventades: una taula d'exemple aquí
+ * seria indistingible d'una de real amb les dades encara no carregades.
+ */
+function AreaPlaceholder({ area }: { area: "solucio" | "oferta" }) {
+  const copy =
+    area === "solucio"
+      ? {
+          title: "Solució tècnica",
+          description:
+            "Aquí es decidirà quins requisits necessiten una resposta tècnica, s'hi escriurà la proposta i s'hi validarà.",
+        }
+      : {
+          title: "Oferta econòmica",
+          description: "Aquí es prepararà l'oferta: lots, seccions, línies, preus i totals.",
+        };
+  return (
+    <Card>
+      <CardHeader title={copy.title} />
+      <p className="px-3.5 py-6 text-body text-muted">{copy.description} Encara no està disponible.</p>
+    </Card>
+  );
+}
+
+/**
+ * La preparació final s'obre per sobre de tota la candidatura perquè el capçal
+ * i qualsevol secció que la pugui canviar comparteixin la mateixa lectura.
+ */
 export default function WorkspacePage() {
+  const params = useParams<{ workspaceId: string }>();
+  const { companyId } = useSession();
+  return (
+    <ReadinessProvider companyId={companyId} workspaceId={params.workspaceId}>
+      <WorkspaceView />
+    </ReadinessProvider>
+  );
+}
+
+function WorkspaceView() {
   const params = useParams<{ workspaceId: string }>();
   const { companyId, user } = useSession();
   const searchParams = useSearchParams();
@@ -209,6 +255,7 @@ export default function WorkspacePage() {
   const { data, error, status, reload } = useResource<WorkspaceDetail>(
     companyId ? `/companies/${companyId}/workspaces/${params.workspaceId}` : null,
   );
+  const invalidateReadiness = useInvalidateReadiness();
 
   // El pas que es mira surt de la URL. Si la URL no ho diu, la primera càrrega
   // el fixa (a la URL i aquí) a partir de l'estat real. Després només el mou
@@ -218,6 +265,11 @@ export default function WorkspacePage() {
   // al mateix lloc.
   const param = searchParams?.get("pas") ?? null;
   const paramStep = param && (STEPS as readonly string[]).includes(param) ? (param as CandidatureStep) : null;
+  // L'àrea de treball dins de Preparar. Sense `area`, el dossier: és el que
+  // ensenyava fins ara un enllaç `?pas=preparar`, i cap enllaç antic no ha de
+  // caure en una pantalla diferent de la que algú va desar.
+  const paramArea = searchParams?.get("area") ?? null;
+  const area: PrepareArea = isPrepareArea(paramArea) ? paramArea : "dossier";
   const [pinned, setPinned] = useState<CandidatureStep | null>(null);
   const initialStatus = data?.status ?? null;
   useEffect(() => {
@@ -273,8 +325,11 @@ export default function WorkspacePage() {
   const items = stepperItems(data);
   const banner = primaryBanner(data);
   const signerName = user?.full_name || user?.email || "tu";
+  // Qualsevol desat d'una secció ja passava per aquí; ara també torna a
+  // preguntar la preparació final, perquè el capçal no quedi dient el que era
+  // cert abans de la mutació. Les dues lectures van alhora: són independents.
   const refresh = async () => {
-    await reload();
+    await Promise.all([reload(), invalidateReadiness()]);
   };
   const hrefFor = (key: CandidatureStep) => {
     const next = new URLSearchParams(searchParams?.toString() ?? "");
@@ -285,7 +340,7 @@ export default function WorkspacePage() {
   // El progrés del stepper continua sortint de l'estat real que torna el
   // refresc; aquí només es canvia el pas que es mira.
   const onDecided = async (decision: WorkspaceDecisionType) => {
-    await reload();
+    await Promise.all([reload(), invalidateReadiness()]);
     if (decision !== "go") return;
     setPinned("preparar");
     router.replace(hrefFor("preparar"), { scroll: false });
@@ -294,7 +349,7 @@ export default function WorkspacePage() {
   // només si l'estat real reflecteix la transició, s'obre Tancar. Un advance
   // fallit no arriba aquí.
   const onAdvanced = async () => {
-    const next = await reload();
+    const [next] = await Promise.all([reload(), invalidateReadiness()]);
     if (next?.status !== "ready_for_final_review") return;
     setPinned("tancar");
     router.replace(hrefFor("tancar"), { scroll: false });
@@ -321,6 +376,7 @@ export default function WorkspacePage() {
         actions={
           <>
             <StatusPill level={WORKSPACE_STATUS_LEVEL[data.status]}>{WORKSPACE_STATUS_LABELS[data.status]}</StatusPill>
+            <ReadinessControl />
             <LinkButton href={`/licitacions/${data.tender_id}`} variant="secondary" size="sm">
               Obre la fitxa de la licitació →
             </LinkButton>
@@ -386,10 +442,26 @@ export default function WorkspacePage() {
 
         {step === "preparar" && (
           <>
-            <DossierSection workspace={data} onChange={refresh} onAdvanced={onAdvanced} />
-            <ChecklistSection workspace={data} onChange={refresh} />
-            <TasksSection workspace={data} onChange={refresh} />
-            <NotesSection workspace={data} onChange={refresh} />
+            {/* Subordinada als tres passos: la mateixa barra que la fitxa de
+                licitació, no una segona navegació principal. */}
+            <Tabs
+              items={PREPARE_AREAS.map((key) => ({ key, label: PREPARE_AREA_LABELS[key] }))}
+              value={area}
+              param="area"
+              history="push"
+              onChange={() => undefined}
+            />
+
+            {area === "solucio" && <AreaPlaceholder area="solucio" />}
+            {area === "oferta" && <AreaPlaceholder area="oferta" />}
+            {area === "dossier" && <DossierSection workspace={data} onChange={refresh} onAdvanced={onAdvanced} />}
+            {area === "pla" && (
+              <>
+                <ChecklistSection workspace={data} onChange={refresh} />
+                <TasksSection workspace={data} onChange={refresh} />
+                <NotesSection workspace={data} onChange={refresh} />
+              </>
+            )}
           </>
         )}
 
