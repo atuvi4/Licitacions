@@ -145,7 +145,9 @@ function TendersFeed() {
   const list = useResource<Page<TenderMatchListItem>>(
     companyId ? `/companies/${companyId}/matches?${query}` : null,
   );
-  const facets = useResource<TenderFacets>("/tenders/facets");
+  const facets = useResource<TenderFacets>(
+    companyId ? `/companies/${companyId}/tenders/facets` : null,
+  );
   const summary = useResource<MatchSummary>(
     companyId ? `/companies/${companyId}/matches/summary` : null,
   );

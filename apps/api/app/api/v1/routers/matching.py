@@ -33,6 +33,7 @@ from app.schemas.matching import (
     TenderMatchRead,
 )
 from app.schemas.tenders import BuyerSummary, Page, TenderCPVRead, TenderListItem
+from app.tenders.visibility import visible_to_company
 
 router = APIRouter(prefix="/companies/{company_id}/matches", tags=["pre-fit"])
 
@@ -208,8 +209,15 @@ async def match_summary(session: SessionDep, ctx: CompanyCtx):
             )
         ).all()
     )
+    # L'univers del mode "Totes". Sense el filtre comptaria tambe les
+    # licitacions privades d'altres empreses, i el comptador delataria el que
+    # la llista amaga.
     total = (
-        await session.execute(sa.select(sa.func.count()).select_from(Tender))
+        await session.execute(
+            sa.select(sa.func.count())
+            .select_from(Tender)
+            .where(visible_to_company(ctx.company_id))
+        )
     ).scalar_one()
     high_fit = (
         await session.execute(

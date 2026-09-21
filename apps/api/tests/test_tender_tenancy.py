@@ -222,24 +222,27 @@ async def test_recalculation_never_writes_a_match_over_a_foreign_private_tender(
 # --------------------------------------------------------------------------- #
 
 
-async def _facets(client) -> dict:
-    response = await client.get("/api/v1/tenders/facets")
+async def _facets(client, company_id) -> dict:
+    response = await client.get(f"/api/v1/companies/{company_id}/tenders/facets")
     assert response.status_code == 200
     return response.json()
 
 
 async def test_facets_do_not_leak_a_private_nuts_to_b(client_b, scenario):
-    assert "ES512" not in (await _facets(client_b))["nuts_codes"]
+    assert "ES512" not in (await _facets(client_b, scenario["company_b"].id))["nuts_codes"]
 
 
 async def test_facets_show_own_private_nuts_to_its_owner(client_a, scenario):
-    assert "ES512" in (await _facets(client_a))["nuts_codes"]
+    assert "ES512" in (await _facets(client_a, scenario["company_a"].id))["nuts_codes"]
 
 
 async def test_facet_total_counts_only_what_the_company_may_see(client_a, client_b, scenario):
     """El comptador tambe es una faceta: no pot delatar el que no es pot llistar."""
-    for client in (client_a, client_b):
-        facets = await _facets(client)
+    for client, company in (
+        (client_a, scenario["company_a"]),
+        (client_b, scenario["company_b"]),
+    ):
+        facets = await _facets(client, company.id)
         titles = await _titles(client)
         assert facets["total_tenders"] == len(titles)
 
@@ -446,3 +449,113 @@ async def test_recalculation_counts_only_visible_tenders(db, scenario):
         )
     ).scalar_one()
     assert summary.tenders_evaluated == visible
+
+
+# --------------------------------------------------------------------------- #
+# I. Un usuari a dues empreses: Oportunitats es company-scoped                  #
+# --------------------------------------------------------------------------- #
+#
+# Que l'usuari tingui dret a veure les dues empreses NO vol dir que les dues
+# hagin d'aparèixer alhora. Oportunitats es mira EN CONTEXT d'una empresa: els
+# matches, el resum i les facetes son d'aquella i de ningu mes. Si el filtre fos
+# per usuari, mirant A veuria valors que nomes existeixen en una licitacio
+# privada de B, i el comptador "Totes" no quadraria amb la llista del davant.
+
+
+@pytest.fixture
+async def multi(db, tenant_a, tenant_b, client_factory):
+    """El mateix usuari, membre d'A i de B, amb una privada a cada empresa.
+
+    Cada licitacio porta un NUTS i un tipus de procediment EXCLUSIUS, de manera
+    que una fuita a les facetes es vegi a simple vista.
+    """
+    from app.models.enums import MembershipRole, ProcedureType
+    from app.models.identity import CompanyMembership
+    from tests.conftest import TEST_PASSWORD, login
+
+    user, company_a = tenant_a
+    _, company_b = tenant_b
+    db.add(
+        CompanyMembership(
+            user_id=user.id, company_id=company_b.id, role=MembershipRole.OWNER
+        )
+    )
+    source = await _source(db)
+    globalt = await _tender(db, source, title="Global", nuts="ES100")
+    ta = await _tender(db, source, title="Privada A", owner=company_a.id, nuts="ES511")
+    tb = await _tender(db, source, title="Privada B", owner=company_b.id, nuts="ES522")
+    ta.procedure_type = ProcedureType.OPEN
+    tb.procedure_type = ProcedureType.RESTRICTED
+    globalt.procedure_type = ProcedureType.MINOR_CONTRACT
+    await db.commit()
+
+    http = client_factory()
+    await login(http, user.email, TEST_PASSWORD)
+    return {
+        "client": http,
+        "a": company_a,
+        "b": company_b,
+        "global": globalt,
+        "ta": ta,
+        "tb": tb,
+    }
+
+
+async def _matched_ids(client, company_id) -> set[str]:
+    await client.post(f"/api/v1/companies/{company_id}/matches/recalculate")
+    response = await client.get(
+        f"/api/v1/companies/{company_id}/matches", params={"limit": 100}
+    )
+    assert response.status_code == 200
+    return {item["tender"]["id"] for item in response.json()["items"]}
+
+
+async def test_opportunities_of_a_never_include_the_private_tender_of_b(multi):
+    seen = await _matched_ids(multi["client"], multi["a"].id)
+    assert str(multi["global"].id) in seen
+    assert str(multi["ta"].id) in seen
+    assert str(multi["tb"].id) not in seen
+
+
+async def test_opportunities_of_b_never_include_the_private_tender_of_a(multi):
+    seen = await _matched_ids(multi["client"], multi["b"].id)
+    assert str(multi["global"].id) in seen
+    assert str(multi["tb"].id) in seen
+    assert str(multi["ta"].id) not in seen
+
+
+async def test_the_summary_universe_is_the_company_and_not_the_user(multi):
+    """`total_tenders` del resum es el mode "Totes": ha de ser el d'una empresa."""
+    client = multi["client"]
+    for company in (multi["a"], multi["b"]):
+        await client.post(f"/api/v1/companies/{company.id}/matches/recalculate")
+        response = await client.get(f"/api/v1/companies/{company.id}/matches/summary")
+        assert response.status_code == 200
+        # Global + la seva privada. Mai les tres.
+        assert response.json()["total_tenders"] == 2
+
+
+async def test_facets_of_a_do_not_carry_values_exclusive_to_b(multi):
+    facets = await _facets(multi["client"], multi["a"].id)
+    assert "ES511" in facets["nuts_codes"]
+    assert "ES522" not in facets["nuts_codes"]
+    assert "open" in facets["procedure_types"]
+    assert "restricted" not in facets["procedure_types"]
+    assert facets["total_tenders"] == 2
+
+
+async def test_facets_of_b_do_not_carry_values_exclusive_to_a(multi):
+    facets = await _facets(multi["client"], multi["b"].id)
+    assert "ES522" in facets["nuts_codes"]
+    assert "ES511" not in facets["nuts_codes"]
+    assert "restricted" in facets["procedure_types"]
+    assert "open" not in facets["procedure_types"]
+    assert facets["total_tenders"] == 2
+
+
+async def test_facets_require_membership_in_the_company_asked_for(client_b, scenario):
+    """El company_id de la ruta no es una declaracio: passa per l'autoritzacio."""
+    response = await client_b.get(
+        f"/api/v1/companies/{scenario['company_a'].id}/tenders/facets"
+    )
+    assert response.status_code in (403, 404)

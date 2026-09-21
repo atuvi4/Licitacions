@@ -20,7 +20,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import noload, selectinload
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CompanyCtx, CurrentUser, SessionDep
 from app.api.v1.tender_filters import TenderFilters, tender_filters
 from app.core.errors import NotFoundError
 from app.models.cpv import CPVCode
@@ -49,7 +49,7 @@ from app.schemas.tenders import (
     TenderRevisionRead,
     TenderTraceability,
 )
-from app.tenders.visibility import visible_to_user
+from app.tenders.visibility import visible_to_company, visible_to_user
 
 router = APIRouter(tags=["licitacions"])
 
@@ -154,15 +154,26 @@ async def list_tenders(
     return Page[TenderListItem](items=items, total=total, limit=limit, offset=offset)
 
 
-@router.get("/tenders/facets", response_model=TenderFacets, summary="Valors per als filtres")
-async def tender_facets(session: SessionDep, user: CurrentUser):
-    """Els valors dels filtres, nomes sobre el que aquest usuari pot llistar.
+@router.get(
+    "/companies/{company_id}/tenders/facets",
+    response_model=TenderFacets,
+    summary="Valors per als filtres d'Oportunitats",
+)
+async def tender_facets(session: SessionDep, ctx: CompanyCtx):
+    """Els valors dels filtres d'Oportunitats, en el context d'UNA empresa.
 
-    Una faceta es una agregacio, i una agregacio delata: si una licitacio
-    privada aportes el seu NUTS o el seu estat a la llista de valors, o el seu
-    +1 al recompte, filtrar la llista no serviria de res.
+    Penja de `/companies/{company_id}` i no del feed global perque el seu unic
+    consumidor —la pantalla d'Oportunitats— ja es company-scoped: mira els
+    matches d'una empresa concreta. Amb el filtre per usuari, algu que fos
+    membre d'A i de B veuria a les facetes d'A valors que nomes existeixen a una
+    licitacio privada de B, i el recompte "Totes" tampoc no quadraria amb la
+    llista que te al davant.
+
+    Una faceta es una agregacio, i una agregacio delata: si una licitacio d'una
+    altra empresa aportes el seu NUTS o el seu estat a la llista de valors, o el
+    seu +1 al recompte, filtrar la llista no serviria de res.
     """
-    visible = visible_to_user(user.id)
+    visible = visible_to_company(ctx.company_id)
 
     async def distinct(column) -> list[str]:
         rows = await session.execute(

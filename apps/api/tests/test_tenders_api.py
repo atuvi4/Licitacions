@@ -86,8 +86,11 @@ class TestFeed:
         terminis = [item["deadline_at"] for item in per_termini if item["deadline_at"]]
         assert terminis == sorted(terminis)
 
-    async def test_facetes(self, client_a, ingested):
-        facets = (await client_a.get("/api/v1/tenders/facets")).json()
+    async def test_facetes(self, client_a, tenant_a, ingested):
+        _, company = tenant_a
+        facets = (
+            await client_a.get(f"/api/v1/companies/{company.id}/tenders/facets")
+        ).json()
         assert facets["total_tenders"] == 3
         assert "resolved" in facets["statuses"]
         assert facets["nuts_codes"]

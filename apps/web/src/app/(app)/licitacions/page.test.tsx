@@ -110,7 +110,7 @@ function base(items: TenderMatchListItem[], total?: number, extra: Record<string
   return {
     "/companies/c1/matches/summary": summary,
     "/companies/c1/matches?": page(items, total),
-    "/tenders/facets": facets,
+    "/companies/c1/tenders/facets": facets,
     "/companies/c1/summary": profile,
     ...extra,
   };
@@ -267,7 +267,7 @@ describe("Oportunitats", () => {
   });
 
   it("ingesta buida: la instrucció tècnica va al detall tècnic, no al títol", async () => {
-    respondWith(base([], 0, { "/tenders/facets": { ...facets, total_tenders: 0 }, "/companies/c1/matches/summary": { ...summary, total_tenders: 0 } }));
+    respondWith(base([], 0, { "/companies/c1/tenders/facets": { ...facets, total_tenders: 0 }, "/companies/c1/matches/summary": { ...summary, total_tenders: 0 } }));
     const { container } = render(<TendersFeedPage />);
     const heading = await screen.findByRole("heading", { name: "Encara no s'ha llegit cap licitació" });
     expect(heading.textContent).not.toContain("python");
