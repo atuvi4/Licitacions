@@ -215,6 +215,46 @@ def test_qui_va_revisar_es_pot_donar_de_baixa_sense_esborrar_la_revisio():
     assert any("ON DELETE SET NULL" in line for line in fk)
 
 
+_TENANCY = "0026_technical_scope_review:0027_tender_tenancy"
+
+
+def test_la_tenancy_de_licitacions_es_pot_aplicar_i_desfer():
+    """0026 -> 0027 -> 0026, amb la columna, la seva FK i el seu index."""
+    up = _offline_sql("upgrade", _TENANCY)
+    down = _offline_sql("downgrade", "0027_tender_tenancy:0026_technical_scope_review")
+
+    assert "ADD COLUMN owner_company_id" in up
+    assert "fk_tenders_owner_company" in up
+    assert "ix_tenders_owner_company_id" in up
+
+    assert "DROP COLUMN owner_company_id" in down
+    assert "fk_tenders_owner_company" in down
+    assert "ix_tenders_owner_company_id" in down
+
+
+def test_cap_licitacio_existent_no_es_torna_privada():
+    """Sense backfill: tot el que ja hi ha queda public, que es el que era.
+
+    Si la migracio escrivis un propietari a alguna fila, licitacions que avui
+    veu tothom deixarien de veure's sense que ningu ho hagues decidit.
+    """
+    up = _offline_sql("upgrade", _TENANCY)
+
+    assert "ADD COLUMN owner_company_id" in up
+    assert "ALTER COLUMN owner_company_id SET NOT NULL" not in up
+    assert "ALTER COLUMN owner_company_id SET DEFAULT" not in up
+    assert "UPDATE tenders" not in up
+
+
+def test_esborrar_una_empresa_nomes_s_emporta_les_seves_licitacions():
+    """CASCADE acotat: la privada se'n va amb l'empresa, la publica es queda."""
+    up = _offline_sql("upgrade", _TENANCY)
+
+    fk = [line for line in up.splitlines() if "fk_tenders_owner_company" in line]
+    assert fk
+    assert any("ON DELETE CASCADE" in line for line in fk)
+
+
 def _columns_created_by_migrations(ddl: str) -> dict[str, set[str]]:
     tables: dict[str, set[str]] = {}
     for match in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\);", ddl, re.S):

@@ -27,6 +27,7 @@ from app.matching.rules import RULES_VERSION
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
 from app.models.tender_lifecycle import TenderRevision
 from app.models.tenders import Tender, TenderLot
+from app.tenders.visibility import visible_to_company
 
 logger = logging.getLogger("app.matching")
 
@@ -132,11 +133,25 @@ class MatchingService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def _tenders(self, tender_ids: list[uuid.UUID] | None) -> list[Tender]:
-        statement = sa.select(Tender).options(
-            selectinload(Tender.cpvs),
-            selectinload(Tender.lots).selectinload(TenderLot.cpvs),
-            noload(Tender.documents),
+    async def _tenders(
+        self, tender_ids: list[uuid.UUID] | None, *, company_id: uuid.UUID
+    ) -> list[Tender]:
+        """Les licitacions que aquesta empresa pot arribar a valorar.
+
+        El filtre de visibilitat NO es opcional: sense ell, un recalcul de
+        l'empresa B crearia files de match sobre licitacions privades de
+        l'empresa A, i el feed de B les ensenyaria totes. Per aixo `company_id`
+        es obligatori i va per paraula clau: afegir-lo com a opcional hauria
+        deixat viva la crida antiga, que es exactament la que filtrava.
+        """
+        statement = (
+            sa.select(Tender)
+            .where(visible_to_company(company_id))
+            .options(
+                selectinload(Tender.cpvs),
+                selectinload(Tender.lots).selectinload(TenderLot.cpvs),
+                noload(Tender.documents),
+            )
         )
         if tender_ids:
             statement = statement.where(Tender.id.in_(tender_ids))
@@ -187,7 +202,7 @@ class MatchingService:
         summary = RecalculationSummary(company_id=company_id)
 
         profile = await load_profile(self.session, company_id)
-        tenders = await self._tenders(tender_ids)
+        tenders = await self._tenders(tender_ids, company_id=company_id)
         revisions = await self._current_revisions(tenders)
 
         existing = {

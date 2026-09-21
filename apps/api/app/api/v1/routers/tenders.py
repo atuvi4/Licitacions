@@ -1,8 +1,11 @@
 """Feed public de licitacions.
 
-Aquests endpoints NO pengen de `/companies/{company_id}`: les licitacions son
-dades publiques i globals, compartides per tots els tenants. Nomes cal sessio
-iniciada, no pertinenca a cap empresa.
+Aquests endpoints NO pengen de `/companies/{company_id}`. La majoria de
+licitacions son publiques i globals, compartides per tots els tenants, i nomes
+calia sessio iniciada. Des d'S3-S0 n'hi pot haver de privades d'una empresa, i
+com que la ruta no diu de quina empresa es parla, el filtre es fa per USUARI:
+veu el que es public i el que pertany a empreses de les quals es membre
+(`visible_to_user`). No s'hi inventa cap empresa.
 
 En aquesta fase no hi ha cap relacio empresa-licitacio: ni matching, ni
 puntuacio, ni Go/No-Go. Nomes el que publica la font.
@@ -46,6 +49,7 @@ from app.schemas.tenders import (
     TenderRevisionRead,
     TenderTraceability,
 )
+from app.tenders.visibility import visible_to_user
 
 router = APIRouter(tags=["licitacions"])
 
@@ -75,13 +79,13 @@ async def _cpv_descriptions(session, codes: set[str]) -> dict[str, str]:
 @router.get("/tenders", response_model=Page[TenderListItem], summary="Feed de licitacions")
 async def list_tenders(
     session: SessionDep,
-    _: CurrentUser,
+    user: CurrentUser,
     criteria: Annotated[TenderFilters, Depends(tender_filters)],
     sort: SortOption = Query(default="recent"),
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
-    filters = criteria.criteria()
+    filters = [visible_to_user(user.id), *criteria.criteria()]
 
     total = (
         await session.execute(
@@ -151,14 +155,27 @@ async def list_tenders(
 
 
 @router.get("/tenders/facets", response_model=TenderFacets, summary="Valors per als filtres")
-async def tender_facets(session: SessionDep, _: CurrentUser):
+async def tender_facets(session: SessionDep, user: CurrentUser):
+    """Els valors dels filtres, nomes sobre el que aquest usuari pot llistar.
+
+    Una faceta es una agregacio, i una agregacio delata: si una licitacio
+    privada aportes el seu NUTS o el seu estat a la llista de valors, o el seu
+    +1 al recompte, filtrar la llista no serviria de res.
+    """
+    visible = visible_to_user(user.id)
+
     async def distinct(column) -> list[str]:
         rows = await session.execute(
-            sa.select(column).where(column.is_not(None)).distinct().order_by(column)
+            sa.select(column)
+            .where(column.is_not(None), visible)
+            .distinct()
+            .order_by(column)
         )
         return [str(getattr(value, "value", value)) for value in rows.scalars()]
 
-    total = (await session.execute(sa.select(sa.func.count()).select_from(Tender))).scalar_one()
+    total = (
+        await session.execute(sa.select(sa.func.count()).select_from(Tender).where(visible))
+    ).scalar_one()
     return TenderFacets(
         statuses=await distinct(Tender.status),
         procedure_types=await distinct(Tender.procedure_type),
@@ -168,11 +185,16 @@ async def tender_facets(session: SessionDep, _: CurrentUser):
     )
 
 
-async def _load_tender(session, tender_id: uuid.UUID) -> Tender:
+async def _load_tender(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> Tender:
+    """La fitxa, si aquest usuari la pot veure.
+
+    Una privada d'una altra empresa dona 404 i no 403: dir "no pots" ja seria
+    dir que existeix, i el punt es que per a qui no la te no existeix.
+    """
     tender = (
         await session.execute(
             sa.select(Tender)
-            .where(Tender.id == tender_id)
+            .where(Tender.id == tender_id, visible_to_user(user_id))
             .options(
                 selectinload(Tender.cpvs),
                 selectinload(Tender.lots).selectinload(TenderLot.cpvs),
@@ -235,8 +257,8 @@ async def _document_summaries(
 
 
 @router.get("/tenders/{tender_id}", response_model=TenderDetail, summary="Fitxa de licitacio")
-async def get_tender(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
-    tender = await _load_tender(session, tender_id)
+async def get_tender(tender_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    tender = await _load_tender(session, tender_id, user.id)
 
     codes = {item.cpv_code for item in tender.cpvs}
     for lot in tender.lots:
@@ -329,8 +351,8 @@ async def get_tender(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
 @router.get(
     "/tenders/{tender_id}/lots", response_model=list[TenderLotRead], summary="Lots de la licitacio"
 )
-async def list_tender_lots(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
-    tender = await _load_tender(session, tender_id)
+async def list_tender_lots(tender_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    tender = await _load_tender(session, tender_id, user.id)
     codes = {item.cpv_code for lot in tender.lots for item in lot.cpvs}
     descriptions = await _cpv_descriptions(session, codes)
     return [
@@ -365,8 +387,8 @@ async def list_tender_lots(tender_id: uuid.UUID, session: SessionDep, _: Current
     response_model=list[TenderDocumentRead],
     summary="Documents publicats (nomes metadata i URL)",
 )
-async def list_tender_documents(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
-    tender = await _load_tender(session, tender_id)
+async def list_tender_documents(tender_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    tender = await _load_tender(session, tender_id, user.id)
     return [TenderDocumentRead.model_validate(document) for document in tender.documents]
 
 
@@ -375,8 +397,8 @@ async def list_tender_documents(tender_id: uuid.UUID, session: SessionDep, _: Cu
     response_model=list[TenderRevisionRead],
     summary="Historial de versions rebudes",
 )
-async def list_tender_revisions(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
-    await _load_tender(session, tender_id)
+async def list_tender_revisions(tender_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    await _load_tender(session, tender_id, user.id)
     rows = (
         await session.execute(
             sa.select(SourceRecord)
@@ -459,14 +481,14 @@ async def list_ingestion_runs(
     response_model=list[TenderHistoryRevisionRead],
     summary="Historial d'estats normalitzats d'una licitacio",
 )
-async def tender_history(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
+async def tender_history(tender_id: uuid.UUID, session: SessionDep, user: CurrentUser):
     """Com hem arribat a l'estat actual, de la mes recent a la mes antiga.
 
     Es public i global, com la licitacio: la historia d'un expedient no pertany
     a cap empresa. Els impactes sobre un workspace concret s'exposen al
     workspace, que si que es del tenant.
     """
-    await _load_tender(session, tender_id)
+    await _load_tender(session, tender_id, user.id)
     revisions = (
         await session.scalars(
             sa.select(TenderRevision)
@@ -486,7 +508,7 @@ async def tender_history(tender_id: uuid.UUID, session: SessionDep, _: CurrentUs
 async def tender_changes(
     tender_id: uuid.UUID,
     session: SessionDep,
-    _: CurrentUser,
+    user: CurrentUser,
     material_only: bool = True,
 ):
     """Els canvis, del mes recent al mes antic.
@@ -495,7 +517,7 @@ async def tender_changes(
     barrejar-lo amb una substitucio de plec faria que la llista deixes de
     llegir-se. `material_only=false` els ensenya tots.
     """
-    await _load_tender(session, tender_id)
+    await _load_tender(session, tender_id, user.id)
     query = (
         sa.select(TenderChangeEvent)
         .where(TenderChangeEvent.tender_id == tender_id)

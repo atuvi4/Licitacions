@@ -101,7 +101,7 @@ el freeze · l'aprovació.
 
 | Camp | Tipus | Rol |
 |---|---|---|
-| `tenders.id` | `UUID` PK, `default=uuid.uuid4` (**client-side**) | **Identitat interna canònica** |
+| `tenders.id` | `UUID` PK, `default=uuid.uuid4` | **Identitat interna canònica.** Vegeu la nota de sota |
 | `tenders.owner_company_id` | `UUID NULL` FK companies CASCADE | **Boundary de tenancy.** `NULL` ⇔ pública/global |
 | `tenders.source_id` | `UUID NOT NULL` FK sources | La `Source` **MANUAL global i única** |
 | `tenders.external_id` | `String(500) NOT NULL` | Identificador sintètic immutable |
@@ -116,6 +116,20 @@ external_id = "manual:" + <client_token|uuid4>
 Coherent amb la convenció existent: PLACSP fa servir l'`<id>` d'ATOM, un
 identificador **opac i natiu de la font**. `manual:<uuid>` és el mateix patró per a
 la font manual. Longitud 43 caràcters, molt per sota de `String(500)`.
+
+> **On es genera cada UUID, exactament.** Són dos i no s'han de confondre.
+>
+> `UUIDPrimaryKeyMixin` declara `default=uuid.uuid4`. En vocabulari de SQLAlchemy
+> això és un default *client-side*, on «client» vol dir **el procés Python de
+> l'API** — ni el navegador ni el servidor SQL — i s'avalua **en el moment de
+> l'INSERT**, no en construir l'objecte. Verificat: `Tender(...).id` és `None`
+> fins al `flush()`, i la columna no té `server_default`.
+>
+> D'aquí que `external_id` **no es derivi de `Tender.id`**: quan cal escriure'l,
+> l'id encara no existeix. El **`client_token` sí que el genera el navegador**,
+> una sola vegada en obrir l'assistent d'importació, i es manté estable durant
+> tots els reintents de la mateixa creació. És això el que fa idempotent el
+> reintent, no el PK.
 
 | Qüestió | Resposta |
 |---|---|

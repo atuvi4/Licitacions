@@ -175,6 +175,9 @@ class SourceType(StrEnum):
     SYNDICATION_ATOM = "syndication_atom"
     API = "api"
     FILE = "file"
+    #: Licitacions introduides per una persona. La font segueix sent provinenca:
+    #: qui pot veure la licitacio ho diu `Tender.owner_company_id`, mai la font.
+    MANUAL = "manual"
 
 
 class IngestionStatus(StrEnum):
