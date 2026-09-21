@@ -302,6 +302,19 @@ class DownloadStatus(StrEnum):
     FAILED = "failed"
 
 
+class DocumentFileOrigin(StrEnum):
+    """D'on ha sortit una versio de document.
+
+    `FETCHED` es el que fa la ingesta sindicada: hi ha una URL d'origen i algu
+    l'ha baixada. `UPLOADED` es el que fara la ingesta manual: no hi ha URL, hi
+    ha una persona que ha pujat el fitxer. Sense aquesta distincio, un fitxer
+    sense `source_url` no es podria distingir d'una descarrega feta malament.
+    """
+
+    FETCHED = "fetched"
+    UPLOADED = "uploaded"
+
+
 class ExtractionStatus(StrEnum):
     """Estat d'una passada de parser sobre un blob."""
 

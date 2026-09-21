@@ -255,6 +255,72 @@ def test_esborrar_una_empresa_nomes_s_emporta_les_seves_licitacions():
     assert any("ON DELETE CASCADE" in line for line in fk)
 
 
+_MANUAL = "0027_tender_tenancy:0028_manual_ingestion_support"
+
+
+def test_la_ingesta_manual_es_pot_aplicar_i_desfer():
+    """0027 -> 0028 -> 0027, amb les dues meitats de la revisio."""
+    up = _offline_sql("upgrade", _MANUAL)
+    down = _offline_sql("downgrade", "0028_manual_ingestion_support:0027_tender_tenancy")
+
+    for fragment in ("ADD COLUMN owner_company_id", "fk_buyers_owner_company",
+                     "ix_buyers_owner_company_id", "ADD COLUMN origin",
+                     "ADD COLUMN uploaded_by"):
+        assert fragment in up, fragment
+    for fragment in ("DROP COLUMN owner_company_id", "fk_buyers_owner_company",
+                     "DROP COLUMN origin", "DROP COLUMN uploaded_by"):
+        assert fragment in down, fragment
+
+
+def test_cap_organisme_existent_no_es_torna_privat():
+    """Els organismes de les fonts sindicades queden publics, que es el que son."""
+    up = _offline_sql("upgrade", _MANUAL)
+
+    assert "ALTER COLUMN owner_company_id SET NOT NULL" not in up
+    assert "UPDATE buyers" not in up
+
+
+def test_els_fitxers_que_ja_hi_havia_queden_com_a_descarregats():
+    """`origin` neix ple, i nomes per a les files antigues.
+
+    Sense el default de servidor la columna NOT NULL no es podria afegir. Amb
+    ell permanent, una fila nova podria dir-se descarregada sense ser-ho, aixi
+    que es retira just despres.
+    """
+    up = _offline_sql("upgrade", _MANUAL)
+
+    assert "ADD COLUMN origin" in up
+    assert "'fetched'" in up
+    assert "DROP DEFAULT" in up
+
+
+def test_un_fitxer_pujat_no_necessita_url():
+    """La nul·labilitat es el que permet que existeixi un fitxer sense origen web."""
+    up = _offline_sql("upgrade", _MANUAL)
+    down = _offline_sql("downgrade", "0028_manual_ingestion_support:0027_tender_tenancy")
+
+    assert "ALTER COLUMN source_url DROP NOT NULL" in up
+    assert "ALTER COLUMN source_url SET NOT NULL" in down
+
+
+def test_esborrar_una_empresa_no_toca_els_organismes_globals():
+    """CASCADE acotat: NULL no coincideix mai amb l'empresa esborrada."""
+    up = _offline_sql("upgrade", _MANUAL)
+
+    fk = [line for line in up.splitlines() if "fk_buyers_owner_company" in line]
+    assert fk
+    assert any("ON DELETE CASCADE" in line for line in fk)
+
+
+def test_qui_puja_un_fitxer_es_pot_donar_de_baixa():
+    """SET NULL: el fitxer segueix sent valid; el que es perd es qui el va pujar."""
+    up = _offline_sql("upgrade", _MANUAL)
+
+    fk = [line for line in up.splitlines() if "uploaded_by" in line and "FOREIGN KEY" in line]
+    assert fk
+    assert any("ON DELETE SET NULL" in line for line in fk)
+
+
 def _columns_created_by_migrations(ddl: str) -> dict[str, set[str]]:
     tables: dict[str, set[str]] = {}
     for match in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\);", ddl, re.S):

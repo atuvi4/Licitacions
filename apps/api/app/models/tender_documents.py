@@ -30,6 +30,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column
 from app.models.enums import (
+    DocumentFileOrigin,
     DownloadStatus,
     ExtractionQuality,
     ExtractionStatus,
@@ -279,7 +280,18 @@ class TenderDocumentFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.Uuid(as_uuid=True), sa.ForeignKey("source_records.id", ondelete="SET NULL")
     )
 
-    source_url: Mapped[str] = mapped_column(sa.String(1000), nullable=False)
+    #: Nul quan el fitxer l'ha pujat una persona: no ve de cap URL.
+    source_url: Mapped[str | None] = mapped_column(sa.String(1000))
+    #: Provinenca del blob. Sense aquest camp, `source_url IS NULL` voldria dir
+    #: alhora "pujat" i "descarrega mal registrada".
+    origin: Mapped[DocumentFileOrigin] = mapped_column(
+        enum_column(DocumentFileOrigin, "document_file_origin"),
+        nullable=False,
+        default=DocumentFileOrigin.FETCHED,
+    )
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
     final_url: Mapped[str | None] = mapped_column(sa.String(1000))
     original_filename: Mapped[str | None] = mapped_column(sa.String(255))
     detected_filename: Mapped[str | None] = mapped_column(sa.String(255))

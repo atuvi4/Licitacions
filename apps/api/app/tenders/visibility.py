@@ -15,6 +15,10 @@ Hi ha dues variants perque hi ha dos tipus de peticio, no dues regles:
   el que es public i el que pertany a alguna empresa de la qual l'usuari es
   membre. **No s'hi inventa cap empresa**: es consulta la pertinenca real.
 
+La mateixa regla val per a `Buyer`: un organisme introduit a ma per una
+empresa es seu fins que algu no el publiqui, i publicar-lo en silenci al
+cataleg global seria decidir-ho per ella.
+
 Aquest modul NO es una capa de permisos generica. Nomes sap d'aquesta regla, i
 existeix perque no acabi escrita a ma a dotze consultes, que es com es perden
 els aillaments: no a la que s'escriu malament, sino a la que algu oblida.
@@ -27,7 +31,7 @@ import uuid
 import sqlalchemy as sa
 
 from app.models.identity import CompanyMembership
-from app.models.tenders import Tender
+from app.models.tenders import Buyer, Tender
 
 
 def visible_to_company(company_id: uuid.UUID) -> sa.ColumnElement[bool]:
@@ -52,4 +56,19 @@ def visible_to_user(user_id: uuid.UUID) -> sa.ColumnElement[bool]:
     return sa.or_(
         Tender.owner_company_id.is_(None),
         Tender.owner_company_id.in_(companies),
+    )
+
+
+def buyer_visible_to_company(company_id: uuid.UUID) -> sa.ColumnElement[bool]:
+    """La mateixa regla, per als organismes de contractacio.
+
+    Els que arriben d'una font sindicada tenen `owner_company_id` a `NULL` i
+    son de tothom. Els que escriu una empresa al seu wizard son nomes seus, i
+    dues empreses poden tenir cadascuna el seu «Ajuntament de Palamos» sense
+    que cap de les dues vegi el de l'altra: la identitat d'un Buyer es
+    `(source_id, external_identifier)`, i el manual porta un token propi.
+    """
+    return sa.or_(
+        Buyer.owner_company_id.is_(None),
+        Buyer.owner_company_id == company_id,
     )

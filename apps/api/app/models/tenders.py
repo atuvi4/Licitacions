@@ -43,10 +43,19 @@ class Buyer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.UniqueConstraint("source_id", "external_identifier", name="uq_buyers_source_external"),
         sa.Index("ix_buyers_name", "name"),
         sa.Index("ix_buyers_tax_identifier", "tax_identifier"),
+        sa.Index("ix_buyers_owner_company_id", "owner_company_id"),
     )
 
     source_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("sources.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Qui el pot veure, amb la mateixa regla que `Tender.owner_company_id`:
+    #: `NULL` es public i canonic, amb valor es privat de l'empresa que el va
+    #: introduir a ma. Un organisme public es informacio publica, pero el que
+    #: una empresa escriu al seu wizard no ho es fins que algu ho valida, i
+    #: publicar-ho al cataleg global en silenci seria decidir-ho per ella.
+    owner_company_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("companies.id", ondelete="CASCADE")
     )
     external_identifier: Mapped[str] = mapped_column(sa.String(200), nullable=False)
     name: Mapped[str] = mapped_column(sa.String(500), nullable=False)
