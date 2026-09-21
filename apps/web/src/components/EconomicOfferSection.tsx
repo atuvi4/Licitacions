@@ -52,6 +52,7 @@ import {
   type LinePayload,
   type OfferCreateResult,
   type OfferLine,
+  type OfferLot,
   type PricingBasis,
 } from "@/lib/economic";
 import type { TenderLot } from "@/lib/tenders";
@@ -70,6 +71,11 @@ const DOMAIN_ERROR_COPY: Record<string, string> = {
 function humanError(error: unknown, fallback: string): string {
   if (error instanceof ApiError) return DOMAIN_ERROR_COPY[error.code] ?? error.message;
   return error instanceof Error ? error.message : fallback;
+}
+
+/** La durada tal com s'escriu al camp. `null` és la cadena buida, mai un zero. */
+function durationText(months: number | null): string {
+  return months === null ? "" : String(months);
 }
 
 /** Una fila de la taula: una línia desada, o la que s'està creant. */
@@ -131,15 +137,28 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
   // desaparegues en silenci, el conflicte hauria esborrat feina seva.
   const [previousDraft, setPreviousDraft] = useState<LineDraft | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  // Dos editors petits més. Només un obert alhora, com la línia: obrir-ne un
+  // passa per la mateixa pregunta que qualsevol altra manera de perdre feina.
+  const [lotEdit, setLotEdit] = useState<{ lotId: string; value: string } | null>(null);
+  const [renameEdit, setRenameEdit] = useState<{ sectionId: string; value: string } | null>(null);
 
   const original = useMemo(() => {
     if (!data || editing?.kind !== "edit") return null;
     return data.lots.flatMap((lot) => lot.sections.flatMap((section) => section.lines)).find((line) => line.id === editing.lineId) ?? null;
   }, [data, editing]);
 
-  const dirty = Boolean(
+  const lineDirty = Boolean(
     draft && (editing?.kind === "new" ? draft.concept.trim() !== "" : original !== null && lineIsDirty(original, draft, internal)),
   );
+  const lotEditDirty = Boolean(
+    lotEdit && lotEdit.value.trim() !== durationText(data?.lots.find((lot) => lot.id === lotEdit.lotId)?.duration_months ?? null),
+  );
+  const renameDirty = Boolean(
+    renameEdit &&
+      renameEdit.value.trim() !==
+        (data?.lots.flatMap((lot) => lot.sections).find((section) => section.id === renameEdit.sectionId)?.title ?? ""),
+  );
+  const dirty = lineDirty || lotEditDirty || renameDirty;
 
   /* ----- Sortir amb canvis oberts ---------------------------------------- */
 
@@ -173,6 +192,8 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
   function closeEditor() {
     setEditing(null);
     setDraft(null);
+    setLotEdit(null);
+    setRenameEdit(null);
     setSaved(false);
     setRowError(null);
     setPreviousDraft(null);
@@ -278,18 +299,82 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
     }
   }
 
+  async function openLotDuration(lot: OfferLot) {
+    if (!(await confirmDiscard())) return;
+    closeEditor();
+    setLotEdit({ lotId: lot.id, value: durationText(lot.duration_months) });
+  }
+
+  async function saveLotDuration() {
+    if (!lotEdit) return;
+    const raw = lotEdit.value.trim();
+    // Buit vol dir «ja no sabem quant dura»: el servidor distingeix ometre el
+    // camp de posar-hi `null`, i aquí s'hi envia `null` a propòsit.
+    const months = raw === "" ? null : Number.parseInt(raw, 10);
+    if (months !== null && (Number.isNaN(months) || months < 1)) return;
+    const lotId = lotEdit.lotId;
+    const next = await runStructural(`duration-${lotId}`, (revision) =>
+      api.patch<EconomicOffer>(`${base}/economic-offer/lots/${lotId}`, {
+        duration_months: months,
+        expected_revision: revision,
+      }),
+    );
+    // Si falla, el que s'ha escrit es queda a la vista.
+    if (next) setLotEdit(null);
+  }
+
+  async function openRename(section: { id: string; title: string }) {
+    if (!(await confirmDiscard())) return;
+    closeEditor();
+    setRenameEdit({ sectionId: section.id, value: section.title });
+  }
+
+  async function saveRename() {
+    if (!renameEdit) return;
+    const title = renameEdit.value.trim();
+    if (title === "") return;
+    const sectionId = renameEdit.sectionId;
+    const next = await runStructural(`rename-${sectionId}`, (revision) =>
+      api.patch<EconomicOffer>(`${base}/economic-offer/sections/${sectionId}`, { title, expected_revision: revision }),
+    );
+    if (next) setRenameEdit(null);
+  }
+
+  const [archiveSection, setArchiveSection] = useState<{ id: string; title: string } | null>(null);
+  async function confirmArchiveSection() {
+    if (!archiveSection) return;
+    const sectionId = archiveSection.id;
+    setArchiveSection(null);
+    await runStructural(`section-archive-${sectionId}`, (revision) =>
+      api.post<EconomicOffer>(`${base}/economic-offer/sections/${sectionId}/archive`, { expected_revision: revision }),
+    );
+  }
+
   const [pending, setPending] = useState<string | null>(null);
-  async function guarded(key: string, run: (revision: number) => Promise<EconomicOffer>): Promise<EconomicOffer | null> {
+
+  /**
+   * Una escriptura d'estructura, amb protecció contra el doble clic.
+   *
+   * NO pregunta res: desar el que s'acaba d'escriure no és perdre-ho. La
+   * pregunta és per a les accions que sí que descarten l'edició oberta, i
+   * aquelles passen per `guarded`.
+   */
+  async function runStructural(key: string, run: (revision: number) => Promise<EconomicOffer>): Promise<EconomicOffer | null> {
     if (pending) return null;
-    if (!(await confirmDiscard())) return null;
     setPending(key);
     try {
-      const next = await mutate(run, "structural");
-      if (next) closeEditor();
-      return next;
+      return await mutate(run, "structural");
     } finally {
       setPending(null);
     }
+  }
+
+  async function guarded(key: string, run: (revision: number) => Promise<EconomicOffer>): Promise<EconomicOffer | null> {
+    if (pending) return null;
+    if (!(await confirmDiscard())) return null;
+    const next = await runStructural(key, run);
+    if (next) closeEditor();
+    return next;
   }
 
   const [creatingOffer, setCreatingOffer] = useState(false);
@@ -782,11 +867,7 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
           <Card key={lot.id}>
             <CardHeader
               title={lot.label}
-              description={
-                lot.duration_months === null
-                  ? "Durada del lot no consta"
-                  : `${lot.duration_months} mesos · les línies temporals l'hereten si no en diuen una altra`
-              }
+              description="Les línies mensuals i anuals hereten la durada del lot si no en diuen una altra."
               action={
                 canEdit ? (
                   <Button variant="secondary" size="sm" onClick={() => void openSection(lot.id)}>
@@ -795,6 +876,51 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
                 ) : undefined
               }
             />
+
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3.5 py-2">
+              <span className={KICKER}>Durada del lot</span>
+              {lotEdit?.lotId === lot.id ? (
+                <form
+                  className="flex flex-wrap items-center gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void saveLotDuration();
+                  }}
+                >
+                  <label className="sr-only" htmlFor={`durada-${lot.id}`}>
+                    Durada del lot en mesos
+                  </label>
+                  <Input
+                    id={`durada-${lot.id}`}
+                    inputMode="numeric"
+                    className="w-24"
+                    value={lotEdit.value}
+                    onChange={(event) => setLotEdit({ lotId: lot.id, value: event.target.value })}
+                    autoFocus
+                  />
+                  <span className="text-caption text-muted">mesos · buit: sense definir</span>
+                  <Button type="submit" variant="primary" size="sm" loading={pending === `duration-${lot.id}`}>
+                    Desa
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => void cancelEditor()}>
+                    Cancel·la
+                  </Button>
+                </form>
+              ) : (
+                <>
+                  <span className={cn("text-body", lot.duration_months === null ? "text-warning" : "text-ink")}>
+                    {lot.duration_months === null
+                      ? "Sense definir"
+                      : `${lot.duration_months} ${lot.duration_months === 1 ? "mes" : "mesos"}`}
+                  </span>
+                  {canEdit && (
+                    <Button variant="ghost" size="sm" onClick={() => void openLotDuration(lot)}>
+                      Edita la durada
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
 
             {!singleLot && lot.limit.tender_max !== null && (
               <p className="border-b border-border px-3.5 py-1.5 text-caption text-muted">
@@ -820,15 +946,65 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
                   stackBelow="md"
                 />
                 {canEdit && (
-                  <div className="flex flex-wrap gap-2 border-t border-border px-3.5 py-2">
+                  <ul className="divide-y divide-border border-t border-border">
                     {sections
                       .filter((section) => section.archived_at === null)
                       .map((section) => (
-                        <Button key={section.id} variant="ghost" size="sm" onClick={() => void openNewLine(section.id)}>
-                          Afegeix una línia a {section.title}
-                        </Button>
+                        <li key={section.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3.5 py-1.5">
+                          {renameEdit?.sectionId === section.id ? (
+                            <form
+                              className="flex flex-wrap items-center gap-2"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                void saveRename();
+                              }}
+                            >
+                              <label className="sr-only" htmlFor={`nom-${section.id}`}>
+                                Títol de la secció
+                              </label>
+                              <Input
+                                id={`nom-${section.id}`}
+                                className="w-56"
+                                maxLength={300}
+                                value={renameEdit.value}
+                                onChange={(event) => setRenameEdit({ sectionId: section.id, value: event.target.value })}
+                                autoFocus
+                              />
+                              <Button
+                                type="submit"
+                                variant="primary"
+                                size="sm"
+                                loading={pending === `rename-${section.id}`}
+                                disabled={renameEdit.value.trim() === ""}
+                              >
+                                Desa
+                              </Button>
+                              <Button type="button" variant="ghost" size="sm" onClick={() => void cancelEditor()}>
+                                Cancel·la
+                              </Button>
+                            </form>
+                          ) : (
+                            <>
+                              <span className="text-body text-ink">{section.title}</span>
+                              <Button variant="ghost" size="sm" onClick={() => void openNewLine(section.id)}>
+                                Afegeix una línia
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={() => void openRename(section)}>
+                                Renombra
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                loading={pending === `section-archive-${section.id}`}
+                                onClick={() => setArchiveSection({ id: section.id, title: section.title })}
+                              >
+                                Arxiva
+                              </Button>
+                            </>
+                          )}
+                        </li>
                       ))}
-                  </div>
+                  </ul>
                 )}
               </>
             )}
@@ -857,6 +1033,15 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
         confirmLabel="Descarta els canvis"
         onConfirm={() => answerDiscard(true)}
         onCancel={() => answerDiscard(false)}
+      />
+
+      <ConfirmDialog
+        open={archiveSection !== null}
+        title="Arxiva la secció"
+        message={`«${archiveSection?.title ?? ""}» deixarà de comptar a l'oferta. Les seves línies es conserven: no compten perquè la secció no compta.`}
+        confirmLabel="Arxiva-la"
+        onConfirm={() => void confirmArchiveSection()}
+        onCancel={() => setArchiveSection(null)}
       />
 
       <Modal

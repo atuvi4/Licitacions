@@ -126,7 +126,7 @@ describe("Oferta econòmica · lectura", () => {
   it("la jerarquia és lot → secció → línia, amb subtotals i total del lot", async () => {
     await mount();
     expect(screen.getByText("Lot 2 · Xarxa d'accés")).toBeTruthy();
-    expect(screen.getByText("Equipament")).toBeTruthy();
+    expect(screen.getAllByText("Equipament").length).toBeGreaterThan(0);
     expect(screen.getByText("Commutadors d'accés 48p")).toBeTruthy();
     expect(screen.getByText("Total del lot")).toBeTruthy();
   });
@@ -246,7 +246,7 @@ describe("Oferta econòmica · lectura", () => {
       lots: [lotFixture({ sections: [sectionFixture({ lines: [], totals: totalsFixture({ line_count: 0, total_revenue: null }) })] })],
     });
     await mount();
-    expect(screen.getByText("Equipament")).toBeTruthy();
+    expect(screen.getAllByText("Equipament").length).toBeGreaterThan(0);
     expect(document.body.textContent).not.toMatch(/bloqueig/i);
   });
 });
@@ -385,7 +385,8 @@ describe("Oferta econòmica · edició", () => {
   it("crea una línia a la secció que toca", async () => {
     post.mockResolvedValue(offerFixture({ revision: 5 }));
     await mount();
-    await click(/Afegeix una línia a Equipament/);
+    const fila = screen.getAllByRole("listitem").find((node) => node.textContent?.includes("Equipament"))!;
+    await click("Afegeix una línia", fila);
     fireEvent.change(screen.getByLabelText(/Concepte/), { target: { value: "Fibra" } });
     fireEvent.change(screen.getByLabelText(/Quantitat/), { target: { value: "3" } });
     await click("Desa");
@@ -824,5 +825,260 @@ describe("Oferta econòmica · 409 estructurals", () => {
     await flush();
     expect(screen.queryByText(/El que has escrit tu/)).toBeNull();
     expect(document.body.textContent).toContain("L'oferta ha canviat des que la vas obrir");
+  });
+});
+
+describe("Oferta econòmica · durada del lot", () => {
+  /** La fila de la durada: el bloc que porta l'etiqueta «Durada del lot». */
+  const durationRow = () =>
+    [...document.querySelectorAll("div")].filter((node) => node.textContent?.startsWith("Durada del lot")).at(-1) as HTMLElement;
+
+  /** El formulari obert de la durada, per prémer-hi Desa sense ambigüitat. */
+  const durationForm = () => screen.getByLabelText(/Durada del lot en mesos/).closest("form") as HTMLElement;
+
+  it("ensenya la durada que diu el servidor", async () => {
+    await mount();
+    expect(durationRow().textContent).toContain("12 mesos");
+  });
+
+  it("sense durada ho diu, i no s'hi suposa cap número", async () => {
+    offer = offerFixture({ lots: [lotFixture({ duration_months: null })] });
+    await mount();
+    const row = durationRow();
+    expect(row.textContent).toContain("Sense definir");
+    expect(row.textContent).not.toContain("12");
+    expect(row.textContent).not.toContain("0 mesos");
+  });
+
+  it("un rol autoritzat la pot editar", async () => {
+    await mount();
+    expect(within(durationRow()).getByRole("button", { name: "Edita la durada" })).toBeTruthy();
+  });
+
+  for (const redacted of ["technical", "viewer"]) {
+    it(`${redacted} no té cap control de durada`, async () => {
+      role = redacted;
+      offer = redactedOffer();
+      await mount();
+      expect(screen.queryByRole("button", { name: "Edita la durada" })).toBeNull();
+      // Però continua veient quina és.
+      expect(durationRow().textContent).toContain("12 mesos");
+    });
+  }
+
+  it("desar envia duration_months i expected_revision", async () => {
+    patch.mockResolvedValue(offerFixture({ revision: 5, lots: [lotFixture({ duration_months: 24 })] }));
+    await mount();
+    await click("Edita la durada");
+    fireEvent.change(screen.getByLabelText(/Durada del lot en mesos/), { target: { value: "24" } });
+    await click("Desa", durationForm());
+    await flush();
+    const [path, body] = patch.mock.calls[0] as [string, Record<string, unknown>];
+    expect(path).toBe("/companies/c1/workspaces/w1/economic-offer/lots/lot1");
+    expect(body).toEqual({ duration_months: 24, expected_revision: 4 });
+    expect(getReadiness).toHaveBeenCalledTimes(2);
+  });
+
+  it("buidar-la envia null, no zero ni dotze", async () => {
+    patch.mockResolvedValue(offerFixture({ revision: 5, lots: [lotFixture({ duration_months: null })] }));
+    await mount();
+    await click("Edita la durada");
+    fireEvent.change(screen.getByLabelText(/Durada del lot en mesos/), { target: { value: "  " } });
+    await click("Desa", durationForm());
+    await flush();
+    const [, body] = patch.mock.calls[0] as [string, Record<string, unknown>];
+    expect(body).toEqual({ duration_months: null, expected_revision: 4 });
+    expect(durationRow().textContent).toContain("Sense definir");
+  });
+
+  it("la revisió nova s'adopta, i les línies recurrents reben la durada del servidor", async () => {
+    offer = offerFixture({
+      lots: [
+        lotFixture({
+          duration_months: null,
+          sections: [
+            sectionFixture({
+              lines: [lineFixture({ concept: "Manteniment", pricing_basis: "monthly", effective_duration_months: null })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await mount();
+    expect(rowOf("Manteniment").textContent).toContain("Durada pendent");
+
+    // El servidor torna l'oferta sencera amb la durada resolta.
+    patch.mockResolvedValue(
+      offerFixture({
+        revision: 9,
+        lots: [
+          lotFixture({
+            duration_months: 12,
+            sections: [
+              sectionFixture({
+                lines: [lineFixture({ concept: "Manteniment", pricing_basis: "monthly", effective_duration_months: 12 })],
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    await click("Edita la durada");
+    fireEvent.change(screen.getByLabelText(/Durada del lot en mesos/), { target: { value: "12" } });
+    await click("Desa", durationForm());
+    await flush();
+
+    const row = rowOf("Manteniment");
+    expect(row.textContent).toContain("12 mesos");
+    expect(row.textContent).toContain("Heretada del lot");
+    expect(row.textContent).not.toContain("Durada pendent");
+
+    // I la revisió següent ja és la nova.
+    patch.mockResolvedValue(offerFixture({ revision: 10 }));
+    await click("Edita la durada");
+    fireEvent.change(screen.getByLabelText(/Durada del lot en mesos/), { target: { value: "18" } });
+    await click("Desa", durationForm());
+    await flush();
+    expect((patch.mock.calls[1][1] as Record<string, unknown>).expected_revision).toBe(9);
+  });
+
+  it("els totals no es mouen fins que respon el servidor", async () => {
+    await mount();
+    const before = document.body.textContent!.replace(/\u00a0/g, " ");
+    expect(before).toContain("11.100,00");
+    await click("Edita la durada");
+    fireEvent.change(screen.getByLabelText(/Durada del lot en mesos/), { target: { value: "36" } });
+    await flush();
+    expect(patch).not.toHaveBeenCalled();
+    expect(document.body.textContent!.replace(/\u00a0/g, " ")).toContain("11.100,00");
+  });
+
+  it("un 409 és estructural: ni reintent ni P8, i el que s'ha escrit es queda", async () => {
+    patch.mockRejectedValue(new ApiError(409, "economic_offer_revision_conflict", "L'oferta ha canviat."));
+    await mount();
+    await click("Edita la durada");
+    fireEvent.change(screen.getByLabelText(/Durada del lot en mesos/), { target: { value: "24" } });
+    await click("Desa", durationForm());
+    await flush();
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/El que has escrit tu/)).toBeNull();
+    expect(document.body.textContent).toContain("L'oferta ha canviat des que la vas obrir");
+    expect((screen.getByLabelText(/Durada del lot en mesos/) as HTMLInputElement).value).toBe("24");
+  });
+});
+
+describe("Oferta econòmica · seccions", () => {
+  const sectionRow = () => screen.getAllByRole("listitem").find((node) => node.textContent?.includes("Equipament"))!;
+  /** El formulari obert de renombrar. */
+  const renameForm = () => screen.getByLabelText(/Títol de la secció/).closest("form") as HTMLElement;
+
+  it("renombrar i arxivar només per a qui pot editar", async () => {
+    await mount();
+    const row = sectionRow();
+    expect(within(row).getByRole("button", { name: "Renombra" })).toBeTruthy();
+    expect(within(row).getByRole("button", { name: "Arxiva" })).toBeTruthy();
+    // I mai «Elimina».
+    expect(within(row).queryByRole("button", { name: /Elimina|Esborra/ })).toBeNull();
+  });
+
+  for (const redacted of ["technical", "viewer"]) {
+    it(`${redacted} no veu cap control de secció`, async () => {
+      role = redacted;
+      offer = redactedOffer();
+      await mount();
+      expect(screen.queryByRole("button", { name: "Renombra" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Arxiva" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Afegeix una secció/ })).toBeNull();
+    });
+  }
+
+  it("renombrar fa el PATCH real amb expected_revision i invalida la preparació", async () => {
+    patch.mockResolvedValue(offerFixture({ revision: 5 }));
+    await mount();
+    await click("Renombra", sectionRow());
+    fireEvent.change(screen.getByLabelText(/Títol de la secció/), { target: { value: "Equipament de xarxa" } });
+    await click("Desa", renameForm());
+    await flush();
+    const [path, body] = patch.mock.calls[0] as [string, Record<string, unknown>];
+    expect(path).toBe("/companies/c1/workspaces/w1/economic-offer/sections/sec1");
+    expect(body).toEqual({ title: "Equipament de xarxa", expected_revision: 4 });
+    expect(getReadiness).toHaveBeenCalledTimes(2);
+  });
+
+  it("un títol buit no s'envia", async () => {
+    await mount();
+    await click("Renombra", sectionRow());
+    fireEvent.change(screen.getByLabelText(/Títol de la secció/), { target: { value: "   " } });
+    await flush();
+    expect((within(renameForm()).getByRole("button", { name: "Desa" }) as HTMLButtonElement).disabled).toBe(true);
+    // I enviant el formulari amb Enter, que no passa pel botó, tampoc no surt.
+    await act(async () => {
+      fireEvent.submit(renameForm());
+    });
+    await flush();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("arxivar demana confirmació i després crida l'endpoint real", async () => {
+    post.mockResolvedValue(offerFixture({ revision: 5 }));
+    await mount();
+    await click("Arxiva", sectionRow());
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("Arxiva la secció");
+    expect(dialog.textContent).toContain("Les seves línies es conserven");
+    await click("Arxiva-la", dialog);
+    await flush();
+    expect(post).toHaveBeenCalledWith("/companies/c1/workspaces/w1/economic-offer/sections/sec1/archive", {
+      expected_revision: 4,
+    });
+    expect(getReadiness).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancel·lar la confirmació no arxiva res", async () => {
+    await mount();
+    await click("Arxiva", sectionRow());
+    await click("Cancel·la", screen.getByRole("dialog"));
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("una secció arxivada no es veu fins que es demana, i no es pot restaurar", async () => {
+    offer = offerFixture({
+      lots: [
+        lotFixture({
+          sections: [
+            sectionFixture({ id: "s1", title: "Viva" }),
+            sectionFixture({ id: "s2", title: "Vella", archived_at: "2026-09-14T09:00:00Z" }),
+          ],
+        }),
+      ],
+    });
+    await mount();
+    expect(screen.queryByText("Vella")).toBeNull();
+    await click(/Mostra els arxivats/);
+    expect(screen.getAllByText("Vella").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /Restaura/ })).toBeNull();
+  });
+
+  it("un 409 en arxivar no força res ni reintenta", async () => {
+    post.mockRejectedValue(new ApiError(409, "economic_offer_revision_conflict", "L'oferta ha canviat."));
+    await mount();
+    await click("Arxiva", sectionRow());
+    await click("Arxiva-la", screen.getByRole("dialog"));
+    await flush();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/El que has escrit tu/)).toBeNull();
+    expect(document.body.textContent).toContain("L'oferta ha canviat des que la vas obrir");
+  });
+
+  it("amb una línia bruta, renombrar pregunta abans i no apila diàlegs", async () => {
+    await mount();
+    await click("Edita", rowOf("Commutadors d'accés 48p"));
+    fireEvent.change(screen.getByLabelText(/Preu ofert/), { target: { value: "1900" } });
+    await flush();
+    await click("Renombra", sectionRow());
+    const dialogs = screen.getAllByRole("dialog");
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0].textContent).toContain("Canvis sense desar");
+    expect(screen.queryByLabelText(/Títol de la secció/)).toBeNull();
   });
 });
