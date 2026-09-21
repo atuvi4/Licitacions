@@ -3,10 +3,11 @@
 import { Check } from "lucide-react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 
 import { useSession } from "@/components/SessionProvider";
 import { SubmissionPackageSection } from "@/components/SubmissionPackage";
+import { TechnicalSolutionSection } from "@/components/TechnicalSolutionSection";
 import { DecisionHistory, DecisionPanel } from "@/components/WorkspaceDecision";
 import { DossierSection } from "@/components/WorkspaceDossier";
 import { BlockerCounters, ChecklistSection, NotesSection, TasksSection } from "@/components/WorkspaceWork";
@@ -54,12 +55,31 @@ function PhaseStepper({
   items,
   current,
   hrefFor,
+  beforeNavigate,
 }: {
   items: StepItem[];
   current: CandidatureStep;
   hrefFor: (step: CandidatureStep) => string;
+  /**
+   * Pot aturar el canvi de pas. Si torna `false`, no es navega: és el que
+   * permet que una àrea amb feina sense desar pregunti abans de perdre-la.
+   */
+  beforeNavigate?: (step: CandidatureStep) => boolean | Promise<boolean>;
 }) {
+  const router = useRouter();
   const active = items.find((item) => item.key === current) ?? items[0];
+  // Continuen sent enllaços de debò —obrir en una pestanya nova, copiar
+  // l'adreça i el botó del mig funcionen igual—; només el clic normal passa
+  // per la pregunta, i només quan n'hi ha una de registrada.
+  async function onClick(event: MouseEvent<HTMLAnchorElement>, step: CandidatureStep) {
+    if (!beforeNavigate || step === current) return;
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    const verdict = beforeNavigate(step);
+    // Sense res a preguntar, el clic segueix sent el del `Link` de sempre.
+    if (verdict === true) return;
+    event.preventDefault();
+    if (verdict !== false && (await verdict)) router.push(hrefFor(step));
+  }
   return (
     <nav aria-label="Passos de la candidatura" className="border-y border-border">
       <p className="px-1 pt-2 text-[12.5px] text-muted md:hidden">
@@ -72,6 +92,7 @@ function PhaseStepper({
             <li key={item.key} data-state={item.state} className="flex min-w-0 flex-1 items-center">
               <Link
                 href={hrefFor(item.key)}
+                onClick={(event) => void onClick(event, item.key)}
                 aria-current={selected ? "step" : undefined}
                 className={cn(
                   "-mb-px flex min-h-11 min-w-0 flex-1 items-center gap-2.5 border-b-2 px-2 py-2.5 md:px-3",
@@ -205,29 +226,20 @@ function ContextPanel({ workspace }: { workspace: WorkspaceDetail }) {
 }
 
 /**
- * Les dues àrees que encara no tenen pantalla.
+ * L'àrea que encara no té pantalla.
  *
- * Existeixen perquè la navegació sigui completa des del primer dia —els
- * problemes de la preparació final ja hi porten— i diuen què són i què hi
- * haurà. El que no fan és ensenyar dades inventades: una taula d'exemple aquí
- * seria indistingible d'una de real amb les dades encara no carregades.
+ * Existeix perquè la navegació sigui completa —els problemes de la preparació
+ * final ja hi porten— i diu què és i què hi haurà. El que no fa és ensenyar
+ * dades inventades: una taula d'exemple aquí seria indistingible d'una de real
+ * amb les dades encara no carregades.
  */
-function AreaPlaceholder({ area }: { area: "solucio" | "oferta" }) {
-  const copy =
-    area === "solucio"
-      ? {
-          title: "Solució tècnica",
-          description:
-            "Aquí es decidirà quins requisits necessiten una resposta tècnica, s'hi escriurà la proposta i s'hi validarà.",
-        }
-      : {
-          title: "Oferta econòmica",
-          description: "Aquí es prepararà l'oferta: lots, seccions, línies, preus i totals.",
-        };
+function AreaPlaceholder() {
   return (
     <Card>
-      <CardHeader title={copy.title} />
-      <p className="px-3.5 py-6 text-body text-muted">{copy.description} Encara no està disponible.</p>
+      <CardHeader title="Oferta econòmica" />
+      <p className="px-3.5 py-6 text-body text-muted">
+        Aquí es prepararà l&apos;oferta: lots, seccions, línies, preus i totals. Encara no està disponible.
+      </p>
     </Card>
   );
 }
@@ -256,6 +268,12 @@ function WorkspaceView() {
     companyId ? `/companies/${companyId}/workspaces/${params.workspaceId}` : null,
   );
   const invalidateReadiness = useInvalidateReadiness();
+  // Una àrea amb feina sense desar pot aturar el canvi de pestanya. La secció
+  // registra la pregunta; les pestanyes la fan abans de navegar.
+  const leaveGuard = useRef<(() => Promise<boolean>) | null>(null);
+  const registerLeaveGuard = useCallback((guard: (() => Promise<boolean>) | null) => {
+    leaveGuard.current = guard;
+  }, []);
 
   // El pas que es mira surt de la URL. Si la URL no ho diu, la primera càrrega
   // el fixa (a la URL i aquí) a partir de l'estat real. Després només el mou
@@ -385,7 +403,7 @@ function WorkspaceView() {
       />
 
       <div className="space-y-5">
-        <PhaseStepper items={items} current={step} hrefFor={hrefFor} />
+        <PhaseStepper items={items} current={step} hrefFor={hrefFor} beforeNavigate={() => leaveGuard.current?.() ?? true} />
 
         <p className="flex flex-wrap items-center gap-2 text-[13.5px] text-ink">
           <span className="text-muted">Termini:</span>
@@ -449,11 +467,12 @@ function WorkspaceView() {
               value={area}
               param="area"
               history="push"
+              beforeChange={() => leaveGuard.current?.() ?? true}
               onChange={() => undefined}
             />
 
-            {area === "solucio" && <AreaPlaceholder area="solucio" />}
-            {area === "oferta" && <AreaPlaceholder area="oferta" />}
+            {area === "solucio" && <TechnicalSolutionSection workspace={data} registerLeaveGuard={registerLeaveGuard} />}
+            {area === "oferta" && <AreaPlaceholder />}
             {area === "dossier" && <DossierSection workspace={data} onChange={refresh} onAdvanced={onAdvanced} />}
             {area === "pla" && (
               <>

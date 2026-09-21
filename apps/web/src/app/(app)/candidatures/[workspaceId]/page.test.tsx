@@ -38,6 +38,16 @@ vi.mock("@/components/WorkspaceDossier", () => ({
   ),
 }));
 vi.mock("@/components/SubmissionPackage", () => ({ SubmissionPackageSection: () => <div data-testid="package">Paquet (secció actual)</div> }));
+const leaveGuard = vi.fn(async () => true);
+vi.mock("@/components/TechnicalSolutionSection", () => ({
+  TechnicalSolutionSection: ({ registerLeaveGuard }: { registerLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void }) => (
+    <div data-testid="solucio">
+      Solució tècnica (secció)
+      <button type="button" onClick={() => registerLeaveGuard?.(leaveGuard)}>simula canvis sense desar</button>
+      <button type="button" onClick={() => registerLeaveGuard?.(null)}>simula desat</button>
+    </div>
+  ),
+}));
 vi.mock("@/components/WorkspaceWork", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/WorkspaceWork")>();
   return {
@@ -338,6 +348,8 @@ describe("Candidatura · Preparar per àrees", () => {
     push.mockClear();
     replace.mockClear();
     search = "pas=preparar";
+    leaveGuard.mockReset();
+    leaveGuard.mockResolvedValue(true);
     get.mockResolvedValue(workspaceFixture(go()));
   });
 
@@ -379,6 +391,8 @@ describe("Candidatura · Preparar per àrees", () => {
     render(<WorkspacePage />);
     await flush();
     fireEvent.click(screen.getByRole("tab", { name: "Solució tècnica" }));
+    // Abans de navegar, la pestanya pregunta a l'àrea si es pot marxar.
+    await flush();
     // `push`, no `replace`: Enrere ha de desfer el canvi d'àrea, igual que
     // desfà un enllaç del calaix de preparació.
     expect(push).toHaveBeenCalledWith("/candidatures/w1?pas=preparar&area=solucio", { scroll: false });
@@ -416,13 +430,22 @@ describe("Candidatura · Preparar per àrees", () => {
     expect(screen.getByTestId("notes")).toBeTruthy();
   });
 
-  it("les àrees que encara no existeixen ho diuen, sense ensenyar dades inventades", async () => {
-    search = "pas=preparar&area=solucio";
+  it("l'àrea que encara no existeix ho diu, sense ensenyar dades inventades", async () => {
+    search = "pas=preparar&area=oferta";
     const { container } = render(<WorkspacePage />);
     await flush();
     expect(container.textContent).toContain("Encara no està disponible");
     expect(container.querySelector("table")).toBeNull();
     expect(screen.queryByTestId("dossier")).toBeNull();
+  });
+
+  it("area=solucio obre la solució tècnica", async () => {
+    search = "pas=preparar&area=solucio";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByTestId("solucio")).toBeTruthy();
+    expect(screen.queryByTestId("dossier")).toBeNull();
+    expect(screen.queryByText("Encara no està disponible")).toBeNull();
   });
 
   it("les àrees són de Preparar: als altres passos no hi surten", async () => {
@@ -473,5 +496,98 @@ describe("Candidatura · Preparar per àrees", () => {
     expect(screen.getByText("Preparació desconeguda")).toBeTruthy();
     expect(screen.queryByText("A punt")).toBeNull();
     expect(screen.getByTestId("dossier")).toBeTruthy();
+  });
+});
+
+describe("Candidatura · canvis sense desar i els tres passos", () => {
+  const go = () => ({ status: "preparing_bid" as const, human_decision: "go" as const, latest_decision: decisionFixture(), decisions: [decisionFixture()] });
+
+  beforeEach(() => {
+    get.mockReset();
+    readiness.mockReset();
+    readiness.mockResolvedValue(readinessFixture());
+    post.mockReset();
+    push.mockClear();
+    replace.mockClear();
+    search = "pas=preparar&area=solucio";
+    leaveGuard.mockReset();
+    leaveGuard.mockResolvedValue(true);
+    get.mockResolvedValue(workspaceFixture(go()));
+  });
+
+  const stepLink = (name: string) => screen.getByRole("link", { name: new RegExp(`^${name}`) });
+
+  async function makeDirty() {
+    fireEvent.click(screen.getByRole("button", { name: "simula canvis sense desar" }));
+    await flush();
+  }
+
+  it("amb canvis sense desar, anar a Tancar pregunta abans de res", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    await makeDirty();
+    leaveGuard.mockResolvedValue(false);
+
+    await act(async () => {
+      fireEvent.click(stepLink("Tancar"));
+    });
+    expect(leaveGuard).toHaveBeenCalledTimes(1);
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("si es cancel·la, no es mou de la solució tècnica", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    await makeDirty();
+    leaveGuard.mockResolvedValue(false);
+
+    await act(async () => {
+      fireEvent.click(stepLink("Decidir"));
+    });
+    await flush();
+    expect(push).not.toHaveBeenCalled();
+    expect(screen.getByTestId("solucio")).toBeTruthy();
+    expect(stepLink("Preparar").getAttribute("aria-current")).toBe("step");
+  });
+
+  it("si es confirma, es navega", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    await makeDirty();
+    leaveGuard.mockResolvedValue(true);
+
+    await act(async () => {
+      fireEvent.click(stepLink("Tancar"));
+    });
+    await flush();
+    expect(push).toHaveBeenCalledWith("/candidatures/w1?pas=tancar&area=solucio");
+  });
+
+  it("sense canvis pendents no pregunta res i l'enllaç segueix sent el de sempre", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    await makeDirty();
+    fireEvent.click(screen.getByRole("button", { name: "simula desat" }));
+    await flush();
+
+    await act(async () => {
+      fireEvent.click(stepLink("Tancar"));
+    });
+    expect(leaveGuard).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+    expect(stepLink("Tancar").getAttribute("href")).toBe("/candidatures/w1?pas=tancar&area=solucio");
+  });
+
+  it("les pestanyes d'àrea fan la mateixa pregunta", async () => {
+    render(<WorkspacePage />);
+    await flush();
+    await makeDirty();
+    leaveGuard.mockResolvedValue(false);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Dossier" }));
+    await flush();
+    expect(leaveGuard).toHaveBeenCalledTimes(1);
+    expect(push).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
   });
 });

@@ -27,6 +27,11 @@ export interface TabsProps {
    * Enrere torni on s'era.
    */
   history?: "replace" | "push";
+  /**
+   * Pot aturar el canvi: si torna `false` (o s'hi resol), no es navega. És
+   * per a pestanyes que contenen feina sense desar i han de poder preguntar.
+   */
+  beforeChange?: (key: string) => boolean | Promise<boolean>;
   className?: string;
 }
 
@@ -43,12 +48,14 @@ const COUNT_CLASS: Partial<Record<Level, string>> = {
  * sempre de la URL, així que Enrere i Endavant tornen a pintar el que toca
  * sense cap estat local que els contradigui.
  */
-export function Tabs({ items, value, onChange, param = "tab", history = "replace", className }: TabsProps) {
+export function Tabs({ items, value, onChange, param = "tab", history = "replace", beforeChange, className }: TabsProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  function select(key: string) {
+  async function select(key: string) {
+    if (key === value) return;
+    if (beforeChange && !(await beforeChange(key))) return;
     onChange(key);
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     params.set(param, key);
@@ -67,7 +74,7 @@ export function Tabs({ items, value, onChange, param = "tab", history = "replace
             type="button"
             role="tab"
             aria-selected={active}
-            onClick={() => select(item.key)}
+            onClick={() => void select(item.key)}
             className={cn(
               "-mb-px flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-body whitespace-nowrap transition-colors",
               active ? "border-accent-500 font-semibold text-ink" : "border-transparent text-muted hover:text-ink",
