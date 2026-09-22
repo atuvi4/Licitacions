@@ -18,15 +18,17 @@ import uuid
 import sqlalchemy as sa
 from fastapi import APIRouter, Path, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, SessionDep
 from app.core.errors import EndpointMovedError, NotFoundError
+from app.models.identity import User
 from app.models.tender_documents import (
     TenderDocumentExtraction,
     TenderDocumentFile,
     TenderDocumentPage,
 )
-from app.models.tenders import TenderDocument
+from app.models.tenders import Tender, TenderDocument
 from app.schemas.tender_documents import (
     TenderDocumentExtractionRead,
     TenderDocumentFileRead,
@@ -37,12 +39,26 @@ from app.services.storage import get_storage
 from app.services.tender_document_processing import (
     current_extraction_for,
 )
+from app.tenders.visibility import visible_to_user
 
 router = APIRouter(tags=["plecs"])
 
 
+def _visible(user: User):
+    """El filtre que converteix "existeix" en "el pots veure".
+
+    Totes les consultes d'aquest modul hi passen. Sense ell, coneixer un UUID
+    equivaldria a tenir-hi dret, i des que hi ha licitacions d'una empresa aixo
+    ja no es cert. Els plecs d'una licitacio publicada continuen sent de tothom:
+    `visible_to_user` ja ho diu.
+    """
+    return TenderDocument.tender_id.in_(
+        sa.select(Tender.id).where(visible_to_user(user.id))
+    )
+
+
 async def _load_document(
-    session: SessionDep, tender_id: uuid.UUID, document_id: uuid.UUID
+    session: SessionDep, tender_id: uuid.UUID, document_id: uuid.UUID, user: User
 ) -> TenderDocument:
     document = await session.scalar(
         sa.select(TenderDocument).where(
@@ -50,6 +66,7 @@ async def _load_document(
             # El tender de la ruta ha de coincidir: sense aixo, la URL
             # afirmaria una relacio que no s'ha comprovat.
             TenderDocument.tender_id == tender_id,
+            _visible(user),
         )
     )
     if document is None:
@@ -57,9 +74,11 @@ async def _load_document(
     return document
 
 
-async def _load_file(session: SessionDep, file_id: uuid.UUID) -> TenderDocumentFile:
+async def _load_file(session: SessionDep, file_id: uuid.UUID, user: User) -> TenderDocumentFile:
     file = await session.scalar(
-        sa.select(TenderDocumentFile).where(TenderDocumentFile.id == file_id)
+        sa.select(TenderDocumentFile)
+        .join(TenderDocument, TenderDocument.id == TenderDocumentFile.tender_document_id)
+        .where(TenderDocumentFile.id == file_id, _visible(user))
     )
     if file is None:
         raise NotFoundError("Fitxer no trobat.")
@@ -67,10 +86,30 @@ async def _load_file(session: SessionDep, file_id: uuid.UUID) -> TenderDocumentF
 
 
 async def _load_extraction(
-    session: SessionDep, extraction_id: uuid.UUID
+    session: SessionDep, extraction_id: uuid.UUID, user: User
 ) -> TenderDocumentExtraction:
+    """Una extraccio es dels BYTES, i els mateixos bytes poden penjar de mes
+    d'una licitacio. No n'hi ha prou amb trobar-la: cal que almenys una de les
+    licitacions que la citen sigui visible per a qui pregunta.
+    """
     extraction = await session.scalar(
-        sa.select(TenderDocumentExtraction).where(TenderDocumentExtraction.id == extraction_id)
+        sa.select(TenderDocumentExtraction)
+        .options(selectinload(TenderDocumentExtraction.qa_issues))
+        .where(
+            TenderDocumentExtraction.id == extraction_id,
+            sa.exists(
+                sa.select(sa.literal(1))
+                .select_from(TenderDocumentFile)
+                .join(
+                    TenderDocument,
+                    TenderDocument.id == TenderDocumentFile.tender_document_id,
+                )
+                .where(
+                    TenderDocumentFile.content_id == TenderDocumentExtraction.content_id,
+                    _visible(user),
+                )
+            ),
+        )
     )
     if extraction is None:
         raise NotFoundError("Extraccio no trobada.")
@@ -107,9 +146,9 @@ async def process_document(tender_id: uuid.UUID, document_id: uuid.UUID, _: Curr
     summary="Versions descarregades d'un document",
 )
 async def list_document_files(
-    tender_id: uuid.UUID, document_id: uuid.UUID, session: SessionDep, _: CurrentUser
+    tender_id: uuid.UUID, document_id: uuid.UUID, session: SessionDep, user: CurrentUser
 ):
-    await _load_document(session, tender_id, document_id)
+    await _load_document(session, tender_id, document_id, user)
     files = (
         await session.scalars(
             sa.select(TenderDocumentFile)
@@ -125,8 +164,8 @@ async def list_document_files(
     response_model=TenderDocumentFileRead,
     summary="Detall d'una versio",
 )
-async def get_file(file_id: uuid.UUID, session: SessionDep, _: CurrentUser):
-    return await _file_read(session, await _load_file(session, file_id))
+async def get_file(file_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    return await _file_read(session, await _load_file(session, file_id, user))
 
 
 @router.get(
@@ -134,13 +173,17 @@ async def get_file(file_id: uuid.UUID, session: SessionDep, _: CurrentUser):
     response_model=list[TenderDocumentExtractionRead],
     summary="Extraccions fetes sobre aquests bytes",
 )
-async def list_file_extractions(file_id: uuid.UUID, session: SessionDep, _: CurrentUser):
-    file = await _load_file(session, file_id)
+async def list_file_extractions(file_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    file = await _load_file(session, file_id, user)
     if file.content_id is None:
         return []
     extractions = (
         await session.scalars(
             sa.select(TenderDocumentExtraction)
+            # Els avisos de qualitat viatgen amb l'extraccio i la resposta els
+            # inclou: sense carregar-los aqui, llegir-los ja fora de la sessio
+            # peta amb `MissingGreenlet`.
+            .options(selectinload(TenderDocumentExtraction.qa_issues))
             .where(TenderDocumentExtraction.content_id == file.content_id)
             .order_by(TenderDocumentExtraction.created_at.desc())
         )
@@ -181,11 +224,11 @@ async def _paginated_pages(
 async def list_file_pages(
     file_id: uuid.UUID,
     session: SessionDep,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
-    file = await _load_file(session, file_id)
+    file = await _load_file(session, file_id, user)
     extraction = await current_extraction_for(session, file.content_id) if file.content_id else None
     if extraction is None:
         return Page(items=[], total=0, limit=limit, offset=offset)
@@ -200,11 +243,11 @@ async def list_file_pages(
 async def list_extraction_pages(
     extraction_id: uuid.UUID,
     session: SessionDep,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
-    extraction = await _load_extraction(session, extraction_id)
+    extraction = await _load_extraction(session, extraction_id, user)
     return await _paginated_pages(session, extraction.id, limit, offset)
 
 
@@ -216,11 +259,11 @@ async def list_extraction_pages(
 async def get_extraction_page(
     extraction_id: uuid.UUID,
     session: SessionDep,
-    _: CurrentUser,
+    user: CurrentUser,
     # ge=1 perque la numeracio es 1-based: la pagina 0 no existeix.
     page_number: int = Path(ge=1),
 ):
-    await _load_extraction(session, extraction_id)
+    await _load_extraction(session, extraction_id, user)
     page = await session.scalar(
         sa.select(TenderDocumentPage).where(
             TenderDocumentPage.extraction_id == extraction_id,
@@ -233,8 +276,8 @@ async def get_extraction_page(
 
 
 @router.get("/tender-document-files/{file_id}/original", summary="Descarrega l'original")
-async def download_original(file_id: uuid.UUID, session: SessionDep, _: CurrentUser):
-    file = await _load_file(session, file_id)
+async def download_original(file_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    file = await _load_file(session, file_id, user)
     if file.content is None:
         raise NotFoundError("Aquesta versio no te cap fitxer descarregat.")
 

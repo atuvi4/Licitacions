@@ -102,7 +102,11 @@ def test_document_settings_expose_derived_limits():
 
     assert settings.document_max_size_bytes == settings.DOCUMENT_MAX_SIZE_MB * 1024 * 1024
     assert "application/pdf" in settings.document_allowed_mime_types
-    assert settings.document_text_extraction_mime_types == {"application/pdf"}
+    # El text pla hi entra des d'S3-S2: llegir-lo es descodificar-lo, sense cap
+    # dependencia nova. De la resta de formats admesos se'n guarda l'original i
+    # no se'n llegeix el text.
+    assert settings.document_text_extraction_mime_types == {"application/pdf", "text/plain"}
+    assert settings.document_text_extraction_mime_types <= settings.document_allowed_mime_types
     assert settings.document_allowed_ports == {80, 443}
 
 

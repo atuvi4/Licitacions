@@ -42,14 +42,10 @@ from app.models.tender_documents import (
 )
 from app.models.tenders import Tender, TenderDocument
 from app.services.document_download import DownloadError, DownloadResult, download_document
+from app.services.document_parsers import extract_text_async, parser_version_for
 from app.services.extraction_qa import PageInput as QaPageInput
 from app.services.extraction_qa import analyse as analyse_extraction_quality
-from app.services.pdf_text import (
-    PARSER_VERSION,
-    ExtractionResult,
-    extract_pdf_text_async,
-    unsupported_result,
-)
+from app.services.pdf_text import ExtractionResult, unsupported_result
 from app.services.storage import build_tender_document_key, get_storage
 from app.services.tender_lifecycle import record_revision
 from app.services.url_guard import Resolver
@@ -155,30 +151,38 @@ async def _claim(session: AsyncSession, document: TenderDocument) -> TenderDocum
     return file
 
 
-async def _get_or_create_content(
-    session: AsyncSession, result: DownloadResult
+async def get_or_create_content(
+    session: AsyncSession,
+    *,
+    data: bytes,
+    sha256: str,
+    mime_type: str,
+    detected_extension: str,
 ) -> tuple[TenderDocumentContent, bool]:
     """Retorna el contingut i si s'acaba de crear.
 
-    Aquest es el punt exacte de la deduplicacio: si el SHA-256 ja hi es, ni es
-    puja el blob ni es tornara a parsejar.
+    Aquest es el punt exacte de la deduplicacio, i el nivell son els BYTES: si
+    el SHA-256 ja hi es, ni es puja el blob ni es tornara a parsejar, vinguin
+    d'una descarrega o d'algu que els ha pujat. Prendre els camps un per un i
+    no un `DownloadResult` es el que permet que les dues entrades comparteixin
+    aquest punt sense que la pujada hagi de fer veure que ha baixat res.
     """
     existing = await session.scalar(
-        sa.select(TenderDocumentContent).where(TenderDocumentContent.sha256 == result.sha256)
+        sa.select(TenderDocumentContent).where(TenderDocumentContent.sha256 == sha256)
     )
     if existing is not None:
         return existing, False
 
-    key = build_tender_document_key(result.sha256, result.detected_extension)
-    await get_storage().upload(key, result.content, result.mime_type)
+    key = build_tender_document_key(sha256, detected_extension)
+    await get_storage().upload(key, data, mime_type)
 
     content = TenderDocumentContent(
-        sha256=result.sha256,
+        sha256=sha256,
         storage_key=key,
-        file_size=result.file_size,
-        mime_type=result.mime_type,
-        detected_extension=result.detected_extension,
-        is_text_extractable=result.mime_type in settings.document_text_extraction_mime_types,
+        file_size=len(data),
+        mime_type=mime_type,
+        detected_extension=detected_extension,
+        is_text_extractable=mime_type in settings.document_text_extraction_mime_types,
     )
     session.add(content)
     try:
@@ -188,11 +192,23 @@ async def _get_or_create_content(
         # ja hi es i es identic: nomes cal quedar-se el que ha guanyat.
         await session.rollback()
         winner = await session.scalar(
-            sa.select(TenderDocumentContent).where(TenderDocumentContent.sha256 == result.sha256)
+            sa.select(TenderDocumentContent).where(TenderDocumentContent.sha256 == sha256)
         )
         return winner, False
     await session.refresh(content)
     return content, True
+
+
+async def _get_or_create_content(
+    session: AsyncSession, result: DownloadResult
+) -> tuple[TenderDocumentContent, bool]:
+    return await get_or_create_content(
+        session,
+        data=result.content,
+        sha256=result.sha256,
+        mime_type=result.mime_type,
+        detected_extension=result.detected_extension,
+    )
 
 
 async def _store_extraction(
@@ -313,7 +329,9 @@ async def _extract(
         return await _store_extraction(session, content, unsupported_result(content.mime_type))
 
     data = await get_storage().download(content.storage_key)
-    return await _store_extraction(session, content, await extract_pdf_text_async(data))
+    return await _store_extraction(
+        session, content, await extract_text_async(content.mime_type, data)
+    )
 
 
 async def _ensure_current_extraction(
@@ -327,7 +345,10 @@ async def _ensure_current_extraction(
     current = await current_extraction_for(session, content.id)
     up_to_date = (
         current is not None
-        and current.parser_version == PARSER_VERSION
+        # La versio vigent es la del parser QUE TOCA a aquest tipus: comparar-la
+        # amb una de global faria caducar un TXT cada cop que canviés el parser
+        # de PDF.
+        and current.parser_version == parser_version_for(content.mime_type)
         and current.status in TERMINAL_EXTRACTION_STATES
     )
     if up_to_date and not force:

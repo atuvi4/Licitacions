@@ -17,12 +17,13 @@ import uuid
 from typing import Annotated, Literal
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
 from sqlalchemy.orm import noload, selectinload
 
 from app.api.deps import CompanyCtx, CurrentUser, SessionDep
 from app.api.v1.tender_filters import TenderFilters, tender_filters
-from app.core.errors import NotFoundError
+from app.core.config import settings
+from app.core.errors import NotFoundError, PayloadTooLargeError
 from app.matching.service import MatchingService
 from app.models.audit import AuditAction
 from app.models.cpv import CPVCode
@@ -48,14 +49,16 @@ from app.schemas.tenders import (
     TenderDetail,
     TenderDocumentFileSummary,
     TenderDocumentRead,
+    TenderDocumentUploadResult,
     TenderFacets,
     TenderHistoryRevisionRead,
     TenderListItem,
     TenderLotRead,
     TenderRevisionRead,
     TenderTraceability,
+    analysis_status_for,
 )
-from app.services import audit, manual_tender
+from app.services import audit, manual_tender, tender_document_upload
 from app.tenders.visibility import (
     buyer_visible_to_company,
     visible_to_company,
@@ -86,6 +89,28 @@ async def _cpv_descriptions(session, codes: set[str]) -> dict[str, str]:
     )
     return {code: description for code, description in rows}
 
+
+_UPLOAD_CHUNK = 1024 * 1024
+
+
+async def _read_tender_upload(file: UploadFile) -> bytes:
+    """Llegeix el fitxer amb tall dur de mida, sense confiar en Content-Length.
+
+    El limit es el dels plecs (`DOCUMENT_MAX_SIZE_MB`) i no el de la biblioteca
+    documental: son dues coses diferents amb dos contractes diferents.
+    """
+    limit = settings.document_max_size_bytes
+    buffer = bytearray()
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK)
+        if not chunk:
+            break
+        buffer.extend(chunk)
+        if len(buffer) > limit:
+            raise PayloadTooLargeError(
+                f"El fitxer supera el maxim permes de {settings.DOCUMENT_MAX_SIZE_MB} MB."
+            )
+    return bytes(buffer)
 
 @router.post(
     "/companies/{company_id}/tenders",
@@ -237,6 +262,65 @@ async def update_manual_tender(
         revised=revised,
         revision=await manual_tender.current_revision_number(session, tender_id),
         tender=await _tender_detail(session, tender_id, ctx.user.id),
+    )
+
+
+@router.post(
+    "/companies/{company_id}/tenders/{tender_id}/documents",
+    response_model=TenderDocumentUploadResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Puja un plec a una licitacio oberta a ma",
+)
+async def upload_tender_document(
+    tender_id: uuid.UUID,
+    session: SessionDep,
+    ctx: CompanyCtx,
+    file: UploadFile = File(...),
+):
+    """Guarda el fitxer i, si del format en sabem llegir el text, el llegeix.
+
+    Les dues coses es responen per separat: `stored` diu que els bytes hi son i
+    `file.analysis_status` diu que se'n sap del text. Un DOCX torna `201` amb
+    `analysis_status="unsupported"`, que no es cap error de pujada.
+
+    Nomes s'hi pugen documents a una licitacio **oberta a ma** i de la propia
+    empresa. Els plecs d'una licitacio publicada els porta la font.
+    """
+    manual_tender.assert_can_edit(ctx.membership.role)
+    tender = await manual_tender.load_editable_tender(session, ctx.company_id, tender_id)
+
+    outcome = await tender_document_upload.upload_tender_document(
+        session,
+        tender=tender,
+        user=ctx.user,
+        filename=file.filename,
+        declared_mime_type=file.content_type,
+        data=await _read_tender_upload(file),
+    )
+
+    await audit.record(
+        session,
+        company_id=ctx.company_id,
+        user_id=ctx.user.id,
+        action=AuditAction.CREATE,
+        entity_type="tender_document",
+        entity_id=outcome.document.id,
+        summary=manual_tender.audit_summary(
+            licitacio=tender_id,
+            document=outcome.document.name,
+            bytes=outcome.content.file_size,
+        ),
+    )
+    await session.commit()
+
+    return TenderDocumentUploadResult(
+        id=outcome.document.id,
+        name=outcome.document.name,
+        document_type=outcome.document.document_type,
+        mime_type=outcome.content.mime_type,
+        stored=True,
+        content_reused=outcome.content_reused,
+        file=file_summary(outcome.file, outcome.content, outcome.extraction),
     )
 
 
@@ -411,24 +495,41 @@ async def _document_summaries(
         )
     )
 
-    summaries: dict[uuid.UUID, TenderDocumentFileSummary] = {}
-    for file, content, extraction in rows:
-        summaries[file.tender_document_id] = TenderDocumentFileSummary(
-            file_id=file.id,
-            version_number=file.version_number,
-            download_status=file.download_status,
-            file_size=content.file_size if content else None,
-            sha256=content.sha256 if content else None,
-            extraction_status=extraction.status if extraction else None,
-            quality=extraction.quality if extraction else None,
-            page_count=extraction.page_count if extraction else None,
-            text_char_count=extraction.text_char_count if extraction else None,
-            ocr_candidate=bool(extraction.ocr_candidate) if extraction else False,
-            extraction_id=extraction.id if extraction else None,
-            processed_at=file.downloaded_at,
-            error_code=file.error_code or (extraction.error_code if extraction else None),
-        )
-    return summaries
+    return {
+        file.tender_document_id: file_summary(file, content, extraction)
+        for file, content, extraction in rows
+    }
+
+
+def file_summary(file, content, extraction) -> TenderDocumentFileSummary:
+    """L'estat d'una versio, amb el veredicte sobre el text ja calculat.
+
+    Es una sola funcio i no una per pantalla: si la fitxa i l'assistent
+    d'importacio calculessin cadascun el seu, acabarien dient coses diferents
+    del mateix fitxer.
+    """
+    return TenderDocumentFileSummary(
+        file_id=file.id,
+        version_number=file.version_number,
+        download_status=file.download_status,
+        origin=file.origin,
+        file_size=content.file_size if content else None,
+        sha256=content.sha256 if content else None,
+        mime_type=content.mime_type if content else None,
+        text_extraction_supported=bool(content.is_text_extractable) if content else False,
+        analysis_status=analysis_status_for(
+            extraction.status if extraction else None,
+            extraction.quality if extraction else None,
+        ),
+        extraction_status=extraction.status if extraction else None,
+        quality=extraction.quality if extraction else None,
+        page_count=extraction.page_count if extraction else None,
+        text_char_count=extraction.text_char_count if extraction else None,
+        ocr_candidate=bool(extraction.ocr_candidate) if extraction else False,
+        extraction_id=extraction.id if extraction else None,
+        processed_at=file.downloaded_at,
+        error_code=file.error_code or (extraction.error_code if extraction else None),
+    )
 
 
 async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> TenderDetail:

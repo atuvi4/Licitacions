@@ -8,12 +8,14 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
     ContractType,
+    DocumentFileOrigin,
     DownloadStatus,
     ExtractionQuality,
     ExtractionStatus,
@@ -85,6 +87,45 @@ class TenderLotRead(ORMModel):
     cpvs: list[TenderCPVRead] = []
 
 
+class DocumentAnalysisStatus(StrEnum):
+    """Que se sap del TEXT d'un document. Mai que se sap del fitxer.
+
+    Es un read-model: no hi ha cap columna que el guardi, i es calcula des de
+    l'estat i la qualitat de l'extraccio vigent. Existeix perque la interficie
+    no hagi de deduir de tres camps si ha de dir "llegit", "no se'n pot llegir
+    el text" o "ha fallat", i sobretot perque no pugui confondre'ls: guardar be
+    un fitxer i poder-ne llegir el text son dos fets independents.
+    """
+
+    #: Encara no s'ha intentat llegir.
+    PENDING = "pending"
+    #: S'ha llegit i hi ha text aprofitable.
+    EXTRACTED = "extracted"
+    #: S'ha llegit i no hi ha text usable. El cas tipic es un PDF escanejat: no
+    #: es cap error i tampoc no es una analisi. No s'hi fa OCR.
+    NO_USABLE_TEXT = "no_usable_text"
+    #: D'aquest format no en llegim el text en aquesta versio. El fitxer es
+    #: perfectament valid i esta guardat.
+    UNSUPPORTED = "unsupported"
+    #: S'ha intentat llegir i el parser no se n'ha sortit.
+    FAILED = "failed"
+
+
+def analysis_status_for(
+    status: ExtractionStatus | None, quality: ExtractionQuality | None
+) -> DocumentAnalysisStatus:
+    """El veredicte sobre el text, des dels camps reals de l'extraccio."""
+    if status is None or status in (ExtractionStatus.PENDING, ExtractionStatus.EXTRACTING):
+        return DocumentAnalysisStatus.PENDING
+    if status == ExtractionStatus.SKIPPED_UNSUPPORTED:
+        return DocumentAnalysisStatus.UNSUPPORTED
+    if status == ExtractionStatus.FAILED:
+        return DocumentAnalysisStatus.FAILED
+    if quality in (ExtractionQuality.EMPTY, ExtractionQuality.LOW_TEXT):
+        return DocumentAnalysisStatus.NO_USABLE_TEXT
+    return DocumentAnalysisStatus.EXTRACTED
+
+
 class TenderDocumentFileSummary(ORMModel):
     """Estat documental d'un document, prou per pintar una fila de la llista.
 
@@ -95,8 +136,16 @@ class TenderDocumentFileSummary(ORMModel):
     file_id: uuid.UUID
     version_number: int
     download_status: DownloadStatus
+    #: D'on venen els bytes: descarregats d'una font o pujats per una persona.
+    origin: DocumentFileOrigin = DocumentFileOrigin.FETCHED
     file_size: int | None = None
     sha256: str | None = None
+    mime_type: str | None = None
+    #: Si d'aquest format en sabem llegir el text. Es una propietat del FORMAT,
+    #: no d'aquest fitxer: separa "no ho hem provat" de "no ho sabem fer".
+    text_extraction_supported: bool = False
+    #: El veredicte sobre el text, ja calculat. Veure `DocumentAnalysisStatus`.
+    analysis_status: DocumentAnalysisStatus = DocumentAnalysisStatus.PENDING
     extraction_status: ExtractionStatus | None = None
     quality: ExtractionQuality | None = None
     page_count: int | None = None
@@ -353,6 +402,26 @@ class ManualTenderUpdate(BaseModel):
     #: Excloents, com al POST. `null` explicit treu l'organisme.
     buyer_id: uuid.UUID | None = None
     buyer_manual: ManualBuyerCreate | None = None
+
+
+class TenderDocumentUploadResult(BaseModel):
+    """El que Step 2 necessita per pintar una fila sense tornar a preguntar res.
+
+    `stored` i l'estat d'analisi son camps separats a proposit: un DOCX surt
+    d'aqui amb `stored=True` i `analysis_status="unsupported"`, i col·lapsar-ho
+    en un sol "ok/error" obligaria la interficie a dir una de les dues mentides.
+    """
+
+    id: uuid.UUID
+    name: str
+    document_type: TenderDocumentType
+    mime_type: str | None = None
+    #: Els bytes son al sistema. Sempre cert si la resposta es 201.
+    stored: bool = True
+    #: Aquests bytes ja hi eren i no s'han tornat a guardar. No es cap error:
+    #: la deduplicacio es de contingut.
+    content_reused: bool = False
+    file: TenderDocumentFileSummary
 
 
 class ManualTenderUpdateResult(BaseModel):

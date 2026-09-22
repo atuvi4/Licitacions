@@ -103,7 +103,9 @@ class Settings(BaseSettings):
         )
     )
     # De moment nomes se n'extreu text del PDF. La resta es guarda tal qual.
-    DOCUMENT_TEXT_EXTRACTION_MIME_TYPES: str = "application/pdf"
+    # Dels quals SI que se n'extreu text. El text pla hi es perque llegir-lo no
+    # demana cap dependencia nova ni cap model: es descodificar-lo.
+    DOCUMENT_TEXT_EXTRACTION_MIME_TYPES: str = "application/pdf,text/plain"
     DOCUMENT_MAX_PAGES: int = 2000
     # Per sota d'aquesta mitjana de caracters per pagina, l'extraccio es "low_text".
     DOCUMENT_LOW_TEXT_CHARS_PER_PAGE: int = 100
