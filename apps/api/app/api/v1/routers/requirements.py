@@ -28,7 +28,12 @@ from app.models.requirements import (
 )
 from app.models.tender_documents import TenderDocumentExtraction
 from app.models.tenders import Tender, TenderDocument
-from app.schemas.provenance import read_of
+from app.schemas.provenance import (
+    DocumentFileRefCreate,
+    ExtractedPageRefCreate,
+    TenderSourceRefRead,
+    read_of,
+)
 from app.schemas.requirements import (
     AwardCriterionRead,
     EvidenceRead,
@@ -41,7 +46,7 @@ from app.schemas.requirements import (
     RequirementRead,
     ReviewRequest,
 )
-from app.services import audit, manual_requirement, manual_tender
+from app.services import audit, manual_requirement, manual_tender, source_refs
 from app.services.requirement_analysis import (
     analysis_input,
 )
@@ -576,3 +581,87 @@ async def unlink_requirement_citation(
         )
     await session.commit()
     return await _requirement_read(session, requirement)
+
+
+# --------------------------------------------------------------------------- #
+# Crear cites (S3-S5.1)                                                         #
+# --------------------------------------------------------------------------- #
+#
+# S3-S4 va deixar el servei fet i sense endpoint a proposit: no hi havia cap
+# consumidor i una UX que despres s'hagues de retirar es pitjor que cap. Ara
+# n'hi ha un de real —els requisits escrits a ma— i per tant s'exposa.
+#
+# El router no valida res pel seu compte: auth, schema, servei canonic i
+# read-model. Tota la comprovacio de la cadena viu a `source_refs.py`, i
+# duplicar-la voldria dir que un dia una copia es quedaria enrere.
+
+
+async def _source_ref_read(session, ref) -> TenderSourceRefRead:
+    return read_of(await resolve_source_ref(session, ref))
+
+
+@router.post(
+    "/companies/{company_id}/tenders/{tender_id}/source-refs/extracted-page",
+    response_model=TenderSourceRefRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Cita una pagina d'un plec llegit",
+)
+async def create_extracted_page_source_ref(
+    tender_id: uuid.UUID,
+    payload: ExtractedPageRefCreate,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """La cita mes forta: de quins bytes, amb quin parser i de quina pagina.
+
+    El `quote` NO s'accepta del client: si hi ha posicions, es deriva del text
+    real d'aquella pagina i es comprova que hi capiga. Una cita que digui una
+    cosa que el document no diu es pitjor que no tenir-ne cap.
+    """
+    manual_requirement.assert_can_edit(ctx.membership.role)
+    tender = await manual_tender.load_editable_tender(session, ctx.company_id, tender_id)
+
+    ref = await source_refs.create_extracted_page_ref(
+        session,
+        tender_id=tender.id,
+        extraction_id=payload.extraction_id,
+        page_id=payload.page_id,
+        user=ctx.user,
+        location_label=payload.location_label,
+        char_start=payload.char_start,
+        char_end=payload.char_end,
+    )
+    await session.commit()
+    return await _source_ref_read(session, ref)
+
+
+@router.post(
+    "/companies/{company_id}/tenders/{tender_id}/source-refs/document-file",
+    response_model=TenderSourceRefRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Cita una versio d'un document sense pagines",
+)
+async def create_document_file_source_ref(
+    tender_id: uuid.UUID,
+    payload: DocumentFileRefCreate,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Per a un XLSX o un DOCX: guardats, sense cap pagina i citables igual.
+
+    Que no en sapiguem llegir el text es una limitacio nostra, no un fet del
+    document. `location_label` diu on mirar i qui ho llegeixi hi anira.
+    """
+    manual_requirement.assert_can_edit(ctx.membership.role)
+    tender = await manual_tender.load_editable_tender(session, ctx.company_id, tender_id)
+
+    ref = await source_refs.create_document_file_ref(
+        session,
+        tender_id=tender.id,
+        file_id=payload.tender_document_file_id,
+        user=ctx.user,
+        location_label=payload.location_label,
+        quote=payload.quote,
+    )
+    await session.commit()
+    return await _source_ref_read(session, ref)

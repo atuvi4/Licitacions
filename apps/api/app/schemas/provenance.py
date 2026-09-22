@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import SourceRefKind
 
@@ -69,3 +69,39 @@ def read_of(resolved) -> TenderSourceRefRead:
         char_end=ref.char_end,
         created_at=ref.created_at,
     )
+
+
+class ExtractedPageRefCreate(BaseModel):
+    """Cita una pagina concreta d'una lectura concreta.
+
+    Els identificadors surten dels selectors de la interficie —document,
+    versio, pagina—, no de ningu que els copii a ma. El que NO hi ha, i es
+    deliberat: `content_sha256` i `quote`. Els deriva el servidor del text i
+    dels bytes reals; acceptar-los del client voldria dir que la prova la
+    redacta qui te interes a dir-ne una altra cosa.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    extraction_id: uuid.UUID
+    page_id: uuid.UUID
+    location_label: str | None = Field(default=None, max_length=200)
+    #: El tros exacte dins del text de la pagina. Tots dos o cap.
+    char_start: int | None = Field(default=None, ge=0)
+    char_end: int | None = Field(default=None, ge=1)
+
+
+class DocumentFileRefCreate(BaseModel):
+    """Cita una versio concreta d'un document sense pagines.
+
+    El cas d'un XLSX o un DOCX: es guarden be i no en llegim el text.
+    `location_label` es el que diu on mirar —"full Calculs, fila 42"— i per
+    aixo aqui si que l'escriu una persona: es coneixement seu, no una dada que
+    el sistema pugui derivar.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tender_document_file_id: uuid.UUID
+    location_label: str | None = Field(default=None, max_length=200)
+    quote: str | None = None

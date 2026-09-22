@@ -934,3 +934,309 @@ async def test_requirement_evidence_is_untouched(db):
     columns = RequirementEvidence.__table__.columns
     assert columns["extraction_id"].nullable is False
     assert columns["page_id"].nullable is False
+
+
+# --------------------------------------------------------------------------- #
+# H. Crear cites des de la interfície (S3-S5.1)                                 #
+# --------------------------------------------------------------------------- #
+#
+# El servei ja existia des d'S3-S4; el que faltava era una porta perquè ningú
+# no hagués de copiar UUIDs a mà. La validació NO es duplica: el router hi
+# passa a través i prou.
+
+PAGE_REF = "/api/v1/companies/{company}/tenders/{tender}/source-refs/extracted-page"
+FILE_REF = "/api/v1/companies/{company}/tenders/{tender}/source-refs/document-file"
+
+
+async def _page_of(db, extraction_id: str):
+    from app.models.tender_documents import TenderDocumentPage
+
+    return (
+        await db.execute(
+            sa.select(TenderDocumentPage).where(
+                TenderDocumentPage.extraction_id == uuid.UUID(extraction_id)
+            )
+        )
+    ).scalars().first()
+
+
+async def test_the_ui_can_cite_a_page_without_touching_the_database(
+    client_a, db, tenant_a
+):
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    uploaded = await _upload(client_a, company, tender_id, name="PCAP.pdf", data=PLEC)
+    page = await _page_of(db, uploaded["file"]["extraction_id"])
+    start = page.text.index("Cal una assegurança")
+
+    response = await client_a.post(
+        PAGE_REF.format(company=company.id, tender=tender_id),
+        json={
+            "extraction_id": uploaded["file"]["extraction_id"],
+            "page_id": str(page.id),
+            "char_start": start,
+            "char_end": start + len("Cal una assegurança de responsabilitat civil."),
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["page_number"] == 1
+    assert body["quote"] == "Cal una assegurança de responsabilitat civil."
+    assert body["content_sha256"] == uploaded["file"]["sha256"]
+    assert body["document_name"] == "PCAP.pdf"
+
+
+async def test_the_ui_can_cite_a_spreadsheet_row(client_a, db, tenant_a):
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    uploaded = await _upload(
+        client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+    )
+
+    response = await client_a.post(
+        FILE_REF.format(company=company.id, tender=tender_id),
+        json={
+            "tender_document_file_id": uploaded["file"]["file_id"],
+            "location_label": "Full Calculs, fila 42",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["location_label"] == "Full Calculs, fila 42"
+    assert body["page_number"] is None
+    assert body["version_number"] == 1
+
+
+async def test_the_client_cannot_declare_which_bytes_those_were(client_a, db, tenant_a):
+    """`content_sha256` no és al schema: el deriva el servidor.
+
+    Si arribés de fora, la prova de quins bytes sostenien una afirmació la
+    diria justament qui té interès a dir-ne una altra.
+    """
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    uploaded = await _upload(
+        client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+    )
+
+    response = await client_a.post(
+        FILE_REF.format(company=company.id, tender=tender_id),
+        json={
+            "tender_document_file_id": uploaded["file"]["file_id"],
+            "content_sha256": "f" * 64,
+        },
+    )
+    assert response.status_code == 422
+
+
+async def test_a_quote_cannot_be_dictated_either(client_a, db, tenant_a):
+    """Per a una pàgina, el text citat surt del document i no del client."""
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    uploaded = await _upload(client_a, company, tender_id, name="PCAP.pdf", data=PLEC)
+    page = await _page_of(db, uploaded["file"]["extraction_id"])
+
+    response = await client_a.post(
+        PAGE_REF.format(company=company.id, tender=tender_id),
+        json={
+            "extraction_id": uploaded["file"]["extraction_id"],
+            "page_id": str(page.id),
+            "quote": "El plec diu el que a mi em convé",
+        },
+    )
+    assert response.status_code == 422
+
+
+async def test_a_span_outside_the_page_is_refused_through_the_api(client_a, db, tenant_a):
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    uploaded = await _upload(client_a, company, tender_id, name="PCAP.pdf", data=PLEC)
+    page = await _page_of(db, uploaded["file"]["extraction_id"])
+
+    response = await client_a.post(
+        PAGE_REF.format(company=company.id, tender=tender_id),
+        json={
+            "extraction_id": uploaded["file"]["extraction_id"],
+            "page_id": str(page.id),
+            "char_start": 0,
+            "char_end": len(page.text) + 100,
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "source_ref_span_invalid"
+
+
+async def test_another_company_cannot_cite_your_documents(
+    client_a, client_b, db, tenant_a, tenant_b
+):
+    _, company_a = tenant_a
+    _, company_b = tenant_b
+    tender_id = await _tender(client_a, company_a)
+    uploaded = await _upload(
+        client_a, company_a, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+    )
+
+    response = await client_b.post(
+        FILE_REF.format(company=company_b.id, tender=tender_id),
+        json={"tender_document_file_id": uploaded["file"]["file_id"]},
+    )
+    assert response.status_code == 404
+
+
+async def test_a_user_of_both_companies_cannot_cite_from_the_other_context(
+    client_a, client_factory, db, tenant_a, tenant_b
+):
+    """El gate: conèixer l'UUID d'un fitxer d'A no el fa citable des de B."""
+    from app.models.enums import MembershipRole
+    from app.models.identity import CompanyMembership
+    from tests.conftest import TEST_PASSWORD, login
+
+    user, company_a = tenant_a
+    _, company_b = tenant_b
+    tender_id = await _tender(client_a, company_a)
+    uploaded = await _upload(
+        client_a, company_a, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+    )
+    db.add(
+        CompanyMembership(user_id=user.id, company_id=company_b.id, role=MembershipRole.OWNER)
+    )
+    await db.commit()
+
+    http = client_factory()
+    await login(http, user.email, TEST_PASSWORD)
+
+    assert (
+        await http.post(
+            FILE_REF.format(company=company_b.id, tender=tender_id),
+            json={"tender_document_file_id": uploaded["file"]["file_id"]},
+        )
+    ).status_code == 404
+    # I des d'A, sí.
+    assert (
+        await http.post(
+            FILE_REF.format(company=company_a.id, tender=tender_id),
+            json={"tender_document_file_id": uploaded["file"]["file_id"]},
+        )
+    ).status_code == 201
+
+
+async def test_a_file_of_another_tender_is_refused_through_the_api(client_a, db, tenant_a):
+    _, company = tenant_a
+    mine = await _tender(client_a, company)
+    other = await _tender(client_a, company, title="Una altra")
+    uploaded = await _upload(
+        client_a, company, other, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+    )
+
+    response = await client_a.post(
+        FILE_REF.format(company=company.id, tender=mine),
+        json={"tender_document_file_id": uploaded["file"]["file_id"]},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "source_ref_chain_invalid"
+
+
+async def test_a_public_tender_is_not_an_authoring_surface_yet(
+    client_a, tenant_a, tender_document
+):
+    _, company = tenant_a
+    response = await client_a.post(
+        FILE_REF.format(company=company.id, tender=tender_document.tender_id),
+        json={"tender_document_file_id": str(uuid.uuid4())},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "tender_not_manual"
+
+
+@pytest.mark.parametrize("role", ["owner", "admin", "bid_manager", "technical"])
+async def test_whoever_writes_requirements_can_cite(client_a, db, tenant_a, role):
+    from app.models.enums import MembershipRole
+    from app.models.identity import CompanyMembership
+
+    user, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    uploaded = await _upload(
+        client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+    )
+    await db.execute(
+        sa.update(CompanyMembership)
+        .where(
+            CompanyMembership.user_id == user.id,
+            CompanyMembership.company_id == company.id,
+        )
+        .values(role=MembershipRole(role))
+    )
+    await db.commit()
+
+    response = await client_a.post(
+        FILE_REF.format(company=company.id, tender=tender_id),
+        json={"tender_document_file_id": uploaded["file"]["file_id"]},
+    )
+    assert response.status_code == 201
+
+
+async def test_a_viewer_cannot_cite(client_a, db, tenant_a):
+    from app.models.enums import MembershipRole
+    from app.models.identity import CompanyMembership
+
+    user, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    uploaded = await _upload(
+        client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+    )
+    await db.execute(
+        sa.update(CompanyMembership)
+        .where(
+            CompanyMembership.user_id == user.id,
+            CompanyMembership.company_id == company.id,
+        )
+        .values(role=MembershipRole.VIEWER)
+    )
+    await db.commit()
+
+    response = await client_a.post(
+        FILE_REF.format(company=company.id, tender=tender_id),
+        json={"tender_document_file_id": uploaded["file"]["file_id"]},
+    )
+    assert response.status_code == 404
+
+
+async def test_citing_has_no_side_effects(client_a, db, tenant_a):
+    """Una cita és provinença i prou.
+
+    No analitza res, no marca cap document com revisat i no toca el corpus
+    sobre el qual es va fer l'anàlisi.
+    """
+    from app.models.requirements import RequirementExtractionRun
+    from app.services import document_review, requirement_analysis
+
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    uploaded = await _upload(client_a, company, tender_id, name="PCAP.pdf", data=PLEC)
+    page = await _page_of(db, uploaded["file"]["extraction_id"])
+    runs_before = (
+        await db.execute(sa.select(sa.func.count()).select_from(RequirementExtractionRun))
+    ).scalar_one()
+    corpus_before = await requirement_analysis.analysis_input(db, uuid.UUID(tender_id))
+    documents_before = await document_review.fingerprint_of(db, uuid.UUID(tender_id))
+
+    await client_a.post(
+        PAGE_REF.format(company=company.id, tender=tender_id),
+        json={
+            "extraction_id": uploaded["file"]["extraction_id"],
+            "page_id": str(page.id),
+        },
+    )
+
+    runs_after = (
+        await db.execute(sa.select(sa.func.count()).select_from(RequirementExtractionRun))
+    ).scalar_one()
+    assert runs_after == runs_before
+    assert (
+        await requirement_analysis.analysis_input(db, uuid.UUID(tender_id))
+    ).fingerprint == corpus_before.fingerprint
+    assert (
+        await document_review.fingerprint_of(db, uuid.UUID(tender_id))
+    ).fingerprint == documents_before.fingerprint

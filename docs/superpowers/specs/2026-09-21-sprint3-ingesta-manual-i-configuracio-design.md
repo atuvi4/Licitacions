@@ -1300,3 +1300,44 @@ tampoc no toca els enllaços.
 manual mou l'empremta de l'abast tècnic → `technical_scope_stale`. Un PATCH que
 no canvia res, no. I `analysis_input().fingerprint` **no** es mou mai per CRUD
 manual: parla del corpus documental, no dels requisits.
+
+### S3-S5.1 — escriure una cita
+
+S3-S4 va deixar el servei de provinença fet i **sense endpoint a propòsit**: no
+hi havia cap consumidor, i una UX que després s'hagués de retirar és pitjor que
+cap. Amb els requisits manuals ja n'hi ha un de real, i per tant s'exposa.
+
+| Endpoint | Per a |
+|---|---|
+| `POST /companies/{c}/tenders/{t}/source-refs/extracted-page` | PDF i TXT: extracció + pàgina, amb `char_start`/`char_end` opcionals |
+| `POST /companies/{c}/tenders/{t}/source-refs/document-file` | DOCX, XLSX i companyia: versió + `location_label` |
+| `POST …/requirements/{r}/citations` | enganxar-ne una d'existent |
+| `DELETE …/requirements/{r}/citations/{ref}` | desenganxar-la |
+
+Mateix contracte que la resta d'S3-S5: licitació **de la font MANUAL i pròpia**,
+rols que preparen la candidatura (`technical` inclòs), `viewer` read-only. Els
+routers no validen res pel seu compte: hi passen a través de `source_refs.py`.
+
+**El client no dicta la prova.** `content_sha256` i `quote` no són als schemas
+de creació: el SHA el deriva el servidor dels bytes reals i el `quote` del text
+real de la pàgina quan hi ha posicions. `location_label`, en canvi, sí que
+l'escriu una persona: és coneixement seu, no una dada derivable.
+
+**Cap UUID a la vista.** El selector treballa amb noms —document, versió,
+pàgina— i resol els identificadors ell mateix, reutilitzant els endpoints
+company-scoped d'S3-S2.1. Hi ha un test que escaneja el DOM buscant UUIDs.
+
+**Atomicitat.** Primer es creen les cites, després el requisit amb els seus
+`source_ref_ids`. Si el segon pas falla, les cites queden **òrfenes i inertes**:
+són immutables, no les referencia ningú i la següent cita dels mateixos bytes no
+en crea cap de nova. És acceptable i deliberat: l'alternativa seria una
+transacció distribuïda al navegador.
+
+**Desenganxar no esborra.** Treure una cita elimina el `RequirementSourceRefLink`
+i prou. El `TenderSourceRef` es queda: pot sostenir-ne d'altres i era cert el dia
+que es va crear. I no s'edita mai — per corregir-la, se'n crea una de nova i es
+desenganxa l'anterior.
+
+**Citar no verifica.** Adjuntar evidència no canvia `review_status` ni
+l'atribució: un requisit manual amb cita continua sent una afirmació humana amb
+font, no una extracció.

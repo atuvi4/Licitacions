@@ -53,6 +53,8 @@ export interface RequirementEvidence {
 /** Qui ha escrit el requisit. Canvia què se'n pot afirmar, no només la fitxa. */
 export type RequirementOrigin = "extracted" | "manual";
 
+export type { TenderDocumentMeta } from "@/lib/tenders";
+
 /** Una cita immutable: de quins bytes, quina versió i —si n'hi ha— quina pàgina. */
 export interface SourceRefCitation {
   id: string;

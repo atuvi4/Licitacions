@@ -2,12 +2,14 @@
 
 import { useCallback, useMemo, useState } from "react";
 
+import { CitationList, CitationPicker } from "@/components/CitationPicker";
 import { Modal } from "@/components/Modal";
 import { useSession } from "@/components/SessionProvider";
 import { Banner, Button, Field, Input, Select, Textarea } from "@/components/ui";
 import { api } from "@/lib/api";
 import {
   CATEGORY_LABELS,
+  type SourceRefCitation,
   OBLIGATION_LABELS,
   type Requirement,
   type RequirementCategory,
@@ -84,12 +86,17 @@ export function ManualRequirementForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
+  // Les cites que sostindran aquest requisit. En un requisit nou, es creen
+  // ABANS que ell i s'hi enganxen en desar-lo; si el desat falla, queden
+  // inertes: son immutables i no les referencia ningu.
+  const [citations, setCitations] = useState<SourceRefCitation[]>([]);
 
   // En obrir amb un requisit diferent, el formulari parteix del seu estat.
   const key = requirement?.id ?? "new";
   if (open && loaded !== key) {
     setLoaded(key);
     setForm(stateOf(requirement));
+    setCitations(requirement?.citations ?? []);
     setError(null);
   }
 
@@ -111,7 +118,8 @@ export function ManualRequirementForm({
       if (requirement) {
         await api.patch(`${root}/${requirement.id}`, body);
       } else {
-        await api.post(root, body);
+        // Les cites ja existeixen: nomes cal dir quines el sostenen.
+        await api.post(root, { ...body, source_ref_ids: citations.map((item) => item.id) });
       }
       await onSaved();
       onClose();
@@ -120,7 +128,35 @@ export function ManualRequirementForm({
     } finally {
       setSaving(false);
     }
-  }, [companyId, form, invalid, onClose, onSaved, requirement, tenderId]);
+  }, [citations, companyId, form, invalid, onClose, onSaved, requirement, tenderId]);
+
+  const addCitation = useCallback(
+    async (citation: SourceRefCitation) => {
+      setCitations((current) => [...current, citation]);
+      if (!requirement || !companyId) return;
+      await api.post(
+        `/companies/${companyId}/tenders/${tenderId}/requirements/${requirement.id}/citations`,
+        { source_ref_id: citation.id },
+      );
+      await onSaved();
+    },
+    [companyId, onSaved, requirement, tenderId],
+  );
+
+  const removeCitation = useCallback(
+    async (citation: SourceRefCitation) => {
+      setCitations((current) => current.filter((item) => item.id !== citation.id));
+      if (!requirement || !companyId) return;
+      // Desenganxa l'enllac. La cita NO s'esborra: pot sostenir-ne d'altres i
+      // era certa el dia que es va crear.
+      await api.delete(
+        `/companies/${companyId}/tenders/${tenderId}/requirements/${requirement.id}` +
+          `/citations/${citation.id}`,
+      );
+      await onSaved();
+    },
+    [companyId, onSaved, requirement, tenderId],
+  );
 
   return (
     <Modal
@@ -192,6 +228,19 @@ export function ManualRequirementForm({
             options={SCOPES.map((option) => ({ ...option }))}
           />
         </Field>
+
+        <section className="grid gap-2 border-t border-border pt-4">
+          <h3 className="font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase">
+            Evidència
+          </h3>
+          {/*
+            Adjuntar-ne no el verifica: una cita diu d'on surt l'afirmació, no
+            que algú l'hagi comprovada. El requisit segueix sense revisar fins
+            que algú ho digui.
+          */}
+          <CitationList citations={citations} onRemove={(item) => void removeCitation(item)} />
+          <CitationPicker tenderId={tenderId} onAdded={(item) => void addCitation(item)} />
+        </section>
       </div>
     </Modal>
   );
