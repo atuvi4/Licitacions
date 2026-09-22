@@ -5,10 +5,11 @@ Tres decisions governen tot el que hi ha aqui.
 **La identitat no es el que escriu la persona.** El numero d'expedient no es
 unic —el model ja ho documenta: dos organismes en poden fer servir el mateix— i
 el nom d'un organisme encara menys. La identitat d'una licitacio manual es
-`external_id = "manual:<client_token>"`, amb el token que genera el formulari i
-manté estable durant tots els reintents. La d'un organisme manual, igual amb el
-seu propi token. Aixi dues empreses poden donar d'alta el mateix expedient i el
-mateix ajuntament sense xocar, perque els tokens son seus.
+`external_id = "manual:<company_id>:<client_token>"`, amb el token que genera el
+formulari i manté estable durant tots els reintents. La d'un organisme manual,
+igual amb el seu propi token. El prefix d'empresa hi es perque la font MANUAL es
+una i global: sense ell, l'espai de tokens d'una empresa limitaria el d'una
+altra. La clau d'idempotencia conceptual es `(company_id, client_token)`.
 
 **La idempotencia surt de la unicitat, no d'una taula de peticions.** Ja hi ha
 `UNIQUE(source_id, external_id)` a `tenders` i `UNIQUE(source_id,
@@ -52,6 +53,11 @@ MANUAL_SOURCE_NAME = "Importacio manual"
 #: son descriptius i s'editen despres, aixi que no bloquegen el reintent.
 MATERIAL_FIELDS = ("title", "expediente_number", "buyer_id")
 
+#: El mateix, per a un organisme escrit a ma. Com que a Sprint 3 no hi ha PATCH
+#: de `Buyer`, acceptar un token repetit amb un nom diferent voldria dir triar
+#: en silenci quina de les dues versions es queda. No es tria: es diu.
+BUYER_MATERIAL_FIELDS = ("name", "tax_identifier", "nuts_code")
+
 
 class ManualTenderConflictError(ConflictError):
     """Mateix token, licitacio diferent. No es un reintent."""
@@ -69,6 +75,12 @@ class ManualBuyerOwnershipError(ConflictError):
     """El token d'organisme ja existeix i es d'una altra empresa."""
 
     code = "manual_buyer_owned_by_other_company"
+
+
+class ManualBuyerConflictError(ConflictError):
+    """Mateix token d'organisme, organisme diferent. No es un reintent."""
+
+    code = "manual_buyer_payload_conflict"
 
 
 class BuyerChoiceError(ValidationError):
@@ -99,13 +111,22 @@ def assert_can_create(role: MembershipRole) -> None:
         raise NotFoundError("No es pot obrir una licitacio amb aquest rol.")
 
 
-def external_id_for(client_token: uuid.UUID) -> str:
-    """`manual:<token>`. Determinista, sintetic i immutable.
+def external_id_for(company_id: uuid.UUID, client_token: uuid.UUID) -> str:
+    """`manual:<company>:<token>`. Determinista, sintetic, opac i immutable.
+
+    Porta l'empresa perque la font MANUAL es una i global, i amb ella ho es
+    tambe `UNIQUE(source_id, external_id)`. Sense el prefix, que l'empresa A
+    fes servir un token no deixaria que l'empresa B fes servir el mateix, i
+    l'espai de claus de A limitaria el de B. La clau d'idempotencia conceptual
+    es **`(company_id, client_token)`**, i aixi s'escriu.
 
     No es deriva de `Tender.id` perque el default d'`UUIDPrimaryKeyMixin`
     s'avalua a l'INSERT: abans del flush l'objecte encara no en te.
+
+    80 caracters, dins de `tenders.external_id` (500) i de
+    `buyers.external_identifier` (200).
     """
-    return f"manual:{client_token}"
+    return f"manual:{company_id}:{client_token}"
 
 
 async def get_or_create_manual_source(session: AsyncSession) -> Source:
@@ -156,7 +177,7 @@ async def _get_or_create_manual_buyer(
     data: ManualBuyerInput,
 ) -> Buyer:
     """Un organisme privat, idempotent pel seu propi token."""
-    external = external_id_for(data.client_token)
+    external = external_id_for(company_id, data.client_token)
     existing = (
         await session.execute(
             sa.select(Buyer).where(
@@ -165,8 +186,19 @@ async def _get_or_create_manual_buyer(
         )
     ).scalars().one_or_none()
     if existing is not None:
+        # Amb el prefix d'empresa aixo ja no hauria de passar mai. Es queda com
+        # a defensa: es un limit de tenancy, i tres linies hi son barates.
         if existing.owner_company_id != company_id:
             raise ManualBuyerOwnershipError("Aquest organisme es d'una altra empresa.")
+        wanted = {
+            "name": data.name,
+            "tax_identifier": data.tax_identifier,
+            "nuts_code": data.nuts_code,
+        }
+        if any(getattr(existing, f) != wanted[f] for f in BUYER_MATERIAL_FIELDS):
+            raise ManualBuyerConflictError(
+                "Aquest token ja identifica un organisme diferent."
+            )
         return existing
 
     buyer = Buyer(
@@ -206,7 +238,7 @@ async def create_manual_tender(
         raise BuyerChoiceError("Cal triar un organisme existent o escriure'n un, no tots dos.")
 
     source = await get_or_create_manual_source(session)
-    external = external_id_for(data.client_token)
+    external = external_id_for(company_id, data.client_token)
 
     existing = (
         await session.execute(

@@ -106,8 +106,10 @@ async def test_the_external_id_comes_from_the_token_and_not_the_expedient(
     tender = (
         await db.execute(sa.select(Tender).where(Tender.id == uuid.UUID(body["tender"]["id"])))
     ).scalars().one()
-    assert tender.external_id == f"manual:{token}"
+    # Amb namespace d'empresa: la clau d'idempotencia es (company, token).
+    assert tender.external_id == f"manual:{company.id}:{token}"
     assert tender.expediente_number == "2024-3137"
+    assert "2024-3137" not in tender.external_id
     assert tender.owner_company_id == company.id
 
 
@@ -399,3 +401,197 @@ async def test_a_company_cannot_open_a_tender_for_another_company(client_b, tena
     _, company_a = tenant_a
     status, _error = await _post(client_b, company_a, payload())
     assert status in (403, 404)
+
+
+# --------------------------------------------------------------------------- #
+# H. El cataleg d'organismes                                                    #
+# --------------------------------------------------------------------------- #
+
+
+async def _buyers(client, company) -> list[dict]:
+    response = await client.get(
+        f"/api/v1/companies/{company.id}/buyers", params={"limit": 200}
+    )
+    assert response.status_code == 200
+    return response.json()["items"]
+
+
+async def _manual_buyer(client, company, name: str, **extra) -> str:
+    """Crea una licitacio amb organisme escrit a ma i en retorna l'id."""
+    manual = {"client_token": str(uuid.uuid4()), "name": name, **extra}
+    _status, body = await _post(client, company, payload(buyer_manual=manual))
+    return body["tender"]["buyer"]["id"]
+
+
+async def test_a_global_buyer_is_in_every_companys_catalogue(
+    client_a, client_b, db, tenant_a, tenant_b
+):
+    buyer = await _global_buyer(db)
+    for client, company in ((client_a, tenant_a[1]), (client_b, tenant_b[1])):
+        assert str(buyer.id) in {row["id"] for row in await _buyers(client, company)}
+
+
+async def test_a_private_buyer_is_only_in_its_owners_catalogue(
+    client_a, client_b, tenant_a, tenant_b
+):
+    company_a, company_b = tenant_a[1], tenant_b[1]
+    private = await _manual_buyer(client_a, company_a, "Nomes d'A")
+
+    assert private in {row["id"] for row in await _buyers(client_a, company_a)}
+    assert private not in {row["id"] for row in await _buyers(client_b, company_b)}
+
+
+async def test_the_detail_of_a_foreign_private_buyer_is_not_reachable(
+    client_a, client_b, tenant_a, tenant_b
+):
+    """Ni pel llistat ni per l'id: tancar nomes la llista no es tancar."""
+    company_a, company_b = tenant_a[1], tenant_b[1]
+    private = await _manual_buyer(client_a, company_a, "Reservat")
+
+    own = await client_a.get(f"/api/v1/companies/{company_a.id}/buyers/{private}")
+    assert own.status_code == 200
+
+    foreign = await client_b.get(f"/api/v1/companies/{company_b.id}/buyers/{private}")
+    assert foreign.status_code == 404
+
+
+async def test_the_buyer_count_does_not_leak_either(client_a, client_b, tenant_a, tenant_b):
+    """El total es una agregacio: delata tant com la llista."""
+    company_a, company_b = tenant_a[1], tenant_b[1]
+    before = len(await _buyers(client_b, company_b))
+    await _manual_buyer(client_a, company_a, "Invisible")
+    assert len(await _buyers(client_b, company_b)) == before
+
+
+# --------------------------------------------------------------------------- #
+# I. Un usuari a dues empreses: el cataleg no es barreja                        #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+async def both(db, tenant_a, tenant_b, client_factory):
+    """El mateix usuari, membre d'A i de B, amb un organisme privat a cada una."""
+    from app.models.enums import MembershipRole
+    from app.models.identity import CompanyMembership
+    from tests.conftest import TEST_PASSWORD, login
+
+    user, company_a = tenant_a
+    _, company_b = tenant_b
+    db.add(
+        CompanyMembership(user_id=user.id, company_id=company_b.id, role=MembershipRole.OWNER)
+    )
+    await db.commit()
+
+    http = client_factory()
+    await login(http, user.email, TEST_PASSWORD)
+    return {
+        "client": http,
+        "company_a": company_a,
+        "company_b": company_b,
+        "buyer_a": await _manual_buyer(http, company_a, "Privat A"),
+        "buyer_b": await _manual_buyer(http, company_b, "Privat B"),
+    }
+
+
+async def test_in_context_a_the_user_does_not_see_the_private_buyers_of_b(both):
+    ids = {row["id"] for row in await _buyers(both["client"], both["company_a"])}
+    assert both["buyer_a"] in ids
+    assert both["buyer_b"] not in ids
+
+
+async def test_in_context_b_the_user_does_not_see_the_private_buyers_of_a(both):
+    ids = {row["id"] for row in await _buyers(both["client"], both["company_b"])}
+    assert both["buyer_b"] in ids
+    assert both["buyer_a"] not in ids
+
+
+# --------------------------------------------------------------------------- #
+# J. Els tokens son per empresa                                                 #
+# --------------------------------------------------------------------------- #
+
+
+async def test_the_same_tender_token_is_independent_in_each_company(
+    client_a, client_b, db, tenant_a, tenant_b
+):
+    """L'espai de tokens d'una empresa no pot limitar el d'una altra."""
+    company_a, company_b = tenant_a[1], tenant_b[1]
+    token = str(uuid.uuid4())
+
+    status_a, a = await _post(client_a, company_a, payload(client_token=token, title="D'A"))
+    status_b, b = await _post(client_b, company_b, payload(client_token=token, title="De B"))
+
+    assert (status_a, status_b) == (201, 201)
+    assert (a["created"], b["created"]) == (True, True)
+    assert a["tender"]["id"] != b["tender"]["id"]
+
+    externals = (
+        await db.execute(
+            sa.select(Tender.external_id).where(
+                Tender.id.in_([uuid.UUID(a["tender"]["id"]), uuid.UUID(b["tender"]["id"])])
+            )
+        )
+    ).scalars().all()
+    assert len(set(externals)) == 2
+    assert all(token in value for value in externals)
+    joined = " ".join(externals)
+    assert str(company_a.id) in joined
+    assert str(company_b.id) in joined
+
+
+async def test_the_same_buyer_token_is_independent_in_each_company(
+    client_a, client_b, tenant_a, tenant_b
+):
+    company_a, company_b = tenant_a[1], tenant_b[1]
+    token = str(uuid.uuid4())
+    manual = {"client_token": token, "name": "Ajuntament homonim"}
+
+    _sa, a = await _post(client_a, company_a, payload(buyer_manual=dict(manual)))
+    _sb, b = await _post(client_b, company_b, payload(buyer_manual=dict(manual)))
+
+    assert a["tender"]["buyer"]["id"] != b["tender"]["buyer"]["id"]
+
+
+# --------------------------------------------------------------------------- #
+# K. Un organisme no s'actualitza en silenci                                    #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("name", "Un altre nom"), ("tax_identifier", "B00000000"), ("nuts_code", "ES999")],
+)
+async def test_the_same_buyer_token_with_a_different_buyer_is_a_conflict(
+    client_a, tenant_a, field, value
+):
+    """Sense PATCH de Buyer, acceptar-ho seria triar en silenci quina versio queda."""
+    _, company = tenant_a
+    manual = {
+        "client_token": str(uuid.uuid4()),
+        "name": "Ajuntament original",
+        "tax_identifier": "P1700000A",
+        "nuts_code": "ES512",
+    }
+    assert (await _post(client_a, company, payload(buyer_manual=dict(manual))))[0] == 201
+
+    status, error = await _post(
+        client_a, company, payload(buyer_manual={**manual, field: value})
+    )
+    assert status == 409
+    assert error["error"]["code"] == "manual_buyer_payload_conflict"
+
+
+async def test_the_same_buyer_token_with_the_same_payload_is_reused(client_a, db, tenant_a):
+    _, company = tenant_a
+    manual = {"client_token": str(uuid.uuid4()), "name": "Repetit", "nuts_code": "ES512"}
+    _sa, first = await _post(client_a, company, payload(buyer_manual=dict(manual)))
+    _sb, second = await _post(client_a, company, payload(buyer_manual=dict(manual)))
+
+    assert first["tender"]["buyer"]["id"] == second["tender"]["buyer"]["id"]
+    total = (
+        await db.execute(
+            sa.select(sa.func.count()).select_from(Buyer).where(
+                Buyer.owner_company_id == company.id
+            )
+        )
+    ).scalar_one()
+    assert total == 1

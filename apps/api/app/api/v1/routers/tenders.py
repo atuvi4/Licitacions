@@ -54,7 +54,11 @@ from app.schemas.tenders import (
     TenderTraceability,
 )
 from app.services import audit, manual_tender
-from app.tenders.visibility import visible_to_company, visible_to_user
+from app.tenders.visibility import (
+    buyer_visible_to_company,
+    visible_to_company,
+    visible_to_user,
+)
 
 router = APIRouter(tags=["licitacions"])
 
@@ -495,15 +499,26 @@ async def list_tender_revisions(tender_id: uuid.UUID, session: SessionDep, user:
     return [TenderRevisionRead.model_validate(record) for record in rows]
 
 
-@router.get("/buyers", response_model=Page[BuyerSummary], summary="Organismes contractants")
+@router.get(
+    "/companies/{company_id}/buyers",
+    response_model=Page[BuyerSummary],
+    summary="Organismes contractants",
+)
 async def list_buyers(
     session: SessionDep,
-    _: CurrentUser,
+    ctx: CompanyCtx,
     q: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    filters = []
+    """El cataleg que veu una empresa: els publics i els seus.
+
+    Penja de `/companies/{company_id}` i no de l'arrel perque el seu consumidor
+    es el selector del wizard d'importacio, que treballa en context d'UNA
+    empresa. Amb un filtre per usuari, algu membre d'A i de B hi barrejaria els
+    dos cataleges privats mentre dona d'alta una licitacio d'una de sola.
+    """
+    filters = [buyer_visible_to_company(ctx.company_id)]
     if q:
         filters.append(sa.func.lower(Buyer.name).like(f"%{q.lower()}%"))
     total = (
@@ -522,10 +537,19 @@ async def list_buyers(
     )
 
 
-@router.get("/buyers/{buyer_id}", response_model=BuyerRead, summary="Organisme contractant")
-async def get_buyer(buyer_id: uuid.UUID, session: SessionDep, _: CurrentUser):
+@router.get(
+    "/companies/{company_id}/buyers/{buyer_id}",
+    response_model=BuyerRead,
+    summary="Organisme contractant",
+)
+async def get_buyer(buyer_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
+    """Un organisme public o de la mateixa empresa. D'una altra: 404."""
     buyer = (
-        await session.execute(sa.select(Buyer).where(Buyer.id == buyer_id))
+        await session.execute(
+            sa.select(Buyer).where(
+                Buyer.id == buyer_id, buyer_visible_to_company(ctx.company_id)
+            )
+        )
     ).scalar_one_or_none()
     if buyer is None:
         raise NotFoundError("Organisme no trobat.")

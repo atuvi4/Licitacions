@@ -110,8 +110,16 @@ el freeze · l'aprovació.
 ### Format de l'`external_id` manual
 
 ```
-external_id = "manual:" + <client_token|uuid4>
+external_id           = "manual:<company_id>:<client_token>"        (Tender)
+external_identifier   = "manual:<company_id>:<buyer_client_token>"  (Buyer)
 ```
+
+**El prefix d'empresa no és decoratiu.** La `Source` MANUAL és una i global, i
+amb ella ho és `UNIQUE(source_id, external_id)`. Sense el prefix, que l'empresa A
+fes servir un token impediria a B fer servir el mateix, i l'espai de claus d'una
+limitaria el de l'altra. La clau d'idempotència conceptual és
+**`(company_id, client_token)`**, i així s'escriu. 80 caràcters, dins de
+`tenders.external_id` (500) i de `buyers.external_identifier` (200).
 
 Coherent amb la convenció existent: PLACSP fa servir l'`<id>` d'ATOM, un
 identificador **opac i natiu de la font**. `manual:<uuid>` és el mateix patró per a
@@ -149,10 +157,12 @@ publicar en silenci** al catàleg global.
 
 | Regla | |
 |---|---|
-| Identitat | `UNIQUE(source_id, external_identifier)`; el manual és `manual:<buyer_client_token>`, amb un token **propi i diferent del de la licitació** |
+| Identitat | `UNIQUE(source_id, external_identifier)`; el manual és `manual:<company_id>:<buyer_client_token>`, amb un token **propi i diferent del de la licitació** |
+| Reintent amb el mateix token | Material = `name`, `tax_identifier`, `nuts_code`. Igual → **es reutilitza**. Diferent → **`409 manual_buyer_payload_conflict`**. Com que no hi ha PATCH de `Buyer` a Sprint 3, acceptar-ho seria triar en silenci quina versió es queda |
+| Lectura | `GET /companies/{c}/buyers` i `/buyers/{buyer_id}`, **company-scoped**. Les rutes globals `/buyers*` **s'eliminen**: no tenien cap consumidor i filtraven malament |
 | Reutilitzar-ne un | Global o de la mateixa empresa. D'una altra: **404** |
 | Modificar-ne un | **Mai** des del wizard. No hi ha PATCH de `Buyer` a Sprint 3 |
-| `buyer_id` i `buyer_manual` | **Excloents**; cap dels dos també val (`buyer_id` és nul·lable) |
+| `buyer_id` i `buyer_manual` | **Com a molt un** (`at most one`, no `exactly one`): cap dels dos és vàlid, un dels dos és vàlid, tots dos donen `422 buyer_choice_ambiguous`. Intencionat: *unknown ≠ no* |
 | Selecció a la UI | **Company-scoped**, mai una ruta user-global que barregi privats de dues empreses del mateix usuari |
 | Esborrat | `ON DELETE CASCADE`, auditat: `tenders.buyer_id` ja va amb `SET NULL`, així que no queda cap licitació impossible, i `NULL` no coincideix mai amb l'empresa esborrada |
 | Deduplicació | **Cap.** Ni fuzzy matching de noms ni automatismes |
@@ -617,7 +627,8 @@ Cap canvi al manifest.
 |---|---|---|---|---|
 | **S3-S0** | Tenancy + `visible_tenders()` + **fix de la fuita de `MatchingService`** | 0027 | — | Cap ruta ni cap job veu una licitació privada d'una altra empresa |
 | **S3-S1** | Licitació manual + camí a Oportunitats | — | S0 | Apareix a `/licitacions` via match recalculat; retry idempotent |
-| **S3-S2** | Pujada manual + contracte de formats | 0028 | S1 | `text_extraction` exposat; dedup per SHA-256 |
+| **S3-S1b** | **Edició de licitació manual**: només la pròpia i manual · CAS per `revision_count` · `TenderRevision` a cada canvi material · staleness canònic · **C-12: cap bloqueig per paquet aprovat** · `id`, `source_id`, `external_id` i `owner_company_id` immutables | — | S1 | Editar no bloqueja; `evaluate_staleness` → `tender_changed` |
+| **S3-S2** | Pujada manual + contracte de formats | 0028 | S1b | `text_extraction` exposat; dedup per SHA-256 |
 | **S3-S3** | Actualitzacions + staleness | 0029 | S2 | Els 3 findings; **cap validació tècnica invalidada** |
 | **S3-S4** | `tender_source_refs` | 0030 | S2 | Citació reconstruïble després d'una versió nova |
 | **S3-S5** | Requisits manuals | 0031 | S4 | Funciona amb `LLM_PROVIDER=fake`; **auditoria completa dels usos de `Requirement.run_id`** (D-09) |

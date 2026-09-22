@@ -151,14 +151,17 @@ class TestDetail:
 
 
 class TestBuyers:
-    async def test_llistat_dorganismes(self, client_a, ingested):
-        response = (await client_a.get("/api/v1/buyers")).json()
+    async def test_llistat_dorganismes(self, client_a, tenant_a, ingested):
+        _, company = tenant_a
+        response = (await client_a.get(f"/api/v1/companies/{company.id}/buyers")).json()
         assert response["total"] == 3
         assert response["items"][0]["name"]
 
-    async def test_fitxa_dorganisme(self, client_a, ingested):
-        buyer_id = (await client_a.get("/api/v1/buyers")).json()["items"][0]["id"]
-        detail = (await client_a.get(f"/api/v1/buyers/{buyer_id}")).json()
+    async def test_fitxa_dorganisme(self, client_a, tenant_a, ingested):
+        _, company = tenant_a
+        base = f"/api/v1/companies/{company.id}/buyers"
+        buyer_id = (await client_a.get(base)).json()["items"][0]["id"]
+        detail = (await client_a.get(f"{base}/{buyer_id}")).json()
         assert detail["external_identifier"]
 
 
