@@ -512,3 +512,40 @@ def test_cada_fk_esborra_igual_que_al_model(migration_sql):
                 )
 
     assert not divergent, "FK que no esborren com el model: " + "; ".join(divergent)
+
+
+_REVIEW = "0028_manual_ingestion_support:0029_document_review_state"
+
+
+def test_la_revisio_documental_es_pot_aplicar_i_desfer():
+    """0028 -> 0029 -> 0028, amb les dues columnes."""
+    up = _offline_sql("upgrade", _REVIEW)
+    down = _offline_sql("downgrade", "0029_document_review_state:0028_manual_ingestion_support")
+
+    for fragment in ("ADD COLUMN documents_reviewed_at",
+                     "ADD COLUMN documents_reviewed_fingerprint"):
+        assert fragment in up, fragment
+    for fragment in ("DROP COLUMN documents_reviewed_at",
+                     "DROP COLUMN documents_reviewed_fingerprint"):
+        assert fragment in down, fragment
+
+
+def test_cap_candidatura_existent_no_queda_revisada():
+    """NULL vol dir NO revisat, i cap workspace no en guanya cap valor.
+
+    Un backfill aqui afirmaria que algu ha mirat uns plecs que no ha mirat
+    ningu, que es exactament el que aquestes columnes existeixen per evitar.
+    """
+    up = _offline_sql("upgrade", _REVIEW)
+
+    assert "UPDATE bid_workspaces" not in up
+    assert "SET NOT NULL" not in up
+    assert "DEFAULT" not in up
+
+
+def test_la_revisio_documental_no_afegeix_cap_index_ni_cap_clau():
+    """No es busca mai cap workspace per aquests camps: un index seria pes."""
+    up = _offline_sql("upgrade", _REVIEW)
+
+    assert "CREATE INDEX" not in up
+    assert "FOREIGN KEY" not in up

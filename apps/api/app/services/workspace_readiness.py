@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import NotFoundError
 from app.models.enums import PricingBasis, TechnicalSolutionSource, TechnicalSolutionStatus
 from app.models.workspace import BidWorkspace
+from app.services import document_review, requirement_analysis
 from app.services import economic_offer as offer_service
 from app.services import technical_scope as scope_service
 from app.services import technical_solution as solution_service
@@ -27,6 +28,7 @@ from app.workspace.readiness import (
     BLOCKER,
     DOMAIN_ECONOMIC,
     DOMAIN_TECHNICAL,
+    DOMAIN_WORKSPACE,
     ECONOMIC_BID_LOTS_NOT_SELECTED,
     ECONOMIC_DURATION_MISSING,
     ECONOMIC_LOT_BUDGET_EXCEEDED,
@@ -38,11 +40,14 @@ from app.workspace.readiness import (
     ECONOMIC_UNIT_LIMIT_UNKNOWN,
     ECONOMIC_VAT_MISSING,
     INFO,
+    REQUIREMENT_ANALYSIS_PREDATES_DOCUMENTS,
     TECHNICAL_SCOPE_STALE,
     TECHNICAL_SCOPE_UNREVIEWED,
     TECHNICAL_SOLUTION_REQUIREMENT_MISSING,
     TECHNICAL_SOLUTION_UNVALIDATED,
     TECHNICAL_SOLUTION_VALIDATION_STALE,
+    TENDER_DOCUMENTS_CHANGED,
+    TENDER_DOCUMENTS_UNREVIEWED,
     WARNING,
     FinalReadiness,
     Finding,
@@ -290,6 +295,91 @@ def _lot_findings(lot_view) -> list[Finding]:
 
 
 # --------------------------------------------------------------------------- #
+# Els plecs (S3-S3)                                                             #
+# --------------------------------------------------------------------------- #
+
+
+async def document_findings(
+    session: AsyncSession, workspace: BidWorkspace
+) -> list[Finding]:
+    """Que se sap dels plecs: si algu se'ls ha mirat i si l'analisi els cobreix.
+
+    Son TRES preguntes separades i cap d'elles no diu que els requisits hagin
+    canviat. Un document que acaba d'arribar nomes diu que hi ha material per
+    llegir; saber si el que demana l'organ es un altre exigeix tornar a
+    extreure'l, i aixo es una accio a part que ningu no fa sol.
+
+    Sense plecs no hi ha cap finding: "cap document per revisar" no es un
+    problema pendent, es que no hi ha res. Dir-hi "pendent de revisio" seria
+    demanar a algu que confirmi el buit.
+    """
+    findings: list[Finding] = []
+    review = await document_review.review_state(session, workspace)
+
+    if review.document_count == 0:
+        return findings
+
+    if not review.reviewed:
+        findings.append(
+            Finding(
+                code=TENDER_DOCUMENTS_UNREVIEWED,
+                severity=INFO,
+                domain=DOMAIN_WORKSPACE,
+                context={"documents": review.document_count},
+            )
+        )
+    elif review.stale:
+        findings.append(
+            Finding(
+                code=TENDER_DOCUMENTS_CHANGED,
+                severity=WARNING,
+                domain=DOMAIN_WORKSPACE,
+                context={"documents": review.document_count},
+            )
+        )
+
+    if await _analysis_predates_documents(session, workspace):
+        findings.append(
+            Finding(
+                code=REQUIREMENT_ANALYSIS_PREDATES_DOCUMENTS,
+                severity=WARNING,
+                domain=DOMAIN_TECHNICAL,
+                context={"documents": review.document_count},
+            )
+        )
+    return findings
+
+
+async def _analysis_predates_documents(
+    session: AsyncSession, workspace: BidWorkspace
+) -> bool:
+    """Si l'analisi vigent no cobreix el corpus documental d'ara.
+
+    **No es compara cap data.** Es compara el corpus: `input_fingerprint` d'una
+    run diu exactament sobre quines extraccions es va fer, i `analysis_input`
+    recalcula la mateixa empremta amb el que hi ha ara. Dues dates poden
+    ordenar-se be i parlar de coses diferents —un document reextret amb un
+    parser nou no mou cap `created_at` de la run—, i aquesta comparacio no te
+    aquest problema.
+
+    Si no hi ha cap run vigent NO es diu res per aqui: que no s'hagi analitzat
+    mai ja te el seu propi finding al dossier, i repetir-ho seria soroll sobre
+    el mateix fet.
+
+    Si ara mateix no hi ha res analitzable —nomes XLSX, per exemple— tampoc:
+    l'analisi vigent no queda desfasada perque hagi arribat un document del qual
+    no sabem llegir el text.
+    """
+    run = await requirement_analysis.current_run_for(session, workspace.tender_id)
+    if run is None:
+        return False
+    current = await requirement_analysis.analysis_input(session, workspace.tender_id)
+    if not current.documents:
+        return False
+    return current.fingerprint != run.input_fingerprint
+
+
+# --------------------------------------------------------------------------- #
 # El veredicte                                                                  #
 # --------------------------------------------------------------------------- #
 
@@ -305,8 +395,16 @@ async def final_readiness(
     """
     dossier = await dossier_service.evaluate_workspace_readiness(session, workspace)
     scope = await scope_service.resolve(session, workspace)
+    # Els findings dels plecs es reparteixen entre dos dominis a proposit: que
+    # ningu no els hagi revisat parla de la candidatura sencera, i que l'analisi
+    # no cobreixi el corpus d'ara parla del tecnic.
+    documents = await document_findings(session, workspace)
     return evaluate_final(
         dossier=dossier,
-        technical=await technical_findings(session, workspace, scope),
+        technical=[
+            *(f for f in documents if f.domain == DOMAIN_TECHNICAL),
+            *await technical_findings(session, workspace, scope),
+        ],
         economic=await economic_findings(session, workspace),
+        workspace=[f for f in documents if f.domain == DOMAIN_WORKSPACE],
     )

@@ -1048,3 +1048,93 @@ referencia l'altra, és un `404`.
 fitxa) continua resolent-se amb `visible_to_user` i el seu cos inclou la
 metadata dels documents. És el contracte del feed, decidit a S3-S0, i
 company-scoparlo tocaria Oportunitats i la fitxa senceres.
+
+---
+
+## Delta S3-S3 — revisió documental, versions i els tres findings
+
+### Migració 0029
+
+`bid_workspaces.documents_reviewed_at` (timestamptz, NULL) i
+`documents_reviewed_fingerprint` (varchar(64), NULL). Cap índex, cap FK, cap
+`reviewed_by`, cap backfill. **NULL vol dir NO revisat.** No hi ha cap columna
+«caducat»: es deriva comparant empremtes en llegir, igual que l'abast tècnic.
+
+### Empremta documental canònica
+
+`document_review.fingerprint_of(session, tender_id)` → SHA-256 de les línies
+ordenades `document_id|file_id|version_number|content_sha256`, una per document
+lògic, amb `-` on no hi ha fitxer vigent.
+
+Hi entra **tot document admès**, inclosos els formats dels quals no sabem llegir
+el text: un XLSX l'ha de revisar una persona igual que un PDF, i que el nostre
+parser el sàpiga obrir o no és una limitació nostra, no un fet del document.
+**No** hi entra res de l'extracció —ni estat, ni qualitat, ni pàgines— ni cap
+sortida de model. És documental.
+
+**Zero documents**: cap finding. «Cap document per revisar» no és un pendent, és
+que no hi ha res; demanar que algú confirmi el buit seria feina inventada.
+
+### Versions
+
+`POST /companies/{c}/tenders/{t}/documents/{d}/versions`, multipart. Mateix
+`TenderDocument.id`, `TenderDocumentFile` nou amb `version_number` anterior + 1,
+l'anterior passa a `is_current=false` i **no es toca mai**: conserva el seu
+contingut, la seva extracció i les seves pàgines, que són l'evidència que una
+citació pot haver referenciat.
+
+**Bytes idèntics als de la versió vigent → cap versió nova**, `200` en comptes de
+`201`, l'empremta no es mou i la revisió no caduca. Tornar a pujar el mateix
+fitxer passa, i convertir-ho en «els plecs han canviat» gastaria el senyal.
+
+### Revisió humana
+
+`POST /companies/{c}/workspaces/{w}/documents/review`. Desa l'empremta d'ara i la
+data. Roles de decisió. **Idempotent**: si l'empremta ja és aquella, no mou ni la
+data ni l'auditoria. No extreu requisits, no valida cap solució, no aprova cap
+paquet i no afirma que no hi hagi canvis.
+
+### Els tres findings
+
+| Codi | Sev. | Domini | Predicat exacte |
+|---|---|---|---|
+| `tender_documents_unreviewed` | info | workspace | `document_count > 0` i `documents_reviewed_fingerprint IS NULL` |
+| `tender_documents_changed` | warning | workspace | `documents_reviewed_fingerprint IS NOT NULL` i `≠ fingerprint_of(ara)` |
+| `requirement_analysis_predates_documents` | warning | technical | hi ha run vigent, el corpus analitzable d'ara no és buit, i `analysis_input(ara).fingerprint ≠ run.input_fingerprint` |
+
+**Delta sobre §23**: el disparador del tercer ja no és `created_at > completed_at`.
+Es compara el **corpus**, no dates: `input_fingerprint` diu sobre quines
+extraccions es va fer la run i `analysis_input` recalcula la mateixa empremta amb
+el que hi ha ara. Dues dates poden ordenar-se bé i parlar de coses diferents —un
+document reextret amb un parser nou no mou cap `created_at`—, i aquesta
+comparació no té aquest problema. **No calia cap columna nova.**
+
+Sense run vigent no es diu res per aquí: que no s'hagi analitzat mai ja té el seu
+finding al dossier. Amb un corpus analitzable buit tampoc: un XLSX nou s'ha de
+revisar, però l'anàlisi no el cobria abans ni ara.
+
+**D-09**: el finding es limita a comparar runs reals. Un requisit manual no té
+run i **no** el dispara; quan `origin` existeixi (0031), el predicat no s'ha de
+tocar, perquè mai mira `run_id IS NULL`.
+
+### Camins de resolució
+
+A i B → fitxa de la licitació, pestanya **Plecs**, amb «Marca com revisats».
+C → **Decidir**, on viu l'anàlisi. Marcar la revisió **no** apaga C: dir que has
+mirat els plecs no fa que l'anàlisi els cobreixi.
+
+### Tipus de document en una pujada manual
+
+`POST …/documents` accepta `document_type` (opcional, per defecte `other`). No
+és cosmètic: l'anàlisi automàtica només tria PCAP, PPT i annexos
+(`DEFAULT_DOCUMENT_TYPES`), així que un plec pujat sense classificar **no hi
+entra sol**. Ho diu qui puja; endevinar-ho pel nom del fitxer seria inventar-se
+una classificació que ningú no ha fet.
+
+### Versió nova i paquet — **conflicte obert**
+
+Una versió nova genera `DOCUMENT_REPLACED`, que porta `WORKSPACE_CRITICAL` i és
+a `PACKAGE_STALE_IMPACTS`. Per tant **avui una versió nova sí que deixa un paquet
+aprovat com a `tender_changed`**, cosa que xoca amb la preferència d'S3-S3. La
+taxonomia **no s'ha tocat**: el comportament real queda fixat per un test i la
+decisió és de producte.

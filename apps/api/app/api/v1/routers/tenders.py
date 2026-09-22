@@ -17,7 +17,7 @@ import uuid
 from typing import Annotated, Literal
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.orm import noload, selectinload
 
 from app.api.deps import CompanyCtx, CurrentUser, SessionDep
@@ -27,6 +27,7 @@ from app.core.errors import NotFoundError, PayloadTooLargeError
 from app.matching.service import MatchingService
 from app.models.audit import AuditAction
 from app.models.cpv import CPVCode
+from app.models.enums import TenderDocumentType
 from app.models.sources import IngestionRun, Source, SourceRecord
 from app.models.tender_documents import (
     TenderDocumentContent,
@@ -276,6 +277,7 @@ async def upload_tender_document(
     session: SessionDep,
     ctx: CompanyCtx,
     file: UploadFile = File(...),
+    document_type: TenderDocumentType = Form(default=TenderDocumentType.OTHER),
 ):
     """Guarda el fitxer i, si del format en sabem llegir el text, el llegeix.
 
@@ -296,6 +298,7 @@ async def upload_tender_document(
         filename=file.filename,
         declared_mime_type=file.content_type,
         data=await _read_tender_upload(file),
+        document_type=document_type,
     )
 
     await audit.record(
@@ -320,6 +323,73 @@ async def upload_tender_document(
         mime_type=outcome.content.mime_type,
         stored=True,
         content_reused=outcome.content_reused,
+        file=file_summary(outcome.file, outcome.content, outcome.extraction),
+    )
+
+
+@router.post(
+    "/companies/{company_id}/tenders/{tender_id}/documents/{document_id}/versions",
+    response_model=TenderDocumentUploadResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Puja una versio nova d'un plec",
+)
+async def upload_tender_document_version(
+    tender_id: uuid.UUID,
+    document_id: uuid.UUID,
+    session: SessionDep,
+    ctx: CompanyCtx,
+    response: Response,
+    file: UploadFile = File(...),
+):
+    """Substitueix el contingut vigent d'un document sense perdre l'anterior.
+
+    Si els bytes son **els mateixos** que els de la versio vigent no es crea cap
+    versio: es respon `200` i no ha passat res. Tornar a pujar el mateix fitxer
+    passa —dues persones, dues finestres— i convertir-ho en "els plecs han
+    canviat" gastaria el senyal que serveix per avisar quan canvien de debo.
+
+    La versio anterior es conserva sencera, amb el seu contingut i la seva
+    extraccio: es l'evidencia que una cita pot haver referenciat.
+    """
+    manual_tender.assert_can_edit(ctx.membership.role)
+    tender = await manual_tender.load_editable_tender(session, ctx.company_id, tender_id)
+    document = await tender_document_upload.load_document_of(session, tender, document_id)
+
+    outcome = await tender_document_upload.upload_new_version(
+        session,
+        tender=tender,
+        document=document,
+        user=ctx.user,
+        filename=file.filename,
+        declared_mime_type=file.content_type,
+        data=await _read_tender_upload(file),
+    )
+
+    if outcome.created:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.UPDATE,
+            entity_type="tender_document",
+            entity_id=outcome.document.id,
+            summary=manual_tender.audit_summary(
+                licitacio=tender_id,
+                document=outcome.document.name,
+                versio=outcome.file.version_number,
+            ),
+        )
+        await session.commit()
+    else:
+        response.status_code = status.HTTP_200_OK
+
+    return TenderDocumentUploadResult(
+        id=outcome.document.id,
+        name=outcome.document.name,
+        document_type=outcome.document.document_type,
+        mime_type=outcome.content.mime_type,
+        stored=True,
+        content_reused=not outcome.created,
         file=file_summary(outcome.file, outcome.content, outcome.extraction),
     )
 

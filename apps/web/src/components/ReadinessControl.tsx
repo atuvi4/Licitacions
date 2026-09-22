@@ -113,14 +113,26 @@ export function ReadinessControl() {
             </Button>
           </div>
         ) : (
-          <FindingList findings={findings} ready={data?.ready_for_final_review === true} />
+          <FindingList
+            findings={findings}
+            ready={data?.ready_for_final_review === true}
+            tenderId={data?.tender_id ?? null}
+          />
         )}
       </Drawer>
     </>
   );
 }
 
-function FindingList({ findings, ready }: { findings: ReadinessFinding[]; ready: boolean }) {
+function FindingList({
+  findings,
+  ready,
+  tenderId,
+}: {
+  findings: ReadinessFinding[];
+  ready: boolean;
+  tenderId: string | null;
+}) {
   const groups = groupFindings(findings);
 
   if (groups.length === 0) {
@@ -143,7 +155,11 @@ function FindingList({ findings, ready }: { findings: ReadinessFinding[]; ready:
           </h3>
           <ul>
             {group.findings.map((finding, index) => (
-              <FindingRow key={`${finding.code}-${finding.entity_id ?? index}`} finding={finding} />
+              <FindingRow
+                key={`${finding.code}-${finding.entity_id ?? index}`}
+                finding={finding}
+                tenderId={tenderId}
+              />
             ))}
           </ul>
         </section>
@@ -152,11 +168,11 @@ function FindingList({ findings, ready }: { findings: ReadinessFinding[]; ready:
   );
 }
 
-function FindingRow({ finding }: { finding: ReadinessFinding }) {
+function FindingRow({ finding, tenderId }: { finding: ReadinessFinding; tenderId: string | null }) {
   const copy = findingCopy(finding.code);
   const detail = `${finding.code}${finding.entity_id ? ` · ${finding.entity_id}` : ""}`;
   const Icon = SEVERITY_ICON[finding.severity] ?? Info;
-  const href = useDestinationHref(copy?.destination, finding.entity_id);
+  const href = useDestinationHref(copy?.destination, finding.entity_id, tenderId);
 
   return (
     <li className="flex items-start gap-2.5 border-b border-border px-4 py-2.5 last:border-b-0">
@@ -205,12 +221,21 @@ function FindingRow({ finding }: { finding: ReadinessFinding }) {
  * fila parla; S9-B i S9-C el faran servir per obrir-la. Sense entitat, l'enllaç
  * porta a l'àrea i prou: inventar-hi una destinació seria pitjor que no tenir-ne.
  */
-function useDestinationHref(destination: FindingDestination | undefined, entityId: string | null): string | null {
+function useDestinationHref(
+  destination: FindingDestination | undefined,
+  entityId: string | null,
+  tenderId: string | null,
+): string | null {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   if (!destination) return null;
 
   const next = new URLSearchParams(searchParams?.toString() ?? "");
+  if (destination.kind === "tender") {
+    // Els plecs són de la licitació, no de la candidatura: l'enllaç surt de
+    // Preparar i porta a la fitxa, que és on es poden mirar i marcar.
+    return `/licitacions/${tenderId}?tab=${destination.tab}`;
+  }
   if (destination.kind === "step") {
     next.set("pas", destination.step);
     next.delete("area");

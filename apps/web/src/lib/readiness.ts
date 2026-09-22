@@ -40,11 +40,21 @@ export interface EconomicReadiness {
   findings: ReadinessFinding[];
 }
 
+export interface DocumentReviewState {
+  reviewed: boolean;
+  stale: boolean;
+  reviewed_at: string | null;
+  documents: number;
+}
+
 export interface FinalReadiness {
   workspace_id: string;
+  /** La licitació: els plecs no es resolen dins de Preparar. */
+  tender_id: string;
   ready_for_final_review: boolean;
   findings: ReadinessFinding[];
   dossier: DossierReadiness;
+  documents: DocumentReviewState;
   technical: TechnicalReadiness;
   economic: EconomicReadiness;
 }
@@ -73,7 +83,11 @@ export function isPrepareArea(value: string | null | undefined): value is Prepar
  * On es resol un problema. Pot ser una àrea de Preparar o un altre pas de la
  * candidatura: `decision_not_go` no es resol preparant res, es resol decidint.
  */
-export type FindingDestination = { kind: "area"; area: PrepareArea } | { kind: "step"; step: "decidir" };
+export type FindingDestination =
+  | { kind: "area"; area: PrepareArea }
+  | { kind: "step"; step: "decidir" }
+  /** Els plecs no són cap àrea de Preparar: són a la fitxa de la licitació. */
+  | { kind: "tender"; tab: "plecs" };
 
 export interface FindingCopy {
   label: string;
@@ -86,6 +100,7 @@ export interface FindingCopy {
 
 const area = (value: PrepareArea): FindingDestination => ({ kind: "area", area: value });
 const DECIDE: FindingDestination = { kind: "step", step: "decidir" };
+const PLECS: FindingDestination = { kind: "tender", tab: "plecs" };
 
 /**
  * Codi del servidor → què llegeix una persona.
@@ -106,6 +121,30 @@ export const FINDING_COPY: Record<string, FindingCopy> = {
   analysis_outdated: {
     label: "L'anàlisi ha quedat endarrerida",
     hint: "El plec o el compliment han canviat des de l'última anàlisi.",
+    action: "Ves a Decidir",
+    destination: DECIDE,
+  },
+
+  /* --- Plecs -------------------------------------------------------------- */
+  //
+  // Cap d'aquestes tres frases diu que els requisits hagin canviat. Les dues
+  // primeres parlen del que hi ha per llegir; la tercera, de fins on arriba
+  // l'anàlisi. Fondre-les tornaria a ajuntar el que S3-S3 va separar.
+  tender_documents_unreviewed: {
+    label: "Ningú no ha revisat els plecs",
+    hint: "Que no se n'hagi dit res no vol dir que hi hagi res malament.",
+    action: "Obre els plecs",
+    destination: PLECS,
+  },
+  tender_documents_changed: {
+    label: "Hi ha canvis als plecs des de l'última revisió",
+    hint: "Han arribat documents o versions noves.",
+    action: "Obre els plecs",
+    destination: PLECS,
+  },
+  requirement_analysis_predates_documents: {
+    label: "L'anàlisi encara no cobreix els plecs d'ara",
+    hint: "Els requisits vigents es van extreure d'uns altres documents.",
     action: "Ves a Decidir",
     destination: DECIDE,
   },

@@ -32,10 +32,16 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.errors import PayloadTooLargeError, UnsupportedMediaTypeError, ValidationError
+from app.core.errors import (
+    NotFoundError,
+    PayloadTooLargeError,
+    UnsupportedMediaTypeError,
+    ValidationError,
+)
 from app.models.enums import DocumentFileOrigin, DownloadStatus, TenderDocumentType
 from app.models.identity import User
 from app.models.tender_documents import (
@@ -137,6 +143,7 @@ async def upload_tender_document(
     filename: str | None,
     declared_mime_type: str | None,
     data: bytes,
+    document_type: TenderDocumentType = TenderDocumentType.OTHER,
 ) -> UploadOutcome:
     """Guarda el fitxer i intenta llegir-ne el text. En aquest ordre.
 
@@ -161,9 +168,11 @@ async def upload_tender_document(
     document = TenderDocument(
         tender_id=tender.id,
         name=name,
-        # No s'endevina de que es un plec pel nom del fitxer: aixo seria
-        # inventar-se una classificacio que ningu ha fet.
-        document_type=TenderDocumentType.OTHER,
+        # Ho diu qui puja, no el nom del fitxer: endevinar-ho seria inventar-se
+        # una classificacio que ningu ha fet. Si no ho diu, `OTHER`, que es
+        # honest i te conseqüencia: l'analisi automatica nomes tria PCAP, PPT i
+        # annexos, aixi que un plec sense classificar no hi entra sol.
+        document_type=document_type,
         url=upload_url_for(uuid.uuid4()),
         mime_type=mime_type,
     )
@@ -201,4 +210,135 @@ async def upload_tender_document(
         content=content,
         extraction=extraction,
         content_reused=not created,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class VersionOutcome:
+    document: TenderDocument
+    file: TenderDocumentFile
+    content: TenderDocumentContent
+    extraction: TenderDocumentExtraction
+    #: Cert quan s'ha creat una versio nova. Fals quan els bytes eren els
+    #: mateixos que els de la versio vigent i no calia.
+    created: bool
+
+
+async def load_document_of(
+    session: AsyncSession, tender: Tender, document_id: uuid.UUID
+) -> TenderDocument:
+    """El document, si es d'aquesta licitacio.
+
+    La ruta afirma una relacio —aquest document, d'aquesta licitacio— i afirmar
+    -la sense comprovar-la seria deixar que un id de qualsevol altra hi entres.
+    """
+    document = (
+        await session.execute(
+            sa.select(TenderDocument).where(
+                TenderDocument.id == document_id, TenderDocument.tender_id == tender.id
+            )
+        )
+    ).scalars().one_or_none()
+    if document is None:
+        raise NotFoundError("Document no trobat.")
+    return document
+
+
+async def upload_new_version(
+    session: AsyncSession,
+    *,
+    tender: Tender,
+    document: TenderDocument,
+    user: User,
+    filename: str | None,
+    declared_mime_type: str | None,
+    data: bytes,
+) -> VersionOutcome:
+    """Una versio nova del MATEIX document logic.
+
+    **Els mateixos bytes no son una versio nova.** Si el contingut vigent ja es
+    aquest, no es crea res: l'empremta documental no es mou, la revisio humana
+    no caduca i ningu no ha de tornar a mirar-se un document que no ha canviat.
+    Tornar a pujar el mateix fitxer es una cosa que passa —dues persones, dues
+    finestres— i convertir-ho en "els plecs han canviat" gastaria el senyal.
+
+    **La versio anterior no es toca mai.** Deixa de ser vigent i es queda amb el
+    seu contingut, la seva extraccio i les seves pagines: son l'evidencia que
+    una cita pot haver referenciat, i una cita ha de continuar dient el mateix
+    demà.
+    """
+    mime_type = validate_tender_upload(data, declared_mime_type)
+    name = sanitize_filename(filename)
+    digest = compute_sha256(data)
+
+    current = (
+        await session.execute(
+            sa.select(TenderDocumentFile)
+            .where(
+                TenderDocumentFile.tender_document_id == document.id,
+                TenderDocumentFile.is_current.is_(True),
+            )
+            .order_by(TenderDocumentFile.version_number.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+
+    if current is not None and current.content is not None:
+        if current.content.sha256 == digest:
+            extraction, _done = await _ensure_current_extraction(
+                session, current.content, force=False
+            )
+            return VersionOutcome(
+                document=document,
+                file=current,
+                content=current.content,
+                extraction=extraction,
+                created=False,
+            )
+
+    content, _new = await get_or_create_content(
+        session,
+        data=data,
+        sha256=digest,
+        mime_type=mime_type,
+        detected_extension=extension_for(mime_type),
+    )
+
+    highest = await session.scalar(
+        sa.select(sa.func.max(TenderDocumentFile.version_number)).where(
+            TenderDocumentFile.tender_document_id == document.id
+        )
+    )
+    file = TenderDocumentFile(
+        tender_document_id=document.id,
+        content_id=content.id,
+        source_url=None,
+        origin=DocumentFileOrigin.UPLOADED,
+        uploaded_by=user.id,
+        original_filename=name,
+        declared_mime_type=(declared_mime_type or "").split(";")[0].strip().lower() or None,
+        version_number=(highest or 0) + 1,
+        is_current=True,
+        download_status=DownloadStatus.DOWNLOADED,
+        downloaded_at=datetime.now(UTC),
+        last_checked_at=datetime.now(UTC),
+    )
+    session.add(file)
+    if current is not None:
+        current.is_current = False
+    # El tipus del document logic segueix el de la versio vigent: si algu
+    # substitueix un PDF per un DOCX, dir que encara es un PDF seria fals.
+    document.mime_type = mime_type
+    await session.commit()
+    await session.refresh(file)
+
+    extraction, _done = await _ensure_current_extraction(session, content, force=False)
+    await _record_tender_revision(session, tender.id)
+    await session.refresh(file)
+    return VersionOutcome(
+        document=document,
+        file=file,
+        content=content,
+        extraction=extraction,
+        created=True,
     )

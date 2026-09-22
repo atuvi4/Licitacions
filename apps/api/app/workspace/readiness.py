@@ -56,6 +56,24 @@ TECHNICAL_SCOPE_UNREVIEWED = "technical_scope_unreviewed"
 #: Es va revisar, pero l'abast d'ara ja no es aquell.
 TECHNICAL_SCOPE_STALE = "technical_scope_stale"
 
+# --- Plecs: revisio humana (S3-S3) -------------------------------------------- #
+#
+# Tres preguntes diferents que abans no es podien distingir. Les dues primeres
+# son DOCUMENTALS —parlen del que hi ha per llegir— i la tercera parla de
+# l'analisi. Cap de les tres no diu que els requisits hagin canviat: aixo nomes
+# es pot saber despres de tornar-los a extreure.
+
+#: Ningu no ha confirmat mai haver mirat els plecs que hi ha. No vol dir que hi
+#: hagi res malament: vol dir que no se n'ha dit res, i callar no es aprovar.
+TENDER_DOCUMENTS_UNREVIEWED = "tender_documents_unreviewed"
+#: Algu els va revisar, pero el conjunt d'ara ja no es aquell: hi ha documents
+#: nous o versions noves des d'aleshores.
+TENDER_DOCUMENTS_CHANGED = "tender_documents_changed"
+#: L'analisi vigent es va fer sobre un corpus que ja no es l'actual. NO diu que
+#: els requisits hagin canviat —aixo no es pot saber sense tornar a extreure—,
+#: nomes que encara no cobreix el que hi ha.
+REQUIREMENT_ANALYSIS_PREDATES_DOCUMENTS = "requirement_analysis_predates_documents"
+
 # --- Solucions tecniques ----------------------------------------------------- #
 
 TECHNICAL_SOLUTION_UNVALIDATED = "technical_solution_unvalidated"
@@ -171,13 +189,19 @@ def evaluate_final(
     dossier: ReadinessResult,
     technical: Sequence[Finding] = (),
     economic: Sequence[Finding] = (),
+    workspace: Sequence[Finding] = (),
 ) -> FinalReadiness:
-    """Ajunta els tres dominis. No en recalcula cap.
+    """Ajunta els dominis. No en recalcula cap.
 
-    L'ordre es fix —workspace i dossier, despres tecnic, despres economic— perque
-    dues lectures iguals no donin dues respostes ordenades diferent.
+    L'ordre es fix —workspace i dossier, despres la resta de workspace, despres
+    tecnic, despres economic— perque dues lectures iguals no donin dues
+    respostes ordenades diferent.
+
+    `workspace` son els fets que parlen de la candidatura sencera i que NO venen
+    del dossier: la revisio dels plecs, per exemple, que no es cap paper nostre
+    sino material de l'organ.
     """
     return FinalReadiness(
         dossier_state=dossier.state,
-        findings=(*_dossier_findings(dossier), *technical, *economic),
+        findings=(*_dossier_findings(dossier), *workspace, *technical, *economic),
     )

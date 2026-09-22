@@ -18,13 +18,14 @@ from fastapi import APIRouter
 from app.api.deps import CompanyCtx, SessionDep
 from app.models.enums import AuditAction
 from app.schemas.readiness import (
+    DocumentReviewRead,
     DossierReadinessRead,
     EconomicReadinessRead,
     FinalReadinessFinding,
     FinalReadinessRead,
     TechnicalReadinessRead,
 )
-from app.services import audit
+from app.services import audit, document_review
 from app.services import bid_workspace as workspace_service
 from app.services import economic_offer as offer_service
 from app.services import technical_scope as scope_service
@@ -50,6 +51,7 @@ def _findings(findings) -> list[FinalReadinessFinding]:
 async def _read(session: SessionDep, workspace) -> FinalReadinessRead:
     final = await service.final_readiness(session, workspace)
     scope = await scope_service.resolve(session, workspace)
+    documents = await document_review.review_state(session, workspace)
     review = await scope_service.review_state(session, workspace, scope)
     try:
         await offer_service.get_offer(session, workspace)
@@ -59,6 +61,7 @@ async def _read(session: SessionDep, workspace) -> FinalReadinessRead:
 
     return FinalReadinessRead(
         workspace_id=workspace.id,
+        tender_id=workspace.tender_id,
         ready_for_final_review=final.ready,
         findings=_findings(final.findings),
         dossier=DossierReadinessRead(
@@ -66,6 +69,12 @@ async def _read(session: SessionDep, workspace) -> FinalReadinessRead:
             blockers=[
                 f.code for f in final.findings if f.domain in ("dossier", "workspace")
             ],
+        ),
+        documents=DocumentReviewRead(
+            reviewed=documents.reviewed,
+            stale=documents.stale,
+            reviewed_at=documents.reviewed_at,
+            documents=documents.document_count,
         ),
         technical=TechnicalReadinessRead(
             scope_reviewed=review.reviewed,
@@ -127,4 +136,37 @@ async def review_technical_scope(
             summary=f"workspace={workspace.id}",
         )
         await session.commit()
+    return await _read(session, workspace)
+
+
+@router.post(
+    "/documents/review",
+    response_model=FinalReadinessRead,
+    summary="Confirma que s'han revisat els plecs",
+)
+async def review_documents(workspace_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
+    """Una persona afirma: "he mirat els plecs que hi ha ara".
+
+    Aixo es tot el que vol dir. **No** extreu requisits, **no** valida cap
+    solucio tecnica, **no** aprova cap paquet i **no** afirma que no hi hagi
+    canvis: nomes deixa escrit fins on ha arribat la lectura d'algu. Llegir els
+    plecs i analitzar-los son dues accions diferents i es fan per separat.
+
+    Repetir-ho sobre el mateix conjunt es idempotent i no mou ni la data ni
+    l'auditoria: la revisio vigent segueix sent la mateixa.
+    """
+    workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    document_review.assert_can_review(ctx.membership.role)
+    _state, changed = await document_review.mark_reviewed(session, workspace)
+    if changed:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.UPDATE,
+            entity_type="workspace_documents_review",
+            entity_id=workspace.id,
+            summary=f"workspace={workspace.id}",
+        )
+    await session.commit()
     return await _read(session, workspace)
