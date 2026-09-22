@@ -234,10 +234,18 @@ async def run_compliance(db, company_id, tender):
 
 @pytest.fixture
 async def ready(db, tenant_a, tender, extraction_run):
-    """Una candidatura amb GO, dossier complet i llesta per congelar.
+    """Una candidatura amb GO, dossier complet i llesta per congelar."""
+    return await build_ready_candidacy(db, tenant_a, tender, extraction_run)
 
-    Es passa per tot el cami real de 5A i 5B: sense aixo, els tests de 5C
-    partirien d'un estat que el sistema no ha acceptat mai.
+
+async def build_ready_candidacy(db, tenant_a, tender, extraction_run) -> dict:
+    """El cami real de 5A i 5B, fet de debo.
+
+    Es una funcio i no nomes una fixture perque altres moduls la necessiten amb
+    una licitacio diferent a sota —S3-S1b la fa servir amb una d'oberta a ma— i
+    importar-se fixtures entre fitxers de test amaga d'on surt cada cosa.
+    Sense passar per aqui, els tests partirien d'un estat que el sistema no ha
+    acceptat mai.
     """
     user, company = tenant_a
     certification = CompanyCertification(

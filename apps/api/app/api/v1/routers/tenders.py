@@ -40,6 +40,8 @@ from app.schemas.tenders import (
     IngestionRunRead,
     ManualTenderCreate,
     ManualTenderCreateResult,
+    ManualTenderUpdate,
+    ManualTenderUpdateResult,
     Page,
     TenderChangeEventRead,
     TenderCPVRead,
@@ -147,6 +149,93 @@ async def create_manual_tender(
 
     return ManualTenderCreateResult(
         created=created, tender=await _tender_detail(session, tender.id, ctx.user.id)
+    )
+
+
+@router.patch(
+    "/companies/{company_id}/tenders/{tender_id}",
+    response_model=ManualTenderUpdateResult,
+    summary="Corregeix una licitacio oberta a ma",
+)
+async def update_manual_tender(
+    tender_id: uuid.UUID,
+    payload: ManualTenderUpdate,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Nomes una licitacio manual i de la propia empresa.
+
+    **Un paquet congelat o aprovat NO bloqueja l'edicio** (C-12). El que passa
+    es el que ja passava quan l'organ publicava un canvi: es desa una revisio
+    nova i `evaluate_staleness` dira `tender_changed`. L'aprovacio anterior
+    queda intacta; el servidor no la converteix en un pany.
+
+    S'aplica **nomes el que arriba**: ometre un camp no el toca i enviar-hi
+    `null` l'esborra. Si els valors ja eren aquests, no es crea cap revisio i
+    `revised` es `False`.
+    """
+    manual_tender.assert_can_edit(ctx.membership.role)
+    tender = await manual_tender.load_editable_tender(session, ctx.company_id, tender_id)
+
+    sent = payload.model_fields_set
+    fields = {
+        name: getattr(payload, name)
+        for name in manual_tender.EDITABLE_FIELDS
+        if name in sent
+    }
+    buyer = payload.buyer_manual
+    tender, revised = await manual_tender.update_manual_tender(
+        session,
+        tender=tender,
+        company_id=ctx.company_id,
+        expected_revision=payload.expected_revision,
+        fields=fields,
+        buyer_id=payload.buyer_id if "buyer_id" in sent else manual_tender.UNSET,
+        buyer_manual=(
+            manual_tender.ManualBuyerInput(
+                client_token=buyer.client_token,
+                name=buyer.name,
+                tax_identifier=buyer.tax_identifier,
+                nuts_code=buyer.nuts_code,
+            )
+            if buyer is not None
+            else None
+        ),
+    )
+
+    if revised:
+        # L'organisme no es un camp del formulari pero si una correccio, i qui
+        # llegeixi l'auditoria ha de poder saber que es va tocar.
+        touched = sorted(fields)
+        if "buyer_id" in sent or buyer is not None:
+            touched.append("buyer")
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.UPDATE,
+            entity_type="tender",
+            entity_id=tender.id,
+            summary=manual_tender.audit_summary(
+                licitacio=tender.id, camps=",".join(touched) or "-"
+            ),
+        )
+        # Un canvi material pot moure el pre-fit. Nomes aquesta licitacio.
+        await MatchingService(session).recalculate(ctx.company_id, tender_ids=[tender.id])
+
+    # Es desa SEMPRE, tambe quan no hi ha revisio: hi ha correccions que no
+    # formen part de la fotografia canonica —el numero d'expedient, per
+    # exemple— i no per aixo s'han de perdre en tancar la sessio.
+    await session.commit()
+    # La fitxa es torna a llegir i l'organisme es una relacio ja carregada:
+    # sense expirar-la, una licitacio que acaba de rebre organisme el
+    # continuaria mostrant buit.
+    session.expire(tender)
+
+    return ManualTenderUpdateResult(
+        revised=revised,
+        revision=await manual_tender.current_revision_number(session, tender_id),
+        tender=await _tender_detail(session, tender_id, ctx.user.id),
     )
 
 

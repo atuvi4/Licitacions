@@ -36,12 +36,49 @@ from app.models.enums import MembershipRole, SourceType
 from app.models.identity import User
 from app.models.sources import Source
 from app.models.tenders import Buyer, Tender
-from app.tenders.visibility import buyer_visible_to_company
+from app.services import tender_lifecycle
+from app.tenders.visibility import buyer_visible_to_company, visible_to_company
 
 #: Qui pot obrir un expedient. Coincideix amb qui decideix, no amb qui edita
 #: una solucio tecnica: donar d'alta una licitacio es un acte de negoci.
 CREATE_ROLES = frozenset(
     {MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.BID_MANAGER}
+)
+
+#: Editar-la es la mateixa classe d'acte que obrir-la. Es una constant propia i
+#: no un alias perque son dues politiques, encara que avui coincideixin.
+EDIT_ROLES = frozenset(CREATE_ROLES)
+
+#: El disparador que queda escrit a `TenderRevision.trigger`, al costat de
+#: `ingestion`. Serveix per saber d'on ve un canvi sense mirar res mes.
+MANUAL_TRIGGER = "manual_edit"
+
+#: Sentinella per distingir "no toquis aquest camp" de "posa-hi NULL", el
+#: mateix patro que ja fa servir el servei de l'oferta economica.
+UNSET = object()
+
+#: Els camps que una persona pot corregir. Tots existeixen ja al model.
+#:
+#: Els que son al snapshot canonic de `tender_lifecycle.build_snapshot`
+#: produeixen revisio quan canvien; `expediente_number` i `country_code` no hi
+#: son, aixi que canviar-los no en genera cap. No s'hi afegeixen a la fotografia
+#: per aconseguir-ho: el snapshot descriu el que un organ publica, i decidir que
+#: hi entra no es feina d'aquesta fase.
+EDITABLE_FIELDS = (
+    "title",
+    "description",
+    "expediente_number",
+    "procedure_type",
+    "contract_type",
+    "estimated_value",
+    "base_budget",
+    "base_budget_without_tax",
+    "currency",
+    "publication_date",
+    "deadline_at",
+    "place_of_execution",
+    "nuts_code",
+    "country_code",
 )
 
 #: El codi de la font manual. Unic a `sources.code`, aixi que serveix de clau.
@@ -81,6 +118,18 @@ class ManualBuyerConflictError(ConflictError):
     """Mateix token d'organisme, organisme diferent. No es un reintent."""
 
     code = "manual_buyer_payload_conflict"
+
+
+class TenderNotManualError(ValidationError):
+    """Nomes s'editen les licitacions obertes a ma. Les d'una font, no."""
+
+    code = "tender_not_manual"
+
+
+class TenderRevisionConflictError(ConflictError):
+    """Algu altre l'ha canviada des que la vas llegir."""
+
+    code = "tender_revision_conflict"
 
 
 class BuyerChoiceError(ValidationError):
@@ -284,8 +333,115 @@ async def create_manual_tender(
     )
     session.add(tender)
     await session.flush()
+    # Revisio 1 des del primer moment. Sense aquesta linia, una licitacio manual
+    # no tindria historia: el primer PATCH no tindria amb que comparar-se i
+    # `evaluate_staleness` d'un paquet congelat diria `tender_revision_unknown`
+    # en comptes de poder afirmar sobre quina versio es va congelar.
+    await tender_lifecycle.record_revision(session, tender, trigger=MANUAL_TRIGGER)
     return tender, True
 
 
 def audit_summary(**fields: object) -> str:
     return " ".join(f"{key}={value}" for key, value in fields.items())
+
+
+# --------------------------------------------------------------------------- #
+# Edicio (S3-S1b)                                                               #
+# --------------------------------------------------------------------------- #
+#
+# No hi ha historial paral·lel. L'unica porta es `tender_lifecycle`, la mateixa
+# que fa servir la ingesta, i amb ella venen de franc tres coses que aqui no
+# s'han de reimplementar: la idempotencia —mateixa fotografia, mateix hash, cap
+# revisio—, la distincio material/descriptiu —`TenderChangeEvent.is_material`,
+# que ja existeix— i la traçabilitat que llegeixen l'staleness del paquet i el
+# pre-fit.
+
+
+def assert_can_edit(role: MembershipRole) -> None:
+    if role not in EDIT_ROLES:
+        raise NotFoundError("No es pot editar una licitacio amb aquest rol.")
+
+
+def is_manual(tender: Tender, source: Source) -> bool:
+    """Manual vol dir que ve de la font MANUAL. No es dedueix del format de res."""
+    return tender.source_id == source.id
+
+
+async def load_editable_tender(
+    session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
+) -> Tender:
+    """La licitacio a editar, si aquesta empresa la pot editar.
+
+    Una licitacio d'una altra empresa dona 404, com arreu: dir «no pots» ja
+    seria dir que existeix. Una de publica existeix per a tothom, aixi que
+    aquesta si que pot dir que no s'edita per aquesta via.
+    """
+    tender = (
+        await session.execute(
+            sa.select(Tender).where(Tender.id == tender_id, visible_to_company(company_id))
+        )
+    ).scalars().one_or_none()
+    if tender is None:
+        raise NotFoundError("Licitacio no trobada.")
+
+    source = await get_or_create_manual_source(session)
+    if not is_manual(tender, source):
+        raise TenderNotManualError("Aquesta licitacio no s'ha obert a ma.")
+    return tender
+
+
+async def current_revision_number(session: AsyncSession, tender_id: uuid.UUID) -> int:
+    """El numero de la revisio vigent. Zero quan encara no n'hi ha cap."""
+    revision = await tender_lifecycle.latest_revision(session, tender_id)
+    return revision.revision_number if revision is not None else 0
+
+
+async def update_manual_tender(
+    session: AsyncSession,
+    *,
+    tender: Tender,
+    company_id: uuid.UUID,
+    expected_revision: int,
+    fields: dict[str, object],
+    buyer_id: uuid.UUID | None | object = UNSET,
+    buyer_manual: ManualBuyerInput | None = None,
+) -> tuple[Tender, bool]:
+    """Aplica els camps demanats i deixa que `tender_lifecycle` decideixi.
+
+    Retorna la licitacio i si ha calgut una revisio nova. Si els valors son els
+    que ja hi havia, la fotografia dona el mateix hash i no es crea res: ni
+    revisio, ni events, ni obsolescencia inventada.
+    """
+    if buyer_id is not UNSET and buyer_manual is not None:
+        raise BuyerChoiceError("Cal triar un organisme existent o escriure'n un, no tots dos.")
+
+    actual = await current_revision_number(session, tender.id)
+    if actual != expected_revision:
+        raise TenderRevisionConflictError(
+            "La licitacio ha canviat des que la vas llegir.",
+            details={"expected_revision": expected_revision, "current_revision": actual},
+        )
+
+    for name, value in fields.items():
+        if name not in EDITABLE_FIELDS:  # pragma: no cover - el schema ja ho impedeix
+            raise ValidationError(f"Camp no editable: {name}")
+        setattr(tender, name, value)
+
+    if buyer_manual is not None:
+        source = await get_or_create_manual_source(session)
+        tender.buyer_id = (
+            await _get_or_create_manual_buyer(session, source, company_id, buyer_manual)
+        ).id
+    elif buyer_id is not UNSET:
+        # `None` explicit vol dir treure'l; ometre el camp vol dir no tocar-lo.
+        tender.buyer_id = (
+            None
+            if buyer_id is None
+            else (await _resolve_existing_buyer(session, company_id, buyer_id)).id  # type: ignore[arg-type]
+        )
+
+    await session.flush()
+    outcome = await tender_lifecycle.record_revision(
+        session, tender, trigger=MANUAL_TRIGGER
+    )
+    return tender, not outcome.unchanged

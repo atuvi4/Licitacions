@@ -313,3 +313,51 @@ class ManualTenderCreateResult(BaseModel):
 
     created: bool
     tender: TenderDetail
+
+
+class ManualTenderUpdate(BaseModel):
+    """Correccions sobre una licitacio oberta a ma.
+
+    Tots els camps son opcionals i s'apliquen **nomes si arriben**: es fa servir
+    `model_fields_set`, que es la manera fiable de distingir «no toquis aixo»
+    d'«escriu-hi NULL». Per aixo no cal cap indicador del tipus `buyer_clear`:
+    enviar `buyer_id: null` treu l'organisme i ometre'l no el toca.
+
+    La identitat no hi es i no s'hi pot colar: `extra="forbid"` rebutja
+    `id`, `source_id`, `external_id` i `owner_company_id` amb un 422 en comptes
+    d'ignorar-los en silenci.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: La revisio que el client creu vigent. Si ja no ho es, 409.
+    expected_revision: int = Field(ge=0)
+
+    title: str | None = Field(default=None, min_length=1, max_length=1000)
+    description: str | None = None
+    expediente_number: str | None = Field(default=None, max_length=200)
+    procedure_type: ProcedureType | None = None
+    contract_type: ContractType | None = None
+    estimated_value: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    base_budget: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    base_budget_without_tax: Decimal | None = Field(
+        default=None, ge=0, max_digits=18, decimal_places=2
+    )
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    publication_date: date | None = None
+    deadline_at: datetime | None = None
+    place_of_execution: str | None = Field(default=None, max_length=500)
+    nuts_code: str | None = Field(default=None, max_length=10)
+    country_code: str | None = Field(default=None, min_length=2, max_length=2)
+
+    #: Excloents, com al POST. `null` explicit treu l'organisme.
+    buyer_id: uuid.UUID | None = None
+    buyer_manual: ManualBuyerCreate | None = None
+
+
+class ManualTenderUpdateResult(BaseModel):
+    """`revised=False` vol dir que els valors ja eren aquests."""
+
+    revised: bool
+    revision: int
+    tender: TenderDetail

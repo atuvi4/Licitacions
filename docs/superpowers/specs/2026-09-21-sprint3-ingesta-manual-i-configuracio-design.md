@@ -627,7 +627,7 @@ Cap canvi al manifest.
 |---|---|---|---|---|
 | **S3-S0** | Tenancy + `visible_tenders()` + **fix de la fuita de `MatchingService`** | 0027 | — | Cap ruta ni cap job veu una licitació privada d'una altra empresa |
 | **S3-S1** | Licitació manual + camí a Oportunitats | — | S0 | Apareix a `/licitacions` via match recalculat; retry idempotent |
-| **S3-S1b** | **Edició de licitació manual**: només la pròpia i manual · CAS per `revision_count` · `TenderRevision` a cada canvi material · staleness canònic · **C-12: cap bloqueig per paquet aprovat** · `id`, `source_id`, `external_id` i `owner_company_id` immutables | — | S1 | Editar no bloqueja; `evaluate_staleness` → `tender_changed` |
+| **S3-S1b** | **Edició de licitació manual**: només la pròpia i manual · CAS per `TenderRevision.revision_number` (veure Delta S3-S1b) · `TenderRevision` a cada canvi material · staleness canònic · **C-12: cap bloqueig per paquet aprovat** · `id`, `source_id`, `external_id` i `owner_company_id` immutables | — | S1 | Editar no bloqueja; `evaluate_staleness` → `tender_changed` |
 | **S3-S2** | Pujada manual + contracte de formats | 0028 | S1b | `text_extraction` exposat; dedup per SHA-256 |
 | **S3-S3** | Actualitzacions + staleness | 0029 | S2 | Els 3 findings; **cap validació tècnica invalidada** |
 | **S3-S4** | `tender_source_refs` | 0030 | S2 | Citació reconstruïble després d'una versió nova |
@@ -837,3 +837,42 @@ d'esborrat · `Decimal` per a tot el que sigui diners o percentatges · economia
 dins `internal_economics` amb el sentinella `UNSET` per distingir «no toquis» de «posa
 NULL» · findings sense text ni xifres internes, només codi, severitat, domini, entitat
 i context · rutes sota `/companies/{company_id}/workspaces/{workspace_id}/…`.
+
+---
+
+## Delta S3-S1b — el que la implementació ha corregit del disseny
+
+Quatre punts que el codi real desmenteix o precisa. Es documenten aquí perquè
+la fila d'S3-S1b de §27 deia una cosa que no es podia sostenir.
+
+**1. El testimoni de CAS no és `revision_count`.** `Tender.revision_count`
+compta **publicacions de la font** —s'assigna des de `SourceRecord.revision_number`
+i s'exposa com a `source_publication_count`—, no correccions. Fer-lo servir com a
+testimoni voldria dir que una edició manual no el mou i que dues correccions
+simultànies no xocarien mai. El CAS va contra
+**`TenderRevision.revision_number`**, que és el que sí que avança a cada revisió.
+**No cal cap canvi d'esquema**: la columna ja hi era.
+
+**2. Una licitació manual neix amb revisió 1.** Abans d'S3-S1b, l'alta no
+escrivia cap `TenderRevision`, i sense fotografia inicial el primer PATCH no
+tenia amb què comparar-se ni el paquet base de què penjar
+(`evaluate_staleness` hauria dit `tender_revision_unknown`). Ara l'alta desa una
+revisió base amb `trigger="manual_edit"`.
+
+**3. Corregir ≠ invalidar.** Que hi hagi revisió nova no vol dir que el paquet
+quedi obsolet: ho decideix la **taxonomia que ja existia**. `TITLE_CHANGED` és
+`INFORMATIONAL`, i per tant corregir un títol amb un paquet aprovat crea revisió
+però **no** dona `tender_changed`. El que sí que el dona és un canvi material
+—termini, imports, tipus, CPV, lots, documents. Aquí no s'hi ha creat cap
+taxonomia nova, i C-12 es compleix igualment: el paquet aprovat no bloqueja mai
+l'edició, i quan el canvi és material queda obsolet tot sol.
+
+**4. `revised=False` no vol dir «no s'ha desat».** `expediente_number` i
+`country_code` queden **fora de la fotografia canònica**: corregir-los es guarda,
+però no crea revisió i per tant `expected_revision` no avança. El PATCH per això
+desa **sempre**, també quan no hi ha revisió.
+
+**Codis d'error.** Editar una licitació d'una altra empresa és `404`, com arreu.
+Editar-ne una de **pública** és `422 tender_not_manual` i no `404`: una licitació
+publicada existeix per a tothom i dir que no s'edita per aquesta via no revela
+res.
