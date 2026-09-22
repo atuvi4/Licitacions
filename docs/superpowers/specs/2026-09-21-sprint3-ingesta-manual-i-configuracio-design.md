@@ -1171,3 +1171,73 @@ Val igual per a una pujada manual i per a una substitució d'una font sindicada:
 **C-12 intacte**: pujar una versió amb un paquet aprovat està permès, l'aprovació
 queda immutable, el paquet no es degrada ni es desbloqueja res, i no hi ha cap
 `409` ni cap acknowledge. Obsolet **no** és revocat.
+
+---
+
+## Delta S3-S4 — les cites immutables, implementades
+
+La taula de §12 s'ha implementat **tal com estava congelada**, amb el nom
+canònic `tender_source_refs` (no `workspace_source_refs`: un `Requirement` és
+tender-level i pot existir abans que cap `BidWorkspace`, així que la provinença
+tampoc no en pot dependre). Migració `0030_tender_source_refs`, head única.
+
+### El que el codi ha precisat
+
+**L'enum no porta CHECK de valors.** `enum_column` és `native_enum=False` sense
+`create_constraint=True` a tot el projecte, i aquí no es canvia. Tot i així el
+valor queda acotat de fet: `source_ref_is_anchored` només és cert per a
+`extracted_page` o `document_file`, i qualsevol altra cadena fa fallar la fila.
+Verificat contra PostgreSQL.
+
+**El `quote` es DERIVA, no s'accepta.** Quan hi ha `char_start`/`char_end`, el
+text citat surt del text real d'aquella pàgina i es valida que el tros hi
+càpiga. Un span que se'n surt és un error i no es retalla en silenci: una cita
+escapçada seguiria semblant una prova. El `content_sha256` també el deriva el
+servidor, del contingut real.
+
+**Una FK sola no demostra res.** El servei comprova la cadena sencera: la pàgina
+és d'aquella extracció, l'extracció d'un contingut que referencia un document
+**d'aquesta licitació**, i el fitxer d'un document d'aquesta licitació. Conèixer
+els dos UUID no els fa compatibles.
+
+### Conseqüència real del `RESTRICT`, verificada contra PostgreSQL
+
+| Esborrar | Resultat |
+|---|---|
+| Pàgina citada | **refusat** |
+| Extracció citada | **refusat** |
+| Fitxer citat | **refusat** |
+| El `TenderDocument` lògic del fitxer citat | **refusat**, pel CASCADE cap als seus fitxers |
+| La licitació sencera | permès; s'endú les cites (CASCADE) |
+
+La quarta fila no estava escrita enlloc i val la pena saber-la: el `SET NULL` de
+`tender_document_id` només tindria efecte si algú esborrés el document per un
+camí que no s'endugués els fitxers, i avui no n'hi ha cap. És coherent —no s'ha
+de poder fer desaparèixer la font d'una cita sense adonar-se'n— i el que
+importa és que l'última fila funciona: esborrar una licitació (o una empresa)
+no queda bloquejat perquè algú l'hagi citada.
+
+### Contracte per tipus
+
+| | `extracted_page` | `document_file` |
+|---|---|---|
+| Àncora | `extraction_id` + `page_id` | `tender_document_file_id` |
+| `page_number` | sí | no |
+| `quote` | derivat del text real | opcional, lliure |
+| `char_start`/`char_end` | opcional, validat contra la pàgina | no |
+| `location_label` | opcional | opcional, i és el que diu on mirar |
+
+`document_file` és el cas d'un XLSX o un DOCX: guardats, sense cap pàgina i amb
+`ExtractionStatus = skipped_unsupported`, i tot i així citables. No s'hi afegeix
+cap parser ni es converteix res a pàgines.
+
+### Què NO porta
+
+Cap `workspace_id`, `requirement_id`, `dimension_id` ni `issue_id`; cap JSON
+d'UUID; cap `updated_at` ni `archived_at` —una fila que no canvia mai no en
+necessita, i tenir-los convidaria a modificar-la. `RequirementEvidence` no s'ha
+tocat: continua sent la provinença dels requisits extrets amb les seves
+garanties, i això és una via genèrica **addicional**.
+
+`requirement_source_ref_links` és 0031. Cap consumidor encara, i per tant cap
+UX: la primera pantalla de citacions arribarà amb els requisits manuals.

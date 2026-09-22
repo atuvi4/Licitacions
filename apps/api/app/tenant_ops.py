@@ -102,6 +102,11 @@ PUBLIC_TABLES = frozenset(
         # que el miren comparteixen les mateixes revisions i els mateixos canvis.
         "tender_revisions",
         "tender_change_events",
+        # Una cita penja de la LICITACIO, no de cap empresa: no te `company_id`
+        # i hereta la visibilitat de l'expedient, com els plecs que cita. Per
+        # aixo tampoc no s'ha d'esborrar en destruir un tenant: la font que
+        # senyala segueix sent la mateixa per a qui la pugui veure.
+        "tender_source_refs",
         "tender_lot_cpvs",
         "tender_lots",
         "tenders",

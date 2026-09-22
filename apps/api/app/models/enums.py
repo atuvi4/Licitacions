@@ -336,6 +336,21 @@ class ExtractionQuality(StrEnum):
     NOT_APPLICABLE = "not_applicable"
 
 
+class SourceRefKind(StrEnum):
+    """A que s'ancora una cita.
+
+    Son dues coses diferents i no una de sola amb camps opcionals: d'un PDF
+    llegit se'n pot citar la pagina exacta, i d'un XLSX guardat nomes se'n pot
+    dir on mirar. Fer veure que un full de calcul te pagines seria inventar-se
+    una precisio que no tenim.
+    """
+
+    #: Una pagina concreta d'una extraccio concreta. La cita mes forta.
+    EXTRACTED_PAGE = "extracted_page"
+    #: Una versio concreta d'un fitxer, sense text. `location_label` diu on.
+    DOCUMENT_FILE = "document_file"
+
+
 class PageExtractionStatus(StrEnum):
     EXTRACTED = "extracted"
     EMPTY = "empty"

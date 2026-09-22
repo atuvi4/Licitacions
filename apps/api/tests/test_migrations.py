@@ -549,3 +549,73 @@ def test_la_revisio_documental_no_afegeix_cap_index_ni_cap_clau():
 
     assert "CREATE INDEX" not in up
     assert "FOREIGN KEY" not in up
+
+
+_REFS = "0029_document_review_state:0030_tender_source_refs"
+
+
+def test_les_cites_es_poden_aplicar_i_desfer():
+    """0029 -> 0030 -> 0029, amb la taula sencera."""
+    up = _offline_sql("upgrade", _REFS)
+    down = _offline_sql("downgrade", "0030_tender_source_refs:0029_document_review_state")
+
+    assert "CREATE TABLE tender_source_refs" in up
+    assert "DROP TABLE tender_source_refs" in down
+
+
+def test_les_ancores_dune_cita_no_es_poden_esborrar_per_accident():
+    """RESTRICT a les tres: l'evidencia citada s'ha de protegir.
+
+    CASCADE hauria fet desapareixer la prova amb el document, i SET NULL hauria
+    deixat una cita que no apunta enlloc pero que segueix semblant una cita.
+    """
+    up = _offline_sql("upgrade", _REFS)
+
+    for fk in ("fk_tender_source_refs_extraction", "fk_tender_source_refs_page",
+               "fk_tender_source_refs_file"):
+        line = [row for row in up.splitlines() if fk in row]
+        assert line, fk
+        assert "ON DELETE RESTRICT" in line[0], fk
+
+
+def test_el_document_logic_nomes_serveix_per_ensenyar_un_nom():
+    """SET NULL: si desapareix, la cita segueix reconstruible pel fitxer i el SHA."""
+    up = _offline_sql("upgrade", _REFS)
+
+    line = [row for row in up.splitlines() if "fk_tender_source_refs_document" in row]
+    assert line
+    assert "ON DELETE SET NULL" in line[0]
+
+
+def test_una_cita_impossible_la_rebutja_la_base_de_dades():
+    """Els tres CHECK, amb nom, al DDL. No nomes a Pydantic."""
+    up = _offline_sql("upgrade", _REFS)
+
+    for check in ("source_ref_is_anchored", "source_ref_page_is_one_based",
+                  "source_ref_char_span_is_coherent"):
+        assert check in up, check
+
+
+def test_lenum_de_cita_no_es_un_tipus_natiu():
+    """`native_enum=False`, com tots els enums del projecte: VARCHAR.
+
+    El helper no genera CHECK de valors —es un fet conegut de tot el projecte i
+    aqui no es canvia—, pero en aquesta taula el valor queda igualment acotat:
+    `source_ref_is_anchored` nomes es cert per a `extracted_page` o
+    `document_file`, aixi que qualsevol altra cadena fa fallar la fila.
+    """
+    up = _offline_sql("upgrade", _REFS)
+
+    assert "ref_kind VARCHAR" in up
+    assert "CREATE TYPE" not in up
+    anchored = [row for row in up.splitlines() if "source_ref_is_anchored" in row]
+    assert anchored
+    assert "'extracted_page'" in anchored[0]
+    assert "'document_file'" in anchored[0]
+
+
+def test_les_cites_neixen_sense_cap_fila():
+    """Cap backfill: no hi ha cap cita que ningu hagi escrit."""
+    up = _offline_sql("upgrade", _REFS)
+
+    assert "INSERT INTO tender_source_refs" not in up
