@@ -930,16 +930,15 @@ async def test_an_expedient_correction_does_not_invalidate_an_approved_package(
     assert "tender_changed" not in report.reasons
 
 
-async def test_a_new_plec_does_make_the_package_stale(client_a, db, ready):
-    """Un plec que arriba SI que obliga a tornar-se a mirar el paquet.
+async def test_a_plec_uploaded_by_hand_does_not_invalidate_the_package_either(
+    client_a, db, ready
+):
+    """La regla no depen d'on ve el document.
 
-    No es una regla nova d'S3-S2: `DOCUMENT_ADDED` ja era material —afecta
-    requisits i compliment— i la ingesta sindicada ja feia exactament aixo quan
-    l'organ publicava un plec. Pujar-lo a ma passa per la mateixa porta.
-
-    Es el punt que separa aixo de l'obsolescencia DOCUMENTAL de S3-S3
-    (`documents_reviewed_*`), que aqui no existeix: aixo nomes diu que la
-    licitacio ha canviat, i qui ho llegeix en treu les conclusions.
+    Que el plec l'hagi pujat una persona o l'hagi portat la sindicacio es
+    irrellevant: en tots dos casos l'arribada diu que hi ha material per
+    llegir, no que el que s'enviaria hagi canviat. Un `if origin == uploaded`
+    aqui seria una regla per a la interficie, no per al domini.
     """
     from app.services import submission_package
     from tests.fixtures.pdf_builder import build_pdf
@@ -947,9 +946,6 @@ async def test_a_new_plec_does_make_the_package_stale(client_a, db, ready):
     package = await freeze(db, ready)
     await approve(db, ready, package)
     company, tender = ready["company"], ready["tender"]
-    assert "tender_changed" not in (
-        await submission_package.evaluate_staleness(db, ready["workspace"], package)
-    ).reasons
 
     uploaded = await client_a.post(
         f"/api/v1/companies/{company.id}/tenders/{tender.id}/documents",
@@ -958,4 +954,16 @@ async def test_a_new_plec_does_make_the_package_stale(client_a, db, ready):
     assert uploaded.status_code == 201, uploaded.text
 
     report = await submission_package.evaluate_staleness(db, ready["workspace"], package)
-    assert "tender_changed" in report.reasons
+    assert "tender_changed" not in report.reasons
+
+    # L'arribada, pero, queda escrita: es tracabilitat, no obsolescencia.
+    from app.models.tender_lifecycle import TenderRevision
+
+    revisions = (
+        await db.execute(
+            sa.select(TenderRevision)
+            .where(TenderRevision.tender_id == tender.id)
+            .order_by(TenderRevision.revision_number)
+        )
+    ).scalars().all()
+    assert revisions[-1].trigger == "document_processing"

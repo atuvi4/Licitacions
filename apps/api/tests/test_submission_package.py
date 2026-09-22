@@ -1580,6 +1580,94 @@ async def test_a_document_that_only_moved_does_not_invalidate_an_approved_packag
     assert stale.is_stale is False
 
 
+async def test_a_new_plec_does_not_by_itself_invalidate_an_approved_package(
+    db, ready, tender
+):
+    """**Un document nou NO vol dir que els requisits hagin canviat.**
+
+    Diu que hi ha material per revisar, i aixo ja ho diu `requirements_outdated`
+    per la seva banda. Mentre ningu no l'hagi llegit, ni els requisits ni el
+    compliment son uns altres: el que hi ha al paquet segueix sent el que es
+    va aprovar.
+
+    Quan algu el llegeixi i l'extraccio doni requisits diferents, hi haura un
+    `RequirementExtractionRun` nou i el paquet ho sabra per
+    `requirement_run_changed`, que ja existia. Confondre les dues coses gastava
+    el senyal: el dia que canviés de veritat un plec, ningu se'l miraria.
+    """
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+    package = await freeze(db, ready)
+    approval = await approve(db, ready, package)
+
+    await _add_tender_document(db, tender, url="https://x/annex.pdf", sha="c" * 64)
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+
+    stale = await service.evaluate_staleness(db, ready["workspace"], package)
+    assert "tender_changed" not in stale.reasons
+
+    # I l'aprovacio segueix intacta i vigent.
+    await db.refresh(approval)
+    await db.refresh(package)
+    assert approval.decision == PackageApprovalDecision.APPROVED_FOR_SUBMISSION
+    assert package.status == SubmissionPackageStatus.APPROVED
+
+
+async def test_the_arrival_of_a_plec_queda_registrada_igualment(db, ready, tender):
+    """No es perd tracabilitat: la revisio i l'event hi son, i son materials.
+
+    El que canvia no es que s'hagi deixat d'enregistrar, sino qui n'ha de fer
+    cas. Separar les dues coses es tota la correccio.
+    """
+    from app.models.tender_lifecycle import TenderChangeEvent
+    from app.tenders.changes import ChangeImpact
+
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+    before = await lifecycle.latest_revision(db, tender.id)
+
+    await _add_tender_document(db, tender, url="https://x/annex.pdf", sha="c" * 64)
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+
+    after = await lifecycle.latest_revision(db, tender.id)
+    assert after.revision_number == before.revision_number + 1
+
+    events = (
+        await db.scalars(
+            sa.select(TenderChangeEvent).where(
+                TenderChangeEvent.tender_id == tender.id,
+                TenderChangeEvent.change_code == "DOCUMENT_ADDED",
+            )
+        )
+    ).all()
+    assert events, "l'arribada del plec ha de quedar escrita"
+    assert all(event.is_material for event in events)
+    # I continua obligant a tornar a llegir els plecs, que es el seu sentit.
+    assert ChangeImpact.REQUIREMENTS_AFFECTING.value in (events[-1].impacts or [])
+
+
+async def test_a_plec_that_is_replaced_does_invalidate_the_package(db, ready, tender):
+    """El contrast: substituir un plec NO es el mateix que afegir-ne un.
+
+    Un document que es substitueix o desapareix toca material que ja formava
+    part del que s'havia aprovat, i per aixo continua sent `workspace_critical`.
+    """
+    document = await _add_tender_document(db, tender, url="https://x/pcap.pdf", sha="a" * 64)
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+    package = await freeze(db, ready)
+    await approve(db, ready, package)
+
+    await _replace_content(db, document, sha="b" * 64)
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+
+    stale = await service.evaluate_staleness(db, ready["workspace"], package)
+    assert "tender_changed" in stale.reasons
+
+
 async def test_a_new_deadline_makes_an_approved_package_stop_being_presentable(
     db, ready, tender
 ):
@@ -1994,6 +2082,39 @@ async def _with_validated_solution(db, ready):
     return await technical_solution.validate_solution(
         db, workspace, solution, note="Revisat", user=user
     )
+
+
+
+async def test_a_new_plec_does_not_unvalidate_a_technical_solution(db, ready, tender):
+    """L'invariant congelat: un document nou NO invalida una solucio validada.
+
+    Ho sosté el mecanisme que ja hi havia i no cap regla afegida aqui: la
+    validacio es lliga a dues empremtes —el contingut de la proposta i el
+    requisit concret—, i cap de les dues no la mou un document que ningu no ha
+    llegit. I l'abast tecnic tampoc no caduca: la seva empremta es fa de
+    requisits, no de documents.
+
+    Si algu llegeix el document i d'alla en surten requisits diferents, llavors
+    si que caduca, pel cami de sempre (`REQUIREMENT_CHANGED`). Aixo es S3-S3 i
+    aqui no s'implementa.
+    """
+    from app.services import technical_scope, technical_solution
+
+    workspace, user = ready["workspace"], ready["user"]
+    solution = await _with_validated_solution(db, ready)
+    validated = (solution.validated_at, solution.validated_by)
+    await technical_scope.confirm(db, workspace, user=user)
+    assert (await technical_scope.review_state(db, workspace)).stale is False
+    assert await technical_solution.stale_reasons_for(db, [solution]) == {solution.id: []}
+
+    await _add_tender_document(db, tender, url="https://x/annex.pdf", sha="d" * 64)
+    await lifecycle.record_revision(db, tender)
+    await db.commit()
+
+    await db.refresh(solution)
+    assert (solution.validated_at, solution.validated_by) == validated
+    assert await technical_solution.stale_reasons_for(db, [solution]) == {solution.id: []}
+    assert (await technical_scope.review_state(db, workspace)).stale is False
 
 
 # --- El cost intern no es contingut presentat -------------------------------- #

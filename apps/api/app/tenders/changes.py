@@ -282,9 +282,18 @@ IMPACT_MATRIX: dict[ChangeCode, frozenset[ChangeImpact]] = {
     ),
     ChangeCode.LOT_METADATA_CHANGED: frozenset({ChangeImpact.INFORMATIONAL}),
 
-    ChangeCode.DOCUMENT_ADDED: frozenset(
-        {ChangeImpact.REQUIREMENTS_AFFECTING, ChangeImpact.COMPLIANCE_AFFECTING}
-    ),
+    #: Un plec NOU diu que hi ha material per llegir, no que el que ja sabiem
+    #: hagi canviat. Obliga a tornar a extreure requisits —per aixo es
+    #: `requirements_affecting` i per aixo continua sent material—, pero no
+    #: afirma res del compliment: el veredicte de compliment es calcula sobre
+    #: els requisits, i mentre ningu no hagi llegit el document nou els
+    #: requisits vigents son exactament els d'abans. Quan algu el llegeixi i
+    #: en surtin requisits diferents, hi haura un run nou i qui en depengui ho
+    #: sabra per aquell cami.
+    #:
+    #: Es diferent de substituir-ne un o de perdre'n un: alla el material que
+    #: ja formava part del que s'havia decidit deixa de ser el mateix.
+    ChangeCode.DOCUMENT_ADDED: frozenset({ChangeImpact.REQUIREMENTS_AFFECTING}),
     ChangeCode.DOCUMENT_REMOVED: frozenset(
         {
             ChangeImpact.REQUIREMENTS_AFFECTING,
@@ -341,6 +350,25 @@ class Change:
             "new_value": self.new_value,
             "impacts": sorted(impact.value for impact in self.impacts),
         }
+
+
+#: Els impactes que fan que un paquet congelat deixi de ser vigent.
+#:
+#: NO hi es `REQUIREMENTS_AFFECTING`, i es la distincio que sosté tota la
+#: pantalla d'aprovacio: que arribi material per llegir no vol dir que el que
+#: s'enviaria hagi canviat. Qui ha de reaccionar a material nou es l'extraccio
+#: de requisits (`requirements_outdated`); si en surten requisits diferents,
+#: el paquet ho sabra per `requirement_run_changed`, que compara runs i no
+#: events. Sense aquesta separacio, qualsevol annex publicat despres de
+#: l'aprovacio la faria caducar, i el dia que canviés un plec de veritat ningu
+#: no s'ho miraria.
+PACKAGE_STALE_IMPACTS: frozenset[ChangeImpact] = frozenset(
+    {
+        ChangeImpact.PREFIT_AFFECTING,
+        ChangeImpact.COMPLIANCE_AFFECTING,
+        ChangeImpact.WORKSPACE_CRITICAL,
+    }
+)
 
 
 def impacts_of(changes: list[Change]) -> frozenset[ChangeImpact]:

@@ -511,13 +511,16 @@ async def test_no_file_ever_points_at_bytes_that_are_not_there(client_a, db, ten
 # --------------------------------------------------------------------------- #
 
 
-async def test_a_new_plec_is_a_change_of_the_tender(client_a, db, tenant_a):
-    """Un plec que arriba es un canvi, vingui de la font o d'una persona.
+async def test_a_new_plec_is_recorded_as_an_arrival(client_a, db, tenant_a):
+    """Un plec que arriba queda REGISTRAT, vingui de la font o d'una persona.
 
     S'hi passa per la MATEIXA porta (`record_revision`) i genera el mateix
-    `DOCUMENT_ADDED` que si l'hagues portat la sindicacio. Aqui no s'hi
-    implementa cap obsolescencia documental: la de S3-S3 —`documents_reviewed_*`
-    i els seus findings— no existeix encara.
+    `DOCUMENT_ADDED`. El que aquesta revisio NO vol dir es que el que
+    s'enviaria hagi canviat: es tracabilitat, i qui hi ha de reaccionar es
+    l'extraccio de requisits. Veure `PACKAGE_STALE_IMPACTS`.
+
+    Aqui tampoc no s'implementa l'obsolescencia DOCUMENTAL de S3-S3
+    (`documents_reviewed_*` i els seus findings).
     """
     from app.models.tender_lifecycle import TenderRevision
 
