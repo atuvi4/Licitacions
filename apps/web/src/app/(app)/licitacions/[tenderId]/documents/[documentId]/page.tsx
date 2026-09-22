@@ -35,6 +35,7 @@ import {
   TENDER_DOCUMENT_LABELS,
   documentState,
   formatBytes,
+  analysisStatusOf,
   type TenderDetail,
   type TenderDocumentFileSummary,
 } from "@/lib/tenders";
@@ -44,11 +45,18 @@ interface FileRead {
   version_number: number;
   is_current: boolean;
   download_status: string;
-  source_url: string;
+  /** Nul quan el fitxer l'ha pujat una persona: no ve de cap URL. */
+  source_url: string | null;
+  origin: "fetched" | "uploaded";
   original_filename: string | null;
   downloaded_at: string | null;
   error_code: string | null;
-  content: { sha256: string; file_size: number; mime_type: string } | null;
+  content: {
+    sha256: string;
+    file_size: number;
+    mime_type: string;
+    is_text_extractable: boolean;
+  } | null;
   extraction: {
     id: string;
     parser_version: string;
@@ -139,8 +147,12 @@ function DocumentText() {
         file_id: current.id,
         version_number: current.version_number,
         download_status: current.download_status as never,
+        origin: current.origin,
         file_size: current.content?.file_size ?? null,
         sha256: current.content?.sha256 ?? null,
+        mime_type: current.content?.mime_type ?? null,
+        text_extraction_supported: current.content?.is_text_extractable ?? false,
+        analysis_status: analysisStatusOf(extraction),
         extraction_status: (extraction?.status ?? null) as never,
         quality: (extraction?.quality ?? null) as never,
         page_count: extraction?.page_count ?? null,

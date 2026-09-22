@@ -119,12 +119,35 @@ export type ExtractionStatus =
 
 export type ExtractionQuality = "good" | "low_text" | "empty" | "failed" | "not_applicable";
 
+/** D'on venen els bytes: descarregats d'una font o pujats per una persona. */
+export type DocumentFileOrigin = "fetched" | "uploaded";
+
+/**
+ * Què se sap del TEXT d'un document. Mai què se sap del fitxer: un DOCX es
+ * guarda perfectament i té `unsupported`, que no és cap error de pujada.
+ *
+ * El calcula el backend i arriba fet. La interfície no l'ha de deduir de
+ * l'estat i la qualitat de l'extracció, perquè deduir-lo en dos llocs acabaria
+ * amb dues pantalles dient coses diferents del mateix fitxer.
+ */
+export type DocumentAnalysisStatus =
+  | "pending"
+  | "extracted"
+  | "no_usable_text"
+  | "unsupported"
+  | "failed";
+
 export interface TenderDocumentFileSummary {
   file_id: string;
   version_number: number;
   download_status: DownloadStatus;
+  origin: DocumentFileOrigin;
   file_size: number | null;
   sha256: string | null;
+  mime_type: string | null;
+  /** Si d'aquest FORMAT en sabem llegir el text. */
+  text_extraction_supported: boolean;
+  analysis_status: DocumentAnalysisStatus;
   extraction_status: ExtractionStatus | null;
   quality: ExtractionQuality | null;
   page_count: number | null;
@@ -133,6 +156,26 @@ export interface TenderDocumentFileSummary {
   extraction_id: string | null;
   processed_at: string | null;
   error_code: string | null;
+}
+
+/**
+ * El mateix veredicte que calcula el backend, per a les pantalles que només
+ * tenen l'extracció crua a mà (el detall d'un document).
+ *
+ * És una traducció, no una segona font de veritat: el resum d'un document
+ * l'envia el backend ja calculat i aquesta funció n'ha de dir exactament el
+ * mateix.
+ */
+export function analysisStatusOf(
+  extraction: { status: string; quality: string } | null,
+): DocumentAnalysisStatus {
+  if (!extraction || extraction.status === "pending" || extraction.status === "extracting") {
+    return "pending";
+  }
+  if (extraction.status === "skipped_unsupported") return "unsupported";
+  if (extraction.status === "failed") return "failed";
+  if (extraction.quality === "empty" || extraction.quality === "low_text") return "no_usable_text";
+  return "extracted";
 }
 
 export interface TenderDocumentMeta {
