@@ -69,6 +69,10 @@ INDIRECT_TABLES: dict[str, tuple[str, str, str]] = {
     "project_cpvs": ("project_id", "company_projects", "id"),
     "project_services": ("project_id", "company_projects", "id"),
     "service_cpvs": ("service_id", "company_services", "id"),
+    # El que una font deia sobre una magnitud es de l'empresa que ho va anotar,
+    # no de la licitacio: `workspace_dimensions` porta el `company_id` i
+    # l'observacio hi penja. Si es destrueix el tenant, se'n va amb ell.
+    "workspace_dimension_observations": ("dimension_id", "workspace_dimensions", "id"),
 }
 
 # Taules publiques i globals: no pertanyen a cap tenant i no s'han de tocar mai.

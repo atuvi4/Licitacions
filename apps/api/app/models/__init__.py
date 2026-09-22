@@ -10,6 +10,7 @@ from app.models.compliance import (
 )
 from app.models.cpv import CompanyCPVPreference, CPVCode, ServiceCPV
 from app.models.credentials import CompanyCertification, CompanyInsurance, CompanyRegistration
+from app.models.dimensions import WorkspaceDimension, WorkspaceDimensionObservation
 from app.models.documents import Document, DocumentLink
 from app.models.identity import Company, CompanyMembership, User
 from app.models.jobs import JobRequest, WorkJob
@@ -125,6 +126,8 @@ __all__ = [
     "TenderRevision",
     "TenderSourceRef",
     "RequirementSourceRefLink",
+    "WorkspaceDimension",
+    "WorkspaceDimensionObservation",
     "User",
     "WorkJob",
     "WorkspaceChecklistItem",

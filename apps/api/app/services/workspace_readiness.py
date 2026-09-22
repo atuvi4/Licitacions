@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import NotFoundError
 from app.models.enums import PricingBasis, TechnicalSolutionSource, TechnicalSolutionStatus
 from app.models.workspace import BidWorkspace
+from app.services import dimensions as dimension_service
 from app.services import document_review, requirement_analysis
 from app.services import economic_offer as offer_service
 from app.services import technical_scope as scope_service
@@ -26,6 +27,7 @@ from app.services import technical_solution as solution_service
 from app.services import workspace_dossier as dossier_service
 from app.workspace.readiness import (
     BLOCKER,
+    DIMENSION_DISPUTED,
     DOMAIN_ECONOMIC,
     DOMAIN_TECHNICAL,
     DOMAIN_WORKSPACE,
@@ -81,6 +83,19 @@ async def technical_findings(
     """
     scope = scope or await scope_service.resolve(session, workspace)
     findings: list[Finding] = []
+
+    # Una discrepancia de dimensionament es tecnica: parla de com es dimensiona
+    # el que s'oferira, no dels papers ni del preu.
+    for dimension in await dimension_service.disputed_dimensions(session, workspace):
+        findings.append(
+            Finding(
+                code=DIMENSION_DISPUTED,
+                severity=WARNING,
+                domain=DOMAIN_TECHNICAL,
+                entity_id=dimension.id,
+                context={"key": dimension.key, "scope_label": dimension.scope_label},
+            )
+        )
 
     review = await scope_service.review_state(session, workspace, scope)
     if not review.reviewed:

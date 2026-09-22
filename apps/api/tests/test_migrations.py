@@ -694,3 +694,110 @@ def test_el_downgrade_esborra_els_manuals_en_comptes_dinventar_runs():
     assert "INSERT INTO requirement_extraction_runs" not in down
     # I l'esborrat va ABANS de tornar la columna a NOT NULL.
     assert down.index("DELETE FROM requirements") < down.index("SET NOT NULL")
+
+
+_DIMENSIONS = "0031_manual_requirements:0032_workspace_dimensions"
+
+
+def test_el_dimensionament_es_pot_aplicar_i_desfer():
+    up = _offline_sql("upgrade", _DIMENSIONS)
+    down = _offline_sql("downgrade", "0032_workspace_dimensions:0031_manual_requirements")
+
+    for fragment in (
+        "CREATE TABLE workspace_dimensions",
+        "CREATE TABLE workspace_dimension_observations",
+    ):
+        assert fragment in up, fragment
+    for fragment in (
+        "DROP TABLE workspace_dimension_observations",
+        "DROP TABLE workspace_dimensions",
+    ):
+        assert fragment in down, fragment
+    # Les observacions se'n van primer: si no, la taula filla es quedaria
+    # apuntant a una taula que ja no hi es.
+    assert down.index("DROP TABLE workspace_dimension_observations") < down.index(
+        "DROP TABLE workspace_dimensions"
+    )
+
+
+def test_nomes_hi_ha_aquestes_dues_taules():
+    """0032 no toca res mes. Cap columna afegida a res que ja existia."""
+    up = _offline_sql("upgrade", _DIMENSIONS)
+
+    created = {
+        row.split("CREATE TABLE ")[1].split(" ")[0].strip()
+        for row in up.splitlines()
+        if row.startswith("CREATE TABLE ")
+    }
+    assert created == {"workspace_dimensions", "workspace_dimension_observations"}
+    assert "ALTER TABLE" not in up.replace("ALTER TABLE ONLY", "")
+
+
+def test_les_xifres_son_numeric_i_no_double():
+    """`Float` no sap representar 0,1, i aquestes xifres acaben en una oferta."""
+    up = _offline_sql("upgrade", _DIMENSIONS)
+
+    assert "NUMERIC(18, 4)" in up
+    assert "DOUBLE PRECISION" not in up
+    assert "FLOAT" not in up.upper().replace("DEFAULT", "")
+
+
+def test_una_decisio_sense_motiu_no_hi_cap():
+    """El CHECK, no nomes el servei: el motiu es el que fa util la decisio."""
+    up = _offline_sql("upgrade", _DIMENSIONS)
+
+    assert "dimension_decided_has_reason" in up
+    assert "status <> 'decided' OR decision_reason IS NOT NULL" in up
+
+
+def test_no_es_pot_repetir_una_magnitud_dins_del_mateix_ambit():
+    up = _offline_sql("upgrade", _DIMENSIONS)
+
+    assert "uq_workspace_dimension_key_scope" in up
+
+
+def test_perdre_una_cita_no_perd_el_que_la_font_deia():
+    """SET NULL cap a la cita; CASCADE cap a la dimensio.
+
+    Si fos RESTRICT, esborrar un document deixaria la cita, i amb ella tot el
+    dimensionament, impossible de netejar. I si fos CASCADE, perdre la cita
+    esborraria l'observacio: el valor que la font deia seguiria sent cert
+    encara que ja no en sapiguem el full exacte.
+    """
+    up = _offline_sql("upgrade", _DIMENSIONS)
+
+    ref = [row for row in up.splitlines() if "fk_dimension_observations_source_ref" in row]
+    assert ref and "ON DELETE SET NULL" in ref[0]
+    parent = [
+        row for row in up.splitlines() if "fk_dimension_observations_dimension" in row
+    ]
+    assert parent and "ON DELETE CASCADE" in parent[0]
+
+
+def test_qui_va_decidir_pot_marxar_de_lempresa():
+    """SET NULL: esborrar un usuari no ha d'esborrar la decisio que va prendre."""
+    up = _offline_sql("upgrade", _DIMENSIONS)
+
+    for name in ("fk_workspace_dimensions_decider", "fk_dimension_observations_author"):
+        row = [line for line in up.splitlines() if name in line]
+        assert row and "ON DELETE SET NULL" in row[0], name
+
+
+def test_no_sinventa_cap_dimensio():
+    """Les dues taules neixen buides. Cap backfill, cap dimensio automatica.
+
+    Que es una dimensio ho diu una persona. Deduir-les dels numeros que
+    apareguin als plecs seria justament el que aquesta fase evita.
+    """
+    up = _offline_sql("upgrade", _DIMENSIONS)
+
+    assert "INSERT INTO workspace_dimensions" not in up
+    assert "INSERT INTO workspace_dimension_observations" not in up
+
+
+def test_el_downgrade_no_deixa_les_observacions_orfes():
+    """Es perdua de dades, i es deliberada: 0031 no coneix cap dimensio."""
+    down = _offline_sql("downgrade", "0032_workspace_dimensions:0031_manual_requirements")
+
+    assert "workspace_dimension_observations" in down
+    assert "INSERT INTO" not in down

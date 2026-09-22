@@ -658,17 +658,24 @@ async def test_two_citations_of_the_same_source_stay_two(client_a, db, tenant_a)
 
 
 async def test_the_citations_have_their_consumers_but_not_more(db):
-    """0030 crea les cites i 0031 les enllaça amb els requisits.
+    """0030 crea les cites, 0031 les enllaça amb els requisits i 0032 amb les
+    dimensions.
 
-    Les dimensions i els dubtes encara no: cada fase afegeix el seu consumidor
-    i cap d'ells no toca `tender_source_refs`, que es immutable.
+    Els dubtes encara no: cada fase afegeix el seu consumidor, i el que cap
+    d'ells no fa és tocar `tender_source_refs`, que és immutable. Un consumidor
+    nou hi apunta; mai no hi escriu.
     """
     from app.models import Base
 
     assert "tender_source_refs" in Base.metadata.tables
     assert "requirement_source_ref_links" in Base.metadata.tables
-    assert "workspace_dimension_observations" not in Base.metadata.tables
+    assert "workspace_dimension_observations" in Base.metadata.tables
     assert "workspace_issue_source_ref_links" not in Base.metadata.tables
+
+    # I la taula citada segueix sent la mateixa: cap consumidor no li ha afegit
+    # cap columna per desar-hi el seu propi estat.
+    columns = set(Base.metadata.tables["tender_source_refs"].columns.keys())
+    assert not any(name.startswith(("dimension", "requirement", "issue")) for name in columns)
 
 
 async def test_an_extraction_referenced_by_a_citation_is_protected(client_a, db, tenant_a):

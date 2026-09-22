@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
+import { DimensionsSubsection } from "@/components/DimensionsSubsection";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useInvalidateReadiness, useReadiness } from "@/components/ReadinessProvider";
 import { useSession } from "@/components/SessionProvider";
@@ -753,6 +754,11 @@ export function TechnicalSolutionSection({ workspace, registerLeaveGuard }: Prop
           />
         </Card>
       )}
+
+      {/* ----- Dimensionament ---------------------------------------------- */}
+      {/* Aqui i no en una pestanya propia: les xifres de que depen la proposta
+          es decideixen mentre s'escriu la proposta, no en un altre moment. */}
+      <DimensionsSubsection workspace={workspace} />
 
       {/* ----- Solucions addicionals -------------------------------------- */}
       <Card>

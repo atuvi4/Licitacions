@@ -1341,3 +1341,98 @@ desenganxa l'anterior.
 **Citar no verifica.** Adjuntar evidència no canvia `review_status` ni
 l'atribució: un requisit manual amb cita continua sent una afirmació humana amb
 font, no una extracció.
+
+
+---
+
+## Delta S3-S6 — dimensions multi-font, implementades
+
+`0032_workspace_dimensions` crea **exactament dues taules** i no toca cap de les
+que ja hi havia: cap columna afegida, cap backfill, cap dimensió inventada. Les
+dues neixen buides, i el downgrade les esborra —0031 no sap representar cap
+dimensió i no hi ha res a preservar-hi que tingui sentit fora d'aquesta fase.
+
+**Delta sobre §14 — la provinença no es duplica.** El disseny original portava
+`tender_document_id`, `page_number` i `quote` a l'observació. Queda superat:
+`source_ref_id` apunta a `tender_source_refs`, que des d'S3-S4 ja porta la
+versió, el SHA, la pàgina i la cita derivada del text real. Tenir-ne dues còpies
+voldria dir que un dia dirien coses diferents, i la còpia de l'observació
+sobreviuria a una v2 del document afirmant una cosa que aquella font no va dir
+mai. Hi ha un test que puja una v2 i comprova que la cita continua apuntant a la
+v1 amb el seu SHA.
+
+**Delta sobre §14 — «evidència nova» no és una comparació de dates.** La regla
+de no reobrir una decisió sola estava escrita com «observacions posteriors a
+`decided_at`». No es pot implementar honestament: `created_at` el posa el
+rellotge de la base de dades (`CURRENT_TIMESTAMP`, resolució de **segon**) i
+`decided_at` el del procés, i comparar-los és comparar dos rellotges. Una
+observació que arribés el mateix segon que la decisió semblaria anterior. Com
+que `add_observation` és l'única manera de crear-ne una, la detecció és
+**incremental**: la font que acaba d'arribar la tenim a la mà i no cal
+preguntar-ho a cap rellotge.
+
+* dimensió **no** decidida → `disputed` si hi ha ≥2 `value_num` distints;
+* dimensió **decidida** → `disputed` només si la font que acaba d'arribar porta
+  un `value_num` que no és el decidit.
+
+Les observacions que van motivar la decisió es conserven totes i **no** tornen a
+comptar. Si comptessin, la dimensió quedaria disputada just després de
+resoldre-la i l'avís no serviria per a res.
+
+**Només números.** `value_num` l'omple qui registra la font. El sistema no dedueix
+que «cent vuitanta-una» és 181, no normalitza text i no tria la font més fiable.
+Dues fonts sense xifra no són mai una discrepància: es mostren totes dues i prou.
+La comparació és de `Decimal`, o sigui que `1.5000` i `1.5` són el mateix número.
+
+**El UNIQUE no basta sol.** `UNIQUE(workspace_id, key, scope_label)` no dispara
+quan `scope_label IS NULL`, perquè a PostgreSQL dos NULL són distints. El
+constraint es queda tal com el fixa §14 i el servei ho complementa amb una
+comprovació pròpia (`409 dimension_duplicate_key`). El gate de PostgreSQL ho
+prova en tots dos sentits: amb àmbit dispara, sense àmbit no.
+
+**CAS a les quatre escriptures.** Corregir metadades, afegir una font, decidir i
+arxivar porten `expected_revision` i avancen el testimoni via
+`UPDATE … WHERE revision = :expected` (`409 dimension_revision_conflict`). Un
+PATCH que no canvia res **no** el mou: un desat que no canvia res no ha de
+caducar la lectura de ningú.
+
+**Decidir té el seu endpoint, i no és un camp.** `status`, `working_value_*` i
+`decision_reason` no són a cap schema d'escriptura de metadades. Si s'hi
+poguessin tocar, «decidit» seria un valor més i el motiu es podria esquivar. El
+motiu és obligatori al schema (`min_length=1`), al servei (no accepta espais) i
+a la base de dades (`CHECK`) — el gate de PostgreSQL comprova que el CHECK
+dispara de debò, no només que existeix.
+
+**Arxivar, mai esborrar.** Treu la dimensió de la llista activa i apaga el seu
+avís; les observacions es conserven. És idempotent.
+
+**Append-only de veritat.** No hi ha cap PATCH ni cap DELETE d'observació, i la
+taula no té ni `updated_at` ni `archived_at`: no hi ha on desar-hi un canvi. Una
+observació no diu «el valor és 151», diu «aquesta font deia 151».
+
+**`SET NULL` cap a la cita, no `RESTRICT`.** A diferència de
+`requirement_source_ref_links`, perdre la cita no ha de fer perdre l'observació:
+el que la font deia segueix sent cert encara que ja no en sapiguem el full
+exacte. Cap a la dimensió, `CASCADE`.
+
+**Delta sobre §22 — `dimension_disputed` sí, `dimension_undecided_in_use` no.**
+El primer és un **warning** del domini tècnic, amb `entity_id` i el `key` de la
+dimensió al context. No bloqueja: bloquejar diria que el sistema sap que hi ha un
+error, i el que sap és que dues fonts no diuen el mateix. Una dimensió
+`undecided` no genera res —queixar-se'n seria soroll—, i
+`dimension_undecided_in_use` queda ajornat a S3-S8, que és quan existiran les
+opcions a les quals una dimensió es pot enllaçar.
+
+**Cap propagació de quantitats.** Res no escriu una quantitat a partir de
+`working_value_num`; §16 continua sent feina d'S3-S8.
+
+**Tenancy.** `workspace_dimensions` porta `company_id` i és de tenant;
+`workspace_dimension_observations` hi penja i queda classificada com a indirecta
+a `app/tenant_ops.py`. Una dimensió d'una altra candidatura, encara que sigui de
+la mateixa empresa, és `404`: un identificador no és cap autorització.
+
+**UX.** Subsecció «Dimensionament» dins de **Preparar → Solució tècnica**, zero
+pestanyes noves: dimensionar no és una feina a part, és el mateix moment en què
+algú decideix què proposarà. Qui només mira ho veu tot i no hi pot escriure. La
+creació de cites reutilitza el `CitationPicker` d'S3-S5.1, o sigui que tampoc
+aquí no hi ha cap UUID a la vista.

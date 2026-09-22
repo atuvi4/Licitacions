@@ -336,6 +336,37 @@ class ExtractionQuality(StrEnum):
     NOT_APPLICABLE = "not_applicable"
 
 
+class DimensionStatus(StrEnum):
+    """En quin punt esta el valor de treball d'una dimensio.
+
+    `UNDECIDED` NO es `DECIDED`: vol dir que ningu no ha dit encara quin numero
+    fara servir la candidatura, i tractar-ho com si fos decidit seria justament
+    l'error que aquesta taula existeix per evitar.
+    """
+
+    #: Hi ha observacions, o no n'hi ha cap, pero ningu no ha fixat el valor.
+    UNDECIDED = "undecided"
+    #: Una persona ha triat un valor i ha escrit per que.
+    DECIDED = "decided"
+    #: Dues fonts diuen numeros diferents. Ho detecta el sistema; el resol algu.
+    DISPUTED = "disputed"
+
+
+class ObservationSourceKind(StrEnum):
+    """QUI afirma un valor. No es la provinenca documental.
+
+    La provinenca —quins bytes, quina versio, quina pagina— viu a
+    `TenderSourceRef`. Aixo diu d'on ve l'afirmacio: del plec, d'un proveidor,
+    d'un calcul nostre. Un proveidor pot dir un numero per telefon i seguir
+    sent una font legitima que no te cap document al darrere.
+    """
+
+    TENDER_DOCUMENT = "tender_document"
+    SUPPLIER = "supplier"
+    INTERNAL = "internal"
+    OTHER = "other"
+
+
 class SourceRefKind(StrEnum):
     """A que s'ancora una cita.
 

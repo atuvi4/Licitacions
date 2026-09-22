@@ -84,6 +84,17 @@ TECHNICAL_SOLUTION_VALIDATION_STALE = "technical_solution_validation_stale"
 #: resoldre. El control fort es la revisio de l'abast, que si que caduca.
 TECHNICAL_SOLUTION_REQUIREMENT_MISSING = "technical_solution_requirement_missing"
 
+# --- Dimensionament (S3-S6) --------------------------------------------------- #
+
+#: Dues fonts diuen numeros diferents i ningu no ha dit quin val. Es AVIS i no
+#: blocador: que hi hagi una discrepancia no impedeix presentar-se, i
+#: convertir-ho en porta tancada obligaria a "resoldre" dimensions que potser
+#: no afecten el que s'ofereix. Qui ho ha de veure, ho veu.
+#:
+#: Una dimensio NOMES `undecided` no genera res: no saber un numero que ningu
+#: no ha contradit no es cap problema pendent.
+DIMENSION_DISPUTED = "dimension_disputed"
+
 # --- Oferta economica --------------------------------------------------------- #
 
 #: Regla de producte de la V1 (C-15): tota candidatura que vulgui arribar a la
