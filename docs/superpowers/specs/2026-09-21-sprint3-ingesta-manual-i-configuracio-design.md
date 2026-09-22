@@ -904,3 +904,63 @@ calculat sobre dades velles. És una sola licitació
 Editar-ne una de **pública** és `422 tender_not_manual` i no `404`: una licitació
 publicada existeix per a tothom i dir que no s'edita per aquesta via no revela
 res.
+
+---
+
+## Delta S3-S2 — el que la implementació ha precisat
+
+Quatre punts que el codi real obliga a concretar. No canvia cap decisió
+congelada: DOCX fora d'extracció, OCR fora, XLSX fora, criteris fora.
+
+**1. Ruta d'upload.** `POST /companies/{company_id}/tenders/{tender_id}/documents`,
+`multipart/form-data`, camp `file`. Company-scoped i amb els rols que decideixen
+(`EDIT_ROLES`). Una licitació d'una altra empresa és `404`; una de **pública** és
+`422 tender_not_manual`, perquè a Sprint 3 els plecs d'una licitació publicada
+els porta la font.
+
+**2. Identitat del document lògic.** `TenderDocument` té `url` NOT NULL i
+`UNIQUE(tender_id, url)`, i un fitxer pujat no ve de cap URL. Se li'n dona una de
+sintètica i opaca, `upload://<uuid4>`, que no resol enlloc. Conseqüència, i és
+deliberada: **cada pujada és un document lògic nou**. Pujar dues vegades els
+mateixos bytes dona DOS documents que comparteixen UN sol contingut; la resposta
+ho diu amb `content_reused`. A S3-S2 no hi ha versions —arriben a S3-S3— i fer
+que la segona pujada es convertís en silenci en la primera seria decidir per
+l'usuari què volia dir.
+
+**3. Read-model de l'extracció.** No hi ha cap columna nova. `analysis_status`
+es calcula des de `ExtractionStatus` i `ExtractionQuality`:
+
+| valor | què vol dir |
+|---|---|
+| `pending` | encara no s'ha intentat llegir |
+| `extracted` | s'ha llegit i hi ha text aprofitable |
+| `no_usable_text` | s'ha llegit i no n'hi ha. El cas típic és un PDF escanejat. **No s'hi fa OCR** |
+| `unsupported` | d'aquest format no en llegim el text. El fitxer és vàlid i està guardat |
+| `failed` | s'ha intentat i el parser no se n'ha sortit |
+
+Va al costat de `stored` i de `text_extraction_supported`, que és una propietat
+del **format**. Els tres camps són separats perquè guardar bé un fitxer i
+poder-ne llegir el text són fets independents, i col·lapsar-los obligaria la
+interfície a dir una de les dues mentides.
+
+**4. TXT i versions de parser.** `text/plain` entra a
+`DOCUMENT_TEXT_EXTRACTION_MIME_TYPES`: llegir-lo és descodificar-lo, sense cap
+dependència nova ni cap model. Es representa amb **una sola pàgina lògica**, que
+és una frontera nostra i no del document, posada perquè la fase de requisits cita
+pàgines i necessita on apuntar; inventar-ne més faria que una cita digués
+«pàgina 4» d'una cosa que no en té. No se li aplica el llindar de caràcters per
+pàgina: aquest llindar existeix per detectar una pàgina de PDF a la qual li falta
+la capa de text, i un fitxer de text no en té cap que pugui faltar. La
+`parser_version` passa a ser **per tipus** (`pypdf-v1`, `plaintext-v1`): una de
+global faria caducar un TXT cada cop que canviés el parser de PDF.
+
+**Dedup.** El nivell són els BYTES, com abans: mateix SHA-256, un sol objecte a
+l'storage i una sola extracció per versió de parser, vinguin d'una descàrrega o
+d'una pujada. No s'hi ha introduït cap dedup per títol ni difús.
+
+**Un plec que arriba és un canvi de la licitació.** Pujar-lo passa per la mateixa
+porta que la sindicació (`record_revision`, trigger `document_processing`) i
+genera el mateix `DOCUMENT_ADDED`, que ja era material. Per tant un paquet
+aprovat queda `tender_changed`. **No és una regla nova d'S3-S2** i no és
+l'obsolescència documental de S3-S3 (`documents_reviewed_*`), que aquí no
+existeix.
