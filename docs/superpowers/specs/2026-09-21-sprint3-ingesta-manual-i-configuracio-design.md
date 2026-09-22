@@ -842,8 +842,8 @@ i context · rutes sota `/companies/{company_id}/workspaces/{workspace_id}/…`.
 
 ## Delta S3-S1b — el que la implementació ha corregit del disseny
 
-Quatre punts que el codi real desmenteix o precisa. Es documenten aquí perquè
-la fila d'S3-S1b de §27 deia una cosa que no es podia sostenir.
+Cinc punts que el codi real desmenteix o precisa. Es documenten aquí perquè la
+fila d'S3-S1b de §27 deia coses que no es podien sostenir.
 
 **1. El testimoni de CAS no és `revision_count`.** `Tender.revision_count`
 compta **publicacions de la font** —s'assigna des de `SourceRecord.revision_number`
@@ -856,21 +856,49 @@ simultànies no xocarien mai. El CAS va contra
 **2. Una licitació manual neix amb revisió 1.** Abans d'S3-S1b, l'alta no
 escrivia cap `TenderRevision`, i sense fotografia inicial el primer PATCH no
 tenia amb què comparar-se ni el paquet base de què penjar
-(`evaluate_staleness` hauria dit `tender_revision_unknown`). Ara l'alta desa una
-revisió base amb `trigger="manual_edit"`.
+(`evaluate_staleness` hauria dit `tender_revision_unknown`).
 
-**3. Corregir ≠ invalidar.** Que hi hagi revisió nova no vol dir que el paquet
-quedi obsolet: ho decideix la **taxonomia que ja existia**. `TITLE_CHANGED` és
-`INFORMATIONAL`, i per tant corregir un títol amb un paquet aprovat crea revisió
-però **no** dona `tender_changed`. El que sí que el dona és un canvi material
-—termini, imports, tipus, CPV, lots, documents. Aquí no s'hi ha creat cap
-taxonomia nova, i C-12 es compleix igualment: el paquet aprovat no bloqueja mai
-l'edició, i quan el canvi és material queda obsolet tot sol.
+**3. Dos disparadors, no un.** La revisió base es desa amb
+`trigger="manual_create"` i cada correcció amb `trigger="manual_edit"`. Obrir un
+expedient no és corregir-lo, i dir-ne `manual_edit` faria semblar que algú ja
+l'havia tocat abans que ningú l'hagués tocat. `trigger` és `String(40)`: no
+necessita esquema.
 
-**4. `revised=False` no vol dir «no s'ha desat».** `expediente_number` i
-`country_code` queden **fora de la fotografia canònica**: corregir-los es guarda,
-però no crea revisió i per tant `expected_revision` no avança. El PATCH per això
-desa **sempre**, també quan no hi ha revisió.
+**4. Tota escriptura real crea revisió.** Aquest és l'invariant, i el primer
+intent no el complia: `expediente_number` i `country_code` es desaven sense
+crear-ne cap perquè eren fora de la fotografia canònica, i això obria un forat
+al CAS —dos clients que havien llegit la revisió 1 podien escriure tots dos, i
+el segon no tenia manera d'assabentar-se que l'objecte ja havia canviat. La
+fotografia d'una licitació **oberta a mà** ara inclou els dos camps
+(`MANUAL_ONLY_FIELDS`). La d'una **sindicada no**: els hi fixa la font, ningú no
+els corregeix, i afegir-los-hi globalment faria semblar canviades totes les que
+ja hi ha. Mateixa taula, mateix `record_revision`, mateixa classificació, mateix
+`evaluate_staleness`: cap segon sistema de revisions.
+
+Per tant:
+
+| | revisió | `revised` |
+|---|---|---|
+| Cap valor diferent | no | `false` |
+| Qualsevol valor diferent, material o informatiu | **sí, +1** | `true` |
+
+`revised` vol dir **s'ha creat una `TenderRevision`**, i res més.
+
+**5. Corregir ≠ invalidar.** Que hi hagi revisió nova no vol dir que el paquet
+quedi obsolet: això ho decideix la **taxonomia que ja existia**, i és una
+pregunta separada. `TITLE_CHANGED`, `EXPEDIENTE_NUMBER_CHANGED` i
+`COUNTRY_CHANGED` són `INFORMATIONAL` —el motor de pre-fit només llegeix
+`nuts_code` i `place_of_execution`, així que classificar el país com a
+`PREFIT_AFFECTING` faria caducar paquets per un camp que ningú calcula. El que
+sí que dona `tender_changed` és un canvi material: termini, imports, tipus, CPV,
+lots, documents. C-12 es compleix igualment: el paquet aprovat no bloqueja mai
+l'edició.
+
+**Recàlcul de pre-fit.** Va lligat a **si hi ha hagut canvi**, no a la
+materialitat: el motor llegeix camps que la taxonomia classifica per a una altra
+pregunta, i mantenir dues classificacions paral·leles acabaria amb un pre-fit
+calculat sobre dades velles. És una sola licitació
+(`recalculate(company_id, tender_ids=[tender.id])`). Un no-op no recalcula res.
 
 **Codis d'error.** Editar una licitació d'una altra empresa és `404`, com arreu.
 Editar-ne una de **pública** és `422 tender_not_manual` i no `404`: una licitació

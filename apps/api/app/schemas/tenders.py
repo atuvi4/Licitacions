@@ -356,8 +356,21 @@ class ManualTenderUpdate(BaseModel):
 
 
 class ManualTenderUpdateResult(BaseModel):
-    """`revised=False` vol dir que els valors ja eren aquests."""
+    """`revised` vol dir **s'ha creat una `TenderRevision`**, res mes.
 
+    Es fals nomes quan els valors ja eren aquests. Tota escriptura real en crea
+    una, sigui material o informativa: si la materialitat decidis l'existencia
+    de la revisio, el testimoni de CAS no es mouria i dos clients que han
+    llegit la mateixa revisio podrien escriure tots dos.
+
+    Si un canvi obliga a tornar a mirar-se un paquet aprovat es una pregunta
+    **separada**, i qui la respon es `evaluate_staleness` amb la taxonomia
+    material/informativa que ja existia.
+    """
+
+    #: S'ha creat una revisio nova (i per tant `revision` ha pujat).
     revised: bool
+    #: La revisio vigent despres de la peticio. El seguent PATCH ha de portar
+    #: aquest numero a `expected_revision`.
     revision: int
     tender: TenderDetail

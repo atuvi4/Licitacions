@@ -171,8 +171,9 @@ async def update_manual_tender(
     queda intacta; el servidor no la converteix en un pany.
 
     S'aplica **nomes el que arriba**: ometre un camp no el toca i enviar-hi
-    `null` l'esborra. Si els valors ja eren aquests, no es crea cap revisio i
-    `revised` es `False`.
+    `null` l'esborra. Si els valors ja eren aquests no es crea cap revisio i
+    `revised` es `False`; qualsevol escriptura real en crea una i fa pujar el
+    testimoni, sigui el canvi material o informatiu.
     """
     manual_tender.assert_can_edit(ctx.membership.role)
     tender = await manual_tender.load_editable_tender(session, ctx.company_id, tender_id)
@@ -223,9 +224,9 @@ async def update_manual_tender(
         # Un canvi material pot moure el pre-fit. Nomes aquesta licitacio.
         await MatchingService(session).recalculate(ctx.company_id, tender_ids=[tender.id])
 
-    # Es desa SEMPRE, tambe quan no hi ha revisio: hi ha correccions que no
-    # formen part de la fotografia canonica —el numero d'expedient, per
-    # exemple— i no per aixo s'han de perdre en tancar la sessio.
+    # Es desa SEMPRE. Sense revisio no hi ha res a desar mes enlla del que ja
+    # hi havia, pero tancar la sessio sense `commit` deixaria la peticio sense
+    # efecte i no val la pena dependre de quin cami hi ha arribat.
     await session.commit()
     # La fitxa es torna a llegir i l'organisme es una relacio ja carregada:
     # sense expirar-la, una licitacio que acaba de rebre organisme el

@@ -49,9 +49,11 @@ CREATE_ROLES = frozenset(
 #: no un alias perque son dues politiques, encara que avui coincideixin.
 EDIT_ROLES = frozenset(CREATE_ROLES)
 
-#: El disparador que queda escrit a `TenderRevision.trigger`, al costat de
-#: `ingestion`. Serveix per saber d'on ve un canvi sense mirar res mes.
-MANUAL_TRIGGER = "manual_edit"
+#: Els disparadors que queden escrits a `TenderRevision.trigger`, al costat
+#: d'`ingestion`. Son dos i no un: obrir un expedient no es corregir-lo, i la
+#: revisio base amb `manual_edit` faria semblar que algu ja l'havia tocat.
+MANUAL_CREATE_TRIGGER = "manual_create"
+MANUAL_EDIT_TRIGGER = "manual_edit"
 
 #: Sentinella per distingir "no toquis aquest camp" de "posa-hi NULL", el
 #: mateix patro que ja fa servir el servei de l'oferta economica.
@@ -337,7 +339,9 @@ async def create_manual_tender(
     # no tindria historia: el primer PATCH no tindria amb que comparar-se i
     # `evaluate_staleness` d'un paquet congelat diria `tender_revision_unknown`
     # en comptes de poder afirmar sobre quina versio es va congelar.
-    await tender_lifecycle.record_revision(session, tender, trigger=MANUAL_TRIGGER)
+    await tender_lifecycle.record_revision(
+        session, tender, trigger=MANUAL_CREATE_TRIGGER
+    )
     return tender, True
 
 
@@ -442,6 +446,6 @@ async def update_manual_tender(
 
     await session.flush()
     outcome = await tender_lifecycle.record_revision(
-        session, tender, trigger=MANUAL_TRIGGER
+        session, tender, trigger=MANUAL_EDIT_TRIGGER
     )
     return tender, not outcome.unchanged

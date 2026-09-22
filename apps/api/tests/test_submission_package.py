@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -2408,7 +2409,11 @@ async def test_el_manifest_no_porta_cap_xifra_interna(db, client_a, ready, role)
     }
     assert not (_keys(json.loads(response.text)) & prohibides)
     assert "4242.42" not in response.text
-    assert "4242" not in response.text
+    # Es busca el numero, no la cadena: el manifest va ple d'UUID i un de sol
+    # que porti "4242" a dins feia caure aquest test sense que s'hagues filtrat
+    # res. La comprovacio segueix sent estricta —tambe enxampa el cost truncat
+    # o arrodonit— pero nomes alla on hi ha un numero.
+    assert not re.search(r"(?<![0-9a-fA-F-])4242(?![0-9a-fA-F-])", response.text)
 
 
 async def test_un_error_amb_dades_estructurades_segueix_sent_un_error_llegible(

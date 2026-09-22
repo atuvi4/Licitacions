@@ -27,6 +27,8 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import SourceType
+from app.models.sources import Source
 from app.models.tender_documents import TenderDocumentContent, TenderDocumentFile
 from app.models.tender_lifecycle import TenderChangeEvent, TenderRevision
 from app.models.tenders import Tender, TenderCPV, TenderDocument, TenderLot, TenderLotCPV
@@ -80,6 +82,13 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
     moment escrit amb dos offsets diferents ha de donar el mateix hash; si no,
     tornar a construir la fotografia sense que l'organ hagi tocat res genera una
     revisio i un `DEADLINE_CHANGED` material que no ha passat.
+
+    A una licitacio **oberta a ma** s'hi afegeixen `expediente_number` i
+    `country_code` (`MANUAL_ONLY_FIELDS`). A una de sindicada no: els fixa la
+    font, ningu no els corregeix, i posar-los-hi faria semblar canviades totes
+    les que ja hi ha. A una de manual son editables, i un camp editable fora de
+    la fotografia deixaria un forat al CAS —dos clients que han llegit la
+    mateixa revisio podrien escriure tots dos sense assabentar-se'n.
     """
     cpvs = (
         await session.execute(
@@ -132,7 +141,7 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
         ).all()
         shas = dict(rows)
 
-    return {
+    snapshot: dict[str, Any] = {
         "title": tender.title,
         "description": tender.description,
         "buyer": str(tender.buyer_id) if tender.buyer_id else None,
@@ -177,6 +186,23 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
             for document in documents
         ],
     }
+
+    if await is_manual_tender(session, tender):
+        snapshot["expediente_number"] = tender.expediente_number
+        snapshot["country_code"] = tender.country_code
+    return snapshot
+
+
+async def is_manual_tender(session: AsyncSession, tender: Tender) -> bool:
+    """Si la licitacio ve de la font MANUAL.
+
+    Es mira la font i no el disparador de la crida: que una licitacio s'hagi
+    obert a ma es una propietat seva, no de qui en desa la revisio.
+    """
+    source_type = await session.scalar(
+        sa.select(Source.source_type).where(Source.id == tender.source_id)
+    )
+    return source_type == SourceType.MANUAL
 
 
 async def latest_revision(session: AsyncSession, tender_id: uuid.UUID) -> TenderRevision | None:

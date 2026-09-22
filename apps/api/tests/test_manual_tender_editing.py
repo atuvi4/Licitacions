@@ -77,7 +77,7 @@ async def test_a_manual_tender_is_born_with_revision_one(client_a, db, tenant_a)
 
     revisions = await _revisions(db, uuid.UUID(tender["id"]))
     assert [r.revision_number for r in revisions] == [1]
-    assert revisions[0].trigger == "manual_edit"
+    assert revisions[0].trigger == "manual_create"
 
 
 # --------------------------------------------------------------------------- #
@@ -346,13 +346,16 @@ async def test_a_no_op_is_not_signed(client_a, db, tenant_a):
     assert entries == []
 
 
-async def test_a_field_outside_the_snapshot_does_not_create_a_revision(
+async def test_a_correction_outside_the_old_snapshot_also_advances_the_token(
     client_a, db, tenant_a
 ):
-    """`expediente_number` no es a la fotografia canonica. No s'hi afegeix.
+    """Desar sense avançar el testimoni trencaria el CAS.
 
-    Es documenta tal com es: el snapshot descriu el que publica un organ, i
-    decidir que hi entra no es feina d'aquesta fase.
+    El numero d'expedient no era a la fotografia canonica, i per tant una
+    correccio seva es desava sense crear revisio. Dos clients que haguessin
+    llegit la revisio 1 podien escriure tots dos: el segon no tenia manera
+    d'assabentar-se que l'objecte ja no era el que havia llegit. El CAS
+    protegeix la LICITACIO, no nomes els camps que l'organ publica.
     """
     _, company = tenant_a
     tender = await _create(client_a, company, expediente_number="2024-1")
@@ -361,15 +364,97 @@ async def test_a_field_outside_the_snapshot_does_not_create_a_revision(
         client_a, company, tender["id"], expected_revision=1, expediente_number="2024-2"
     )
     assert status == 200
-    assert body["revised"] is False
-    assert len(await _revisions(db, uuid.UUID(tender["id"]))) == 1
+    assert (body["revised"], body["revision"]) == (True, 2)
+    assert body["tender"]["expediente_number"] == "2024-2"
 
-    # I tot i aixi s'ha desat: no generar revisio no vol dir no guardar.
     db.expire_all()
     row = (
         await db.execute(sa.select(Tender).where(Tender.id == uuid.UUID(tender["id"])))
     ).scalars().one()
     assert row.expediente_number == "2024-2"
+
+
+async def test_two_clients_that_read_the_same_revision_do_not_both_win(
+    client_a, client_factory, db, tenant_a
+):
+    """El test de §5: dos camps diferents, tots dos fora de la fotografia antiga.
+
+    Es el cas que abans passava en silenci. Que els dos clients toquin camps
+    diferents no els fa compatibles: el segon va llegir un objecte que ja no
+    existeix.
+    """
+    from tests.conftest import TEST_PASSWORD, login
+
+    user, company = tenant_a
+    tender = await _create(client_a, company, expediente_number="2024-1")
+
+    other = client_factory()
+    await login(other, user.email, TEST_PASSWORD)
+
+    first, first_body = await _patch(
+        client_a, company, tender["id"], expected_revision=1, expediente_number="2024-2"
+    )
+    assert (first, first_body["revision"]) == (200, 2)
+
+    second, error = await _patch(
+        other, company, tender["id"], expected_revision=1, country_code="FR"
+    )
+    assert second == 409
+    assert error["error"]["code"] == "tender_revision_conflict"
+
+    db.expire_all()
+    row = (
+        await db.execute(sa.select(Tender).where(Tender.id == uuid.UUID(tender["id"])))
+    ).scalars().one()
+    assert row.country_code != "FR"
+    assert row.expediente_number == "2024-2"
+
+
+async def test_the_country_is_part_of_the_photograph_too(client_a, db, tenant_a):
+    _, company = tenant_a
+    tender = await _create(client_a, company)
+
+    _status, body = await _patch(
+        client_a, company, tender["id"], expected_revision=1, country_code="FR"
+    )
+    assert (body["revised"], body["revision"]) == (True, 2)
+    assert [r.revision_number for r in await _revisions(db, uuid.UUID(tender["id"]))] == [1, 2]
+
+
+async def test_rewriting_the_same_expedient_is_still_a_no_op(client_a, db, tenant_a):
+    """Avançar el testimoni a cada escriptura REAL, no a cada peticio."""
+    _, company = tenant_a
+    tender = await _create(client_a, company, expediente_number="2024-1")
+
+    _status, body = await _patch(
+        client_a, company, tender["id"], expected_revision=1, expediente_number="2024-1"
+    )
+    assert (body["revised"], body["revision"]) == (False, 1)
+    assert len(await _revisions(db, uuid.UUID(tender["id"]))) == 1
+
+
+# --------------------------------------------------------------------------- #
+# G. D'on ve cada revisio                                                       #
+# --------------------------------------------------------------------------- #
+
+
+async def test_the_first_revision_says_it_is_an_opening_and_not_a_correction(
+    client_a, db, tenant_a
+):
+    """`manual_create` i `manual_edit` no son el mateix fet.
+
+    La revisio base no es cap correccio: es la licitacio tal com algu la va
+    obrir. Dir-ne `manual_edit` faria semblar que algu ja l'havia tocada.
+    """
+    _, company = tenant_a
+    tender = await _create(client_a, company, title="Abans")
+    await _patch(client_a, company, tender["id"], expected_revision=1, title="Despres")
+
+    revisions = await _revisions(db, uuid.UUID(tender["id"]))
+    assert [(r.revision_number, r.trigger) for r in revisions] == [
+        (1, "manual_create"),
+        (2, "manual_edit"),
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -510,56 +595,48 @@ async def test_a_refused_buyer_leaves_no_trace(client_a, client_b, db, tenant_a,
 # --------------------------------------------------------------------------- #
 
 
-async def test_a_real_edit_recalculates_only_this_tender(client_a, db, tenant_a):
+async def _calculated_at(db, tender_id: str):
     from app.models.matching import CompanyTenderMatch
 
+    return (
+        await db.execute(
+            sa.select(CompanyTenderMatch.calculated_at).where(
+                CompanyTenderMatch.tender_id == uuid.UUID(tender_id)
+            )
+        )
+    ).scalar_one()
+
+
+async def test_a_real_edit_recalculates_only_this_tender(client_a, db, tenant_a):
+    """I ho fa encara que el canvi sigui informatiu.
+
+    El recalcul NO va lligat a `is_material`: el motor de pre-fit llegeix
+    camps —`nuts_code`, `place_of_execution`, imports, CPV— que la taxonomia
+    classifica per a una altra pregunta. Mantenir dues classificacions
+    paral·leles acabaria amb un pre-fit calculat sobre dades velles, i aqui
+    nomes hi ha una licitacio a recalcular.
+    """
     _, company = tenant_a
     first = await _create(client_a, company, title="Primera")
     second = await _create(client_a, company, title="Segona")
-
-    before = (
-        await db.execute(
-            sa.select(CompanyTenderMatch.calculated_at).where(
-                CompanyTenderMatch.tender_id == uuid.UUID(second["id"])
-            )
-        )
-    ).scalar_one()
+    before_first = await _calculated_at(db, first["id"])
+    before_second = await _calculated_at(db, second["id"])
 
     await _patch(client_a, company, first["id"], expected_revision=1, title="Canviada")
 
-    after = (
-        await db.execute(
-            sa.select(CompanyTenderMatch.calculated_at).where(
-                CompanyTenderMatch.tender_id == uuid.UUID(second["id"])
-            )
-        )
-    ).scalar_one()
-    assert after == before
+    assert await _calculated_at(db, first["id"]) > before_first
+    assert await _calculated_at(db, second["id"]) == before_second
 
 
 async def test_a_no_op_does_not_recalculate(client_a, db, tenant_a):
-    from app.models.matching import CompanyTenderMatch
-
+    """Sense canvi no hi ha res a recalcular, i el pre-fit no s'ha de tocar."""
     _, company = tenant_a
     tender = await _create(client_a, company, title="Igual")
-    before = (
-        await db.execute(
-            sa.select(CompanyTenderMatch.calculated_at).where(
-                CompanyTenderMatch.tender_id == uuid.UUID(tender["id"])
-            )
-        )
-    ).scalar_one()
+    before = await _calculated_at(db, tender["id"])
 
     await _patch(client_a, company, tender["id"], expected_revision=1, title="Igual")
 
-    after = (
-        await db.execute(
-            sa.select(CompanyTenderMatch.calculated_at).where(
-                CompanyTenderMatch.tender_id == uuid.UUID(tender["id"])
-            )
-        )
-    ).scalar_one()
-    assert after == before
+    assert await _calculated_at(db, tender["id"]) == before
 
 
 # --------------------------------------------------------------------------- #
@@ -785,6 +862,69 @@ async def test_a_no_op_does_not_make_the_package_stale(client_a, db, ready):
         client_a, company, tender.id, expected_revision=revision, title=tender.title
     )
     assert body["revised"] is False
+
+    report = await submission_package.evaluate_staleness(db, ready["workspace"], package)
+    assert "tender_changed" not in report.reasons
+
+
+# --------------------------------------------------------------------------- #
+# K. L'organisme entra al mateix contracte                                      #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("step", ["assign", "replace", "clear"])
+async def test_changing_the_buyer_advances_the_token(client_a, db, tenant_a, step):
+    """Posar-ne un, canviar-lo o treure'l son escriptures reals."""
+    _, company = tenant_a
+    first = await _global_buyer(db)
+    second = await _global_buyer(db)
+
+    if step == "assign":
+        tender = await _create(client_a, company)
+        value = str(first.id)
+    elif step == "replace":
+        tender = await _create(client_a, company, buyer_id=str(first.id))
+        value = str(second.id)
+    else:
+        tender = await _create(client_a, company, buyer_id=str(first.id))
+        value = None
+
+    _status, body = await _patch(
+        client_a, company, tender["id"], expected_revision=1, buyer_id=value
+    )
+    assert (body["revised"], body["revision"]) == (True, 2)
+    assert len(await _revisions(db, uuid.UUID(tender["id"]))) == 2
+
+
+async def test_writing_the_same_buyer_again_is_a_no_op(client_a, db, tenant_a):
+    _, company = tenant_a
+    buyer = await _global_buyer(db)
+    tender = await _create(client_a, company, buyer_id=str(buyer.id))
+
+    _status, body = await _patch(
+        client_a, company, tender["id"], expected_revision=1, buyer_id=str(buyer.id)
+    )
+    assert (body["revised"], body["revision"]) == (False, 1)
+    assert len(await _revisions(db, uuid.UUID(tender["id"]))) == 1
+
+
+async def test_an_expedient_correction_does_not_invalidate_an_approved_package(
+    client_a, db, ready
+):
+    """Revisio nova, si; obsolescencia, no. Son dues preguntes diferents."""
+    from app.services import submission_package
+
+    package = await freeze(db, ready)
+    await approve(db, ready, package)
+    company, tender = ready["company"], ready["tender"]
+    revision = await _current_revision(db, tender.id)
+
+    status, body = await _patch(
+        client_a, company, tender.id, expected_revision=revision,
+        expediente_number="2026-corregit",
+    )
+    assert (status, body["revised"]) == (200, True), body
+    assert body["revision"] == revision + 1
 
     report = await submission_package.evaluate_staleness(db, ready["workspace"], package)
     assert "tender_changed" not in report.reasons
