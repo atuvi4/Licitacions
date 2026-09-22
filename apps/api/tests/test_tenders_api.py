@@ -120,12 +120,17 @@ class TestDetail:
         assert len(trace["raw_hash"]) == 64
         assert trace["external_id"].startswith("https://")
 
-    async def test_lots_i_documents_per_separat(self, client_a, ingested):
+    async def test_lots_i_documents_per_separat(self, client_a, tenant_a, ingested):
+        _, company = tenant_a
         items = (await client_a.get("/api/v1/tenders")).json()["items"]
         tender_id = next(i["id"] for i in items if i["expediente_number"] == "26-002735")
 
         lots = (await client_a.get(f"/api/v1/tenders/{tender_id}/lots")).json()
-        documents = (await client_a.get(f"/api/v1/tenders/{tender_id}/documents")).json()
+        # Els plecs es llegeixen dins d'una empresa. Aquesta es publica, i per
+        # aixo es veu des de qualsevol.
+        documents = (
+            await client_a.get(f"/api/v1/companies/{company.id}/tenders/{tender_id}/documents")
+        ).json()
         assert len(lots) == 3
         assert all(document["url"].startswith("http") for document in documents)
 

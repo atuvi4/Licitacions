@@ -1,7 +1,12 @@
 """Endpoints de la capa documental.
 
-La lectura es publica i global: cal sessio, pero no pertinenca a cap empresa. El
-processat es demana per empresa i l'executa el worker (`tests/jobs_support.py`).
+La lectura es fa DINS d'una empresa, com el processat: `visible_to_company`
+inclou les licitacions sense propietari, aixi que un plec publicat —com el
+d'aquests tests— es llegeix des de qualsevol empresa. El que no es pot fer es
+llegir-ne un de privat d'una altra, i aixo ho prova
+`test_tender_document_tenancy.py`.
+
+El processat el demana l'empresa i l'executa el worker (`tests/jobs_support.py`).
 """
 
 from __future__ import annotations
@@ -54,10 +59,20 @@ async def _process(client_a, tenant_a, tender_document, session_factory, **optio
     )
 
 
-async def _current_file(client_a, tender_document) -> dict:
-    files = await client_a.get(
-        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/files"
+def _scoped(company_id) -> str:
+    """Prefix de lectura documental. Sempre dins d'una empresa."""
+    return f"/api/v1/companies/{company_id}"
+
+
+def _docs_url(company_id, tender_document) -> str:
+    return (
+        f"/api/v1/companies/{company_id}/tenders/{tender_document.tender_id}"
+        f"/documents/{tender_document.id}/files"
     )
+
+
+async def _current_file(client_a, tenant_a, tender_document) -> dict:
+    files = await client_a.get(_docs_url(tenant_a[1].id, tender_document))
     assert files.status_code == 200
     return next(item for item in files.json() if item["is_current"])
 
@@ -82,7 +97,7 @@ async def test_processes_a_document_and_returns_the_file(
 
     assert final.json()["status"] == "succeeded"
     assert final.json()["outcome"] == "executed"
-    file = await _current_file(client_a, tender_document)
+    file = await _current_file(client_a, tenant_a, tender_document)
     assert file["download_status"] == "downloaded"
     assert file["version_number"] == 1
     assert file["content"]["mime_type"] == "application/pdf"
@@ -95,7 +110,7 @@ async def test_no_response_ever_leaks_the_storage_key(
 ):
     final = await _process(client_a, tenant_a, tender_document, session_factory)
     files = await client_a.get(
-        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/files"
+        _docs_url(tenant_a[1].id, tender_document)
     )
     assert "storage_key" not in final.text
     assert "storage_key" not in files.text
@@ -117,7 +132,7 @@ async def test_lists_the_versions_of_a_document(
     await _process(client_a, tenant_a, tender_document, session_factory)
 
     response = await client_a.get(
-        f"/api/v1/tenders/{tender_document.tender_id}/documents/{tender_document.id}/files"
+        _docs_url(tenant_a[1].id, tender_document)
     )
 
     assert response.status_code == 200
@@ -130,10 +145,11 @@ async def test_reads_the_pages_of_the_current_extraction(
     client_a, tender_document, tenant_a, session_factory
 ):
     await _process(client_a, tenant_a, tender_document, session_factory)
-    current = await _current_file(client_a, tender_document)
+    current = await _current_file(client_a, tenant_a, tender_document)
     file_id = current["id"]
 
-    response = await client_a.get(f"/api/v1/tender-document-files/{file_id}/pages")
+    root = _scoped(tenant_a[1].id)
+    response = await client_a.get(f"{root}/tender-document-files/{file_id}/pages")
 
     assert response.status_code == 200
     body = response.json()
@@ -146,30 +162,32 @@ async def test_reads_one_page_by_its_human_number(
     client_a, tender_document, tenant_a, session_factory
 ):
     await _process(client_a, tenant_a, tender_document, session_factory)
-    current = await _current_file(client_a, tender_document)
+    current = await _current_file(client_a, tenant_a, tender_document)
     file_id = current["id"]
     extraction_id = current["extraction"]["id"]
 
-    response = await client_a.get(f"/api/v1/tender-document-extractions/{extraction_id}/pages/2")
+    pages = f"{_scoped(tenant_a[1].id)}/tender-document-extractions/{extraction_id}/pages"
+    response = await client_a.get(f"{pages}/2")
 
     assert response.status_code == 200
     assert response.json()["page_number"] == 2
 
-    missing = await client_a.get(f"/api/v1/tender-document-extractions/{extraction_id}/pages/99")
+    missing = await client_a.get(f"{pages}/99")
     assert missing.status_code == 404
 
     # La pagina 0 no existeix: la numeracio comenca a 1 arreu.
-    zero = await client_a.get(f"/api/v1/tender-document-extractions/{extraction_id}/pages/0")
+    zero = await client_a.get(f"{pages}/0")
     assert zero.status_code == 422
     assert file_id
 
 
 async def test_serves_the_original_pdf_inline(client_a, tender_document, tenant_a, session_factory):
     await _process(client_a, tenant_a, tender_document, session_factory)
-    current = await _current_file(client_a, tender_document)
+    current = await _current_file(client_a, tenant_a, tender_document)
     file_id = current["id"]
 
-    response = await client_a.get(f"/api/v1/tender-document-files/{file_id}/original")
+    root = _scoped(tenant_a[1].id)
+    response = await client_a.get(f"{root}/tender-document-files/{file_id}/original")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/pdf")
@@ -179,7 +197,9 @@ async def test_serves_the_original_pdf_inline(client_a, tender_document, tenant_
 
 async def test_unknown_identifiers_are_404(client_a, tender_document, tenant_a):
     missing = uuid.uuid4()
-    assert (await client_a.get(f"/api/v1/tender-document-files/{missing}")).status_code == 404
+    root = _scoped(tenant_a[1].id)
+    unknown = await client_a.get(f"{root}/tender-document-files/{missing}")
+    assert unknown.status_code == 404
     unknown_document = await client_a.post(
         _process_url(tenant_a[1].id, tender_document), json={"document_ids": [str(missing)]}
     )

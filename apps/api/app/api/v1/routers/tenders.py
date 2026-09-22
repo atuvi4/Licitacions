@@ -664,12 +664,27 @@ async def list_tender_lots(tender_id: uuid.UUID, session: SessionDep, user: Curr
 
 
 @router.get(
-    "/tenders/{tender_id}/documents",
+    "/companies/{company_id}/tenders/{tender_id}/documents",
     response_model=list[TenderDocumentRead],
-    summary="Documents publicats (nomes metadata i URL)",
+    summary="Documents d'una licitacio (nomes metadata i URL)",
 )
-async def list_tender_documents(tender_id: uuid.UUID, session: SessionDep, user: CurrentUser):
-    tender = await _load_tender(session, tender_id, user.id)
+async def list_tender_documents(tender_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
+    """Dins d'una empresa, com tota la lectura de plecs.
+
+    La metadata d'un plec ja diu prou —nom, tipus, mida, estat— com perque
+    llegir-la des d'una altra empresa sigui una fuita. Les licitacions
+    publicades hi continuen sent: `visible_to_company` inclou les que no tenen
+    propietari.
+    """
+    tender = (
+        await session.execute(
+            sa.select(Tender)
+            .where(Tender.id == tender_id, visible_to_company(ctx.company_id))
+            .options(selectinload(Tender.documents))
+        )
+    ).scalars().unique().one_or_none()
+    if tender is None:
+        raise NotFoundError("Licitacio no trobada.")
     return [TenderDocumentRead.model_validate(document) for document in tender.documents]
 
 

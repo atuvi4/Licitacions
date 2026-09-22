@@ -964,3 +964,87 @@ genera el mateix `DOCUMENT_ADDED`, que ja era material. Per tant un paquet
 aprovat queda `tender_changed`. **No és una regla nova d'S3-S2** i no és
 l'obsolescència documental de S3-S3 (`documents_reviewed_*`), que aquí no
 existeix.
+
+---
+
+## Delta S3-S2.1 — arribada ≠ obsolescència, i lectura dins d'una empresa
+
+Dos invariants que el primer intent d'S3-S2 no complia.
+
+### A. Un document nou NO caduca el que s'enviaria
+
+La cadena era: pujar → `record_revision` → `DOCUMENT_ADDED` → qualsevol event
+material → `tender_changed`. Això confonia dues preguntes diferents.
+
+**Causa exacta**, en dues peces:
+
+1. `DOCUMENT_ADDED` portava `{REQUIREMENTS_AFFECTING, COMPLIANCE_AFFECTING}`.
+2. `evaluate_staleness` derivava `tender_changed` de **qualsevol** event
+   material (`log.since`), sense mirar quin impacte tenia.
+
+**Correcció final**, amb la taxonomia que ja existia i sense cap de nova:
+
+- `DOCUMENT_ADDED` passa a `{REQUIREMENTS_AFFECTING}`. Continua sent **material**
+  i continua generant revisió i event: la traçabilitat no es toca. El que deixa
+  d'afirmar és res sobre el compliment, que es calcula sobre els requisits —i
+  mentre ningú no hagi llegit el document, els requisits vigents són els d'abans.
+- `evaluate_staleness` deriva `tender_changed` de `PACKAGE_STALE_IMPACTS`
+  = `{PREFIT_AFFECTING, COMPLIANCE_AFFECTING, WORKSPACE_CRITICAL}`.
+  `REQUIREMENTS_AFFECTING` no hi és.
+
+| Fet | Revisió | `tender_changed` | Qui hi reacciona |
+|---|---|---|---|
+| Plec **nou** | sí | **no** | `requirements_outdated` (ja existia) |
+| Plec **substituït** o **retirat** | sí | sí | també `workspace_critical` |
+| Termini, imports, tipus, CPV, lots | sí | sí | pre-fit / compliment |
+| URL d'un document que canvia | sí | no | és informatiu |
+
+Quan algú llegeixi el document i l'extracció doni requisits diferents, hi haurà
+un `RequirementExtractionRun` nou i el paquet ho sabrà per
+`requirement_run_changed`, que compara runs i no events. La revisió documental
+(`documents_reviewed_*`) és **S3-S3** i aquí no existeix.
+
+**La regla és conceptual, no del canal**: no hi ha cap `if origin == uploaded`.
+Un plec sindicat i un de pujat a mà es comporten igual, perquè l'arribada vol dir
+el mateix en tots dos casos.
+
+**TechnicalSolution**: una validació es lliga a l'empremta del contingut i a la
+del requisit, i l'abast tècnic a una empremta feta de requisits. Cap de les tres
+no la mou un document que ningú no ha llegit, així que l'invariant congelat es
+compleix pel mecanisme que ja hi havia.
+
+### B. Els plecs es llegeixen dins d'una empresa
+
+`visible_to_user` no n'hi havia prou: qui és membre d'A i de B treballa sempre
+**dins** d'una, i en context B podia llegir un plec d'A només perquè també era
+d'A. El límit d'un tenant no és qui ets, és on ets.
+
+Els set camins de lectura passen a penjar de `/companies/{company_id}` i filtren
+amb `visible_to_company(company_id)`:
+
+| Ruta final |
+|---|
+| `GET /companies/{c}/tenders/{t}/documents` |
+| `GET /companies/{c}/tenders/{t}/documents/{d}/files` |
+| `GET /companies/{c}/tender-document-files/{f}` |
+| `GET /companies/{c}/tender-document-files/{f}/extractions` |
+| `GET /companies/{c}/tender-document-files/{f}/pages` |
+| `GET /companies/{c}/tender-document-files/{f}/original` |
+| `GET /companies/{c}/tender-document-extractions/{e}/pages[/{n}]` |
+
+**No queda cap ruta user-global de lectura documental.** No calia cap excepció
+per als plecs públics: `visible_to_company` ja inclou les licitacions sense
+propietari, així que un plec publicat es llegeix des de qualsevol empresa,
+exactament com abans.
+
+**Contingut compartit**: els mateixos bytes donen un sol `TenderDocumentContent`
+i una sola extracció. Per tant el dret sobre una extracció **no** pot dependre de
+qui la va crear —la segona empresa que puja el mateix plec es quedaria sense
+poder llegir el text del seu propi document. La pregunta és si aquell contingut
+el referencia algun `TenderDocument` visible **en aquesta empresa**; si només el
+referencia l'altra, és un `404`.
+
+**Superfície que queda fora d'aquesta passada**: `GET /tenders/{tender_id}` (la
+fitxa) continua resolent-se amb `visible_to_user` i el seu cos inclou la
+metadata dels documents. És el contracte del feed, decidit a S3-S0, i
+company-scoparlo tocaria Oportunitats i la fitxa senceres.

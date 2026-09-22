@@ -7,6 +7,16 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: { ...actual.api, get: (...args: unknown[]) => get(...args) } };
 });
+let companyId = "c1";
+vi.mock("@/components/SessionProvider", () => ({
+  useSession: () => ({
+    get companyId() {
+      return companyId;
+    },
+    membership: { id: "m1", company_id: companyId, role: "owner", is_default: true },
+    user: { id: "u1", email: "anna@example.org", full_name: "Anna Puig" },
+  }),
+}));
 vi.mock("next/navigation", () => ({
   useParams: () => ({ tenderId: "t1", documentId: "d3" }),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
@@ -57,11 +67,12 @@ const flush = () => act(async () => { await new Promise((resolve) => setTimeout(
 
 function base() {
   return {
-    "/tenders/t1/documents/d3/files": files,
+    // Els plecs es llegeixen dins d'una empresa: les rutes hi pengen.
+    "/companies/c1/tenders/t1/documents/d3/files": files,
     "/tenders/t1": tender,
-    "/tender-document-extractions/e2/pages/1": { page_number: 1, text: "Text de la pàgina 1", char_count: 19, status: "extracted" },
-    "/tender-document-extractions/e2/pages/2": { page_number: 2, text: "", char_count: 0, status: "extracted" },
-    "/tender-document-extractions/e1/pages/1": { page_number: 1, text: "Text antic de la revisió 1", char_count: 26, status: "extracted" },
+    "/companies/c1/tender-document-extractions/e2/pages/1": { page_number: 1, text: "Text de la pàgina 1", char_count: 19, status: "extracted" },
+    "/companies/c1/tender-document-extractions/e2/pages/2": { page_number: 2, text: "", char_count: 0, status: "extracted" },
+    "/companies/c1/tender-document-extractions/e1/pages/1": { page_number: 1, text: "Text antic de la revisió 1", char_count: 26, status: "extracted" },
   };
 }
 
@@ -69,6 +80,7 @@ describe("Text extret d'un plec", () => {
   beforeEach(() => {
     get.mockReset();
     search = "";
+    companyId = "c1";
   });
 
   it("context de la licitació, nom del document, estat i versions reals; avisos de lectura com a bàner", async () => {
@@ -85,7 +97,7 @@ describe("Text extret d'un plec", () => {
     expect(banner.textContent).toContain("Pàgina 2: pàgina sense text");
     expect(banner.textContent).toContain("escanejat");
     expect(await screen.findByText("Text de la pàgina 1")).toBeTruthy();
-    expect(screen.getByRole("link", { name: /Obre l'original/ }).getAttribute("href")).toBe("/bff/tender-document-files/f2/original");
+    expect(screen.getByRole("link", { name: /Obre l'original/ }).getAttribute("href")).toBe("/bff/companies/c1/tender-document-files/f2/original");
     // Versions: la vigent i l'anterior, amb data.
     const versions = screen.getByText("Versions").closest("section")!;
     expect(versions.textContent).toContain("v2");
@@ -99,7 +111,7 @@ describe("Text extret d'un plec", () => {
     await screen.findByText("Text de la pàgina 1");
     fireEvent.click(screen.getByRole("button", { name: "Següent" }));
     await flush();
-    expect(get).toHaveBeenCalledWith("/tender-document-extractions/e2/pages/2");
+    expect(get).toHaveBeenCalledWith("/companies/c1/tender-document-extractions/e2/pages/2");
     expect(await screen.findByText(/pàgina sense text extret/)).toBeTruthy();
     expect(screen.getByText("Pàgina 2 de 3")).toBeTruthy();
   });
@@ -114,9 +126,25 @@ describe("Text extret d'un plec", () => {
   });
 
   it("sense cap fitxer → buit amb tornada a la pestanya Plecs", async () => {
-    respondWith({ ...base(), "/tenders/t1/documents/d3/files": [] });
+    respondWith({ ...base(), "/companies/c1/tenders/t1/documents/d3/files": [] });
     render(<DocumentTextPage />);
     expect(await screen.findByRole("heading", { name: "Aquest document encara no s'ha processat" })).toBeTruthy();
     expect(screen.getByRole("link", { name: /Torna als plecs/ }).getAttribute("href")).toBe("/licitacions/t1?tab=plecs");
+  });
+});
+
+describe("canvi d'empresa", () => {
+  it("cap petició continua llegint el document amb l'empresa anterior", async () => {
+    get.mockReset();
+    companyId = "c2";
+    respondWith(base());
+    render(<DocumentTextPage />);
+    await flush();
+
+    const asked = get.mock.calls.map(([path]) => path as string);
+    const scoped = asked.filter((path) => path.startsWith("/companies/"));
+    expect(scoped.length).toBeGreaterThan(0);
+    expect(scoped.every((path) => path.startsWith("/companies/c2/"))).toBe(true);
+    expect(asked.some((path) => path.includes("/companies/c1/"))).toBe(false);
   });
 });
