@@ -87,6 +87,31 @@ function pickFile(name: string, type: string) {
   return flush();
 }
 
+function pickFiles(...files: Array<[string, string]>) {
+  const input = screen.getByLabelText("Fitxers");
+  fireEvent.change(input, {
+    target: { files: files.map(([name, type]) => new File(["x"], name, { type })) },
+  });
+  return flush();
+}
+
+/** Declara què és un fitxer en espera. Per fitxer, no per pujada. */
+function declareType(name: string, value: string) {
+  fireEvent.change(screen.getByLabelText(`Tipus de ${name}`), { target: { value } });
+  return flush();
+}
+
+/** Envia el que hi ha en espera. Triar fitxers ja no els puja. */
+function send() {
+  fireEvent.click(screen.getByRole("button", { name: /^Puja / }));
+  return flush();
+}
+
+function typeOf(call: unknown[]): string | null {
+  const body = call[1] as FormData;
+  return (body.get("document_type") as string | null) ?? null;
+}
+
 beforeEach(() => {
   companyId = "c1";
   post.mockReset();
@@ -186,6 +211,7 @@ describe("pas 2", () => {
     await open();
     await fillTitleAndContinue();
     await pickFile("PCAP.pdf", "application/pdf");
+    await send();
 
     expect(upload).toHaveBeenCalledTimes(1);
     const [path, body] = upload.mock.calls[0] as [string, FormData];
@@ -197,6 +223,7 @@ describe("pas 2", () => {
     await open();
     await fillTitleAndContinue();
     await pickFile("PCAP.pdf", "application/pdf");
+    await send();
 
     expect(screen.getByText("Guardat")).toBeTruthy();
     expect(screen.getByText("Text llegit")).toBeTruthy();
@@ -219,6 +246,7 @@ describe("pas 2", () => {
     await open();
     await fillTitleAndContinue();
     await pickFile("plec.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    await send();
 
     expect(screen.getByText("Guardat")).toBeTruthy();
     expect(screen.getByText(/no suportada/i)).toBeTruthy();
@@ -229,9 +257,11 @@ describe("pas 2", () => {
     await open();
     await fillTitleAndContinue();
     await pickFile("PCAP.pdf", "application/pdf");
+    await send();
 
     upload.mockRejectedValueOnce(new Error("Tipus de fitxer no permès."));
     await pickFile("pagina.html", "text/html");
+    await send();
 
     expect(screen.getByText("Guardat")).toBeTruthy();
     expect(screen.getByText("No s'ha pujat")).toBeTruthy();
@@ -242,6 +272,7 @@ describe("pas 2", () => {
     const { onClose } = await open();
     await fillTitleAndContinue();
     await pickFile("PCAP.pdf", "application/pdf");
+    await send();
 
     fireEvent.click(screen.getByRole("button", { name: /Veure a Oportunitats/ }));
     await flush();
@@ -274,5 +305,91 @@ describe("canvi d'empresa", () => {
 
     await fillTitleAndContinue("Una altra");
     expect(post.mock.calls.at(-1)?.[0]).toBe("/companies/c2/tenders");
+  });
+});
+
+
+/* ----- El tipus de cada document ------------------------------------------- */
+
+describe("tipus de document", () => {
+  it("triar fitxers no els puja: primer es diu què són", async () => {
+    await open();
+    await fillTitleAndContinue();
+    await pickFile("PCAP.pdf", "application/pdf");
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Tipus de PCAP.pdf")).toBeTruthy();
+  });
+
+  it("el valor per defecte és «sense classificar», no una endevinalla", async () => {
+    await open();
+    await fillTitleAndContinue();
+    // El nom diu «PCAP» ben clar i tot i així no es classifica sol: un fitxer
+    // es pot dir com sigui i el que és ho ha de dir una persona.
+    await pickFile("PCAP-administratiu.pdf", "application/pdf");
+
+    const select = screen.getByLabelText("Tipus de PCAP-administratiu.pdf") as HTMLSelectElement;
+    expect(select.value).toBe("other");
+
+    await send();
+    expect(typeOf(upload.mock.calls[0])).toBe("other");
+  });
+
+  it("envia el tipus declarat", async () => {
+    await open();
+    await fillTitleAndContinue();
+    await pickFile("PCAP.pdf", "application/pdf");
+    await declareType("PCAP.pdf", "administrative_terms");
+    await send();
+
+    expect(typeOf(upload.mock.calls[0])).toBe("administrative_terms");
+  });
+
+  it("amb diversos fitxers, el tipus és de CADA fitxer", async () => {
+    await open();
+    await fillTitleAndContinue();
+    await pickFiles(
+      ["PCAP.pdf", "application/pdf"],
+      ["PPT.pdf", "application/pdf"],
+      ["Annex.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    );
+    await declareType("PCAP.pdf", "administrative_terms");
+    await declareType("PPT.pdf", "technical_terms");
+    await declareType("Annex.xlsx", "additional");
+    await send();
+
+    expect(upload.mock.calls.map(typeOf)).toEqual([
+      "administrative_terms",
+      "technical_terms",
+      "additional",
+    ]);
+  });
+
+  it("un reintent conserva el tipus que ja s'havia triat", async () => {
+    await open();
+    await fillTitleAndContinue();
+    await pickFile("PPT.pdf", "application/pdf");
+    await declareType("PPT.pdf", "technical_terms");
+
+    upload.mockRejectedValueOnce(new Error("la xarxa ha fallat"));
+    await send();
+    expect(screen.getByText("No s'ha pujat")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reintenta" }));
+    await flush();
+
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(upload.mock.calls.map(typeOf)).toEqual(["technical_terms", "technical_terms"]);
+  });
+
+  it("un cop pujat, el tipus es veu però ja no es torna a preguntar", async () => {
+    await open();
+    await fillTitleAndContinue();
+    await pickFile("PCAP.pdf", "application/pdf");
+    await declareType("PCAP.pdf", "administrative_terms");
+    await send();
+
+    expect(screen.queryByLabelText("Tipus de PCAP.pdf")).toBeNull();
+    expect(screen.getByText(/Plec administratiu/)).toBeTruthy();
   });
 });

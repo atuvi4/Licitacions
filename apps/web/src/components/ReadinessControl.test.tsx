@@ -227,6 +227,26 @@ describe("Calaix de preparació final", () => {
     expect(href(/Ves a Decidir/)).toBe("/candidatures/w1?pas=decidir");
   });
 
+  it("els tres fets dels plecs surten de Preparar i porten a la licitació", async () => {
+    // Els plecs i l'anàlisi no són àrees de Preparar: viuen a la fitxa de la
+    // licitació, que és on es poden mirar, marcar i tornar a executar.
+    await mount({}, [
+      findingFixture({ code: "tender_documents_unreviewed", domain: "workspace", severity: "info" }),
+      findingFixture({ code: "tender_documents_changed", domain: "workspace", severity: "warning" }),
+      findingFixture({
+        code: "requirement_analysis_predates_documents",
+        domain: "technical",
+        severity: "warning",
+      }),
+    ]);
+    await open();
+    const href = (name: RegExp) =>
+      (screen.getAllByRole("link", { name })[0] as HTMLAnchorElement).getAttribute("href");
+
+    expect(href(/Obre els plecs/)).toBe("/licitacions/t1?tab=plecs");
+    expect(href(/Obre l'anàlisi del plec/)).toBe("/licitacions/t1?tab=requisits");
+  });
+
   it("un problema sense entitat no s'inventa cap fila a la URL", async () => {
     search = "pas=preparar&area=dossier&entity=vell";
     await mount({}, [findingFixture({ code: "economic_bid_lots_not_selected", domain: "economic", entity_id: null })]);

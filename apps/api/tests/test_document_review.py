@@ -739,16 +739,21 @@ async def test_a_new_document_still_does_not_invalidate_an_approved_package(
     assert "tender_changed" not in report.reasons
 
 
-async def test_a_new_version_does_make_the_package_stale_today(client_a, db, ready):
-    """AVUI una versió nova SÍ que caduca el paquet, i cal decidir-ho.
+async def test_a_new_document_version_makes_the_existing_package_stale(client_a, db, ready):
+    """Substituir un plec SI que deixa un paquet aprovat fora de vigencia.
 
-    Ve de la taxonomia existent: substituir el contingut sota el mateix
-    document dona `DOCUMENT_REPLACED`, que porta `WORKSPACE_CRITICAL` perquè es
-    va escriure per al cas d'un òrgan que canvia un plec ja publicat.
-    Classificar-ho d'una altra manera seria canviar la taxonomia, i això no es
-    fa en silenci: queda reportat.
+    No perque afirmem que els requisits hagin canviat —aixo no es pot saber
+    sense tornar a extreure'ls—, sino per una cosa diferent i comprovable: la
+    font vigent que formava part de la base documental del paquet ja no hi es.
+    El que es va aprovar penjava d'uns bytes concrets, i aquells bytes han
+    deixat de ser els vigents.
 
-    Aquest test fixa el comportament REAL d'avui, no el desitjat.
+    L'aprovacio no es desfa: segueix dient qui va signar, quan i sobre que.
+    El que canvia es la resposta a una altra pregunta —si aixo encara
+    s'envia—, que es exactament C-12.
+
+    Val igual si el canvi ve d'una pujada a ma o d'una font sindicada: la
+    taxonomia no mira d'on venen els bytes.
     """
     from app.services import submission_package
     from tests.test_submission_package import approve, freeze
@@ -758,7 +763,8 @@ async def test_a_new_version_does_make_the_package_stale_today(client_a, db, rea
         await _upload(client_a, company, tender.id, name="PCAP.pdf", data=build_pdf(["v1"]))
     ).json()
     package = await freeze(db, ready)
-    await approve(db, ready, package)
+    approval = await approve(db, ready, package)
+    signed = (approval.approved_at, approval.approved_by)
 
     await _version(
         client_a, company, tender.id, document["id"], name="PCAP.pdf", data=build_pdf(["v2"])
@@ -766,6 +772,37 @@ async def test_a_new_version_does_make_the_package_stale_today(client_a, db, rea
 
     report = await submission_package.evaluate_staleness(db, ready["workspace"], package)
     assert "tender_changed" in report.reasons
+
+    # C-12: obsolet no es revocat. L'aprovacio queda intacta i el paquet no
+    # es degrada ni es desbloqueja res.
+    await db.refresh(approval)
+    await db.refresh(package)
+    assert (approval.approved_at, approval.approved_by) == signed
+    assert package.status.value == "approved"
+
+
+async def test_a_brand_new_document_does_not_make_the_package_stale(client_a, db, ready):
+    """El contrast que dona sentit a l'anterior.
+
+    Un document LOGIC nou nomes diu que hi ha material per llegir: cap font
+    que el paquet cites ha canviat. Un de SUBSTITUIT si que en canvia una.
+    Si les dues coses donessin el mateix, l'avis es gastaria i el dia que
+    substituissin un plec de debo ningu no se'l miraria.
+    """
+    from app.services import submission_package
+    from tests.test_submission_package import approve, freeze
+
+    company, tender = ready["company"], ready["tender"]
+    await _upload(client_a, company, tender.id, name="PCAP.pdf", data=build_pdf(["v1"]))
+    package = await freeze(db, ready)
+    await approve(db, ready, package)
+
+    await _upload(client_a, company, tender.id, name="Annex.pdf", data=build_pdf(["annex"]))
+
+    report = await submission_package.evaluate_staleness(db, ready["workspace"], package)
+    assert "tender_changed" not in report.reasons
+    # I tot i aixi, els plecs queden per revisar: son dues preguntes diferents.
+    assert "tender_documents_unreviewed" in await _codes(client_a, ready)
 
 
 async def test_a_new_version_does_not_unvalidate_a_technical_solution(client_a, db, ready):
@@ -794,3 +831,117 @@ async def test_a_new_version_does_not_unvalidate_a_technical_solution(client_a, 
     assert (solution.validated_at, solution.validated_by) == validated
     assert await technical_solution.stale_reasons_for(db, [solution]) == {solution.id: []}
     assert (await technical_scope.review_state(db, ready["workspace"])).stale is False
+
+
+# --------------------------------------------------------------------------- #
+# G. El tipus del document: qui puja, ho declara                                #
+# --------------------------------------------------------------------------- #
+#
+# No és cosmètic. L'anàlisi automàtica només tria PCAP, PPT i annexos
+# (`DEFAULT_DOCUMENT_TYPES`), així que un plec pujat sense classificar no hi
+# entra sol. És deliberat: endevinar-ho pel nom del fitxer seria inventar-se una
+# classificació que ningú no ha fet, i un PCAP anomenat «doc1.pdf» acabaria
+# classificat com a qualsevol altra cosa.
+
+
+async def test_a_plec_declared_as_administrative_enters_the_analysis(client_a, db, tenant_a):
+    """El contracte end-to-end: declarar-lo com a PCAP el fa analitzable."""
+    from app.models.tenders import TenderDocument
+    from app.services import requirement_analysis
+
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    body = (
+        await _upload(
+            client_a, company, tender_id, name="PCAP.pdf", data=PLEC, document_type=PCAP
+        )
+    ).json()
+
+    document = (
+        await db.execute(
+            sa.select(TenderDocument).where(TenderDocument.id == uuid.UUID(body["id"]))
+        )
+    ).scalars().one()
+    assert str(document.document_type) == PCAP
+    # El PDF té text, així que l'extracció existeix de debò.
+    assert body["file"]["analysis_status"] == "extracted"
+
+    corpus = await requirement_analysis.analysis_input(db, uuid.UUID(tender_id))
+    assert [str(d.tender_document_id) for d in corpus.documents] == [str(document.id)]
+
+
+async def test_a_plec_without_a_type_is_stored_but_stays_out_of_the_corpus(
+    client_a, db, tenant_a
+):
+    """`other` és el valor honest per defecte, i té conseqüència.
+
+    El document es guarda, es revisa i es pot triar a mà des de la interfície
+    d'anàlisi. El que no fa és entrar-hi sol, perquè ningú no ha dit què és.
+    """
+    from app.services import requirement_analysis
+
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    body = (
+        await _upload(client_a, company, tender_id, name="doc1.pdf", data=PLEC)
+    ).json()
+    assert body["document_type"] == "other"
+
+    corpus = await requirement_analysis.analysis_input(db, uuid.UUID(tender_id))
+    assert corpus.documents == []
+
+    # I tot i així es pot demanar explícitament: no queda inaccessible.
+    chosen = await requirement_analysis.analysis_input(
+        db, uuid.UUID(tender_id), document_ids=[uuid.UUID(body["id"])]
+    )
+    assert [str(d.tender_document_id) for d in chosen.documents] == [body["id"]]
+
+    # I entra igualment a l'empremta documental: s'ha de revisar com qualsevol.
+    assert (await document_review.fingerprint_of(db, uuid.UUID(tender_id))).document_count == 1
+
+
+async def test_a_new_version_does_not_reclassify_the_document(client_a, db, tenant_a):
+    """El tipus és del document lògic, no del fitxer.
+
+    Substituir el contingut no canvia què és aquell document; si ho fes, pujar
+    una versió podria treure'l de l'anàlisi sense que ningú ho hagués demanat.
+    """
+    from app.models.tenders import TenderDocument
+
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    first = (
+        await _upload(
+            client_a, company, tender_id, name="PCAP.pdf", data=PLEC, document_type=PCAP
+        )
+    ).json()
+
+    await _version(
+        client_a, company, tender_id, first["id"], name="PCAP-v2.pdf", data=PLEC_V2
+    )
+
+    db.expire_all()
+    document = (
+        await db.execute(
+            sa.select(TenderDocument).where(TenderDocument.id == uuid.UUID(first["id"]))
+        )
+    ).scalars().one()
+    assert str(document.document_type) == PCAP
+
+
+async def test_nothing_is_guessed_from_the_filename(client_a, db, tenant_a):
+    """Un fitxer que es diu PCAP no es classifica sol. Cap heurística."""
+    from app.models.tenders import TenderDocument
+
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    body = (
+        await _upload(client_a, company, tender_id, name="PCAP-administratiu.pdf", data=PLEC)
+    ).json()
+
+    document = (
+        await db.execute(
+            sa.select(TenderDocument).where(TenderDocument.id == uuid.UUID(body["id"]))
+        )
+    ).scalars().one()
+    assert str(document.document_type) == "other"

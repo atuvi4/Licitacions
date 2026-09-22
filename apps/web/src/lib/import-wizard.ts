@@ -112,6 +112,48 @@ export function updatePayload(
   return body;
 }
 
+/* ----- El tipus d'un plec --------------------------------------------------- */
+
+/**
+ * Què és cada document, declarat per qui el puja.
+ *
+ * No és cosmètic: l'anàlisi automàtica de requisits només tria el plec
+ * administratiu, el tècnic i els annexos. Un document sense classificar es
+ * guarda i es revisa igual, però **no hi entra sol**, i això és deliberat.
+ *
+ * Els valors són els de `TenderDocumentType` del servidor. Aquí no se n'inventa
+ * cap ni se'n dedueix cap del nom del fitxer: un PCAP anomenat «doc1.pdf»
+ * seguiria sent un PCAP i un «PCAP-plantilla.pdf» podria no ser-ho. Ho diu la
+ * persona o no ho diu ningú.
+ */
+export const UPLOAD_DOCUMENT_TYPES = [
+  { value: "administrative_terms", label: "Plec administratiu (PCAP)" },
+  { value: "technical_terms", label: "Plec tècnic (PPT)" },
+  { value: "additional", label: "Annex o correcció" },
+  { value: "notice", label: "Anunci de licitació" },
+  { value: "other", label: "Altres / sense classificar" },
+] as const;
+
+export type UploadDocumentType = (typeof UPLOAD_DOCUMENT_TYPES)[number]["value"];
+
+/** El valor honest per defecte: no se sap fins que algú ho diu. */
+export const DEFAULT_DOCUMENT_TYPE: UploadDocumentType = "other";
+
+/** Els tipus que l'anàlisi automàtica tria (`DEFAULT_DOCUMENT_TYPES` al servidor). */
+export const ANALYSED_DOCUMENT_TYPES: readonly UploadDocumentType[] = [
+  "administrative_terms",
+  "technical_terms",
+  "additional",
+];
+
+export function entersAnalysis(type: UploadDocumentType): boolean {
+  return ANALYSED_DOCUMENT_TYPES.includes(type);
+}
+
+export function documentTypeLabel(type: UploadDocumentType): string {
+  return UPLOAD_DOCUMENT_TYPES.find((option) => option.value === type)?.label ?? type;
+}
+
 /* ----- Estat d'un fitxer a Step 2 ------------------------------------------ */
 
 export type UploadTone = "ok" | "info" | "warning" | "error";

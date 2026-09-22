@@ -1120,21 +1120,54 @@ tocar, perquè mai mira `run_id IS NULL`.
 ### Camins de resolució
 
 A i B → fitxa de la licitació, pestanya **Plecs**, amb «Marca com revisats».
-C → **Decidir**, on viu l'anàlisi. Marcar la revisió **no** apaga C: dir que has
-mirat els plecs no fa que l'anàlisi els cobreixi.
+C → fitxa de la licitació, pestanya **Requisits**, on viu `RequirementAnalysisSection`
+i on es pot tornar a executar l'anàlisi. **No** a Decidir: allà no hi ha el botó
+que cal.
+
+Marcar la revisió **no** apaga C: dir que has mirat els plecs no fa que l'anàlisi
+els cobreixi.
 
 ### Tipus de document en una pujada manual
 
-`POST …/documents` accepta `document_type` (opcional, per defecte `other`). No
-és cosmètic: l'anàlisi automàtica només tria PCAP, PPT i annexos
+`POST …/documents` accepta `document_type` (opcional al servidor, per defecte
+`other`). No és cosmètic: l'anàlisi automàtica només tria PCAP, PPT i annexos
 (`DEFAULT_DOCUMENT_TYPES`), així que un plec pujat sense classificar **no hi
-entra sol**. Ho diu qui puja; endevinar-ho pel nom del fitxer seria inventar-se
-una classificació que ningú no ha fet.
+entra sol** — es guarda, es revisa i es pot triar a mà, però no hi entra.
 
-### Versió nova i paquet — **conflicte obert**
+**És una declaració humana, per document.** Al pas 2 de l'assistent, triar
+fitxers ja no els puja: els posa en espera amb un selector de tipus per fitxer, i
+s'envien quan qui els puja ha dit què són. Un reintent conserva el tipus ja
+triat. El valor per defecte és `other` i **no s'endevina res del nom del
+fitxer**: un «PCAP-administratiu.pdf» surt com a `other` si ningú no diu el
+contrari.
 
-Una versió nova genera `DOCUMENT_REPLACED`, que porta `WORKSPACE_CRITICAL` i és
-a `PACKAGE_STALE_IMPACTS`. Per tant **avui una versió nova sí que deixa un paquet
-aprovat com a `tender_changed`**, cosa que xoca amb la preferència d'S3-S3. La
-taxonomia **no s'ha tocat**: el comportament real queda fixat per un test i la
-decisió és de producte.
+El tipus és del `TenderDocument` **lògic**, no del fitxer: pujar una versió nova
+**no** el reclassifica.
+
+### Versió nova i paquet — **congelat**
+
+`DOCUMENT_ADDED` i `DOCUMENT_REPLACED` **no** volen dir el mateix, i la
+taxonomia actual ja ho expressa bé:
+
+| | `DOCUMENT_ADDED` | `DOCUMENT_REPLACED` |
+|---|---|---|
+| Revisió i event | sí | sí |
+| Empremta documental | canvia | canvia |
+| `tender_documents_changed` | sí | sí |
+| L'anàlisi pot quedar desfasada | sí | sí |
+| Impactes | `REQUIREMENTS_AFFECTING` | + `COMPLIANCE_AFFECTING`, `WORKSPACE_CRITICAL` |
+| **Paquet existent `tender_changed`** | **no** | **sí** |
+| TechnicalSolution | no invalida | no invalida |
+
+El motiu de la diferència no és que un afirmi que els requisits han canviat.
+Cap dels dos ho afirma. És que **la font vigent que formava part de la base
+documental del paquet ha estat substituïda**: el que es va aprovar penjava d'uns
+bytes concrets i aquells bytes ja no són els vigents. Un document nou, en canvi,
+no toca cap font que el paquet citi.
+
+Val igual per a una pujada manual i per a una substitució d'una font sindicada:
+**cap cas especial per `origin`**.
+
+**C-12 intacte**: pujar una versió amb un paquet aprovat està permès, l'aprovació
+queda immutable, el paquet no es degrada ni es desbloqueja res, i no hi ha cap
+`409` ni cap acknowledge. Obsolet **no** és revocat.

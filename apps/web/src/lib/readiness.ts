@@ -86,8 +86,11 @@ export function isPrepareArea(value: string | null | undefined): value is Prepar
 export type FindingDestination =
   | { kind: "area"; area: PrepareArea }
   | { kind: "step"; step: "decidir" }
-  /** Els plecs no són cap àrea de Preparar: són a la fitxa de la licitació. */
-  | { kind: "tender"; tab: "plecs" };
+  /**
+   * Ni els plecs ni l'anàlisi són àrees de Preparar: viuen a la fitxa de la
+   * licitació, que és on es poden mirar i tornar a executar.
+   */
+  | { kind: "tender"; tab: "plecs" | "requisits" };
 
 export interface FindingCopy {
   label: string;
@@ -101,6 +104,7 @@ export interface FindingCopy {
 const area = (value: PrepareArea): FindingDestination => ({ kind: "area", area: value });
 const DECIDE: FindingDestination = { kind: "step", step: "decidir" };
 const PLECS: FindingDestination = { kind: "tender", tab: "plecs" };
+const ANALISI: FindingDestination = { kind: "tender", tab: "requisits" };
 
 /**
  * Codi del servidor → què llegeix una persona.
@@ -145,8 +149,10 @@ export const FINDING_COPY: Record<string, FindingCopy> = {
   requirement_analysis_predates_documents: {
     label: "L'anàlisi encara no cobreix els plecs d'ara",
     hint: "Els requisits vigents es van extreure d'uns altres documents.",
-    action: "Ves a Decidir",
-    destination: DECIDE,
+    // Es resol on viu l'anàlisi, que és on es pot tornar a executar. Portar a
+    // Decidir seria enviar algú a un lloc on no hi ha el botó que necessita.
+    action: "Obre l'anàlisi del plec",
+    destination: ANALISI,
   },
 
   /* --- Dossier ----------------------------------------------------------- */

@@ -8,8 +8,11 @@ import { useSession } from "@/components/SessionProvider";
 import { Banner, Button, Field, Input, Select, StatusPill } from "@/components/ui";
 import { api } from "@/lib/api";
 import {
+  DEFAULT_DOCUMENT_TYPE,
   EMPTY_STEP1,
+  UPLOAD_DOCUMENT_TYPES,
   createPayload,
+  documentTypeLabel,
   failedRowState,
   fileSize,
   newTokens,
@@ -18,6 +21,7 @@ import {
   uploadRowState,
   type BuyerChoice,
   type Step1Form,
+  type UploadDocumentType,
   type UploadRowState,
   type WizardTokens,
 } from "@/lib/import-wizard";
@@ -46,9 +50,17 @@ interface Row {
   key: string;
   name: string;
   size: number | null;
+  /**
+   * El fitxer, mentre encara no s'ha pujat. Es guarda perquè el tipus es
+   * declara ABANS de pujar-lo i perquè un reintent ha de poder tornar a
+   * enviar exactament el mateix.
+   */
+  file: File | null;
+  /** Què és aquest document. Per fitxer, no per pujada. */
+  documentType: UploadDocumentType;
   state: UploadRowState;
-  /** Cert mentre encara està pujant: la fila existeix abans que la resposta. */
-  pending: boolean;
+  /** `staged` = triat i encara no enviat. */
+  phase: "staged" | "uploading" | "done" | "failed";
 }
 
 /**
@@ -151,58 +163,97 @@ export function ImportTenderWizard({
     }
   }, [companyId, form, revision, tender, tokens, validation]);
 
-  const upload = useCallback(
-    async (files: FileList | null) => {
-      if (!files || !tender) return;
-      setError(null);
-      for (const file of Array.from(files)) {
-        const key = `${file.name}-${file.size}-${crypto.randomUUID()}`;
-        setRows((current) => [
-          ...current,
-          {
-            key,
-            name: file.name,
-            size: file.size,
-            state: { tone: "info", stored: "Pujant…", analysis: "" },
-            pending: true,
-          },
-        ]);
-        const body = new FormData();
-        body.append("file", file);
-        try {
-          const result = await api.upload<UploadResult>(
-            `/companies/${companyId}/tenders/${tender.id}/documents`,
-            body,
-          );
-          setRows((current) =>
-            current.map((row) =>
-              row.key === key
-                ? {
-                    ...row,
-                    name: result.name,
-                    size: result.file.file_size,
-                    state: uploadRowState(result.file),
-                    pending: false,
-                  }
-                : row,
-            ),
-          );
-        } catch (caught) {
-          const message =
-            caught instanceof Error ? caught.message : "No s'ha pogut pujar el fitxer.";
-          setRows((current) =>
-            current.map((row) =>
-              row.key === key ? { ...row, state: failedRowState(message), pending: false } : row,
-            ),
-          );
-        }
+  // Triar fitxers NO els puja: els posa en espera perquè qui els puja pugui dir
+  // què són abans d'enviar-los. Endevinar-ho pel nom seria inventar-se una
+  // classificació que ningú no ha fet, i el tipus decideix si el document entra
+  // a l'anàlisi de requisits.
+  const stage = useCallback((files: FileList | null) => {
+    if (!files) return;
+    setError(null);
+    setRows((current) => [
+      ...current,
+      ...Array.from(files).map((file) => ({
+        key: `${file.name}-${file.size}-${crypto.randomUUID()}`,
+        name: file.name,
+        size: file.size,
+        file,
+        documentType: DEFAULT_DOCUMENT_TYPE,
+        state: { tone: "info" as const, stored: "Per pujar", analysis: "" },
+        phase: "staged" as const,
+      })),
+    ]);
+    if (fileInput.current) fileInput.current.value = "";
+  }, []);
+
+  const setType = useCallback((key: string, documentType: UploadDocumentType) => {
+    setRows((current) =>
+      current.map((row) => (row.key === key ? { ...row, documentType } : row)),
+    );
+  }, []);
+
+  const send = useCallback(
+    async (row: Row) => {
+      if (!tender || !row.file) return;
+      setRows((current) =>
+        current.map((item) =>
+          item.key === row.key
+            ? {
+                ...item,
+                phase: "uploading",
+                state: { tone: "info", stored: "Pujant…", analysis: "" },
+              }
+            : item,
+        ),
+      );
+      const body = new FormData();
+      body.append("file", row.file);
+      // El tipus viatja SEMPRE, també quan és `other`: el servidor no ha
+      // d'endevinar que no s'ha dit res.
+      body.append("document_type", row.documentType);
+      try {
+        const result = await api.upload<UploadResult>(
+          `/companies/${companyId}/tenders/${tender.id}/documents`,
+          body,
+        );
+        setRows((current) =>
+          current.map((item) =>
+            item.key === row.key
+              ? {
+                  ...item,
+                  name: result.name,
+                  size: result.file.file_size,
+                  state: uploadRowState(result.file),
+                  phase: "done",
+                  // El fitxer es conserva: si després cal reintentar-lo, s'ha
+                  // de poder enviar el mateix i amb el mateix tipus.
+                  file: item.file,
+                }
+              : item,
+          ),
+        );
+      } catch (caught) {
+        const message =
+          caught instanceof Error ? caught.message : "No s'ha pogut pujar el fitxer.";
+        setRows((current) =>
+          current.map((item) =>
+            item.key === row.key
+              ? { ...item, state: failedRowState(message), phase: "failed" }
+              : item,
+          ),
+        );
       }
-      if (fileInput.current) fileInput.current.value = "";
     },
     [companyId, tender],
   );
 
-  const retry = useCallback(() => fileInput.current?.click(), []);
+  const sendAll = useCallback(async () => {
+    for (const row of rows.filter((item) => item.phase === "staged")) {
+      await send(row);
+    }
+  }, [rows, send]);
+
+  const pick = useCallback(() => fileInput.current?.click(), []);
+  const staged = rows.filter((row) => row.phase === "staged").length;
 
   return (
     <Modal
@@ -310,11 +361,16 @@ export function ImportTenderWizard({
               multiple
               className="sr-only"
               aria-label="Fitxers"
-              onChange={(event) => void upload(event.target.files)}
+              onChange={(event) => stage(event.target.files)}
             />
-            <Button variant="secondary" onClick={retry}>
+            <Button variant="secondary" onClick={pick}>
               <Upload size={15} strokeWidth={1.5} aria-hidden /> Tria fitxers
             </Button>
+            {staged > 0 && (
+              <Button variant="primary" onClick={() => void sendAll()}>
+                Puja {staged === 1 ? "el fitxer" : `els ${staged} fitxers`}
+              </Button>
+            )}
             <p className="text-caption text-muted">
               PDF i text s&apos;analitzen. La resta es guarden tal com arriben.
             </p>
@@ -336,12 +392,42 @@ export function ImportTenderWizard({
                     <span className="truncate text-body text-ink">{row.name}</span>
                     <span className="text-caption text-muted">{fileSize(row.size)}</span>
                   </span>
-                  <span className="flex items-center gap-2">
-                    <StatusPill level={row.state.tone === "error" ? "blocking" : "ready"}>
+                  <span className="flex flex-wrap items-center gap-2">
+                    {row.phase === "staged" ? (
+                      <Select
+                        aria-label={`Tipus de ${row.name}`}
+                        value={row.documentType}
+                        onChange={(event) =>
+                          setType(row.key, event.target.value as UploadDocumentType)
+                        }
+                        options={UPLOAD_DOCUMENT_TYPES.map((option) => ({ ...option }))}
+                      />
+                    ) : (
+                      <span className="text-caption text-muted">
+                        {documentTypeLabel(row.documentType)}
+                      </span>
+                    )}
+                    <StatusPill
+                      level={
+                        row.state.tone === "error"
+                          ? "blocking"
+                          : row.phase === "done"
+                            ? "ready"
+                            : "neutral"
+                      }
+                    >
                       {row.state.stored}
                     </StatusPill>
                     {row.state.analysis && (
                       <span className="text-caption text-muted">{row.state.analysis}</span>
+                    )}
+                    {row.phase === "failed" && (
+                      // El reintent envia el MATEIX fitxer amb el MATEIX tipus:
+                      // tornar a preguntar-ho seria fer repetir una decisió que
+                      // ja s'havia pres.
+                      <Button variant="ghost" size="sm" onClick={() => void send(row)}>
+                        Reintenta
+                      </Button>
                     )}
                   </span>
                 </li>
@@ -349,18 +435,9 @@ export function ImportTenderWizard({
             </ul>
           )}
 
-          {rows.some((row) => row.state.tone === "error") && (
-            <Banner
-              level="attention"
-              kicker="Alguns fitxers"
-              action={
-                <Button size="sm" variant="secondary" onClick={retry}>
-                  Torna-ho a provar
-                </Button>
-              }
-            >
-              Els que s&apos;han guardat hi continuen sent. Torna a provar només els que han
-              fallat.
+          {rows.some((row) => row.phase === "failed") && (
+            <Banner level="attention" kicker="Alguns fitxers" action={null}>
+              Els que s&apos;han guardat hi continuen sent. Reintenta només els que han fallat.
             </Banner>
           )}
         </div>
