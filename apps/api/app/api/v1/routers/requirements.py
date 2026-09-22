@@ -14,12 +14,13 @@ from __future__ import annotations
 import uuid
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, status
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CompanyCtx, CurrentUser, SessionDep
 from app.core.errors import EndpointMovedError, NotFoundError
-from app.models.enums import AnalysisRunStatus
+from app.models.audit import AuditAction
+from app.models.enums import AnalysisRunStatus, RequirementOrigin
 from app.models.requirements import (
     AwardCriterion,
     Requirement,
@@ -27,18 +28,24 @@ from app.models.requirements import (
 )
 from app.models.tender_documents import TenderDocumentExtraction
 from app.models.tenders import Tender, TenderDocument
+from app.schemas.provenance import read_of
 from app.schemas.requirements import (
     AwardCriterionRead,
     EvidenceRead,
     ExtractionRunRead,
+    ManualRequirementCreate,
+    ManualRequirementResult,
+    ManualRequirementUpdate,
     RequirementAnalysisRead,
+    RequirementCitationLink,
     RequirementRead,
     ReviewRequest,
 )
+from app.services import audit, manual_requirement, manual_tender
 from app.services.requirement_analysis import (
     analysis_input,
-    current_run_for,
 )
+from app.services.source_refs import resolve_source_ref
 
 router = APIRouter(tags=["analisi de plecs"])
 
@@ -111,33 +118,53 @@ async def run_analysis(tender_id: uuid.UUID, _: CurrentUser):
 )
 async def read_analysis(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
     await _load_tender(session, tender_id)
-    run = await current_run_for(session, tender_id)
-    if run is None:
+    # El conjunt EFECTIU: l'analisi vigent mes els requisits escrits a ma. Les
+    # dues fonts es mantenen separades —`origin` ho diu a cada fila— perque fer
+    # veure que un manual surt de l'ultima run seria atribuir a un model una
+    # cosa que ha escrit una persona.
+    effective = await manual_requirement.effective_requirements(session, tender_id)
+    run = effective.run
+    if run is None and not effective.manual:
         return RequirementAnalysisRead()
 
     requirements = (
         await session.scalars(
             sa.select(Requirement)
             .options(selectinload(Requirement.evidence))
-            .where(Requirement.run_id == run.id)
+            .where(Requirement.id.in_([r.id for r in effective.all]))
             .order_by(Requirement.category, Requirement.created_at)
         )
-    ).all()
+    ).all() if effective.all else []
     criteria = (
         await session.scalars(
             sa.select(AwardCriterion)
             .options(selectinload(AwardCriterion.evidence))
-            .where(AwardCriterion.run_id == run.id)
+            .where(AwardCriterion.run_id == (run.id if run else None))
             .order_by(AwardCriterion.points.desc().nullslast(), AwardCriterion.name)
         )
-    ).all()
+    ).all() if run is not None else []
 
     decoration = await _decorate_evidence(session, list(requirements) + list(criteria))
+
+    # La provinenca dels manuals son cites, no `RequirementEvidence`: dos
+    # emmagatzematges amb garanties diferents i un sol vocabulari a l'API.
+    citations = await manual_requirement.source_refs_of(
+        session, [r.id for r in requirements if r.origin == RequirementOrigin.MANUAL]
+    )
 
     requirement_reads = []
     for requirement in requirements:
         read = RequirementRead.model_validate(requirement)
         read.evidence = _evidence_reads(requirement, decoration)
+        if requirement.origin == RequirementOrigin.MANUAL:
+            # `confidence` es de l'extractor. Un requisit escrit per una
+            # persona no en te, i ensenyar-ne el valor de la columna seria
+            # atribuir a una IA una afirmacio humana.
+            read.confidence = None
+            read.citations = [
+                read_of(await resolve_source_ref(session, ref))
+                for ref in citations.get(requirement.id, [])
+            ]
         requirement_reads.append(read)
 
     criteria_reads = []
@@ -148,11 +175,17 @@ async def read_analysis(tender_id: uuid.UUID, session: SessionDep, _: CurrentUse
 
     # Obsolet: els documents han canviat des que es va fer l'analisi. Amb la
     # mateixa definicio d'entrada que l'analisi (sostre de pagines inclos).
-    current = await analysis_input(session, tender_id)
-    is_stale = bool(current.documents) and current.fingerprint != run.input_fingerprint
+    # `is_stale` parla NOMES de la run extreta i del corpus documental. Un
+    # requisit manual no hi entra: una afirmacio humana no caduca perque s'hagi
+    # tornat a llegir un PDF, i crear-ne un tampoc no fa que l'analisi cobreixi
+    # els documents d'ara.
+    is_stale = False
+    if run is not None:
+        current = await analysis_input(session, tender_id)
+        is_stale = bool(current.documents) and current.fingerprint != run.input_fingerprint
 
     return RequirementAnalysisRead(
-        run=ExtractionRunRead.model_validate(run),
+        run=ExtractionRunRead.model_validate(run) if run is not None else None,
         requirements=requirement_reads,
         award_criteria=criteria_reads,
         is_stale=is_stale,
@@ -294,3 +327,252 @@ async def review_award_criterion(
 
 
 __all__ = ["router", "AnalysisRunStatus"]
+
+
+# --------------------------------------------------------------------------- #
+# Requisits escrits a ma (S3-S5)                                                #
+# --------------------------------------------------------------------------- #
+#
+# Company-scoped i NOMES sobre una licitacio oberta a ma i de la propia
+# empresa. El motiu no es de permisos sino de model: `Requirement` es
+# tender-level i no te `owner_company_id`, aixi que deixar escriure'n sobre una
+# licitacio PUBLICA faria que el que escriu una empresa aparegues a totes les
+# altres. Mentre no hi hagi tenancy a `Requirement`, la porta es aquesta.
+
+
+async def _editable_tender(session, company_id: uuid.UUID, tender_id: uuid.UUID):
+    return await manual_tender.load_editable_tender(session, company_id, tender_id)
+
+
+async def _requirement_read(session, requirement) -> RequirementRead:
+    """La fitxa d'un requisit, amb la seva provinenca."""
+    read = RequirementRead.model_validate(requirement)
+    if requirement.origin == RequirementOrigin.MANUAL:
+        read.confidence = None
+        refs = (await manual_requirement.source_refs_of(session, [requirement.id])).get(
+            requirement.id, []
+        )
+        read.citations = [
+            read_of(await resolve_source_ref(session, ref)) for ref in refs
+        ]
+    return read
+
+
+@router.post(
+    "/companies/{company_id}/tenders/{tender_id}/requirements",
+    response_model=RequirementRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Escriu un requisit a ma",
+)
+async def create_manual_requirement(
+    tender_id: uuid.UUID,
+    payload: ManualRequirementCreate,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Afegeix un requisit que l'analisi no ha trobat, o que no hi podia ser.
+
+    No crea cap `RequirementExtractionRun` i no en pot crear: una run modela
+    una execucio d'analisi amb el seu proveidor i el seu corpus, i aqui no n'hi
+    ha cap. El requisit neix `unreviewed`: que l'hagi escrit una persona no vol
+    dir que estigui comprovat, i citar-ne la font tampoc no el verifica.
+    """
+    manual_requirement.assert_can_edit(ctx.membership.role)
+    tender = await _editable_tender(session, ctx.company_id, tender_id)
+
+    fields = payload.model_dump(exclude={"source_ref_ids"})
+    requirement = await manual_requirement.create_manual_requirement(
+        session, tender=tender, user=ctx.user, fields=fields
+    )
+    for ref_id in payload.source_ref_ids:
+        await manual_requirement.link_source_ref(
+            session, requirement=requirement, source_ref_id=ref_id, user=ctx.user
+        )
+
+    await audit.record(
+        session,
+        company_id=ctx.company_id,
+        user_id=ctx.user.id,
+        action=AuditAction.CREATE,
+        entity_type="requirement",
+        entity_id=requirement.id,
+        summary=f"licitacio={tender_id} requisit={requirement.id}",
+    )
+    await session.commit()
+    await session.refresh(requirement)
+    return await _requirement_read(session, requirement)
+
+
+@router.patch(
+    "/companies/{company_id}/tenders/{tender_id}/requirements/{requirement_id}",
+    response_model=ManualRequirementResult,
+    summary="Corregeix un requisit escrit a ma",
+)
+async def update_manual_requirement(
+    tender_id: uuid.UUID,
+    requirement_id: uuid.UUID,
+    payload: ManualRequirementUpdate,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Nomes els escrits a ma.
+
+    Un requisit EXTRET no s'edita per aqui, i no es cap oblit: seria reescriure
+    la sortida d'una execucio concreta, i llavors la run ja no diria el que va
+    produir. Els extrets tenen el seu cami, que es la revisio.
+
+    Un PATCH que no canvia res no es un canvi: no mou l'autor, no deixa
+    auditoria i no fa caducar l'abast tecnic.
+    """
+    manual_requirement.assert_can_edit(ctx.membership.role)
+    tender = await _editable_tender(session, ctx.company_id, tender_id)
+    requirement = await manual_requirement.load_manual_requirement(
+        session, tender, requirement_id
+    )
+
+    fields = {
+        name: getattr(payload, name)
+        for name in manual_requirement.EDITABLE_FIELDS
+        if name in payload.model_fields_set
+    }
+    changed = await manual_requirement.update_manual_requirement(
+        session, tender=tender, requirement=requirement, user=ctx.user, fields=fields
+    )
+    if changed:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.UPDATE,
+            entity_type="requirement",
+            entity_id=requirement.id,
+            summary=f"requisit={requirement.id} camps={','.join(sorted(fields)) or '-'}",
+        )
+    await session.commit()
+    await session.refresh(requirement)
+    return ManualRequirementResult(
+        changed=changed, requirement=await _requirement_read(session, requirement)
+    )
+
+
+@router.post(
+    "/companies/{company_id}/tenders/{tender_id}/requirements/{requirement_id}/archive",
+    response_model=ManualRequirementResult,
+    summary="Arxiva un requisit escrit a ma",
+)
+async def archive_manual_requirement(
+    tender_id: uuid.UUID,
+    requirement_id: uuid.UUID,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """El treu del conjunt efectiu sense esborrar-lo.
+
+    No hi ha esborrat dur: les seves cites i la feina que va generar segueixen
+    existint, i arxivar vol dir "ja no compta", no "no va existir". Idempotent.
+    """
+    manual_requirement.assert_can_edit(ctx.membership.role)
+    tender = await _editable_tender(session, ctx.company_id, tender_id)
+    requirement = await manual_requirement.load_manual_requirement(
+        session, tender, requirement_id
+    )
+
+    changed = await manual_requirement.archive_manual_requirement(
+        session, requirement=requirement, user=ctx.user
+    )
+    if changed:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.UPDATE,
+            entity_type="requirement",
+            entity_id=requirement.id,
+            summary=f"requisit={requirement.id} arxivat",
+        )
+    await session.commit()
+    await session.refresh(requirement)
+    return ManualRequirementResult(
+        changed=changed, requirement=await _requirement_read(session, requirement)
+    )
+
+
+@router.post(
+    "/companies/{company_id}/tenders/{tender_id}/requirements/{requirement_id}/citations",
+    response_model=RequirementRead,
+    summary="Enllaça una cita a un requisit",
+)
+async def link_requirement_citation(
+    tender_id: uuid.UUID,
+    requirement_id: uuid.UUID,
+    payload: RequirementCitationLink,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """La cita ha de ser de la MATEIXA licitacio.
+
+    Una FK sola no ho demostra: dues licitacions poden tenir els mateixos bytes,
+    i deixar que un requisit d'una citi la font de l'altra faria que la prova
+    apuntes a un expedient que no es el seu.
+    """
+    manual_requirement.assert_can_edit(ctx.membership.role)
+    tender = await _editable_tender(session, ctx.company_id, tender_id)
+    requirement = await manual_requirement.load_manual_requirement(
+        session, tender, requirement_id
+    )
+
+    await manual_requirement.link_source_ref(
+        session, requirement=requirement, source_ref_id=payload.source_ref_id, user=ctx.user
+    )
+    await audit.record(
+        session,
+        company_id=ctx.company_id,
+        user_id=ctx.user.id,
+        action=AuditAction.UPDATE,
+        entity_type="requirement",
+        entity_id=requirement.id,
+        summary=f"requisit={requirement.id} cita+={payload.source_ref_id}",
+    )
+    await session.commit()
+    return await _requirement_read(session, requirement)
+
+
+@router.delete(
+    "/companies/{company_id}/tenders/{tender_id}/requirements/{requirement_id}"
+    "/citations/{source_ref_id}",
+    response_model=RequirementRead,
+    summary="Treu una cita d'un requisit",
+)
+async def unlink_requirement_citation(
+    tender_id: uuid.UUID,
+    requirement_id: uuid.UUID,
+    source_ref_id: uuid.UUID,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Treu l'ENLLAC. La cita no s'esborra.
+
+    Pot sostenir-ne d'altres, i era certa el dia que es va crear. L'unic que
+    canvia es que aquest requisit ja no s'hi recolza.
+    """
+    manual_requirement.assert_can_edit(ctx.membership.role)
+    tender = await _editable_tender(session, ctx.company_id, tender_id)
+    requirement = await manual_requirement.load_manual_requirement(
+        session, tender, requirement_id
+    )
+
+    removed = await manual_requirement.unlink_source_ref(
+        session, requirement=requirement, source_ref_id=source_ref_id
+    )
+    if removed:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.UPDATE,
+            entity_type="requirement",
+            entity_id=requirement.id,
+            summary=f"requisit={requirement.id} cita-={source_ref_id}",
+        )
+    await session.commit()
+    return await _requirement_read(session, requirement)

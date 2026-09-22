@@ -840,6 +840,10 @@ function TenderDetail() {
           <RequirementAnalysisSection
             tenderId={tenderId}
             companyId={companyId}
+            // Només a una licitació oberta a mà i pròpia: `Requirement` no té
+            // propietari, així que escriure'n sobre una de pública els faria
+            // aparèixer a totes les empreses.
+            editable={isManual}
             analysis={analysis.data}
             loading={analysis.loading}
             error={analysis.error}

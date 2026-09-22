@@ -436,6 +436,20 @@ class ExtractionConfidence(StrEnum):
     LOW = "low"
 
 
+class RequirementOrigin(StrEnum):
+    """Qui ha escrit aquest requisit.
+
+    No es un detall de metadata: canvia que se'n pot afirmar. Un requisit
+    EXTRET el va treure un model d'uns documents concrets i te una run al
+    darrere que diu quins; un de MANUAL l'ha escrit una persona i no te run ni
+    en pot tenir. Barrejar-los obligaria a inventar una execucio d'analisi que
+    no ha existit mai (D-09).
+    """
+
+    EXTRACTED = "extracted"
+    MANUAL = "manual"
+
+
 class ReviewStatus(StrEnum):
     """Revisio humana. L'output original del model no es sobreescriu mai."""
 

@@ -145,3 +145,62 @@ class TenderSourceRef(UUIDPrimaryKeyMixin, Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<TenderSourceRef {self.ref_kind} {self.content_sha256[:12]}>"
+
+
+class RequirementSourceRefLink(UUIDPrimaryKeyMixin, Base):
+    """Quines cites sosté un requisit.
+
+    Taula relacional de debo i no un JSON d'identificadors: aixi la base de
+    dades pot garantir que la cita existeix, i esborrar-la per accident deixa
+    de ser possible.
+
+    **L'enllac es mutable; la cita, no.** Treure un enllac vol dir "aquest
+    requisit ja no s'hi recolza", no "aquella cita no va existir": el
+    `TenderSourceRef` es queda, perque pot sostenir-ne d'altres i perque era
+    cert el dia que es va crear.
+
+    `RESTRICT` cap a la cita pel mateix motiu que a tota la cadena de
+    provinenca: una font citada no s'ha de poder fer desapareixer sense
+    adonar-se'n. Cap al requisit, `CASCADE`: si el requisit deixa d'existir,
+    els seus enllacos no tenen ningu a qui servir. Arxivar-lo, en canvi, NO els
+    toca —arxivar no es esborrar.
+    """
+
+    __tablename__ = "requirement_source_ref_links"
+    __table_args__ = (
+        # El mateix requisit no cita dues vegades la mateixa font.
+        sa.UniqueConstraint(
+            "requirement_id", "source_ref_id", name="uq_requirement_source_ref"
+        ),
+        sa.Index("ix_requirement_source_ref_links_requirement", "requirement_id"),
+        sa.Index("ix_requirement_source_ref_links_source_ref", "source_ref_id"),
+    )
+
+    requirement_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "requirements.id", ondelete="CASCADE", name="fk_requirement_source_ref_requirement"
+        ),
+        nullable=False,
+    )
+    source_ref_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "tender_source_refs.id",
+            ondelete="RESTRICT",
+            name="fk_requirement_source_ref_source",
+        ),
+        nullable=False,
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "users.id", ondelete="SET NULL", name="fk_requirement_source_ref_author"
+        ),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<RequirementSourceRefLink {self.requirement_id} -> {self.source_ref_id}>"

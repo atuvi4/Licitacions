@@ -28,7 +28,7 @@ from app.models.profile import (
     CompanyTerritory,
 )
 from app.models.projects import CompanyProject, ProjectCPV, project_services
-from app.models.provenance import TenderSourceRef
+from app.models.provenance import RequirementSourceRefLink, TenderSourceRef
 from app.models.requirements import (
     AwardCriterion,
     AwardCriterionEvidence,
@@ -124,6 +124,7 @@ __all__ = [
     "TenderLotCPV",
     "TenderRevision",
     "TenderSourceRef",
+    "RequirementSourceRefLink",
     "User",
     "WorkJob",
     "WorkspaceChecklistItem",

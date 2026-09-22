@@ -63,6 +63,7 @@ from app.models.identity import Company
 from app.models.matching import CompanyTenderMatch
 from app.models.requirements import Requirement, RequirementExtractionRun
 from app.models.tenders import Tender, TenderLot
+from app.services import manual_requirement
 from app.services.tender_lifecycle import latest_revision
 
 logger = logging.getLogger(__name__)
@@ -139,12 +140,21 @@ async def analyze_company_compliance(
             "Aquesta licitacio no te cap analisi de requisits vigent. Analitza'n els plecs primer."
         )
 
+    # El conjunt EFECTIU: l'extraccio vigent mes els requisits escrits a ma.
+    # Un requisit manual obligatori existeix igual que un d'extret i el motor
+    # n'ha de llegir els camps estructurats igual; que l'hagi escrit una
+    # persona no el fa complert tot sol.
     requirements = list(
         (
             await session.scalars(
                 sa.select(Requirement)
                 .options(selectinload(Requirement.evidence))
-                .where(Requirement.run_id == extraction_run.id)
+                .where(
+                    sa.or_(
+                        Requirement.run_id == extraction_run.id,
+                        manual_requirement.manual_filter(tender.id),
+                    )
+                )
                 .order_by(Requirement.category, Requirement.created_at)
             )
         ).all()

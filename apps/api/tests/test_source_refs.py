@@ -657,13 +657,18 @@ async def test_two_citations_of_the_same_source_stay_two(client_a, db, tenant_a)
     assert total == 2
 
 
-async def test_no_requirement_link_table_exists_yet(db):
-    """0030 crea les cites; enllaçar-les amb requisits és 0031."""
+async def test_the_citations_have_their_consumers_but_not_more(db):
+    """0030 crea les cites i 0031 les enllaça amb els requisits.
+
+    Les dimensions i els dubtes encara no: cada fase afegeix el seu consumidor
+    i cap d'ells no toca `tender_source_refs`, que es immutable.
+    """
     from app.models import Base
 
     assert "tender_source_refs" in Base.metadata.tables
-    assert "requirement_source_ref_links" not in Base.metadata.tables
+    assert "requirement_source_ref_links" in Base.metadata.tables
     assert "workspace_dimension_observations" not in Base.metadata.tables
+    assert "workspace_issue_source_ref_links" not in Base.metadata.tables
 
 
 async def test_an_extraction_referenced_by_a_citation_is_protected(client_a, db, tenant_a):

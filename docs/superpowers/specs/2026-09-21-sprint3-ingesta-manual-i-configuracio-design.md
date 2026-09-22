@@ -1241,3 +1241,62 @@ garanties, i això és una via genèrica **addicional**.
 
 `requirement_source_ref_links` és 0031. Cap consumidor encara, i per tant cap
 UX: la primera pantalla de citacions arribarà amb els requisits manuals.
+
+---
+
+## Delta S3-S5 — requisits manuals i conjunt efectiu
+
+La §13 s'ha implementat tal com estava congelada. Els deltes reals:
+
+**Restricció V1 de tenancy.** `Requirement` és tender-level i 0031 **no** hi
+afegeix `owner_company_id`. Per tant escriure requisits a mà només es pot sobre
+una licitació **de la font MANUAL i de la pròpia empresa**: fer-ho sobre una de
+pública faria que el que escriu una empresa aparegués a totes les altres, sense
+cap model de tenancy que ho impedeixi. La lectura dels extrets d'una licitació
+pública no canvia gens.
+
+**Codi d'error.** El freeze deia `403 requirement_not_manual`; la implementació
+retorna **`422`**, per coherència amb `tender_not_manual` d'S3-S1b i amb la
+resta de `ValidationError` del repo. El `404` es reserva per al que és d'una
+altra empresa.
+
+**`confidence` no s'exposa als manuals.** La columna és NOT NULL i ve de quan
+tot requisit sortia d'un model; es desa al mínim per satisfer-la, però el
+read-model la retorna `null` quan `origin=manual` i la interfície pinta
+atribució humana. Dir «confiança baixa de la IA» d'una cosa escrita per una
+persona seria una atribució falsa.
+
+**`dedup_key` es calcula però no s'imposa.** `UNIQUE(run_id, dedup_key)` no
+dispara amb `run_id` NULL, i és correcte: que dues persones escriguin el mateix
+requisit és cosa seva, i fusionar-los seria decidir-ho per elles.
+
+**Downgrade amb pèrdua deliberada.** 0030 no sap representar un requisit sense
+run. El downgrade esborra els manuals i els seus enllaços **abans** de tornar
+`run_id` a NOT NULL. L'alternativa —fabricar-los una `RequirementExtractionRun`—
+és exactament la mentida que 0031 existeix per evitar.
+
+**Provinença.** `requirement_source_ref_links` (N:N), `RESTRICT` cap a la cita i
+`CASCADE` cap al requisit. Treure un enllaç **no** esborra la cita: pot
+sostenir-ne d'altres i era certa el dia que es va crear. Arxivar un requisit
+tampoc no toca els enllaços.
+
+### Callers de `Requirement.run_id` auditats
+
+| Fitxer / funció | Assumpció abans | Classificació | Canvi |
+|---|---|---|---|
+| `services/technical_scope._requirements` | `run_id == run.id` | conjunt efectiu | usa `effective_requirements` |
+| `services/bid_workspace.relevant_requirements` | `run_id == run.id` | conjunt efectiu | usa `effective_requirements` |
+| `services/compliance_analysis.analyze_company_compliance` | `run_id == run.id` | conjunt efectiu | `OR manual_filter(tender)` |
+| `routers/requirements.read_analysis` | `run_id == run.id`, `run` no-null | conjunt efectiu | unió + `run` opcional |
+| `services/requirement_analysis` (1046-1178) | escriu amb `run_id=run.id` | extracted-only | intacte |
+| `evaluation/runner` | `run_id == run.id` | extracted-only | intacte |
+| `services/submission_package`, `submission_manifest`, `routers/submission` | `requirement_run_id` del **paquet** | extracted-only | intacte |
+| `services/bid_workspace` (`current_requirement_run_id`) | run vigent del workspace | extracted-only | intacte |
+| `models/requirements.Requirement.run` | relació no-null | manual-aware | `Requirement \| None` |
+| `schemas/requirements.RequirementRead` | `run_id: uuid` | manual-aware | `uuid \| None` + `origin` |
+| `ai/normalize_v2`, `jobs/*`, `ingestion/*` | `run_id` d'altres entitats | no afectats | intacte |
+
+**Conseqüències volgudes**: crear, editar materialment o arxivar un requisit
+manual mou l'empremta de l'abast tècnic → `technical_scope_stale`. Un PATCH que
+no canvia res, no. I `analysis_input().fingerprint` **no** es mou mai per CRUD
+manual: parla del corpus documental, no dels requisits.

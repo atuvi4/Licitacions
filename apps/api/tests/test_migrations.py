@@ -619,3 +619,78 @@ def test_les_cites_neixen_sense_cap_fila():
     up = _offline_sql("upgrade", _REFS)
 
     assert "INSERT INTO tender_source_refs" not in up
+
+
+_MANUAL_REQ = "0030_tender_source_refs:0031_manual_requirements"
+
+
+def test_els_requisits_manuals_es_poden_aplicar_i_desfer():
+    up = _offline_sql("upgrade", _MANUAL_REQ)
+    down = _offline_sql("downgrade", "0031_manual_requirements:0030_tender_source_refs")
+
+    for fragment in ("ADD COLUMN origin", "ADD COLUMN archived_at",
+                     "ADD COLUMN created_by", "ADD COLUMN updated_by",
+                     "CREATE TABLE requirement_source_ref_links"):
+        assert fragment in up, fragment
+    for fragment in ("DROP COLUMN origin", "DROP COLUMN archived_at",
+                     "DROP TABLE requirement_source_ref_links"):
+        assert fragment in down, fragment
+
+
+def test_els_requisits_que_ja_hi_havia_son_extrets():
+    """Backfill honest: totes les files antigues venen d'una run.
+
+    El `server_default` nomes serveix per omplir-les i es retira tot seguit:
+    deixar-lo permanent faria que una fila nova pogues dir-se extreta sense
+    ser-ho.
+    """
+    up = _offline_sql("upgrade", _MANUAL_REQ)
+
+    assert "'extracted'" in up
+    assert "DROP DEFAULT" in up
+
+
+def test_no_sinventa_cap_autor_historic():
+    """`created_by` i `updated_by` neixen NULL: no sabem qui va crear les files
+    antigues i inventar-ho seria pitjor que no dir-ho."""
+    up = _offline_sql("upgrade", _MANUAL_REQ)
+
+    assert "UPDATE requirements SET created_by" not in up
+    assert "UPDATE requirements SET updated_by" not in up
+
+
+def test_un_requisit_extret_sempre_te_run_i_un_de_manual_mai():
+    """El CHECK ho garanteix la base de dades, no nomes el servei."""
+    up = _offline_sql("upgrade", _MANUAL_REQ)
+
+    assert "requirement_origin_matches_run" in up
+    assert "origin = 'extracted' AND run_id IS NOT NULL" in up
+    assert "origin = 'manual' AND run_id IS NULL" in up
+
+
+def test_una_cita_enllacada_no_es_pot_esborrar_per_accident():
+    """RESTRICT cap a la cita; CASCADE cap al requisit."""
+    up = _offline_sql("upgrade", _MANUAL_REQ)
+
+    source = [row for row in up.splitlines() if "fk_requirement_source_ref_source" in row]
+    assert source and "ON DELETE RESTRICT" in source[0]
+    requirement = [
+        row for row in up.splitlines() if "fk_requirement_source_ref_requirement" in row
+    ]
+    assert requirement and "ON DELETE CASCADE" in requirement[0]
+
+
+def test_el_downgrade_esborra_els_manuals_en_comptes_dinventar_runs():
+    """0030 no sap representar un requisit sense run.
+
+    L'unica alternativa a esborrar-los seria fabricar-los una
+    `RequirementExtractionRun`, que es exactament la mentida que 0031 existeix
+    per evitar. Es perdua de dades, i es deliberada.
+    """
+    down = _offline_sql("downgrade", "0031_manual_requirements:0030_tender_source_refs")
+
+    assert "DELETE FROM requirements WHERE origin = 'manual'" in down
+    assert "DELETE FROM requirement_source_ref_links" in down
+    assert "INSERT INTO requirement_extraction_runs" not in down
+    # I l'esborrat va ABANS de tornar la columna a NOT NULL.
+    assert down.index("DELETE FROM requirements") < down.index("SET NOT NULL")

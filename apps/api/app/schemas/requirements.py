@@ -26,9 +26,11 @@ from app.models.enums import (
     RequirementModality,
     RequirementObligation,
     RequirementOperator,
+    RequirementOrigin,
     RequirementScope,
     ReviewStatus,
 )
+from app.schemas.provenance import TenderSourceRefRead
 
 
 class ORMModel(BaseModel):
@@ -55,7 +57,15 @@ class EvidenceRead(ORMModel):
 
 class RequirementRead(ORMModel):
     id: uuid.UUID
-    run_id: uuid.UUID
+    #: `None` als requisits escrits a ma: no venen de cap execucio d'analisi i
+    #: no se n'hi inventa cap (D-09).
+    run_id: uuid.UUID | None = None
+    #: Qui l'ha escrit. La interficie n'ha de derivar l'atribucio: un requisit
+    #: manual NO porta atribucio d'IA.
+    origin: RequirementOrigin = RequirementOrigin.EXTRACTED
+    #: Nomes als manuals. Un d'extret surt del conjunt efectiu quan la seva run
+    #: deixa de ser vigent i no li cal cap marca.
+    archived_at: datetime | None = None
     tender_id: uuid.UUID
     tender_lot_id: uuid.UUID | None = None
     category: RequirementCategory
@@ -77,7 +87,10 @@ class RequirementRead(ORMModel):
     equivalence_allowed: bool = False
     condition_note: str | None = None
     raw_lot_labels: list[Any] | None = None
-    confidence: ExtractionConfidence
+    #: `None` als manuals. La columna es NOT NULL per historia —tot requisit
+    #: sortia d'un model—, pero aqui no s'exposa: dir "confianca baixa de la IA"
+    #: d'una cosa que ha escrit una persona seria una atribucio falsa.
+    confidence: ExtractionConfidence | None = None
     review_status: ReviewStatus
     review_note: str | None = None
     manual_override_json: dict[str, Any] | None = None
@@ -85,7 +98,12 @@ class RequirementRead(ORMModel):
     has_conflict: bool
     conflict_group: str | None = None
     created_at: datetime
+    #: La provinenca dels EXTRETS. Els manuals la porten a `citations`.
     evidence: list[EvidenceRead] = Field(default_factory=list)
+    #: La provinenca dels MANUALS: cites a `tender_source_refs`. Son dues
+    #: llistes i no una d'unida perque son dos emmagatzematges amb garanties
+    #: diferents, i `RequirementEvidence` no s'ha tocat.
+    citations: list[TenderSourceRefRead] = Field(default_factory=list)
 
 
 class AwardCriterionRead(ORMModel):
@@ -173,6 +191,71 @@ class AnalysisResult(BaseModel):
     #: Cert si s'ha reutilitzat un run anterior sense gastar tokens.
     reused: bool
     run: ExtractionRunRead
+
+
+class ManualRequirementCreate(BaseModel):
+    """Un requisit escrit per una persona.
+
+    Nomes hi son els camps que una persona pot DEFINIR. No hi ha `origin`,
+    `run_id`, `archived_at`, `confidence` ni `dedup_key`: son fets sobre com ha
+    nascut la fila i els fixa el servidor. Deixar-los escriure voldria dir
+    deixar que algu digues "aixo ho ha extret un model amb confianca alta" d'una
+    cosa que acaba d'escriure ell.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=500)
+    description: str | None = None
+    category: RequirementCategory
+    obligation: RequirementObligation = RequirementObligation.UNKNOWN
+    operator: RequirementOperator | None = None
+    scope: RequirementScope = RequirementScope.UNKNOWN
+    modality: RequirementModality = RequirementModality.UNKNOWN
+    value_json: dict[str, Any] | None = None
+    tender_lot_id: uuid.UUID | None = None
+    alternative_group: str | None = Field(default=None, max_length=80)
+    equivalence_allowed: bool = False
+    condition_note: str | None = Field(default=None, max_length=500)
+    #: Cites ja creades que sostenen aquest requisit. Poden ser zero: un
+    #: requisit sense font es una afirmacio humana sense acreditar, i neix
+    #: `unreviewed` justament per aixo.
+    source_ref_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class ManualRequirementUpdate(BaseModel):
+    """Correccions. S'apliquen nomes els camps que arriben."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    description: str | None = None
+    category: RequirementCategory | None = None
+    obligation: RequirementObligation | None = None
+    operator: RequirementOperator | None = None
+    scope: RequirementScope | None = None
+    modality: RequirementModality | None = None
+    value_json: dict[str, Any] | None = None
+    tender_lot_id: uuid.UUID | None = None
+    alternative_group: str | None = Field(default=None, max_length=80)
+    equivalence_allowed: bool | None = None
+    condition_note: str | None = Field(default=None, max_length=500)
+
+
+class RequirementCitationLink(BaseModel):
+    """Enllaça una cita JA CREADA. Aqui no se'n crea cap: una cita es immutable
+    i es crea pel seu propi cami."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_ref_id: uuid.UUID
+
+
+class ManualRequirementResult(BaseModel):
+    """`changed` es fals quan el PATCH no ha canviat cap valor."""
+
+    changed: bool = True
+    requirement: RequirementRead
 
 
 class RequirementAnalysisRead(BaseModel):

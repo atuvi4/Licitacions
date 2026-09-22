@@ -29,7 +29,7 @@ from app.models.offer import EconomicOffer, EconomicOfferLot
 from app.models.requirements import Requirement
 from app.models.tenders import TenderLot
 from app.models.workspace import BidWorkspace, WorkspaceTechnicalSolution
-from app.services import bid_workspace as workspace_service
+from app.services import manual_requirement
 from app.workspace.checklist import applies_to_workspace_lot
 from app.workspace.relevance import requirement_fingerprint
 from app.workspace.technical_scope import (
@@ -135,16 +135,24 @@ async def _requirements(
     lot_ids: tuple[uuid.UUID, ...],
     lot_mode: str,
 ) -> tuple[Requirement, ...]:
-    """Els requisits de l'extraccio vigent que apliquen a aquests lots."""
-    run = await workspace_service.current_requirement_run(session, workspace.tender_id)
-    if run is None:
-        return ()
-    rows = await session.scalars(
-        sa.select(Requirement).where(Requirement.run_id == run.id)
+    """Els requisits VIGENTS que apliquen a aquests lots.
+
+    Vigents vol dir el conjunt efectiu: els de l'extraccio vigent MES els
+    escrits a ma i no arxivats. Si nomes mires l'extraccio, un requisit que
+    algu ha afegit perque el model no el va veure no arribaria mai a l'abast
+    tecnic, i el sistema diria que no cal cap solucio per a una cosa que si que
+    en necessita.
+
+    Com que l'empremta de l'abast es fa d'aqui, aixo tambe vol dir que crear,
+    editar o arxivar un requisit manual fa caducar una revisio ja confirmada,
+    que es exactament el que ha de passar.
+    """
+    effective = await manual_requirement.effective_requirements(
+        session, workspace.tender_id
     )
     return tuple(
         requirement
-        for requirement in rows.all()
+        for requirement in effective.all
         if in_scope(requirement, lot_ids=lot_ids, lot_mode=lot_mode)
     )
 

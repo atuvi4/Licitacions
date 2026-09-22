@@ -87,6 +87,10 @@ PUBLIC_TABLES = frozenset(
         "requirement_evidence",
         "requirement_extraction_runs",
         "requirements",
+        # Les cites d'un requisit pengen del requisit, que penja de la
+        # licitacio. Cap empresa n'es propietaria i per tant no s'esborren en
+        # destruir un tenant.
+        "requirement_source_ref_links",
         "tender_cpvs",
         "tender_documents",
         # La capa documental dels plecs es publica i global: els mateixos bytes

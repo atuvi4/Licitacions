@@ -16,7 +16,10 @@
  * preview → confirmació humana; el botó «Analitza» només demana el preview.
  */
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
+
+import { ManualRequirementForm, canWriteRequirements } from "@/components/ManualRequirementForm";
+import { useSession } from "@/components/SessionProvider";
 
 import { AnalysisQuotePanel } from "@/components/AnalysisQuotePanel";
 import { Attribution, Banner, Button, Card, CardHeader, ErrorNotice, ErrorState, EvidenceRef, LinkButton, StatusPill } from "@/components/ui";
@@ -124,11 +127,18 @@ function RequirementRow({
   requirement,
   onReview,
   busy,
+  onEdit,
+  onArchive,
 }: {
   tenderId: string;
   requirement: Requirement;
   onReview: (id: string, status: ReviewStatus) => void;
   busy: boolean;
+  /** Només als escrits a mà. Un d'extret no s'edita: seria reescriure la
+   * sortida d'una execució concreta, i llavors la run ja no diria què va
+   * produir. Per als extrets hi ha la revisió, que ja hi era. */
+  onEdit?: (requirement: Requirement) => void;
+  onArchive?: (requirement: Requirement) => void;
 }) {
   return (
     <li className="px-4 py-3.5 sm:px-5">
@@ -137,7 +147,16 @@ function RequirementRow({
           <p className="text-[14px] font-medium text-ink">{requirement.title}</p>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted">
             <span className={KICKER}>{OBLIGATION_LABELS[requirement.obligation]}</span>
-            <Attribution kind="ai" confidence={requirement.confidence} />
+            {/*
+              Atribució segons QUI l'ha escrit. Un requisit manual no porta
+              confiança d'IA: dir "confiança alta del model" d'una cosa que ha
+              escrit una persona seria atribuir-li una autoria falsa.
+            */}
+            {requirement.origin === "manual" ? (
+              <Attribution kind="human" label="Escrit a mà" />
+            ) : (
+              <Attribution kind="ai" confidence={requirement.confidence ?? undefined} />
+            )}
             {requirement.has_conflict && (
               <StatusPill level="attention" size="sm">
                 Possible conflicte entre documents
@@ -148,6 +167,34 @@ function RequirementRow({
           <div className="mt-2">
             <Evidence tenderId={tenderId} evidence={requirement.evidence} />
           </div>
+          {requirement.citations.length > 0 && (
+            // La provinença d'un requisit escrit a mà: cites a una versió i
+            // una pàgina concretes, que no es mouen quan arriba un document nou.
+            <ul className="mt-2 grid gap-1">
+              {requirement.citations.map((citation) => (
+                <li key={citation.id} className="text-caption text-muted">
+                  {citation.document_name ?? "Document"}
+                  {citation.page_number ? ` · p. ${citation.page_number}` : ""}
+                  {citation.location_label ? ` · ${citation.location_label}` : ""}
+                  {citation.quote ? ` · «${citation.quote}»` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+          {requirement.origin === "manual" && (onEdit || onArchive) && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {onEdit && (
+                <Button variant="ghost" size="sm" onClick={() => onEdit(requirement)}>
+                  Edita
+                </Button>
+              )}
+              {onArchive && (
+                <Button variant="ghost" size="sm" onClick={() => void onArchive(requirement)}>
+                  Arxiva
+                </Button>
+              )}
+            </div>
+          )}
         </div>
         <div className="shrink-0 md:max-w-[40%]">
           <ReviewControls current={requirement.review_status} busy={busy} onReview={(status) => onReview(requirement.id, status)} />
@@ -170,6 +217,7 @@ export function RequirementAnalysisSection({
   loading,
   error,
   onReload,
+  editable = false,
 }: {
   tenderId: string;
   companyId: string | null;
@@ -177,7 +225,29 @@ export function RequirementAnalysisSection({
   loading: boolean;
   error: string | null;
   onReload: () => Promise<void>;
+  /**
+   * Si en aquesta licitació s'hi poden escriure requisits a mà. Només a una
+   * d'oberta a mà i pròpia: `Requirement` no té propietari, així que escriure'n
+   * sobre una de pública els faria aparèixer a totes les empreses.
+   */
+  editable?: boolean;
 }) {
+  const { membership } = useSession();
+  const canWrite = editable && canWriteRequirements(membership?.role);
+  const [editing, setEditing] = useState<Requirement | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+
+  const archive = useCallback(
+    async (requirement: Requirement) => {
+      if (!companyId) return;
+      await api.post(
+        `/companies/${companyId}/tenders/${tenderId}/requirements/${requirement.id}/archive`,
+        {},
+      );
+      await onReload();
+    },
+    [companyId, onReload, tenderId],
+  );
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [jobFailure, setJobFailure] = useState<JobRequest | null>(null);
@@ -296,12 +366,33 @@ export function RequirementAnalysisSection({
 
   return (
     <>
+      <ManualRequirementForm
+        open={formOpen}
+        tenderId={tenderId}
+        requirement={editing}
+        onClose={() => setFormOpen(false)}
+        onSaved={onReload}
+      />
       <Card>
         <CardHeader
           title="Anàlisi del plec"
           description="Extreu els requisits i els criteris d'adjudicació dels documents processats."
           action={
             <div className="flex flex-wrap items-center gap-2">
+              {canWrite && (
+                // Escriure un requisit no analitza res: és una afirmació
+                // humana, i neix sense revisar.
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setEditing(null);
+                    setFormOpen(true);
+                  }}
+                >
+                  Afegeix un requisit
+                </Button>
+              )}
               {/* Amb un motor simulat o sense motor, «Completa» seria una
                   afirmació falsa sobre el plec: el procés ha acabat, però no
                   ha llegit res. Es diu el que és, i la pastilla no pot ser
@@ -533,6 +624,15 @@ export function RequirementAnalysisSection({
                       requirement={requirement}
                       busy={reviewing === requirement.id}
                       onReview={review}
+                      onEdit={
+                        canWrite
+                          ? (item) => {
+                              setEditing(item);
+                              setFormOpen(true);
+                            }
+                          : undefined
+                      }
+                      onArchive={canWrite ? archive : undefined}
                     />
                   ))}
                 </ul>
