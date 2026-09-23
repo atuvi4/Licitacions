@@ -2040,3 +2040,140 @@ de les quatre àrees i sense afegir-ne cap: un dubte és transversal per definic
 obligaria a triar-ne una d'arbitrària. «Obre dubte» prepara el formulari amb el
 context preseleccionat i **no crea res** fins que algú confirma. El control de
 bloqueig **no existeix** per als rols que no el poden decidir.
+
+---
+
+## Delta S3-S11 — l'acceptació reproduïble, executada
+
+**Fixture.** `apps/api/tests/fixtures/benchmarks/palamos_s3_benchmark.json`,
+SHA-256 `9df32715c9f1192dc0f1023c6b0f04a163a8347fb8c20043b138c0284b66c2ae`
+(16.250 bytes). El §25 apuntava a `tests/fixtures/palamos_s3_benchmark.json`;
+s'ha posat sota `benchmarks/` seguint el patró de `tests/fixtures/placsp/`. El
+que sí que era una condició i s'ha respectat és que **entri al commit**: `var/`
+està al `.gitignore` i un oracle que no es versiona no és un oracle.
+
+**Els dos oracles (D-06), amb xifres.**
+
+| | |
+|---|---|
+| `documented_total_ex_vat` | `219351.55` |
+| `canonical_total_ex_vat` | `215276.17` |
+| delta | `-4075.38` |
+
+El delta es descompon, i la descomposició és part del fixture:
+
+* **`-4075.5798` · partides que l'artefacte no enumera.** La taula de
+  multiplicadors anomena un *pool* de 5 IP públiques (K = 2,0) i un mòdul
+  d'expansió EXP43 (K = 4,0), però **no en dona mai el cost unitari**. No
+  s'inventen. Es veuen com els 48,544000 i 2,984297 €/mes que falten als blocs
+  de veu i d'internet.
+* **`+0.1998` · la regla canònica i l'escala.** Preu unitari a quatre decimals
+  —l'escala de `Numeric(18,4)`— i total de cada línia a dos abans de sumar.
+
+**El bloc de mòbils quadra EXACTAMENT**, cost `1097.816926` i preu
+`1423.615557` a sis decimals. Això no és decoració: és la comprovació que la
+transcripció i el mapatge del multiplicador K a `target_markup_pct`
+(K = 1 + markup/100) són correctes, i el que permet afirmar que el delta dels
+altres dos blocs és una absència de dades i no un error de lectura.
+
+**Regla canònica escrita, no derivada.** `quantize-line-then-sum`. El valor es
+va derivar una sola vegada fora de pytest, amb `Decimal` pur i sense importar
+`app.offer.pricing`. `test_palamos_fixture.py` el protegeix: comprova que el
+total canònic és la suma dels totals de línia **escrits al fixture**, que cada
+un segueix la regla reimplementada en tres línies, i que el fitxer de test no
+importa res d'`app`. Si algú substituís el canònic pel resultat del motor sense
+tocar les línies, deixaria de quadrar.
+
+**Punts de control de l'E2E** (`test_palamos_end_to_end.py`, un sol recorregut
+amb 22 seccions): licitació manual i idempotència del `client_token` · tenancy
+A/B amb sis proves d'escriptura i lectura · candidatura per la ruta real ·
+2 documents lògics / 1 contingut / 1 extracció · DOCX i XLSX `unsupported` amb
+0 pàgines · revisió documental, empremta i `tender_documents_changed` sense
+invalidar la solució tècnica · requisits manuals (`origin=manual`,
+`run_id=NULL`) que sí que mouen l'empremta d'abast · cita d'XLSX v1 que
+sobreviu la v2 · magnitud 151/181 → `disputed` → decidida a 181 · una
+observació que concorda no reobre, una de 209 sí · dues opcions germanes on
+triar-ne una no en rebutja cap · relació opció ↔ magnitud sense propagació ·
+cost invisible per a `technical` i `viewer`, i un PATCH públic que no se
+l'emporta · `to-offer-line` tres vegades (una fresca) amb una sola línia viva ·
+snapshot que no es mou sol · sync camp a camp · objectiu i `apply-target` ·
+les 21 línies i el total contra l'oracle · `technical_scope_stale`,
+`solution_option_quote_pending` i `dimension_undecided_in_use` encesos i
+apagats · dubte marcat, resolt i descartat · manifest v2 que una opció no mou,
+una nota tampoc, i un `concept` sí.
+
+**Zero model de pagament**, i no per confiança: un fixture `autouse` substitueix
+`AnthropicProvider` per una cridada que peta. `get_provider` importa el SDK dins
+de la funció, de manera que això tanca totes les vies alhora. L'acceptació
+acaba amb **zero `RequirementExtractionRun`**.
+
+**Zero dades de producció.** Només `licitacions_test` (port 5433,
+`current_database()` comprovat), cada test al seu schema temporal.
+
+**Dents (§43), demostrades revertint el guard:**
+
+| invariant | mutació | test que cau |
+|---|---|---|
+| `to-offer-line` idempotent | `existing = None` | reintent amb revisió fresca |
+| la cita no segueix la versió vigent | resoldre al fitxer `is_current` | assercions de v1 |
+| `technical` no veu el cost | `can_view_internal_economics → True` | `internal_economics is None` |
+| resoldre un dubte no decideix res | cascada a la magnitud | no-cascada |
+
+**Gates.** Suite backend completa verda a SQLite i a PostgreSQL. Head
+`0037_workspace_issues`; **S3-S11 no crea cap migració**.
+
+### Defectes trobats per l'acceptació, i corregits a part
+
+Tres rutes resolien el `tender_id` amb un `session.get()` pelat, sense el filtre
+que `app/tenders/visibility.py` escriu una sola vegada. És exactament el que
+aquell mòdul avisa que passaria: l'aïllament no es perd a la consulta que
+s'escriu malament, sinó a la que algú oblida d'escriure.
+
+1. **`POST /companies/{c}/tenders/{t}/workspace`** — una empresa podia obrir
+   candidatura sobre una licitació **privada d'una altra**, i la resposta ja en
+   portava el títol, l'expedient i el termini. Escriptura i fuita alhora.
+2. **`GET /tenders/{t}/analysis/requirements`** i `/analysis/runs` — qualsevol
+   usuari autenticat podia llegir **sencers** els requisits d'una licitació
+   manual d'una altra empresa amb només el seu UUID.
+3. **`…/compliance`** i `/compliance/runs` — responien `200` en comptes de
+   `404`: oracle d'existència, sense contingut.
+
+Cap dels tres demana schema, columna ni contracte nou: només aplicar
+`visible_to_company` / `visible_to_user`. Corregits en un commit propi, amb sis
+regressions a `test_tender_tenancy.py`.
+
+4. **`create_line` no acceptava `target_markup_pct`** encara que
+   `LineCreateRequest` el porta des d'S3-S8b: el PATCH l'admetia i la creació
+   esclatava amb un `TypeError`. Afegit el paràmetre, que només s'escriu:
+   posar-hi un objectiu continua sense moure cap preu.
+
+### El senyal de deduplicació global, retirat del contracte
+
+`TenderDocumentContent` es dedupa per **SHA-256 a tot el sistema**, i la resposta
+de la pujada tornava `content_reused`. Per tant, pujant uns bytes que sospitava
+que algú altre ja tenia, una empresa podia saber si hi eren. Un oracle
+cross-tenant: no revela contingut, però revela **possessió**, i sota la tenancy
+d'Sprint 3 això no és acceptable.
+
+**El dedup físic es queda.** Mateixos bytes → un sol `TenderDocumentContent` →
+una sola extracció compartida. No es fa dedup per tenant: seria una altra
+decisió d'arquitectura i no és d'aquesta fase.
+
+**El que desapareix és el senyal extern.** `content_reused` surt de
+`TenderDocumentUploadResult`, de les dues respostes de pujada (document nou i
+versió nova) i de `UploadOutcome`: un camp que només existia per ser exposat no
+es guarda «per si de cas». I no se substitueix per cap equivalent —
+`content_exists`, `globally_reused`, `deduplicated`, `already_known`— perquè el
+forat el tornaria a obrir qualsevol booleà amb el mateix significat.
+
+Que una versió nova no hagi canviat res ho continuen dient el **`200` en comptes
+del `201`** i el número de versió, que no es mou. Això parla d'aquell document i
+de ningú més. La resposta de la primera pujada ja porta el `sha256` dels bytes
+que el client acaba d'enviar, així que dins d'una empresa un duplicat propi
+continua sent detectable sense preguntar res del sistema.
+
+Dos tests ho fixen: el de dues empreses comprova **a dins** un sol contingut i
+una sola extracció per a dos fitxers, i **a fora** que cap de les dues respostes
+porta el camp ni cap dels seus sinònims; el de versions comprova que dins de la
+mateixa empresa el contracte tampoc no explica optimitzacions d'storage.
+

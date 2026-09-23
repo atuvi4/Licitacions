@@ -1,0 +1,464 @@
+{
+  "schema": "palamos-s3-benchmark-v1",
+  "id": "palamos-2024-sprint3",
+  "note": "Oracle independent per a l'acceptacio E2E d'Sprint 3. Transcrit a ma dels artefactes locals del benchmark; cap valor prove d'executar el producte. Fitxer de NOMES LECTURA: cap test l'ha de reescriure.",
+  "clock": {
+    "publication_date": "2024-03-01",
+    "deadline_at": "2024-04-15T12:00:00+00:00",
+    "quote_date": "2024-03-20",
+    "note": "Dates congelades. L'acceptacio no depen mai de today()."
+  },
+  "tender": {
+    "title": "Serveis de comunicacions de veu, dades i mobilitat",
+    "expediente_number": "2024/PALAMOS/COM",
+    "currency": "EUR",
+    "duration_months": 48,
+    "base_budget_without_tax": "413971.07",
+    "buyer_name": "Ajuntament de referencia del benchmark"
+  },
+  "oracles": {
+    "documented_total_ex_vat": "219351.55",
+    "documented_monthly_ex_vat": "4569.824003",
+    "documented_source": "Total documental de la preparacio real: 48 mesos, IVA exclos.",
+    "canonical_total_ex_vat": "215276.17",
+    "canonical_total_cost_ex_vat": "169012.59",
+    "canonical_rule": "quantize-line-then-sum: preu unitari a 4 decimals, total de cada linia a 2 decimals, i nomes despres se sumen els totals ja quantitzats.",
+    "canonical_derivation": "Derivat UNA sola vegada de `economic_lines`, fora de pytest, amb Decimal pur i sense importar app.offer.pricing. Valor estatic: el test no el recalcula mai.",
+    "delta_canonical_minus_documented": "-4075.38",
+    "delta_explained": {
+      "lines_not_enumerated_in_artifact": "-4075.5798",
+      "unit_scale_and_quantization": "+0.1998",
+      "note": "L'artefacte enumera els costos unitaris de 21 linies i dona a mes els subtotals per bloc. El bloc de mobils es reprodueix EXACTAMENT (cost 1097.816926 i preu 1423.615557, a sis decimals), cosa que valida la transcripcio i el mapatge del multiplicador K a target_markup_pct. Els blocs de veu i internet queden curts en 48.544000 i 2.984297 EUR/mes de cost: hi ha partides de les quals l'artefacte dona el factor K (el pool de 5 IP publiques amb K=2,0 i el modul d'expansio EXP43 amb K=4,0) pero MAI el cost unitari. No s'inventen. El segon component del delta es la regla canonica en si."
+    },
+    "block_subtotals_in_artifact": {
+      "veu_fixa": {
+        "cost": "1109.767958",
+        "price": "1432.951446"
+      },
+      "internet": {
+        "cost": "1365.038333",
+        "price": "1713.257000"
+      },
+      "mobils": {
+        "cost": "1097.816926",
+        "price": "1423.615557"
+      }
+    }
+  },
+  "economic_lines": [
+    {
+      "key": "trunk_sip",
+      "block": "veu_fixa",
+      "concept": "Trunk SIP de 30 canals redundat",
+      "quantity": "1",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "35.0000",
+      "target_markup_pct": "50.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "52.5000",
+      "expected_line_total_ex_vat": "2520.00",
+      "tender_max_unit_price_ex_vat": "180.00",
+      "cost_formula_in_artifact": "=10*3.5"
+    },
+    {
+      "key": "bonus_fix",
+      "block": "veu_fixa",
+      "concept": "Bonus de 12.000 minuts fixos",
+      "quantity": "1",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "90.0000",
+      "target_markup_pct": "30.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "117.0000",
+      "expected_line_total_ex_vat": "5616.00",
+      "tender_max_unit_price_ex_vat": "130.00",
+      "cost_formula_in_artifact": "=10000*0.009"
+    },
+    {
+      "key": "bonus_mobil",
+      "block": "veu_fixa",
+      "concept": "Bonus de 12.000 minuts mobils",
+      "quantity": "1",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "150.0000",
+      "target_markup_pct": "30.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "195.0000",
+      "expected_line_total_ex_vat": "9360.00",
+      "tender_max_unit_price_ex_vat": "280.00",
+      "cost_formula_in_artifact": "=10000*0.015"
+    },
+    {
+      "key": "linia_analogica",
+      "block": "veu_fixa",
+      "concept": "Linies analogiques",
+      "quantity": "9",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "1.0000",
+      "target_markup_pct": "30.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "1.3000",
+      "expected_line_total_ex_vat": "561.60",
+      "tender_max_unit_price_ex_vat": "8.00"
+    },
+    {
+      "key": "ddi",
+      "block": "veu_fixa",
+      "concept": "Numeracio DDI",
+      "quantity": "86",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "1.0000",
+      "target_markup_pct": "30.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "1.3000",
+      "expected_line_total_ex_vat": "5366.40",
+      "tender_max_unit_price_ex_vat": "2.00"
+    },
+    {
+      "key": "implantacio",
+      "block": "veu_fixa",
+      "concept": "Implantacio i migracio",
+      "quantity": "1",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "10.0000",
+      "target_markup_pct": "50.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "15.0000",
+      "expected_line_total_ex_vat": "720.00",
+      "tender_max_unit_price_ex_vat": "508.75",
+      "capex_one_off_ex_vat": "480.00",
+      "amortized_over_months": 48,
+      "cost_formula_in_artifact": "=24*20/48"
+    },
+    {
+      "key": "zoiper",
+      "block": "veu_fixa",
+      "concept": "Llicencia de softphone Zoiper",
+      "quantity": "181",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "1.0417",
+      "target_markup_pct": "20.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "1.2500",
+      "expected_line_total_ex_vat": "10860.00",
+      "capex_one_off_ex_vat": "50.00",
+      "amortized_over_months": 48,
+      "cost_formula_in_artifact": "=50/48"
+    },
+    {
+      "key": "freepbx",
+      "block": "veu_fixa",
+      "concept": "Extensio de centraleta FreePBX",
+      "quantity": "224",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "0.1000",
+      "target_markup_pct": "60.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "0.1600",
+      "expected_line_total_ex_vat": "1720.32"
+    },
+    {
+      "key": "t44u",
+      "block": "veu_fixa",
+      "concept": "Terminal d'usuari Yealink T44U",
+      "quantity": "209",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "1.5583",
+      "target_markup_pct": "25.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "1.9479",
+      "expected_line_total_ex_vat": "19541.33",
+      "tender_max_unit_price_ex_vat": "2.18",
+      "capex_one_off_ex_vat": "74.80",
+      "amortized_over_months": 48,
+      "cost_formula_in_artifact": "=74.8/48"
+    },
+    {
+      "key": "t46u",
+      "block": "veu_fixa",
+      "concept": "Terminal d'operadora Yealink T46U",
+      "quantity": "15",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "2.2479",
+      "target_markup_pct": "25.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "2.8099",
+      "expected_line_total_ex_vat": "2023.13",
+      "tender_max_unit_price_ex_vat": "7.99",
+      "capex_one_off_ex_vat": "107.90",
+      "amortized_over_months": 48,
+      "cost_formula_in_artifact": "=107.9/48"
+    },
+    {
+      "key": "uh37",
+      "block": "veu_fixa",
+      "concept": "Auricular amb fil Yealink UH37",
+      "quantity": "100",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "0.8175",
+      "target_markup_pct": "30.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "1.0628",
+      "expected_line_total_ex_vat": "5101.44",
+      "tender_max_unit_price_ex_vat": "1.60",
+      "capex_one_off_ex_vat": "39.24",
+      "amortized_over_months": 48,
+      "cost_formula_in_artifact": "=39.24/48"
+    },
+    {
+      "key": "wh62",
+      "block": "veu_fixa",
+      "concept": "Auricular sense fil Yealink WH62",
+      "quantity": "15",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "1.9415",
+      "target_markup_pct": "40.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "2.7181",
+      "expected_line_total_ex_vat": "1957.03",
+      "tender_max_unit_price_ex_vat": "4.18",
+      "capex_one_off_ex_vat": "93.19",
+      "amortized_over_months": 48,
+      "cost_formula_in_artifact": "=93.19/48"
+    },
+    {
+      "key": "gpon_directa",
+      "block": "internet",
+      "concept": "GPON 600 simetric per cable directa",
+      "quantity": "13",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "36.7300",
+      "target_markup_pct": "25.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "45.9125",
+      "expected_line_total_ex_vat": "28649.40",
+      "tender_max_unit_price_ex_vat": "77.50"
+    },
+    {
+      "key": "gpon_sewan",
+      "block": "internet",
+      "concept": "GPON 600 simetric per operador provincial",
+      "quantity": "13",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "45.0000",
+      "target_markup_pct": "25.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "56.2500",
+      "expected_line_total_ex_vat": "35100.00",
+      "tender_max_unit_price_ex_vat": "77.50"
+    },
+    {
+      "key": "ftth",
+      "block": "internet",
+      "concept": "FTTH 600/600",
+      "quantity": "10",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "21.8116",
+      "target_markup_pct": "20.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "26.1739",
+      "expected_line_total_ex_vat": "12563.47",
+      "tender_max_unit_price_ex_vat": "40.00",
+      "cost_formula_in_artifact": "=32.99/1.21*0.8"
+    },
+    {
+      "key": "router_4g",
+      "block": "internet",
+      "concept": "Router 3G/4G de respatller",
+      "quantity": "3",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "24.5800",
+      "target_markup_pct": "20.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "29.4960",
+      "expected_line_total_ex_vat": "4247.42",
+      "cost_formula_in_artifact": "=4+20.58"
+    },
+    {
+      "key": "config_vpn",
+      "block": "internet",
+      "concept": "Configuracio de VPN",
+      "quantity": "26",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "0.1042",
+      "target_markup_pct": "50.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "0.1563",
+      "expected_line_total_ex_vat": "195.06",
+      "capex_one_off_ex_vat": "5.00",
+      "amortized_over_months": 48,
+      "cost_formula_in_artifact": "=0.25*20/48"
+    },
+    {
+      "key": "fax2mail",
+      "block": "internet",
+      "concept": "Servei fax2mail",
+      "quantity": "1",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "5.0000",
+      "target_markup_pct": "250.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "17.5000",
+      "expected_line_total_ex_vat": "840.00"
+    },
+    {
+      "key": "mobil_t1",
+      "block": "mobils",
+      "concept": "Linia mobil tarifa 1 (10 GB)",
+      "quantity": "140",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "5.2240",
+      "target_markup_pct": "30.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "6.7912",
+      "expected_line_total_ex_vat": "45636.86",
+      "tender_max_unit_price_ex_vat": "12.00",
+      "cost_formula_in_artifact": "=6.53*0.8"
+    },
+    {
+      "key": "mobil_t2",
+      "block": "mobils",
+      "concept": "Linia mobil tarifa 2 (50 GB)",
+      "quantity": "41",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "7.2080",
+      "target_markup_pct": "30.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "9.3704",
+      "expected_line_total_ex_vat": "18440.95",
+      "tender_max_unit_price_ex_vat": "22.00",
+      "cost_formula_in_artifact": "=9.01*0.8"
+    },
+    {
+      "key": "ip_mobil",
+      "block": "mobils",
+      "concept": "IP estatica per a linia mobil",
+      "quantity": "9",
+      "pricing_basis": "monthly",
+      "duration_months": 48,
+      "unit_cost_ex_vat": "7.8810",
+      "target_markup_pct": "25.0000",
+      "vat_rate": "21.00",
+      "expected_offered_unit_price_ex_vat": "9.8513",
+      "expected_line_total_ex_vat": "4255.76",
+      "tender_max_unit_price_ex_vat": "15.00",
+      "cost_formula_in_artifact": "=11.92/1.21*0.8"
+    }
+  ],
+  "not_offered": [
+    {
+      "key": "jabra",
+      "concept": "Auricular sense fil Jabra Evolve 920 + EHS40",
+      "unit_cost_ex_vat": "3.720833",
+      "cost_formula_in_artifact": "=(36.79+141.81)/48",
+      "reason": "Alternativa conservada amb quantitat 0: no s'ofereix."
+    },
+    {
+      "key": "llicencies",
+      "concept": "Llicencies de sessions SIP de tercers",
+      "unit_cost_ex_vat": "0.000000",
+      "tender_max_unit_price_ex_vat": "274.54",
+      "reason": "Descartada explicitament. L'artefacte no en dona cap multiplicador."
+    }
+  ],
+  "dimension": {
+    "key": "linies_mobils",
+    "label": "Linies mobils a migrar",
+    "unit": "linies",
+    "observation_a": {
+      "value_num": "151",
+      "value_text": "Annex IV: 151 linies",
+      "source_kind": "tender_document"
+    },
+    "observation_b": {
+      "value_num": "181",
+      "value_text": "Clausula 9.3: 181 linies",
+      "source_kind": "tender_document"
+    },
+    "decision": {
+      "working_value_num": "181",
+      "working_value_text": "181 linies",
+      "reason": "Es dedueix que l'Annex IV arrossega un error; preval la clausula 9.3."
+    },
+    "confirming_observation": {
+      "value_num": "181",
+      "value_text": "Recompte intern: 181 linies",
+      "source_kind": "internal"
+    },
+    "conflicting_observation": {
+      "value_num": "209",
+      "value_text": "Inventari de terminals: 209",
+      "source_kind": "internal"
+    }
+  },
+  "solution_options": {
+    "selected": {
+      "key": "wh62",
+      "supplier_name": "Yealink",
+      "product_name": "WH62",
+      "quantity": "15",
+      "unit": "unitats",
+      "pricing_basis": "monthly",
+      "documented_unit_cost_ex_vat": "1.941458",
+      "capex_unit_cost_ex_vat": "93.190000",
+      "target_markup_pct": "40.0000"
+    },
+    "rejected": {
+      "key": "jabra",
+      "supplier_name": "Jabra",
+      "product_name": "Evolve 920 + EHS40",
+      "quantity": "15",
+      "unit_cost_ex_vat": "3.720833",
+      "reason": "Mes cara per prestacio equivalent; es queda registrada."
+    }
+  },
+  "scenario": {
+    "note": "Valors de COREOGRAFIA del test, no transcripcio documental. Nomes serveixen per provocar i despres resoldre la divergencia; el recorregut acaba sempre als valors documentats, de manera que aixo no toca cap oracle.",
+    "option_supplier_before": "Yealink",
+    "option_supplier_after": "Yealink (via distribuidor)",
+    "option_product_before": "WH62",
+    "option_product_after": "WH62 Dual UC",
+    "issue_title": "Les linies mobils de l'Annex IV i de la clausula 9.3 no quadren",
+    "issue_resolution": "Preval la clausula 9.3: 181 linies. Consultat i confirmat.",
+    "second_issue_title": "Confirmar si el fax2mail entra a les 11 fibres individuals"
+  },
+  "source_ref": {
+    "location_label": "Full Calculs, fila 42",
+    "document_name": "Annex-VI-preus.xlsx",
+    "note": "Es cita la v1. Despres arriba la v2 i la cita NO s'hi ha de moure."
+  },
+  "requirements": [
+    {
+      "key": "mobils",
+      "title": "Migracio de les linies mobils existents",
+      "category": "technical_requirement",
+      "obligation": "mandatory"
+    },
+    {
+      "key": "gpon",
+      "title": "Accessos GPON de 600 Mbps simetrics",
+      "category": "technical_requirement",
+      "obligation": "mandatory"
+    }
+  ]
+}
