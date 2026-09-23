@@ -1093,3 +1093,100 @@ async def test_the_whole_walk_from_two_numbers_to_one_decision(client_a, candida
 
     calm = await client_a.get(READINESS.format(company=company_id, workspace=workspace_id))
     assert not any(f["code"] == "dimension_disputed" for f in calm.json()["findings"])
+
+
+async def _wait_until_blocked(session, *, timeout: float = 5.0) -> None:
+    """Espera que alguna altra sessio quedi encallada en un bloqueig de fila."""
+    import asyncio as _asyncio
+
+    deadline = _asyncio.get_running_loop().time() + timeout
+    while _asyncio.get_running_loop().time() < deadline:
+        waiting = await session.scalar(
+            sa.text(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()"
+            )
+        )
+        if waiting:
+            return
+        await _asyncio.sleep(0.02)
+    raise AssertionError("la segona transaccio no ha arribat mai a esperar el bloqueig")
+
+
+@pytest.mark.postgres
+async def test_two_editors_at_once_and_only_one_wins(db, session_factory, candidacy, tenant_a):
+    """La cursa de debò, amb dues transaccions reals contra PostgreSQL.
+
+    És el que cap test contra SQLite no pot demostrar. Amb un `SELECT` i
+    després un `UPDATE`, totes dues llegirien la revisió 0 i totes dues
+    escriurien: la segona es menjaria la feina de la primera sense que ningú
+    se n'assabentés. Amb el compare-and-swap, la segona espera al bloqueig de
+    la fila i, quan hi arriba, la condició ja no es compleix.
+    """
+    import asyncio
+
+    from app.services import dimensions as service
+
+    user, _company = tenant_a
+    workspace = candidacy["workspace"]
+    created = await service.create_dimension(
+        db, workspace=workspace, user=user, fields={"key": "cursa", "label": "Cursa"}
+    )
+    await db.commit()
+    dimension_id = created.id
+
+    # Sense sincronitzar-les, s'executarien en sèrie i això no provaria res.
+    primera_ha_escrit = asyncio.Event()
+    segona_ho_intenta = asyncio.Event()
+
+    async def guanyadora() -> str:
+        async with session_factory() as session, session.begin():
+            candidata = await session.get(service.WorkspaceDimension, dimension_id)
+            await service.decide_dimension(
+                session,
+                dimension=candidata,
+                user=user,
+                expected_revision=0,
+                working_value_text="181",
+                working_value_num=None,
+                reason="La primera",
+            )
+            primera_ha_escrit.set()
+            # No n'hi ha prou amb saber que l'altra ho ha intentat: cal saber
+            # que ja esta ESPERANT el bloqueig d'aquesta fila. Si no, la seva
+            # lectura podria arribar despres d'aquest commit, i llavors fins i
+            # tot un compare+commit ingenu se'n sortiria per pura sort i el
+            # test deixaria de detectar-lo.
+            await segona_ho_intenta.wait()
+            await _wait_until_blocked(session)
+        return "guanyat"
+
+    async def perdedora() -> str:
+        await primera_ha_escrit.wait()
+        async with session_factory() as session:
+            try:
+                async with session.begin():
+                    candidata = await session.get(service.WorkspaceDimension, dimension_id)
+                    # L'avís va ABANS de la sentència que pot quedar bloquejada.
+                    segona_ho_intenta.set()
+                    await service.decide_dimension(
+                        session,
+                        dimension=candidata,
+                        user=user,
+                        expected_revision=0,
+                        working_value_text="151",
+                        working_value_num=None,
+                        reason="La segona",
+                    )
+            except service.DimensionRevisionConflictError:
+                return "conflicte"
+        return "guanyat"
+
+    resultats = await asyncio.gather(guanyadora(), perdedora())
+    assert sorted(resultats) == ["conflicte", "guanyat"]
+
+    db.expire_all()
+    final = await db.get(service.WorkspaceDimension, dimension_id)
+    assert final.revision == 1, "nomes una escriptura ha de moure el testimoni"
+    assert final.working_value_text == "181"
+    assert final.decision_reason == "La primera"
