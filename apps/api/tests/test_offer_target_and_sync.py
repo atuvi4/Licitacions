@@ -20,6 +20,8 @@ divergida.
 
 from __future__ import annotations
 
+import re
+
 import uuid
 from decimal import Decimal
 
@@ -448,6 +450,36 @@ async def test_a_manual_line_can_still_use_the_target(client_a, candidacy):
         json={"expected_revision": await _revision(client_a, candidacy)},
     )
     assert applied.status_code == 200
+    after = await _line(client_a, candidacy, line["id"])
+    assert Decimal(after["offered_unit_price_ex_vat"]) == Decimal("120")
+
+
+async def test_the_target_can_be_written_when_the_line_is_born(client_a, candidacy):
+    """`LineCreateRequest` porta `target_markup_pct` des d'aquesta fase.
+
+    El PATCH l'acceptava i la creació no: enviar-lo al cos d'una línia nova
+    esclatava en comptes d'escriure'l. Un camp que el contracte anuncia i que
+    el servei no admet no és una limitació, és una porta trencada.
+
+    I escriure'l al néixer continua sense moure cap preu: el preu ofert només
+    el toca `apply-target`.
+    """
+    line = await _manual_line(
+        client_a, candidacy, unit_cost_ex_vat="100", target_markup_pct="20"
+    )
+    assert line["offered_unit_price_ex_vat"] is None
+    assert Decimal(line["internal_economics"]["target_markup_pct"]) == Decimal("20")
+    assert Decimal(line["internal_economics"]["proposed_unit_price_ex_vat"]) == Decimal("120")
+
+    applied = await client_a.post(
+        APPLY.format(
+            company=candidacy["company_id"],
+            workspace=candidacy["workspace_id"],
+            line=line["id"],
+        ),
+        json={"expected_revision": await _revision(client_a, candidacy)},
+    )
+    assert applied.status_code == 200, applied.text
     after = await _line(client_a, candidacy, line["id"])
     assert Decimal(after["offered_unit_price_ex_vat"]) == Decimal("120")
 
@@ -1036,11 +1068,17 @@ async def test_the_audit_trail_carries_no_figures(client_a, db, candidacy):
         json={"expected_revision": await _revision(client_a, candidacy)},
     )
 
+    # Els identificadors s'esborren abans de buscar-hi xifres: un UUID porta
+    # trenta-dos digits hexadecimals i qualsevol dels imports hi cau tard o
+    # d'hora per atzar. Buscar-hi a pel seria un test que falla sol.
+    identifier = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
     entries = (await db.scalars(sa.select(AuditLog))).all()
     for entry in entries:
         summary = entry.summary or ""
+        without_ids = identifier.sub("", summary)
         for value in ("120", "100", "20.0000"):
-            assert value not in summary, summary
+            assert value not in without_ids, summary
 
 
 # --------------------------------------------------------------------------- #

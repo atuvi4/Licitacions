@@ -856,6 +856,11 @@ async def create_line(
     duration_months_override: int | None = None,
     unit_cost_ex_vat: Decimal | None = None,
     offered_unit_price_ex_vat: Decimal | None = None,
+    #: Objectiu de markup (S3-S8b). Hi es perque `LineCreateRequest` ja el porta
+    #: des d'aleshores: el PATCH l'acceptava i la creacio no, de manera que
+    #: enviar-lo al cos d'una linia nova esclatava en comptes d'escriure'l.
+    #: Posar-hi un objectiu NO mou cap preu: nomes `apply-target` ho fa.
+    target_markup_pct: Decimal | None = None,
     tender_max_unit_price_ex_vat: Decimal | None = None,
     vat_rate: Decimal | None = None,
     notes: str | None = None,
@@ -895,6 +900,7 @@ async def create_line(
         duration_months_override=duration_months_override,
         unit_cost_ex_vat=unit_cost_ex_vat,
         offered_unit_price_ex_vat=offered_unit_price_ex_vat,
+        target_markup_pct=target_markup_pct,
         tender_max_unit_price_ex_vat=tender_max_unit_price_ex_vat,
         vat_rate=vat_rate,
         notes=notes,
