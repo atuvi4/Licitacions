@@ -88,6 +88,9 @@ def _line_read(view, *, internal: bool) -> LineRead:
                 "id",
                 "section_id",
                 "concept",
+                # D'on ve la linia (S3-S8). Nomes de lectura: cap schema
+                # d'escriptura generic el porta.
+                "solution_option_id",
                 "requirement_id",
                 "technical_solution_id",
                 "supplier_name",

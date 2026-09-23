@@ -27,6 +27,7 @@ let role = "bid_manager";
 let payload: SolutionOptionList = { can_view_internal_economics: true, items: [] };
 let failWith: string | null = null;
 let dimensionsPayload: OptionDimension[] = [];
+let offerShape: unknown = null;
 
 const post = vi.fn();
 const put = vi.fn();
@@ -44,6 +45,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
         if (failWith) throw new Error(failWith);
         if (path.endsWith("/solution-options")) return payload;
         if (path.endsWith("/dimensions")) return dimensionsPayload;
+        if (path.endsWith("/economic-offer")) return offerShape;
         throw new Error(`GET inesperat: ${path}`);
       },
       post: (...args: unknown[]) => post(...args),
@@ -97,6 +99,7 @@ function option(overrides: Partial<SolutionOption> = {}): SolutionOption {
     archived_at: null,
     revision: 0,
     dimensions: [],
+    offer_line_id: null,
     internal_economics: null,
     ...overrides,
   };
@@ -134,6 +137,7 @@ beforeEach(() => {
   payload = list([]);
   failWith = null;
   dimensionsPayload = [];
+  offerShape = null;
   post.mockReset();
   post.mockResolvedValue({});
   put.mockReset();
@@ -660,4 +664,177 @@ it("res d'aquesta fase crea cap línia econòmica", async () => {
   for (const [path] of put.mock.calls as [string, unknown][]) {
     expect(path).not.toContain("economic-offer");
   }
+});
+
+
+/* ----- Portar una opció a l'oferta (S3-S8) --------------------------------- */
+
+/** Triada, viva, amb quantitat i amb base: tot el que la línia necessita. */
+function adoptable(overrides: Partial<SolutionOption> = {}): SolutionOption {
+  return option({ selection: "selected", pricing_basis: "monthly", ...overrides });
+}
+
+const OFFER_SHAPE = {
+  revision: 3,
+  lots: [
+    {
+      label: "Global",
+      archived_at: null,
+      sections: [
+        { id: "s1", title: "Serveis", archived_at: null },
+        { id: "s2", title: "Arxivada", archived_at: "2026-09-01T00:00:00Z" },
+      ],
+    },
+  ],
+};
+
+it("un rol econòmic veu el CTA en una opció seleccionada", async () => {
+  payload = list([adoptable()]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByRole("button", { name: /Afegeix a l'oferta/ })).toBeTruthy();
+});
+
+it("un tècnic no pot posar cap xifra a l'oferta", async () => {
+  role = "technical";
+  payload = list([adoptable()], false);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.queryByRole("button", { name: /Afegeix a l'oferta/ })).toBeNull();
+});
+
+it("qui només mira tampoc", async () => {
+  role = "viewer";
+  payload = list([adoptable()], false);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.queryByRole("button", { name: /Afegeix a l'oferta/ })).toBeNull();
+});
+
+it.each(["undecided", "rejected"] as const)(
+  "una opció %s no ofereix portar-la a l'oferta",
+  async (selection) => {
+    payload = list([adoptable({ selection, selection_reason: "x" })]);
+    await mount();
+    await click("Proveïdor A · Terminal X");
+
+    expect(screen.queryByRole("button", { name: /Afegeix a l'oferta/ })).toBeNull();
+  },
+);
+
+it("una opció sense quantitat o sense base no ofereix el CTA", async () => {
+  payload = list([adoptable({ quantity: null })]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.queryByRole("button", { name: /Afegeix a l'oferta/ })).toBeNull();
+});
+
+it("amb línia viva diu que ja hi és i no n'ofereix una segona", async () => {
+  payload = list([adoptable({ offer_line_id: "l1" })]);
+  await mount();
+
+  expect(screen.getByText("A l'oferta")).toBeTruthy();
+  await click("Proveïdor A · Terminal X");
+  expect(screen.queryByRole("button", { name: /Afegeix a l'oferta/ })).toBeNull();
+});
+
+it("el diàleg demana el concepte i no el dedueix del producte", async () => {
+  payload = list([adoptable()]);
+  offerShape = OFFER_SHAPE;
+  await mount();
+  await click("Proveïdor A · Terminal X");
+  await click(/Afegeix a l'oferta/);
+
+  const concept = screen.getByLabelText(/^Concepte/) as HTMLInputElement;
+  expect(concept.value).toBe("");
+  expect(concept.value).not.toContain("Terminal X");
+
+  const confirm = screen.getByRole("button", { name: "Afegeix-la" });
+  expect(confirm.hasAttribute("disabled")).toBe(true);
+});
+
+it("només ofereix blocs de preus vius", async () => {
+  payload = list([adoptable()]);
+  offerShape = OFFER_SHAPE;
+  await mount();
+  await click("Proveïdor A · Terminal X");
+  await click(/Afegeix a l'oferta/);
+
+  const select = screen.getByLabelText("Bloc de preus") as HTMLSelectElement;
+  const labels = Array.from(select.options).map((o) => o.textContent ?? "");
+  expect(labels.some((l) => l.includes("Serveis"))).toBe(true);
+  expect(labels.some((l) => l.includes("Arxivada"))).toBe(false);
+});
+
+it("envia el concepte escrit i la revisió de l'OFERTA", async () => {
+  payload = list([adoptable({ revision: 9 })]);
+  offerShape = OFFER_SHAPE;
+  await mount();
+  await click("Proveïdor A · Terminal X");
+  await click(/Afegeix a l'oferta/);
+
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText("Bloc de preus"), { target: { value: "s1" } });
+  });
+  await type("Concepte", "Terminals IP per a extensions");
+  await click("Afegeix-la");
+
+  expect(post).toHaveBeenCalledWith(
+    "/companies/c1/workspaces/w1/solution-options/o1/to-offer-line",
+    {
+      section_id: "s1",
+      // La de l'oferta (3), no la de l'opció (9).
+      expected_revision: 3,
+      concept: "Terminals IP per a extensions",
+    },
+  );
+});
+
+it("no omple cap preu de venda a partir del cost", async () => {
+  payload = list([
+    adoptable({
+      internal_economics: { unit_cost_ex_vat: "10.0000", internal_note: null },
+    }),
+  ]);
+  offerShape = OFFER_SHAPE;
+  await mount();
+  await click("Proveïdor A · Terminal X");
+  await click(/Afegeix a l'oferta/);
+
+  // Ni hi ha camp de preu de venda, ni el diàleg en proposa cap. («Bloc de
+  // preus» no compta: és on va la línia, no quant es cobra.)
+  expect(screen.queryByLabelText(/^Preu/i)).toBeNull();
+  expect(screen.queryByLabelText(/venda/i)).toBeNull();
+  const body = document.body.textContent ?? "";
+  expect(body).not.toMatch(/Preu ofert[:\s]*10/);
+});
+
+it("un reintent que retorna la línia existent es tracta com un èxit", async () => {
+  payload = list([adoptable()]);
+  offerShape = OFFER_SHAPE;
+  // El servidor respon 200 amb la línia que ja hi era.
+  post.mockResolvedValue({ id: "l1", solution_option_id: "o1" });
+  await mount();
+  await click("Proveïdor A · Terminal X");
+  await click(/Afegeix a l'oferta/);
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText("Bloc de preus"), { target: { value: "s1" } });
+  });
+  await type("Concepte", "Terminals IP");
+  await click("Afegeix-la");
+
+  // Cap error a la vista, i el diàleg es tanca.
+  expect(screen.queryByText(/No s'ha pogut/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Afegeix-la" })).toBeNull();
+});
+
+it("el CTA no obre cap pestanya nova", async () => {
+  payload = list([adoptable()]);
+  await mount();
+
+  expect(screen.queryAllByRole("tab")).toHaveLength(0);
 });

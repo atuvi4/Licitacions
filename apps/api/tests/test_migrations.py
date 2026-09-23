@@ -1020,3 +1020,83 @@ def test_el_downgrade_no_toca_ni_opcions_ni_dimensions():
     assert touched == [], touched
     assert "INSERT INTO" not in down
     assert "DELETE FROM" not in down
+
+
+_PROVENANCE = "0034_solution_option_dimensions:0035_offer_line_solution_option"
+_PROVENANCE_DOWN = "0035_offer_line_solution_option:0034_solution_option_dimensions"
+
+
+def test_la_provinenca_de_la_linia_es_pot_aplicar_i_desfer():
+    up = _offline_sql("upgrade", _PROVENANCE)
+    down = _offline_sql("downgrade", _PROVENANCE_DOWN)
+
+    assert "ADD COLUMN solution_option_id" in up
+    assert "DROP COLUMN solution_option_id" in down
+
+
+def test_nomes_hi_ha_una_columna_nova():
+    """Un sol camp. Ni markup, ni snapshot de cotitzacio, ni res mes."""
+    up = _offline_sql("upgrade", _PROVENANCE)
+
+    added = [row for row in up.splitlines() if "ADD COLUMN" in row]
+    assert len(added) == 1, added
+    for forbidden in (
+        "target_markup_pct",
+        "synced_at",
+        "option_cost_hash",
+        "diverged",
+        "snapshot",
+    ):
+        assert forbidden not in up, forbidden
+    assert "CREATE TABLE" not in up
+
+
+def test_la_columna_es_nullable_i_no_hi_ha_backfill():
+    """Les linies que ja hi havia no venen de cap opcio: es queden a NULL."""
+    up = _offline_sql("upgrade", _PROVENANCE)
+
+    assert "NOT NULL" not in up.split("ADD COLUMN solution_option_id")[1].split("\n")[0]
+    assert "UPDATE economic_offer_lines" not in up
+    assert "INSERT INTO" not in up
+
+
+def test_perdre_lopcio_no_perd_la_linia():
+    """SET NULL: es perd la traca, no la feina. El preu escrit es conserva."""
+    up = _offline_sql("upgrade", _PROVENANCE)
+
+    row = [line for line in up.splitlines() if "fk_economic_offer_lines_solution_option" in line]
+    assert row and "ON DELETE SET NULL" in row[0], row
+
+
+def test_una_sola_linia_viva_per_opcio():
+    """L'index es PARCIAL: nomes hi entren les linies vives que venen d'una
+    opcio, de manera que una d'arxivada conserva la seva provinenca com a
+    historia i alhora deixa l'opcio lliure per tornar-hi."""
+    up = _offline_sql("upgrade", _PROVENANCE)
+
+    row = [
+        line
+        for line in up.splitlines()
+        if "uq_economic_offer_lines_solution_option" in line and "CREATE" in line
+    ]
+    assert row, "falta l'index"
+    assert "UNIQUE" in row[0]
+    assert "WHERE solution_option_id IS NOT NULL AND archived_at IS NULL" in row[0], row[0]
+
+
+def test_el_downgrade_no_toca_cap_xifra():
+    down = _offline_sql("downgrade", _PROVENANCE_DOWN)
+
+    assert "DELETE FROM" not in down
+    assert "INSERT INTO" not in down
+    for money in ("unit_cost_ex_vat", "offered_unit_price_ex_vat", "quantity"):
+        assert money not in down, money
+
+
+def test_0036_encara_no_existeix():
+    """`target_markup_pct`, `sync-from-option` i el finding de divergencia son
+    d'una fase posterior."""
+    import pathlib
+
+    versions = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    assert not list(versions.glob("0036*")), "0036 no toca a S3-S8"

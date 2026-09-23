@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import PricingBasis
 
@@ -104,6 +104,29 @@ class LineCreateRequest(RevisionGuarded):
     notes: str | None = Field(default=None, max_length=4000)
 
 
+class ToOfferLineRequest(RevisionGuarded):
+    """Adoptar una opcio com a linia d'oferta.
+
+    `expected_revision` es el de l'**`EconomicOffer`**, no el de l'opcio: qui
+    muta aqui es l'oferta, i l'opcio no es toca.
+
+    `concept` l'escriu qui crea la linia. `WorkspaceSolutionOption` no en te cap
+    homoleg, i treure'l del producte o del proveidor seria inventar-se el nom
+    d'una linia que anira a una oferta de debo. La resta de camps surten de
+    l'opcio, que continua sent-ne la font.
+    """
+
+    section_id: uuid.UUID
+    concept: str = Field(min_length=1, max_length=500)
+
+    @field_validator("concept")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("El concepte no pot ser nomes espais.")
+        return value.strip()
+
+
 class LineUpdateRequest(LineCreateRequest):
     """El mateix, tot opcional, mes la posicio.
 
@@ -174,6 +197,10 @@ class LineRead(ORMModel):
     id: uuid.UUID
     section_id: uuid.UUID
     concept: str
+    #: D'on ve la linia, si ve d'una opcio de solucio. **Nomes de lectura**:
+    #: no es a cap schema d'escriptura generic, perque la provinenca se
+    #: guanya adoptant una opcio i no enviant-ne l'identificador.
+    solution_option_id: uuid.UUID | None = None
     requirement_id: uuid.UUID | None = None
     technical_solution_id: uuid.UUID | None = None
     supplier_name: str | None = None

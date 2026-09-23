@@ -1194,12 +1194,21 @@ async def test_losing_the_solution_or_the_requirement_does_not_lose_the_option(d
     assert names["bid_workspaces"] == "CASCADE"
 
 
-async def test_the_economic_offer_line_is_untouched(db):
-    """0033 no toca l'oferta. El vincle arriba en una fase posterior."""
+async def test_the_option_does_not_carry_the_offer_economics(db):
+    """El preu de venda no viu aquí, i no hi viurà.
+
+    Des d'S3-S8 la línia sí que sap de quina opció ve (`solution_option_id`),
+    però la direcció importa: la línia apunta a l'opció, no al revés. L'opció no
+    guanya cap camp d'oferta per això.
+    """
     from app.models.offer import EconomicOfferLine
 
-    assert "solution_option_id" not in EconomicOfferLine.__table__.columns
+    assert "solution_option_id" in EconomicOfferLine.__table__.columns
+    # El markup encara no existeix enlloc: és d'una fase posterior.
     assert "target_markup_pct" not in EconomicOfferLine.__table__.columns
+    assert "target_markup_pct" not in WorkspaceSolutionOption.__table__.columns
+    for forbidden in ("offered_unit_price_ex_vat", "offer_line_id"):
+        assert forbidden not in WorkspaceSolutionOption.__table__.columns
 
 
 async def test_the_option_does_not_carry_a_dimension_column(db):

@@ -1079,12 +1079,17 @@ async def test_both_sides_cascade(db):
     assert actions["users"] == "SET NULL"
 
 
-async def test_the_economic_offer_line_is_still_untouched(db):
+async def test_the_offer_line_never_points_at_a_dimension(db):
+    """La línia coneix l'opció (S3-S8), mai una magnitud directament.
+
+    La cadena és `línia → opció → dependència → magnitud`, i és el que fa
+    calculable el blocador d'S3-S8 sense cap drecera.
+    """
     from app.models.offer import EconomicOfferLine
 
-    assert "solution_option_id" not in EconomicOfferLine.__table__.columns
-    assert "target_markup_pct" not in EconomicOfferLine.__table__.columns
+    assert "solution_option_id" in EconomicOfferLine.__table__.columns
     assert "dimension_id" not in EconomicOfferLine.__table__.columns
+    assert "target_markup_pct" not in EconomicOfferLine.__table__.columns
 
 
 async def test_the_join_table_is_tenant_owned(db):

@@ -22,6 +22,7 @@ from app.models.workspace import BidWorkspace
 from app.services import dimensions as dimension_service
 from app.services import document_review, requirement_analysis
 from app.services import economic_offer as offer_service
+from app.services import solution_option_dimensions as link_service
 from app.services import solution_options as option_service
 from app.services import technical_scope as scope_service
 from app.services import technical_solution as solution_service
@@ -29,6 +30,7 @@ from app.services import workspace_dossier as dossier_service
 from app.workspace.readiness import (
     BLOCKER,
     DIMENSION_DISPUTED,
+    DIMENSION_UNDECIDED_IN_USE,
     DOMAIN_ECONOMIC,
     DOMAIN_TECHNICAL,
     DOMAIN_WORKSPACE,
@@ -44,6 +46,7 @@ from app.workspace.readiness import (
     ECONOMIC_VAT_MISSING,
     INFO,
     REQUIREMENT_ANALYSIS_PREDATES_DOCUMENTS,
+    SOLUTION_OPTION_QUOTE_EXPIRED,
     SOLUTION_OPTION_QUOTE_PENDING,
     TECHNICAL_SCOPE_STALE,
     TECHNICAL_SCOPE_UNREVIEWED,
@@ -112,6 +115,26 @@ async def technical_findings(
                     "supplier_name": option.supplier_name,
                     "product_name": option.product_name,
                     "quote_status": option.quote_status.value,
+                },
+            )
+        )
+
+    # "En us" vol dir en us ECONOMIC. Nomes quan una linia viva de l'oferta
+    # depen d'una magnitud sense decidir hi ha res a bloquejar: fins llavors,
+    # una opcio triada que encara espera un numero es feina normal.
+    for dimension, option in await link_service.dimensions_undecided_in_use(
+        session, workspace
+    ):
+        findings.append(
+            Finding(
+                code=DIMENSION_UNDECIDED_IN_USE,
+                severity=BLOCKER,
+                domain=DOMAIN_TECHNICAL,
+                entity_id=dimension.id,
+                context={
+                    "key": dimension.key,
+                    "scope_label": dimension.scope_label,
+                    "solution_option_id": str(option.id),
                 },
             )
         )
@@ -212,19 +235,42 @@ async def economic_findings(
             )
         ]
 
+    # El preu que s'ofereix es recolza en una cotitzacio que ja no es vigent.
+    # Va en una llista a part i s'afegeix a TOTS els camins de sortida: si
+    # compartis la variable amb els findings dels lots, el `findings = []` de
+    # mes avall se l'emportaria sense que ningu ho veies.
+    expired = [
+        Finding(
+            code=SOLUTION_OPTION_QUOTE_EXPIRED,
+            severity=BLOCKER,
+            domain=DOMAIN_ECONOMIC,
+            entity_id=option.id,
+            # Ni cost ni preu: aquest finding el poden llegir rols que no veuen
+            # economia interna.
+            context={
+                "supplier_name": option.supplier_name,
+                "product_name": option.product_name,
+            },
+        )
+        for option in await link_service.options_with_expired_quote_in_use(
+            session, workspace
+        )
+    ]
+
     view = await offer_service.build_view(session, workspace, offer)
     lots = offer_service.active_views(view.lots)
 
     if view.shape.selectable and not lots:
         return [
+            *expired,
             Finding(
                 code=ECONOMIC_BID_LOTS_NOT_SELECTED,
                 severity=BLOCKER,
                 domain=DOMAIN_ECONOMIC,
-            )
+            ),
         ]
 
-    findings: list[Finding] = []
+    findings: list[Finding] = [*expired]
     for lot_view in lots:
         findings.extend(_lot_findings(lot_view))
     return findings

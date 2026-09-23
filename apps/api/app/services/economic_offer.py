@@ -852,6 +852,10 @@ async def create_line(
     tender_max_unit_price_ex_vat: Decimal | None = None,
     vat_rate: Decimal | None = None,
     notes: str | None = None,
+    #: D'on ve la linia (S3-S8). NOMES el servei d'adopcio el passa: no es a
+    #: cap schema d'escriptura, de manera que un client no pot fabricar una
+    #: provinenca enviant un identificador qualsevol.
+    solution_option_id: uuid.UUID | None = None,
 ) -> EconomicOfferLine:
     await _assert_writable_section(session, section)
     lot = await session.get(EconomicOfferLot, section.offer_lot_id)
@@ -887,6 +891,7 @@ async def create_line(
         tender_max_unit_price_ex_vat=tender_max_unit_price_ex_vat,
         vat_rate=vat_rate,
         notes=notes,
+        solution_option_id=solution_option_id,
         position=position + 1,
         created_by=user.id,
         updated_by=user.id,

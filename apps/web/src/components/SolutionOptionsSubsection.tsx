@@ -29,10 +29,14 @@ import {
   QUOTE_STATUS_LEVEL,
   SELECTION_LABELS,
   SELECTION_LEVEL,
+  canBeAdopted,
+  canCreateOfferLine,
   canEditOptions,
   dimensionValue,
   optionTitle,
   whoCanEditOptions,
+  offerSections,
+  type OfferShape,
   type OptionDimension,
   type PricingBasis,
   type QuoteStatus,
@@ -63,11 +67,18 @@ export function SolutionOptionsSubsection({ workspace }: { workspace: WorkspaceD
   const { companyId, membership } = useSession();
   const invalidateReadiness = useInvalidateReadiness();
   const canEdit = canEditOptions(membership?.role);
+  const canAdopt = canCreateOfferLine(membership?.role);
 
   const path = companyId
     ? `/companies/${companyId}/workspaces/${workspace.id}/solution-options`
     : null;
   const options = useResource<SolutionOptionList>(path);
+  // Els blocs de preus on es pot posar la linia. Nomes per a qui pot crear-la.
+  const offer = useResource<OfferShape>(
+    canAdopt && companyId
+      ? `/companies/${companyId}/workspaces/${workspace.id}/economic-offer`
+      : null,
+  );
   const data = options.data ?? null;
   const rows = data?.items ?? [];
   const canSeeCost = data?.can_view_internal_economics ?? false;
@@ -75,6 +86,7 @@ export function SolutionOptionsSubsection({ workspace }: { workspace: WorkspaceD
   const [createOpen, setCreateOpen] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [rejectFor, setRejectFor] = useState<SolutionOption | null>(null);
+  const [adoptFor, setAdoptFor] = useState<SolutionOption | null>(null);
 
   const refresh = useCallback(async () => {
     await options.reload();
@@ -149,6 +161,8 @@ export function SolutionOptionsSubsection({ workspace }: { workspace: WorkspaceD
                   expanded={openId === option.id}
                   onToggle={() => setOpenId(openId === option.id ? null : option.id)}
                   onReject={() => setRejectFor(option)}
+                  canAdopt={canAdopt}
+                  onAdopt={() => setAdoptFor(option)}
                   onChanged={refresh}
                 />
               ))}
@@ -163,6 +177,14 @@ export function SolutionOptionsSubsection({ workspace }: { workspace: WorkspaceD
         canSeeCost={canSeeCost}
         onClose={() => setCreateOpen(false)}
         onCreated={refresh}
+      />
+
+      <AddToOfferDialog
+        option={adoptFor}
+        workspace={workspace}
+        sections={offerSections(offer.data)}
+        onClose={() => setAdoptFor(null)}
+        onAdded={refresh}
       />
 
       <RejectDialog
@@ -185,6 +207,8 @@ function OptionRow({
   expanded,
   onToggle,
   onReject,
+  canAdopt,
+  onAdopt,
   onChanged,
 }: {
   option: SolutionOption;
@@ -194,6 +218,8 @@ function OptionRow({
   expanded: boolean;
   onToggle: () => void;
   onReject: () => void;
+  canAdopt: boolean;
+  onAdopt: () => void;
   onChanged: () => Promise<void>;
 }) {
   const { companyId } = useSession();
@@ -249,9 +275,17 @@ function OptionRow({
           </StatusPill>
         </td>
         <td className="px-3.5 py-2.5">
-          <StatusPill level={SELECTION_LEVEL[option.selection]} size="sm">
-            {SELECTION_LABELS[option.selection]}
-          </StatusPill>
+          <span className="flex flex-wrap items-center gap-1.5">
+            <StatusPill level={SELECTION_LEVEL[option.selection]} size="sm">
+              {SELECTION_LABELS[option.selection]}
+            </StatusPill>
+            {/* Amb linia viva no hi ha CTA: hi diu que ja hi es. */}
+            {option.offer_line_id !== null && (
+              <StatusPill level="ready" size="sm" outline>
+                A l&apos;oferta
+              </StatusPill>
+            )}
+          </span>
         </td>
       </tr>
 
@@ -347,6 +381,14 @@ function OptionRow({
                 >
                   Arxiva
                 </Button>
+                {/* Nomes si es pot de debo: triada, viva, amb quantitat i base,
+                    i sense linia. Oferir una accio que el servidor rebutjara
+                    seria fer perdre el temps a qui la prem. */}
+                {canAdopt && canBeAdopted(option) && (
+                  <Button variant="secondary" size="sm" onClick={onAdopt}>
+                    Afegeix a l&apos;oferta
+                  </Button>
+                )}
               </div>
             )}
           </td>
@@ -517,6 +559,128 @@ function DependsOn({
         </div>
       )}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Portar una opció a l'oferta.
+ *
+ * Tres coses que aquest diàleg no fa:
+ *
+ * * **no inventa el concepte.** L'opció no en té cap, i derivar-lo del producte
+ *   voldria dir que una línia d'una oferta real es podria dir «Opció». L'escriu
+ *   qui la crea;
+ * * **no omple el preu de venda.** Que el cost sigui 10 no vol dir que
+ *   l'oferim a 10. El marge el decideix una persona, després;
+ * * **no ofereix crear-ne una segona.** Si l'opció ja té línia viva, aquí no hi
+ *   ha cap botó: hi diu que ja hi és.
+ */
+function AddToOfferDialog({
+  option,
+  workspace,
+  sections,
+  onClose,
+  onAdded,
+}: {
+  option: SolutionOption | null;
+  workspace: WorkspaceDetail;
+  sections: Array<{ id: string; title: string; lot: string }>;
+  onClose: () => void;
+  onAdded: () => Promise<void>;
+}) {
+  const { companyId } = useSession();
+  const mutation = useMutation();
+  const [sectionId, setSectionId] = useState("");
+  const [concept, setConcept] = useState("");
+
+  const submit = useCallback(async () => {
+    if (!companyId || !option) return;
+    const saved = await mutation.run(async () => {
+      const offer = await api.get<{ revision: number }>(
+        `/companies/${companyId}/workspaces/${workspace.id}/economic-offer`,
+      );
+      await api.post(
+        `/companies/${companyId}/workspaces/${workspace.id}/solution-options/${option.id}/to-offer-line`,
+        {
+          section_id: sectionId,
+          expected_revision: offer.revision,
+          concept: concept.trim(),
+        },
+      );
+    });
+    if (saved) {
+      setConcept("");
+      setSectionId("");
+      onClose();
+      await onAdded();
+    }
+  }, [companyId, concept, mutation, onClose, onAdded, option, sectionId, workspace.id]);
+
+  return (
+    <Modal
+      open={option !== null}
+      title="Afegeix a l'oferta"
+      description={option ? optionTitle(option) : ""}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={mutation.saving}>
+            Cancel·la
+          </Button>
+          <Button
+            variant="primary"
+            loading={mutation.saving}
+            disabled={sectionId === "" || concept.trim() === ""}
+            onClick={() => void submit()}
+          >
+            Afegeix-la
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-3">
+        {mutation.error && (
+          <Banner level="blocking" kicker="Oferta" action={null}>
+            {mutation.error}
+          </Banner>
+        )}
+
+        <Field label="Bloc de preus" required>
+          <Select
+            aria-label="Bloc de preus"
+            value={sectionId}
+            onChange={(event) => setSectionId(event.target.value)}
+            placeholder="Tria un bloc"
+            options={sections.map((section) => ({
+              value: section.id,
+              label: section.lot ? `${section.lot} · ${section.title}` : section.title,
+            }))}
+          />
+        </Field>
+
+        <Field
+          label="Concepte"
+          required
+          hint="Com es dirà la línia a l'oferta. L'opció no en porta cap, i no se n'inventa."
+        >
+          <Input
+            value={concept}
+            onChange={(event) => setConcept(event.target.value)}
+            maxLength={500}
+          />
+        </Field>
+
+        {option && (
+          <p className="text-caption text-muted">
+            La línia adopta el que diu l&apos;opció ara: {option.quantity ?? "—"}{" "}
+            {option.unit ?? ""}. Si després canvia l&apos;opció, la línia es queda com
+            està. El preu de venda no s&apos;omple sol.
+          </p>
+        )}
+      </div>
+    </Modal>
   );
 }
 

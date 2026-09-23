@@ -32,6 +32,7 @@ export function lineFixture(overrides: Partial<OfferLine> = {}): OfferLine {
   return {
     id: "ln1",
     section_id: "sec1",
+    solution_option_id: null,
     concept: "Commutadors d'accés 48p",
     requirement_id: null,
     technical_solution_id: null,

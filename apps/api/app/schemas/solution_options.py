@@ -108,6 +108,9 @@ class SolutionOptionRead(ORMModel):
     revision: int
     #: De quines magnituds depen. Declarat per una persona; res no ho dedueix.
     dimensions: list[OptionDimensionRead] = Field(default_factory=list)
+    #: La linia d'oferta VIVA que va sortir d'aquesta opcio, si n'hi ha.
+    #: Serveix perque la interficie no ofereixi crear-ne una segona.
+    offer_line_id: uuid.UUID | None = None
 
     #: `None` per a qui no pot veure cost. Veure el docstring del modul.
     internal_economics: OptionInternalRead | None = None

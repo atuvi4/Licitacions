@@ -23,7 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
 from app.models.dimensions import WorkspaceDimension
+from app.models.enums import DimensionStatus, OptionSelection, QuoteStatus
 from app.models.identity import User
+from app.models.offer import EconomicOfferLine
 from app.models.solution_option_dimensions import WorkspaceSolutionOptionDimension
 from app.models.solution_options import WorkspaceSolutionOption
 from app.models.workspace import BidWorkspace
@@ -180,3 +182,81 @@ async def detach_dimension(
     await session.delete(link)
     await session.flush()
     return True
+
+
+async def dimensions_undecided_in_use(
+    session: AsyncSession, workspace: BidWorkspace
+) -> list[tuple[WorkspaceDimension, WorkspaceSolutionOption]]:
+    """Magnituds sense decidir de les quals depen una linia economica VIVA.
+
+    La cadena es real i explicita, sense cap heuristica de text:
+
+        EconomicOfferLine viva
+          -> solution_option_id
+          -> workspace_solution_option_dimensions
+          -> WorkspaceDimension activa i `undecided`
+
+    Abans que existeixi la linia no hi ha res a bloquejar: una opcio triada que
+    depen d'una magnitud per decidir es feina normal. El que no pot passar es
+    que una xifra que ja ha entrat a l'oferta es recolzi en un numero que ningu
+    no ha fixat.
+
+    `disputed` no hi entra: te el seu propi avis, i convertir-la en blocador
+    canviaria el que significa.
+    """
+    rows = (
+        await session.execute(
+            sa.select(WorkspaceDimension, WorkspaceSolutionOption)
+            .join(
+                WorkspaceSolutionOptionDimension,
+                WorkspaceSolutionOptionDimension.dimension_id == WorkspaceDimension.id,
+            )
+            .join(
+                WorkspaceSolutionOption,
+                WorkspaceSolutionOption.id
+                == WorkspaceSolutionOptionDimension.solution_option_id,
+            )
+            .join(
+                EconomicOfferLine,
+                EconomicOfferLine.solution_option_id == WorkspaceSolutionOption.id,
+            )
+            .where(
+                EconomicOfferLine.archived_at.is_(None),
+                WorkspaceDimension.workspace_id == workspace.id,
+                WorkspaceDimension.archived_at.is_(None),
+                WorkspaceDimension.status == DimensionStatus.UNDECIDED,
+            )
+            .distinct()
+        )
+    ).all()
+    return [(dimension, option) for dimension, option in rows]
+
+
+async def options_with_expired_quote_in_use(
+    session: AsyncSession, workspace: BidWorkspace
+) -> list[WorkspaceSolutionOption]:
+    """Opcions triades amb la cotitzacio caducada que ja son a l'oferta.
+
+    El quote viu a l'OPCIO i no a la linia: la linia es el snapshot que es va
+    adoptar, i no ha de saber res de com va la gestio amb el proveidor. El que
+    aquest blocador diu es que el preu que s'ofereix es recolza en una xifra que
+    ja no es vigent.
+    """
+    return list(
+        (
+            await session.scalars(
+                sa.select(WorkspaceSolutionOption)
+                .join(
+                    EconomicOfferLine,
+                    EconomicOfferLine.solution_option_id == WorkspaceSolutionOption.id,
+                )
+                .where(
+                    EconomicOfferLine.archived_at.is_(None),
+                    WorkspaceSolutionOption.workspace_id == workspace.id,
+                    WorkspaceSolutionOption.selection == OptionSelection.SELECTED,
+                    WorkspaceSolutionOption.quote_status == QuoteStatus.EXPIRED,
+                )
+                .distinct()
+            )
+        ).all()
+    )

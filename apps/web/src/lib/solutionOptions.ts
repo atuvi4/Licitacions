@@ -80,6 +80,13 @@ export interface SolutionOption {
   revision: number;
   /** De quines magnituds depèn. Ho declara una persona; res no ho dedueix. */
   dimensions: OptionDimension[];
+  /**
+   * La línia d'oferta VIVA que va sortir d'aquesta opció, si n'hi ha.
+   *
+   * Serveix per no oferir dues vegades el mateix: amb línia, la interfície
+   * diu que ja hi és en comptes d'ensenyar un botó que en crearia una altra.
+   */
+  offer_line_id: string | null;
   /** `null` quan aquest rol no pot veure el cost. No és «encara no escrit». */
   internal_economics: OptionInternalEconomics | null;
 }
@@ -196,4 +203,48 @@ export function dimensionValue(dimension: OptionDimension): string | null {
   return dimension.unit
     ? `${dimension.working_value_text} ${dimension.unit}`
     : dimension.working_value_text;
+}
+
+/** Qui pot posar una xifra a l'oferta. `technical` no: no és una decisió seva. */
+export function canCreateOfferLine(role: string | null | undefined): boolean {
+  return role === "owner" || role === "admin" || role === "bid_manager";
+}
+
+/**
+ * Si aquesta opció es pot portar a l'oferta ara mateix.
+ *
+ * Ha d'estar triada, viva, sense línia i amb el que la línia necessita. La
+ * interfície no ofereix una acció que el servidor rebutjarà: dir-ho abans és
+ * més honest que un error després.
+ */
+export function canBeAdopted(option: SolutionOption): boolean {
+  return (
+    option.selection === "selected" &&
+    option.archived_at === null &&
+    option.offer_line_id === null &&
+    option.quantity !== null &&
+    option.pricing_basis !== null
+  );
+}
+
+/** Els blocs de preus de l'oferta, aplanats amb el nom del seu lot. */
+export interface OfferShape {
+  lots: Array<{
+    label: string;
+    archived_at: string | null;
+    sections: Array<{ id: string; title: string; archived_at: string | null }>;
+  }>;
+}
+
+export function offerSections(
+  offer: OfferShape | null,
+): Array<{ id: string; title: string; lot: string }> {
+  if (!offer) return [];
+  return offer.lots
+    .filter((lot) => lot.archived_at === null)
+    .flatMap((lot) =>
+      lot.sections
+        .filter((section) => section.archived_at === null)
+        .map((section) => ({ id: section.id, title: section.title, lot: lot.label })),
+    );
 }

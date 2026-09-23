@@ -56,6 +56,14 @@ export interface OfferLine {
   id: string;
   section_id: string;
   concept: string;
+  /**
+   * D'on ve la línia, si ve d'una opció de solució.
+   *
+   * Només de lectura: la provinença es guanya adoptant una opció, no enviant-ne
+   * l'identificador. I la línia és un **snapshot**: que després canviï l'opció
+   * no la toca.
+   */
+  solution_option_id: string | null;
   requirement_id: string | null;
   technical_solution_id: string | null;
   supplier_name: string | null;

@@ -380,6 +380,12 @@ motiu, totes dues conservades · dues opcions germanes `undecided` fins que alg�
 
 ## 16. Dimension dependencies
 
+> **SUPERAT per la V1 (0034).** La taula d'aquesta secció descriu el disseny
+> original. La V1 implementada és una **relació pura N:N**: només
+> `solution_option_id` i `dimension_id` (més qui i quan). `role`,
+> `quantity_factor`, `snapshot_value_num` i `snapshot_taken_at` **queden fora de
+> l'Sprint 3**, i `dimension_id` és **`CASCADE`**. Veure «Delta S3-S7b».
+
 `workspace_solution_option_dimensions` (**N:N**):
 
 | Camp | Tipus | Nota |
@@ -1561,21 +1567,27 @@ terminals i del de SIM de dades; i el nombre de línies el fan servir totes les
 opcions que s'hi comparen. Per això no hi ha cap `dimension_id` a l'opció ni cap
 `solution_option_id` a la magnitud.
 
-**Delta sobre §16 — només la parella.** El disseny congelat preveia `role`
-(`quantity_driver` / `scope_reference`), `quantity_factor`, `snapshot_value_num`
-i `snapshot_taken_at`. Res d'això s'ha implementat, i queda **ajornat, no
-descartat**. La relació diu una cosa i prou: *«aquesta opció depèn d'aquesta
-magnitud»*. No diu que `option.quantity` surti de `working_value_num`, ni que el
-valor estigués decidit el dia que es va enllaçar, ni que la magnitud sigui el
-preu.
+**Delta sobre §16 — la V1 és la relació pura, i §16 queda superat.** El disseny
+original preveia `role` (`quantity_driver` / `scope_reference`),
+`quantity_factor`, `snapshot_value_num` i `snapshot_taken_at`. **Cap d'aquests
+camps forma part de l'Sprint 3**: no són feina pendent dins de l'sprint, són
+disseny **substituït** per la relació pura. Si algun dia apareix un cas de
+negoci que els necessiti, serà una decisió i una migració futures i explícites,
+no la continuació d'aquesta.
 
-**Cap snapshot.** L'estat d'ara el diu `workspace_dimensions`, que n'és l'única
-font de veritat. Una còpia aquí voldria dir tenir dues respostes a la mateixa
-pregunta, i un dia no coincidirien sense que ningú sabés quina manava. Quan més
-endavant una línia econòmica adopti una quantitat i un cost, serà **la línia**
-qui en farà el snapshot econòmic; aquesta fase no avança aquella semàntica.
+La relació diu una cosa i prou: *«aquesta opció depèn d'aquesta magnitud»*. No
+diu que `option.quantity` surti de `working_value_num`, ni que el valor estigués
+decidit el dia que es va enllaçar, ni que la magnitud sigui el preu.
 
-**Delta sobre §16 — `dimension_id` és `CASCADE` i no `RESTRICT`.** El freeze deia
+**Cap snapshot, i no n'hi haurà cap aquí.** L'estat d'ara el diu
+`workspace_dimensions`, que n'és l'única font de veritat. Una còpia a la relació
+voldria dir tenir dues respostes a la mateixa pregunta, i un dia no coincidirien
+sense que ningú sabés quina manava. **El snapshot econòmic el fa la línia**
+(`EconomicOfferLine`, 0035): quan una línia adopta una quantitat i un cost, els
+copia i ja no es mouen. Aquesta és la V1 i no un pas intermedi.
+
+**Delta sobre §16 — `dimension_id` és `CASCADE` i no `RESTRICT`, i aquest és el
+valor congelat de la V1.** El disseny original deia
 `RESTRICT` per no deixar esborrar una magnitud de què depèn una opció. A la
 pràctica el producte **no esborra cap magnitud** —les arxiva—, de manera que
 aquella protecció no arribaria a actuar mai; en canvi, amb `RESTRICT` la
@@ -1647,3 +1659,122 @@ El selector només ofereix les **actives** i treballa amb noms i valors, mai amb
 identificadors. La quantitat de l'opció i el valor de la magnitud es veuen tots
 dos i són **camps independents**: si no coincideixen no és cap error, i no hi ha
 cap botó que digui «fes servir 181».
+
+
+---
+
+## Delta S3-S8 — la línia d'oferta que ve d'una opció, implementada
+
+`0035_offer_line_solution_option` afegeix **un sol camp**:
+`economic_offer_lines.solution_option_id`, UUID nullable, `SET NULL`. Cap altra
+columna, cap taula nova, cap backfill: les línies que ja hi havia no venen de
+cap opció i es queden a `NULL`, que és exactament el que són.
+
+    l'opció és la configuració VIVA; la línia és el snapshot ADOPTAT
+
+Quan es crea la línia es copien els homòlegs i s'hi queden. Que després canviï
+el proveïdor, la quantitat o el cost de l'opció **no toca la línia**: la xifra
+que va a l'oferta la va adoptar una persona un dia concret, i moure-la sola
+voldria dir canviar una oferta sense que ningú ho hagués decidit.
+
+**L'índex únic és PARCIAL** —`WHERE solution_option_id IS NOT NULL AND
+archived_at IS NULL`— i és l'última defensa, no una comoditat: entre comprovar
+que no hi ha línia i inserir-la hi cap una altra petició. Alhora deixa que una
+línia arxivada conservi el seu `solution_option_id` com a història i que l'opció
+quedi lliure per tornar a convertir-se, amb el snapshot d'aleshores.
+
+**Delta sobre §19 — `concept` és entrada humana explícita.** El cos passa a ser
+`{section_id, expected_revision, concept}`. `WorkspaceSolutionOption` **no té cap
+homòleg de `concept`**, i `EconomicOfferLine.concept` és `NOT NULL`: derivar-lo
+de `product_name`, `supplier_name` o `description` voldria dir que una línia
+d'una oferta real es podria acabar dient «Opció». S'hi fa `trim` i no pot ser
+buit. **No s'afegeix `concept` a l'opció**: el nom d'una línia és vocabulari
+d'oferta, no de configuració.
+
+**Delta sobre §19 — `quantity` i `pricing_basis` han d'estar definits a
+l'opció.** Totes dues són `NOT NULL` a la línia i nullables a l'opció. No
+viatgen al cos: l'opció continua sent-ne la font autoritativa. Si en falta
+alguna → **`422 solution_option_not_ready_for_offer_line`** amb `details.missing`.
+No hi ha cap default: `quantity = 0` faria que la línia sumés zero a l'oferta
+sense que ningú se n'adonés, i `pricing_basis = one_off` canviaria el total pels
+mesos del contracte. `unknown` no és `zero` ni `one_off`.
+
+**Mapatge del snapshot**, amb els noms canònics reals dels dos models:
+`concept` ← petició · `quantity`, `pricing_basis`, `unit_cost_ex_vat`,
+`supplier_name`, `product_name`, `duration_months_override`, `requirement_id`,
+`technical_solution_id` ← opció. **`offered_unit_price_ex_vat` no es deriva mai
+del cost** i queda `NULL`: que ens costi 10 no vol dir que ho oferim a 10.
+
+**Precisió del cost.** L'opció el guarda a `Numeric(18,6)` i la línia a
+`Numeric(18,4)` (Sprint 2). El snapshot **arrodoneix**: `12.345678` → `12.3457`.
+No és una pèrdua accidental sinó la precisió amb què treballa l'oferta, i 0035
+no toca cap altra columna. Hi ha un test que ho documenta en comptes d'afirmar
+una igualtat que la columna no pot sostenir.
+
+**Idempotència abans que res.** Si ja hi ha línia viva per a l'opció, es retorna
+aquella amb `200` —mai `409`, mai una segona línia, mai un increment de
+revisió—, i la comprovació va **primer**, abans de mirar l'arxivat, la selecció i
+la revisió: el `expected_revision` d'un reintent ha quedat antic justament
+perquè la primera crida va tenir èxit, i castigar-lo seria castigar l'èxit. Un
+reintent sobre una opció ja arxivada també retorna la línia, i **no reviu
+l'opció**.
+
+**La cursa de debò.** Si dues peticions veuen totes dues que no hi ha línia,
+guanya la que arriba primer i l'altra hi convergeix. Els dos camins de fallada
+es tracten diferent perquè deixen la transacció en estats diferents: el CAS
+falla sense escriure res i la transacció segueix sana, mentre que la violació de
+l'índex la trenca i cal desfer-la abans de tornar a llegir. En tots dos casos la
+perdedora no consumeix cap revisió. Si la revisió s'havia mogut per una altra
+cosa, això sí que és un conflicte de debò i és un `409`.
+
+**CAS de l'oferta, no de l'opció.** `expected_revision` és el d'`EconomicOffer` i
+es fa servir el `bump_revision` canònic d'Sprint 2. **L'opció no muta**: no es
+toca `selection`, `selected_by`, `selected_at` ni cap camp de cotització.
+
+**Permisos.** `ECONOMIC_EDIT_ROLES`. Un `technical` pot configurar l'opció i
+triar-la, però posar una xifra a l'oferta no li toca.
+
+**La provinença és només de lectura.** `solution_option_id` és a `LineRead` i no
+és a `LineCreateRequest` ni a `LineUpdateRequest`: es guanya adoptant una opció,
+no enviant-ne l'identificador. El servei canònic `create_line()` l'accepta com a
+argument intern —així la línia neix amb la seva provinença en un sol `INSERT` i
+l'índex la protegeix de debò—, i cap router genèric el passa.
+
+**Delta sobre §22 — els dos blocadors ja són calculables.**
+
+`dimension_undecided_in_use` (blocker, tècnic) segueix la cadena real
+`EconomicOfferLine viva → solution_option_id → workspace_solution_option_dimensions
+→ WorkspaceDimension activa i undecided`. Sense línia **no hi ha blocador**, i
+això és exactament què vol dir «en ús»: una opció triada que depèn d'una
+magnitud per decidir és feina normal; el que no pot passar és que una xifra que
+ja ha entrat a l'oferta es recolzi en un número que ningú no ha fixat. No compara
+xifres. Una magnitud `disputed` **no** hi entra: té `dimension_disputed`, i
+convertir-la aquí canviaria el que significa.
+
+`solution_option_quote_expired` (blocker, econòmic): línia viva + opció
+`selected` + `quote_status = expired`. El quote viu a l'**opció**, no a la línia.
+S'apaga quan deixa de complir-se, i el sistema **no toca `selection`**: caducada
+no vol dir rebutjada.
+
+`solution_option_quote_pending` no canvia: continua sent un avís, no necessita
+cap línia i és un contracte a part.
+
+Cap dels findings nous exposa cost, preu, marge ni notes internes: només ids i
+context públic.
+
+**Paquet.** Crear una línia **sí** que és una mutació econòmica i el manifest
+canvia pel mecanisme d'Sprint 2 —no s'ha preservat res artificialment—. Crear o
+editar una **opció**, en canvi, no el mou: la línia és un snapshot i l'opció no
+és contingut del manifest. Hi ha un test que mesura les tres coses.
+
+**UX.** Dins de «Opcions i cotitzacions», sense cap pestanya nova. El CTA
+«Afegeix a l'oferta» només surt per a rols econòmics i només quan l'opció es pot
+adoptar de debò (triada, viva, amb quantitat i base, i sense línia): oferir una
+acció que el servidor rebutjarà seria fer perdre el temps a qui la prem. Amb
+línia viva, un xip **«A l'oferta»** i cap botó que en crearia una segona. El
+diàleg demana el bloc de preus i el concepte —buit, mai preomplert amb el
+producte— i no proposa cap preu de venda.
+
+**0036 conserva la seva feina**: `target_markup_pct`, `sync-from-option` i
+`economic_line_option_diverged`, que arriben junts perquè el finding de
+divergència només té sentit quan existeix el camí explícit de resolució.

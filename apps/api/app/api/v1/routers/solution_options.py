@@ -21,9 +21,12 @@ import uuid
 from fastapi import APIRouter, status
 
 from app.api.deps import CompanyCtx, SessionDep
+from app.api.v1.routers import economic_offer as offer_read
 from app.models.dimensions import WorkspaceDimension
 from app.models.enums import AuditAction
+from app.models.offer import EconomicOfferLot, EconomicOfferSection
 from app.models.solution_options import WorkspaceSolutionOption
+from app.schemas.offer import LineRead, ToOfferLineRequest
 from app.schemas.solution_options import (
     OptionDimensionRead,
     OptionDimensionWrite,
@@ -38,6 +41,8 @@ from app.schemas.solution_options import (
 )
 from app.services import audit
 from app.services import bid_workspace as workspace_service
+from app.services import economic_offer as offer_service
+from app.services import option_to_offer_line as adopt_service
 from app.services import solution_option_dimensions as link_service
 from app.services import solution_options as service
 
@@ -52,6 +57,7 @@ def _read(
     internal: bool,
     effective_ids: set[uuid.UUID] | None = None,
     dimensions: list[WorkspaceDimension] | None = None,
+    offer_line_id: uuid.UUID | None = None,
 ) -> SolutionOptionRead:
     """La fitxa d'una opcio, amb el cost nomes si qui mira el pot veure.
 
@@ -76,6 +82,7 @@ def _read(
     read.dimensions = [
         OptionDimensionRead.model_validate(dimension) for dimension in (dimensions or [])
     ]
+    read.offer_line_id = offer_line_id
     return read
 
 
@@ -93,7 +100,9 @@ async def list_options(
         session, workspace, include_archived=include_archived
     )
     effective_ids = await service.effective_requirement_ids(session, workspace)
-    linked = await link_service.dimensions_of(session, [row.id for row in rows])
+    ids = [row.id for row in rows]
+    linked = await link_service.dimensions_of(session, ids)
+    adopted = await adopt_service.live_lines_for(session, ids)
     return SolutionOptionListRead(
         can_view_internal_economics=internal,
         items=[
@@ -102,6 +111,7 @@ async def list_options(
                 internal=internal,
                 effective_ids=effective_ids,
                 dimensions=linked.get(row.id, []),
+                offer_line_id=adopted.get(row.id),
             )
             for row in rows
         ],
@@ -121,11 +131,13 @@ async def get_option(
     option = await service.load_option(session, workspace, option_id)
     effective_ids = await service.effective_requirement_ids(session, workspace)
     linked = await link_service.dimensions_of(session, [option.id])
+    adopted = await adopt_service.live_lines_for(session, [option.id])
     return _read(
         option,
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=effective_ids,
         dimensions=linked.get(option.id, []),
+        offer_line_id=adopted.get(option.id),
     )
 
 
@@ -172,6 +184,9 @@ async def create_option(
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=await service.effective_requirement_ids(session, workspace),
         dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
+        offer_line_id=(await adopt_service.live_lines_for(session, [option.id])).get(
+            option.id
+        ),
     )
 
 
@@ -223,6 +238,9 @@ async def update_option(
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=await service.effective_requirement_ids(session, workspace),
         dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
+        offer_line_id=(await adopt_service.live_lines_for(session, [option.id])).get(
+            option.id
+        ),
     )
 
 
@@ -273,6 +291,9 @@ async def update_internal_economics(
         internal=True,
         effective_ids=await service.effective_requirement_ids(session, workspace),
         dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
+        offer_line_id=(await adopt_service.live_lines_for(session, [option.id])).get(
+            option.id
+        ),
     )
 
 
@@ -320,6 +341,9 @@ async def set_selection(
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=await service.effective_requirement_ids(session, workspace),
         dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
+        offer_line_id=(await adopt_service.live_lines_for(session, [option.id])).get(
+            option.id
+        ),
     )
 
 
@@ -357,6 +381,9 @@ async def archive_option(
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=await service.effective_requirement_ids(session, workspace),
         dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
+        offer_line_id=(await adopt_service.live_lines_for(session, [option.id])).get(
+            option.id
+        ),
     )
 
 
@@ -434,6 +461,9 @@ async def attach_dimension(
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=await service.effective_requirement_ids(session, workspace),
         dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
+        offer_line_id=(await adopt_service.live_lines_for(session, [option.id])).get(
+            option.id
+        ),
     )
 
 
@@ -486,4 +516,80 @@ async def detach_dimension(
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=await service.effective_requirement_ids(session, workspace),
         dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
+        offer_line_id=(await adopt_service.live_lines_for(session, [option.id])).get(
+            option.id
+        ),
     )
+
+
+@router.post(
+    "/{option_id}/to-offer-line",
+    response_model=LineRead,
+    summary="Adopta l'opcio com a linia d'oferta",
+)
+async def to_offer_line(
+    workspace_id: uuid.UUID,
+    option_id: uuid.UUID,
+    payload: ToOfferLineRequest,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Crea la linia economica d'aquesta opcio, o retorna la que ja hi havia.
+
+    **Es una accio economica.** Un `technical` pot configurar l'opcio i triar-la,
+    pero posar una xifra a l'oferta no li toca: aqui hi passen nomes els rols
+    economics.
+
+    **Idempotent.** Un doble clic o un reintent retornen la mateixa linia viva
+    amb `200`, sense crear-ne una segona i sense moure la revisio de l'oferta.
+    Un `expected_revision` que ha quedat antic precisament perque la primera
+    crida va funcionar NO trenca el reintent.
+
+    **L'opcio no muta.** El `expected_revision` del cos es el de l'oferta, que es
+    qui canvia; l'opcio nomes es llegeix.
+    """
+    offer_service.assert_can_edit(ctx.membership.role)
+    internal = offer_service.can_view_internal_economics(ctx.membership.role)
+    workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    offer = await offer_service.get_offer(session, workspace)
+
+    adopted = await adopt_service.to_offer_line(
+        session,
+        workspace=workspace,
+        offer=offer,
+        option_id=option_id,
+        section_id=payload.section_id,
+        expected_revision=payload.expected_revision,
+        concept=payload.concept,
+        user=ctx.user,
+    )
+    if adopted.created:
+        # Un reintent no deixa cap rastre nou: el que no ha canviat res no s'ha
+        # d'apuntar com si hagues passat.
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.CREATE,
+            entity_type="economic_offer_line",
+            entity_id=adopted.line.id,
+            # Ids i prou: ni cost, ni preu, ni marge. El resum d'auditoria el
+            # poden llegir rols que no veuen economia interna.
+            summary=f"linia creada des de l'opcio {option_id}",
+        )
+    await session.commit()
+
+    # La mateixa forma que retorna qualsevol altre endpoint de l'oferta, amb els
+    # mateixos calculs canonics. Es construeix la vista d'AQUESTA linia i no
+    # l'arbre sencer: `build_view` recorre col.leccions ja carregades, i la
+    # sessio no expira en fer `commit`, aixi que la linia nova no hi seria.
+    section = await session.get(EconomicOfferSection, adopted.line.section_id)
+    lot = await session.get(EconomicOfferLot, section.offer_lot_id)
+    line_view = offer_service.LineView(
+        line=adopted.line,
+        totals=offer_service.line_totals(offer_service.line_input(adopted.line, lot)),
+        effective_duration_months=offer_service.effective_duration_months(
+            adopted.line, lot
+        ),
+    )
+    return offer_read._line_read(line_view, internal=internal)

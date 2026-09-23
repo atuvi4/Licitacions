@@ -102,15 +102,39 @@ DIMENSION_DISPUTED = "dimension_disputed"
 #: Nomes compta si l'opcio esta triada: que una alternativa que ningu no fara
 #: servir no tingui cotitzacio no es cap feina pendent.
 #:
-#: NO existeix encara el blocador de cotitzacio CADUCADA. El seu contracte
-#: exigeix que una linia economica VIVA en depengui, i el vincle entre linia i
-#: opcio encara no existeix: calcular-lo ara seria una heuristica.
+#: No necessita cap linia economica: parla de la gestio, no de l'oferta. Es un
+#: contracte diferent del blocador de cotitzacio caducada, i no s'hi barreja.
 SOLUTION_OPTION_QUOTE_PENDING = "solution_option_quote_pending"
+
+#: Una magnitud SENSE DECISIO de la qual depen una linia economica VIVA.
+#:
+#: Aixo si que es un blocador: vol dir que una xifra que anira a l'oferta es
+#: recolza en un numero que ningu no ha fixat. Abans que existis la linia no ho
+#: era —i el test ho comprova—, perque "en us" vol dir en us ECONOMIC: la
+#: cadena real es linia viva -> opcio -> dependencia -> magnitud.
+#:
+#: No compara numeros. No mira si `option.quantity` quadra amb el valor de
+#: treball: nomes diu que falta una decisio humana.
+#:
+#: Una magnitud `disputed` NO entra aqui: te el seu avis propi
+#: (`DIMENSION_DISPUTED`) i convertir-la en blocador canviaria el que significa.
+DIMENSION_UNDECIDED_IN_USE = "dimension_undecided_in_use"
 
 # --- Oferta economica --------------------------------------------------------- #
 
 #: Regla de producte de la V1 (C-15): tota candidatura que vulgui arribar a la
 #: revisio final necessita oferta. L'absencia no vol dir mai "no cal".
+#: Una linia viva de l'oferta ve d'una opcio triada la cotitzacio de la qual ha
+#: caducat. El preu que s'ofereix es recolza en una xifra que ja no es vigent.
+#:
+#: El quote viu a l'OPCIO, no a la linia: la linia es el snapshot que es va
+#: adoptar i no ha de saber res de com va la gestio amb el proveidor.
+#:
+#: S'apaga quan deixa de complir-se: arriba una cotitzacio nova, s'arxiva la
+#: linia o la persona canvia la tria. "Caducada" no vol dir "rebutjada", i el
+#: sistema no toca `selection` per compte seu.
+SOLUTION_OPTION_QUOTE_EXPIRED = "solution_option_quote_expired"
+
 ECONOMIC_OFFER_NOT_STARTED = "economic_offer_not_started"
 ECONOMIC_BID_LOTS_NOT_SELECTED = "economic_bid_lots_not_selected"
 ECONOMIC_LOT_EMPTY = "economic_lot_empty"

@@ -241,6 +241,18 @@ class EconomicOfferLine(
         sa.Index("ix_economic_offer_lines_section", "section_id", "position"),
         sa.Index("ix_economic_offer_lines_requirement", "requirement_id"),
         sa.Index("ix_economic_offer_lines_technical_solution", "technical_solution_id"),
+        # Una sola linia VIVA per opcio. Parcial i no un UNIQUE sencer: una
+        # linia arxivada conserva la seva provinenca com a historia, i alhora
+        # deixa l'opcio lliure per tornar a convertir-se en una linia nova.
+        sa.Index(
+            "uq_economic_offer_lines_solution_option",
+            "solution_option_id",
+            unique=True,
+            postgresql_where=sa.text(
+                "solution_option_id IS NOT NULL AND archived_at IS NULL"
+            ),
+            sqlite_where=sa.text("solution_option_id IS NOT NULL AND archived_at IS NULL"),
+        ),
     )
 
     section_id: Mapped[uuid.UUID] = mapped_column(
@@ -288,6 +300,25 @@ class EconomicOfferLine(
     notes: Mapped[str | None] = mapped_column(sa.Text)
     position: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
     archived_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+
+    #: D'on ve aquesta linia, si ve d'una opcio de solucio (S3-S8).
+    #:
+    #: **L'opcio es la configuracio viva; la linia es el snapshot adoptat.** Que
+    #: despres canviin el proveidor, la quantitat o el cost de l'opcio NO toca
+    #: res d'aqui: la xifra que va a l'oferta la va adoptar una persona un dia
+    #: concret, i moure-la sola voldria dir canviar una oferta sense que ningu
+    #: ho hagues decidit.
+    #:
+    #: `SET NULL`: si algun dia desapareix l'opcio, es perd la traca, no la
+    #: feina. El preu escrit es conserva.
+    solution_option_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "workspace_solution_options.id",
+            ondelete="SET NULL",
+            name="fk_economic_offer_lines_solution_option",
+        ),
+    )
 
     section: Mapped[EconomicOfferSection] = relationship(back_populates="lines")
 
