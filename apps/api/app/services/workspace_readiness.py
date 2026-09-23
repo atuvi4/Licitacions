@@ -22,6 +22,7 @@ from app.models.workspace import BidWorkspace
 from app.services import dimensions as dimension_service
 from app.services import document_review, requirement_analysis
 from app.services import economic_offer as offer_service
+from app.services import issues as issue_service
 from app.services import offer_line_option_sync as sync_service
 from app.services import solution_option_dimensions as link_service
 from app.services import solution_options as option_service
@@ -47,6 +48,8 @@ from app.workspace.readiness import (
     ECONOMIC_UNIT_LIMIT_UNKNOWN,
     ECONOMIC_VAT_MISSING,
     INFO,
+    ISSUE_BLOCKING_OPEN,
+    ISSUE_OPEN,
     REQUIREMENT_ANALYSIS_PREDATES_DOCUMENTS,
     SOLUTION_OPTION_QUOTE_EXPIRED,
     SOLUTION_OPTION_QUOTE_PENDING,
@@ -421,10 +424,11 @@ async def document_findings(
     findings: list[Finding] = []
     review = await document_review.review_state(session, workspace)
 
-    if review.document_count == 0:
-        return findings
+    # Atencio: NO es pot sortir aqui. Una candidatura sense plecs pot tenir
+    # dubtes igualment, i un blocador que desaparegues per no haver-hi documents
+    # seria un forat.
 
-    if not review.reviewed:
+    if review.document_count and not review.reviewed:
         findings.append(
             Finding(
                 code=TENDER_DOCUMENTS_UNREVIEWED,
@@ -433,13 +437,39 @@ async def document_findings(
                 context={"documents": review.document_count},
             )
         )
-    elif review.stale:
+    elif review.document_count and review.stale:
         findings.append(
             Finding(
                 code=TENDER_DOCUMENTS_CHANGED,
                 severity=WARNING,
                 domain=DOMAIN_WORKSPACE,
                 context={"documents": review.document_count},
+            )
+        )
+
+    # Els dubtes. El blocador NOMES surt d'una decisio humana explicita; la
+    # resta es un comptador, no una llista de feines.
+    for issue in await issue_service.blocking_open_issues(session, workspace):
+        findings.append(
+            Finding(
+                code=ISSUE_BLOCKING_OPEN,
+                severity=BLOCKER,
+                domain=DOMAIN_WORKSPACE,
+                entity_id=issue.id,
+                # Titol i estat i prou. Si el dubte apunta a una linia economica,
+                # aqui no hi entra res d'aquella linia: el cost te el seu canal.
+                context={"title": issue.title, "status": issue.status.value},
+            )
+        )
+
+    open_count = await issue_service.open_issue_count(session, workspace)
+    if open_count:
+        findings.append(
+            Finding(
+                code=ISSUE_OPEN,
+                severity=INFO,
+                domain=DOMAIN_WORKSPACE,
+                context={"count": open_count},
             )
         )
 

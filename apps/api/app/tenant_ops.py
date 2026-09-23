@@ -81,6 +81,9 @@ INDIRECT_TABLES: dict[str, tuple[str, str, str]] = {
         "workspace_solution_options",
         "id",
     ),
+    # Les cites d'un dubte pengen del dubte, que porta el `company_id`. La cita
+    # en si (`tender_source_refs`) no: es de la licitacio i es publica.
+    "workspace_issue_source_refs": ("issue_id", "workspace_issues", "id"),
 }
 
 # Taules publiques i globals: no pertanyen a cap tenant i no s'han de tocar mai.

@@ -13,6 +13,7 @@ from app.models.credentials import CompanyCertification, CompanyInsurance, Compa
 from app.models.dimensions import WorkspaceDimension, WorkspaceDimensionObservation
 from app.models.documents import Document, DocumentLink
 from app.models.identity import Company, CompanyMembership, User
+from app.models.issues import WorkspaceIssue, WorkspaceIssueSourceRef
 from app.models.jobs import JobRequest, WorkJob
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
 from app.models.offer import (
@@ -130,6 +131,8 @@ __all__ = [
     "RequirementSourceRefLink",
     "WorkspaceDimension",
     "WorkspaceDimensionObservation",
+    "WorkspaceIssue",
+    "WorkspaceIssueSourceRef",
     "WorkspaceSolutionOption",
     "WorkspaceSolutionOptionDimension",
     "User",

@@ -1940,3 +1940,103 @@ abstracció nova: s'hi ha tret la dada.
 `sync-from-option` no canvia: `ECONOMIC_EDIT_ROLES` continua podent adoptar
 `unit_cost_ex_vat`. La correcció és només de LECTURA i de readiness. Cap canvi
 d'esquema.
+
+
+---
+
+## Delta S3-S10 — dubtes i discrepàncies, implementats
+
+`0037_workspace_issues` crea **exactament dues taules** i no en toca cap altra:
+`workspace_issues` i `workspace_issue_source_refs`. És l'última migració de
+l'Sprint 3.
+
+**Un dubte no és una tasca.** Una tasca és feina per fer i es tanca fent-la
+(`WorkspaceTask`, ja existia); un dubte és **coneixement que falta** i es tanca
+sabent alguna cosa. Per això resoldre exigeix escriure la resposta —imposat al
+servei i per un `CHECK`—: un dubte «resolt» sense resposta no seria resolt,
+seria oblidat.
+
+**Cap dubte neix sol.** Ni per una dimensió en disputa, ni per una cotització
+pendent, ni per una línia divergida, ni per un document nou. Tot això ja té el
+seu avís a `FinalReadiness`; convertir-ho en dubtes ompliria la llista de
+preguntes que ningú no s'ha fet i hi enterraria les que sí. Hi ha un test que
+crea una discrepància real i comprova que la taula continua buida.
+
+**`source_refs_json` queda SUPERAT.** La provinença va per
+`workspace_issue_source_refs` cap a `tender_source_refs`, que és la cadena de
+cites d'S3-S4. Un JSON d'identificadors no pot garantir que la cita existeixi ni
+impedir que algú l'esborri sense adonar-se'n. `RESTRICT` cap a la cita i
+`CASCADE` cap al dubte, com a `requirement_source_ref_links`. **Desenganxar no
+esborra la cita**, i una cita segueix apuntant a la versió que es va llegir: puja
+una v2 i el dubte continua citant la v1.
+
+**Divergència de nom amb el freeze:** §22 anomenava la taula
+`workspace_issue_source_ref_links`; la fase la va especificar com
+`workspace_issue_source_refs`, i és el nom implementat.
+
+**`blocks_final_review` és una decisió d'oferta, no una propietat del dubte.**
+Neix sempre a `false`, no és a cap schema d'escriptura general, i té la seva
+acció (`POST …/final-review-block`) reservada a `DECISION_ROLES`. Un `technical`
+pot obrir el dubte, moure'l, citar-lo i resoldre'l; marcar que atura la
+candidatura, no. **Resoldre no la neteja**: que algú decidís un dia que això
+impedia presentar-se continua sent cert, i esborrar-ho seria perdre per què la
+candidatura va estar aturada.
+
+**`dismissed` no és `resolved`.** Descartar tanca el dubte perquè ja no ve al
+cas, i **deixa `resolved_by` i `resolved_at` buits**: si els omplís,
+`resolved_at IS NOT NULL` voldria dir dues coses diferents i «ho sabem»
+inclouria coses que ningú no ha contestat mai. Qui descarta i quan viu a
+`AuditLog` i a `updated_by`/`updated_at`. **No s'ha afegit cap segona parella**
+de camps.
+
+**Readiness.** `issue_blocking_open` (**blocker**, domini workspace) quan hi ha
+un dubte marcat i `status ∈ {open, waiting}`; s'apaga en tancar-lo o en
+desmarcar-lo, i no depèn del tipus. `issue_open` (**info**) és un **comptador
+agregat** dels oberts **no marcats**: un finding per dubte faria semblar que
+cadascun és una feina pendent, i comptar-hi també els que bloquegen diria el
+mateix problema dues vegades. Cap dels dos porta economia interna: si el dubte
+apunta a una línia, del finding no en surt cap xifra.
+
+**Cap cascada.** Resoldre un dubte de contradicció **no decideix** la dimensió, i
+decidir la dimensió **no resol** el dubte. Són dues decisions relacionades i
+diferents; encadenar-les faria que respondre una pregunta mogués xifres que
+ningú no ha mirat. El mateix val per a requisits, solucions tècniques, opcions i
+línies.
+
+**Coherència i inquilins.** Les FK soles no demostren res: el servei valida que
+requisit i criteri siguin de la licitació, i que solució tècnica, opció, línia i
+magnitud siguin de la candidatura. El responsable ha de ser de l'empresa. Un
+dubte és de la **candidatura**, no de l'expedient: sobre una licitació pública
+compartida, cada empresa té els seus i no veu els de l'altra —hi ha un test.
+
+**Cap esborrat.** No hi ha `DELETE` de dubte; l'únic `DELETE` del recurs treu una
+**cita** d'un dubte. Es tanca resolent o descartant, i es conserven la pregunta,
+la provinença, la resolució, l'actor i les dates. Els vincles històrics no se
+sincronitzen amb l'estat de l'entitat: un dubte pot continuar apuntant a una
+magnitud que després s'arxiva.
+
+**El paquet no es mou.** `WorkspaceIssue` no entra al manifest v2: crear,
+bloquejar, resoldre o descartar no el toquen i no revoquen cap aprovació. El que
+sí que canvia és la **preparació d'ara**: una aprovació històrica és la
+fotografia del que es va presentar, i un dubte d'avui no la pot reescriure.
+
+**Nota d'implementació.** `workspace_issues` porta `company_id`
+(`CompanyOwnedMixin`), com totes les taules que pengen d'una candidatura
+(`workspace_dimensions`, `workspace_solution_options`,
+`workspace_technical_solutions`). No era al freeze §22, però és la convenció del
+repositori i la que fa servir `tenant_ops` per destruir un tenant sense recórrer
+cap cadena.
+
+**Limitació coneguda i deliberada:** els endpoints de creació de cites
+(`source-refs/*`) només accepten **licitacions manuals pròpies**, i S3-S10 no
+relaxa aquesta política. Sobre una licitació pública, un dubte pot existir i
+tenir tot el seu contingut, però no s'hi poden crear cites noves per aquesta via.
+Obrir-ho exigiria tocar el model de tenancy de la provinença, i això no és
+d'aquesta fase.
+
+**UX.** Calaix **«Dubtes i discrepàncies»** a la capçalera de Preparar, al costat
+de les quatre àrees i sense afegir-ne cap: un dubte és transversal per definició
+—pot ser d'un requisit, d'una magnitud o d'un preu— i posar-lo dins d'una àrea
+obligaria a triar-ne una d'arbitrària. «Obre dubte» prepara el formulari amb el
+context preseleccionat i **no crea res** fins que algú confirma. El control de
+bloqueig **no existeix** per als rols que no el poden decidir.

@@ -29,6 +29,7 @@ import { ReadinessControl } from "@/components/ReadinessControl";
 import { ReadinessProvider, useInvalidateReadiness } from "@/components/ReadinessProvider";
 import { ANALYSIS_BASIS_LABELS, ELIGIBILITY_LABELS, RECOMMENDATION_LABELS } from "@/lib/compliance";
 import { useResource } from "@/lib/hooks";
+import { IssuesDrawer } from "@/components/IssuesDrawer";
 import { PREPARE_AREAS, PREPARE_AREA_LABELS, isPrepareArea, type PrepareArea } from "@/lib/readiness";
 import {
   ANALYSIS_BASIS_LEVEL,
@@ -278,6 +279,7 @@ function WorkspaceView() {
     leaveGuard.current = null;
   }
   const [pinned, setPinned] = useState<CandidatureStep | null>(null);
+  const [issuesOpen, setIssuesOpen] = useState(false);
   const initialStatus = data?.status ?? null;
   useEffect(() => {
     if (!initialStatus || paramStep || pinned) return;
@@ -451,13 +453,28 @@ function WorkspaceView() {
           <>
             {/* Subordinada als tres passos: la mateixa barra que la fitxa de
                 licitació, no una segona navegació principal. */}
-            <Tabs
-              items={PREPARE_AREAS.map((key) => ({ key, label: PREPARE_AREA_LABELS[key] }))}
-              value={area}
-              param="area"
-              history="push"
-              beforeChange={() => leaveGuard.current?.() ?? true}
-              onChange={() => undefined}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Tabs
+                items={PREPARE_AREAS.map((key) => ({ key, label: PREPARE_AREA_LABELS[key] }))}
+                value={area}
+                param="area"
+                history="push"
+                beforeChange={() => leaveGuard.current?.() ?? true}
+                onChange={() => undefined}
+              />
+              {/* A la capçalera i no dins de cap àrea: un dubte és transversal
+                  per definició —pot ser d'un requisit, d'una magnitud o d'un
+                  preu— i posar-lo a una de les quatre obligaria a triar-ne una
+                  d'arbitrària. Les quatre àrees es queden com estaven. */}
+              <Button variant="secondary" size="sm" onClick={() => setIssuesOpen(true)}>
+                Dubtes i discrepàncies
+              </Button>
+            </div>
+
+            <IssuesDrawer
+              workspace={data}
+              open={issuesOpen}
+              onClose={() => setIssuesOpen(false)}
             />
 
             {area === "solucio" && <TechnicalSolutionSection workspace={data} registerLeaveGuard={registerLeaveGuard} />}

@@ -1159,8 +1159,142 @@ def test_el_downgrade_no_toca_cap_preu():
     assert "DELETE FROM" not in down
 
 
-def test_0037_encara_no_existeix():
+def test_0036_no_porta_cap_dubte():
+    """Els dubtes son de 0037. 0036 nomes porta l'objectiu de markup."""
+    up = _offline_sql("upgrade", _TARGET)
+
+    assert "workspace_issues" not in up
+    assert "blocks_final_review" not in up
+
+
+_ISSUES = "0036_offer_line_target_markup:0037_workspace_issues"
+_ISSUES_DOWN = "0037_workspace_issues:0036_offer_line_target_markup"
+
+
+def test_els_dubtes_es_poden_aplicar_i_desfer():
+    up = _offline_sql("upgrade", _ISSUES)
+    down = _offline_sql("downgrade", _ISSUES_DOWN)
+
+    for fragment in ("CREATE TABLE workspace_issues", "CREATE TABLE workspace_issue_source_refs"):
+        assert fragment in up, fragment
+    # Els enllacos se'n van primer: si no, la taula filla quedaria apuntant a
+    # una taula que ja no hi es.
+    assert down.index("DROP TABLE workspace_issue_source_refs") < down.index(
+        "DROP TABLE workspace_issues"
+    )
+
+
+def test_0037_nomes_crea_les_dues_taules_de_dubtes():
+    up = _offline_sql("upgrade", _ISSUES)
+
+    created = {
+        row.split("CREATE TABLE ")[1].split(" ")[0].strip()
+        for row in up.splitlines()
+        if row.startswith("CREATE TABLE ")
+    }
+    assert created == {"workspace_issues", "workspace_issue_source_refs"}
+    assert "ALTER TABLE" not in up.replace("ALTER TABLE ONLY", "")
+
+
+def test_no_hi_ha_source_refs_json():
+    """El disseny antic queda superat: la provinenca va a una taula relacional."""
+    up = _offline_sql("upgrade", _ISSUES)
+
+    assert "source_refs_json" not in up
+    assert "JSON" not in up.upper().replace("JSONB", "")
+
+
+def test_els_enums_dels_dubtes_tenen_check():
+    up = _offline_sql("upgrade", _ISSUES)
+
+    assert "issue_type_valid" in up
+    assert "issue_status_valid" in up
+    for value in ("internal_question", "authority_question", "supplier_question",
+                  "contradiction", "missing_information"):
+        assert f"'{value}'" in up, value
+    for value in ("open", "waiting", "resolved", "dismissed"):
+        assert f"'{value}'" in up, value
+
+
+def test_resolt_implica_resposta_escrita():
+    up = _offline_sql("upgrade", _ISSUES)
+
+    assert "resolved_has_resolution" in up
+    assert "status <> 'resolved' OR resolution IS NOT NULL" in up
+
+
+def test_bloquejar_neix_a_fals():
+    up = _offline_sql("upgrade", _ISSUES)
+
+    row = [line for line in up.splitlines() if "blocks_final_review" in line]
+    assert row and "NOT NULL" in row[0], row
+    assert "false" in row[0].lower(), row[0]
+
+
+def test_els_vincles_del_context_son_set_null():
+    """Si l'entitat desapareix, la pregunta i la resposta continuen sent certes."""
+    up = _offline_sql("upgrade", _ISSUES)
+
+    for name in (
+        "fk_issue_requirement",
+        "fk_issue_criterion",
+        "fk_issue_technical_solution",
+        "fk_issue_option",
+        "fk_issue_offer_line",
+        "fk_issue_dimension",
+        "fk_issue_owner",
+        "fk_issue_resolver",
+    ):
+        row = [line for line in up.splitlines() if name in line]
+        assert row and "ON DELETE SET NULL" in row[0], name
+
+
+def test_la_cita_no_es_pot_esborrar_per_accident():
+    up = _offline_sql("upgrade", _ISSUES)
+
+    source = [line for line in up.splitlines() if "fk_issue_ref_source" in line]
+    assert source and "ON DELETE RESTRICT" in source[0], source
+    issue = [line for line in up.splitlines() if "fk_issue_ref_issue" in line]
+    assert issue and "ON DELETE CASCADE" in issue[0], issue
+
+
+def test_una_cita_no_es_repeteix_dins_del_mateix_dubte():
+    up = _offline_sql("upgrade", _ISSUES)
+
+    assert "uq_workspace_issue_source_ref" in up
+
+
+def test_els_index_congelats_hi_son():
+    up = _offline_sql("upgrade", _ISSUES)
+
+    assert "ix_workspace_issues_status" in up
+    assert "ix_workspace_issues_type" in up
+
+
+def test_no_sinventa_cap_dubte():
+    """Les dues taules neixen buides: cap issue automatic, tampoc a la migracio."""
+    up = _offline_sql("upgrade", _ISSUES)
+
+    assert "INSERT INTO workspace_issues" not in up
+    assert "INSERT INTO workspace_issue_source_refs" not in up
+
+
+def test_el_downgrade_no_toca_res_mes():
+    down = _offline_sql("downgrade", _ISSUES_DOWN)
+
+    touched = [
+        line
+        for line in down.splitlines()
+        if line.startswith(("DROP TABLE", "ALTER TABLE", "DROP INDEX"))
+        and "workspace_issue" not in line
+    ]
+    assert touched == [], touched
+    assert "INSERT INTO" not in down
+    assert "DELETE FROM" not in down
+
+
+def test_0038_no_existeix():
     import pathlib
 
     versions = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
-    assert not list(versions.glob("0037*")), "0037 no toca a S3-S8b"
+    assert not list(versions.glob("0038*")), "0038 no toca a S3-S10"

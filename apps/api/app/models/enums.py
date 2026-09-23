@@ -1072,3 +1072,44 @@ class OptionSelection(StrEnum):
     SELECTED = "selected"
     #: Descartada per una persona, sempre amb motiu escrit.
     REJECTED = "rejected"
+
+
+# ---------------------------------------------------------------------------
+# Dubtes i discrepancies (Sprint 3)
+# ---------------------------------------------------------------------------
+
+
+class IssueType(StrEnum):
+    """Quina mena de pregunta oberta es.
+
+    Classifica per **a qui cal preguntar o que cal esbrinar**, no per gravetat:
+    la urgencia ja la diuen `due_at` i `blocks_final_review`, i una taxonomia de
+    risc convidaria a inventar-ne la severitat.
+    """
+
+    #: Ho hem de resoldre nosaltres.
+    INTERNAL_QUESTION = "internal_question"
+    #: Cal preguntar-ho a l'organ de contractacio.
+    AUTHORITY_QUESTION = "authority_question"
+    SUPPLIER_QUESTION = "supplier_question"
+    #: Dues fonts diuen coses diferents i cal decidir quina val.
+    CONTRADICTION = "contradiction"
+    #: Falta una dada que encara no te ningu.
+    MISSING_INFORMATION = "missing_information"
+
+
+class IssueStatus(StrEnum):
+    """On es la pregunta.
+
+    `DISMISSED` **no** es `RESOLVED`: descartar vol dir que la pregunta ja no ve
+    al cas, no que en tinguem la resposta. Barrejar-los faria que "ho sabem"
+    inclogues coses que ningu no ha contestat mai.
+    """
+
+    OPEN = "open"
+    #: Depen d'algu o d'alguna cosa de fora: no hi podem fer res ara mateix.
+    WAITING = "waiting"
+    #: Hi ha resposta, i esta escrita.
+    RESOLVED = "resolved"
+    #: Es tanca perque ja no es pertinent.
+    DISMISSED = "dismissed"

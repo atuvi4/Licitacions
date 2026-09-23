@@ -65,6 +65,27 @@ TECHNICAL_SCOPE_STALE = "technical_scope_stale"
 
 #: Ningu no ha confirmat mai haver mirat els plecs que hi ha. No vol dir que hi
 #: hagi res malament: vol dir que no se n'ha dit res, i callar no es aprovar.
+#: Un dubte obert que algu ha decidit que impedeix presentar-se.
+#:
+#: **Blocador, pero per decisio humana i no per regla.** El sistema no marca cap
+#: dubte: ho fa `DECISION_ROLES`, i mentre continui obert la candidatura no es
+#: pot donar per preparada. S'apaga quan es tanca —resolt o descartat— o quan
+#: algu treu la marca.
+#:
+#: No depen del tipus de dubte: una contradiccio no bloqueja mes que una
+#: pregunta a l'organ de contractacio.
+ISSUE_BLOCKING_OPEN = "issue_blocking_open"
+
+#: Quants dubtes oberts hi ha que NO bloquegen.
+#:
+#: Informatiu i **agregat**: un finding per dubte ompliria la llista i faria
+#: semblar que cadascun es una feina pendent, quan obrir preguntes es
+#: exactament el que ha de passar mentre es prepara una oferta.
+#:
+#: Els que bloquegen no s'hi compten: ja tenen el seu blocador, i dir-ho dues
+#: vegades faria semblar que son dos problemes.
+ISSUE_OPEN = "issue_open"
+
 TENDER_DOCUMENTS_UNREVIEWED = "tender_documents_unreviewed"
 #: Algu els va revisar, pero el conjunt d'ara ja no es aquell: hi ha documents
 #: nous o versions noves des d'aleshores.
