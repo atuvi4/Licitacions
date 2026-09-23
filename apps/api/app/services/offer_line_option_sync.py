@@ -58,6 +58,28 @@ SYNCABLE_FIELDS = (
     "technical_solution_id",
 )
 
+#: Els camps de la whitelist que son ECONOMIA INTERNA. El seu NOM ja es
+#: informacio de dins: saber "el cost ha canviat" es saber alguna cosa del cost.
+#:
+#: Per aixo la redaccio no es nomes dels valors. Un rol sense economia interna
+#: no ha de rebre aquests noms per cap superficie —ni al read-model, ni a
+#: readiness, ni a l'auditoria—, i filtrar-ho a la pantalla no serveix: la
+#: resposta ja ha sortit del servidor.
+INTERNAL_ONLY_FIELDS = frozenset({"unit_cost_ex_vat"})
+
+
+def visible_fields(fields: list[str], *, internal: bool) -> list[str]:
+    """Els noms de camps divergents que aquest rol pot rebre.
+
+    Amb `internal` es tota la whitelist; sense, nomes els publics. Es UNA sola
+    funcio i la fan servir totes les sortides, perque una redaccio que cada
+    endpoint decidis pel seu compte acabaria tenint un forat.
+    """
+    if internal:
+        return list(fields)
+    return [name for name in fields if name not in INTERNAL_ONLY_FIELDS]
+
+
 #: Camps que a la linia son NOT NULL. Si l'opcio els te buits no s'hi poden
 #: sincronitzar: no hi ha cap valor a adoptar, i inventar-ne un (`0`, `one_off`)
 #: fabricaria l'economia de l'oferta.

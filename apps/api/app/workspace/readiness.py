@@ -147,8 +147,11 @@ SOLUTION_OPTION_QUOTE_EXPIRED = "solution_option_quote_expired"
 #: quan els camps tornen a coincidir, sigui perque algu els ha adoptat, perque
 #: ha editat la linia a ma o perque l'opcio ha tornat enrere.
 #:
-#: Al context nomes hi van els NOMS dels camps: entre ells hi ha el cost, i els
-#: valors el filtrarien a qui no el pot veure.
+#: Al context hi va NOMES l'opcio, per poder-hi navegar. Cap nom de camp:
+#: entre ells hi ha el cost, i saber que "el cost ha canviat" ja es saber
+#: alguna cosa del cost. Aquest finding el llegeix tothom, i readiness no te
+#: redaccio per rol; el diff detallat viu al read-model de la linia, que si
+#: que n'hi te.
 ECONOMIC_LINE_OPTION_DIVERGED = "economic_line_option_diverged"
 
 ECONOMIC_OFFER_NOT_STARTED = "economic_offer_not_started"

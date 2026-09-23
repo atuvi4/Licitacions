@@ -560,7 +560,9 @@ async def test_editing_the_option_diverges_without_touching_the_line(
     findings = await _findings(client_a, candidacy, "economic_line_option_diverged")
     assert len(findings) == 1
     assert findings[0]["severity"] == "info", "informa; no diu que la línia sigui dolenta"
-    assert findings[0]["context"]["changed_fields"] == ["supplier_name"]
+    # El detall viu al read-model de la línia, que sí que està redactat per rol.
+    # Readiness només diu QUINA opció mirar (S3-S8b.1).
+    assert set(findings[0]["context"]) == {"solution_option_id"}
 
 
 async def test_a_manual_line_never_diverges(client_a, candidacy):
@@ -594,8 +596,14 @@ async def test_an_archived_line_does_not_diverge(client_a, db, candidacy):
     assert await _findings(client_a, candidacy, "economic_line_option_diverged") == []
 
 
-async def test_the_finding_carries_names_never_values(client_a, db, candidacy):
-    """Entre els camps hi ha el cost: el seu valor aquí el filtraria."""
+async def test_the_finding_carries_neither_values_nor_field_names(
+    client_a, db, candidacy
+):
+    """Readiness diu que la font ha canviat, i prou.
+
+    Transportar-hi el diff la convertiria en una via sense redacció cap al
+    cost: el mateix finding el llegeix qualsevol membre.
+    """
     option = await _option(
         client_a, candidacy, internal_economics={"unit_cost_ex_vat": "12.345678"}
     )
@@ -613,10 +621,12 @@ async def test_the_finding_carries_names_never_values(client_a, db, candidacy):
     )
 
     findings = await _findings(client_a, candidacy, "economic_line_option_diverged")
-    assert findings and findings[0]["context"]["changed_fields"] == ["unit_cost_ex_vat"]
+    assert findings
+    # Ni els valors ni els NOMS: "el cost ha canviat" ja és saber alguna cosa
+    # del cost, i readiness la llegeix tothom.
     rendered = str(findings[0])
-    for value in ("12.345678", "12.3457", "99.5"):
-        assert value not in rendered
+    for value in ("12.345678", "12.3457", "99.5", "unit_cost_ex_vat", "changed_fields"):
+        assert value not in rendered, value
 
 
 # --------------------------------------------------------------------------- #
@@ -1131,3 +1141,190 @@ async def test_editing_the_option_alone_never_stales_the_package(
     )
 
     assert await _digest(db, candidacy) == base
+
+
+# --------------------------------------------------------------------------- #
+# G. La divergència també es redacta (S3-S8b.1)                                 #
+# --------------------------------------------------------------------------- #
+#
+# El NOM d'un camp intern ja és informació de dins: saber que «el cost ha
+# canviat» és saber alguna cosa del cost. Filtrar-ho a la pantalla no serveix
+# —la resposta ja ha sortit del servidor—, així que aquests tests miren el JSON
+# de l'API i no cap component.
+
+
+async def _diverged_of(client, ctx, line_id: str) -> list[str]:
+    return (await _line(client, ctx, line_id))["diverged_fields"]
+
+
+async def _cost_only_divergence(client, db, ctx) -> str:
+    """Una línia on l'ÚNICA diferència amb la seva opció és el cost."""
+    option = await _option(client, ctx, internal_economics={"unit_cost_ex_vat": "12"})
+    line = await _adopt(client, ctx, option["id"])
+    # Adoptar no mou la revisió de l'opció: ja la portem de la resposta, i així
+    # no cal expirar la sessió (que caducaria també l'usuari de la fixture).
+    await client.patch(
+        OPTION.format(
+            company=ctx["company_id"], workspace=ctx["workspace_id"], option=option["id"]
+        )
+        + "/internal-economics",
+        json={"expected_revision": option["revision"], "unit_cost_ex_vat": "99.5"},
+    )
+    return line["id"]
+
+
+async def test_an_economic_role_sees_the_cost_divergence(client_a, db, candidacy):
+    line_id = await _cost_only_divergence(client_a, db, candidacy)
+
+    assert await _diverged_of(client_a, candidacy, line_id) == ["unit_cost_ex_vat"]
+
+
+@pytest.mark.parametrize("role", [MembershipRole.TECHNICAL, MembershipRole.VIEWER])
+async def test_a_role_without_internal_economics_never_sees_the_cost_divergence(
+    client_a, db, candidacy, tenant_a, role
+):
+    """El nom del camp no ha de sortir del servidor per a aquests rols.
+
+    Amb la divergència NOMÉS al cost, la línia s'ha de veure igual que si no
+    n'hi hagués cap: no hi ha res que aquest rol pugui revisar, i insinuar-ho
+    seria dir-li que el cost s'ha mogut.
+    """
+    line_id = await _cost_only_divergence(client_a, db, candidacy)
+    await _set_role(db, tenant_a, role)
+
+    payload = await _offer(client_a, candidacy)
+    assert payload["can_view_internal_economics"] is False
+
+    line = next(item for item in _lines_of(payload) if item["id"] == line_id)
+    assert line["diverged_fields"] == []
+    assert line["internal_economics"] is None
+    # I cap xifra, per si de cas.
+    for value in ("12.0000", "99.5", "99.5000"):
+        assert value not in str(payload), value
+
+
+@pytest.mark.parametrize("role", [MembershipRole.TECHNICAL, MembershipRole.VIEWER])
+async def test_a_public_divergence_is_not_hidden_from_anyone(
+    client_a, db, candidacy, tenant_a, role
+):
+    """La correcció no pot amagar tota la funcionalitat.
+
+    El proveïdor no és economia interna: que hagi canviat ho ha de poder veure
+    qualsevol que llegeixi l'oferta.
+    """
+    option = await _option(client_a, candidacy)
+    line = await _adopt(client_a, candidacy, option["id"])
+    await _patch_option(
+        client_a, candidacy, option["id"], option["revision"], supplier_name="Proveïdor B"
+    )
+    await _set_role(db, tenant_a, role)
+
+    assert await _diverged_of(client_a, candidacy, line["id"]) == ["supplier_name"]
+
+
+async def test_a_mixed_divergence_keeps_the_public_part_and_drops_the_internal(
+    client_a, db, candidacy, tenant_a
+):
+    """El cas que separa «redactar» de «amagar-ho tot»."""
+    option = await _option(
+        client_a, candidacy, internal_economics={"unit_cost_ex_vat": "12"}
+    )
+    line = await _adopt(client_a, candidacy, option["id"])
+    patched = await _patch_option(
+        client_a, candidacy, option["id"], option["revision"], supplier_name="Proveïdor B"
+    )
+    await client_a.patch(
+        OPTION.format(
+            company=candidacy["company_id"],
+            workspace=candidacy["workspace_id"],
+            option=option["id"],
+        )
+        + "/internal-economics",
+        json={"expected_revision": patched.json()["revision"], "unit_cost_ex_vat": "99.5"},
+    )
+
+    assert set(await _diverged_of(client_a, candidacy, line["id"])) == {
+        "supplier_name",
+        "unit_cost_ex_vat",
+    }
+
+    await _set_role(db, tenant_a, MembershipRole.TECHNICAL)
+    assert await _diverged_of(client_a, candidacy, line["id"]) == ["supplier_name"]
+
+
+@pytest.mark.parametrize(
+    "role",
+    [MembershipRole.OWNER, MembershipRole.BID_MANAGER, MembershipRole.TECHNICAL,
+     MembershipRole.VIEWER],
+)
+async def test_readiness_never_carries_internal_field_names(
+    client_a, db, candidacy, tenant_a, role
+):
+    """Readiness no té redacció per rol: el mateix finding el llegeix tothom.
+
+    Per tant el diff no hi pot viatjar de cap manera —ni tan sols per als rols
+    econòmics, perquè seria el mateix camp amb dos significats segons qui
+    mira—. El detall sencer ja és al read-model de la línia, que sí que està
+    redactat.
+    """
+    await _cost_only_divergence(client_a, db, candidacy)
+    await _set_role(db, tenant_a, role)
+
+    findings = await _findings(client_a, candidacy, "economic_line_option_diverged")
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding["severity"] == "info"
+    assert set(finding["context"]) == {"solution_option_id"}
+
+    rendered = str(finding)
+    for forbidden in (
+        "unit_cost_ex_vat",
+        "target_markup_pct",
+        "proposed_unit_price",
+        "price_matches_target",
+        "changed_fields",
+        "99.5",
+        "12.0000",
+    ):
+        assert forbidden not in rendered, forbidden
+
+
+async def test_no_surface_leaks_the_internal_field_name(client_a, db, candidacy, tenant_a):
+    """L'escombrada: cap resposta que aquest rol pugui demanar el porta."""
+    from app.models.audit import AuditLog
+
+    line_id = await _cost_only_divergence(client_a, db, candidacy)
+    await _set_role(db, tenant_a, MembershipRole.TECHNICAL)
+
+    offer_body = (
+        await client_a.get(
+            OFFER.format(
+                company=candidacy["company_id"], workspace=candidacy["workspace_id"]
+            )
+        )
+    ).text
+    readiness_body = (
+        await client_a.get(
+            READINESS.format(
+                company=candidacy["company_id"], workspace=candidacy["workspace_id"]
+            )
+        )
+    ).text
+    # I una resposta d'error del mateix recurs.
+    refused = await client_a.post(
+        SYNC.format(
+            company=candidacy["company_id"],
+            workspace=candidacy["workspace_id"],
+            line=line_id,
+        ),
+        json={"expected_revision": 0, "fields": ["unit_cost_ex_vat"]},
+    )
+    assert refused.status_code == 403, "un technical no pot sincronitzar"
+
+    for body in (offer_body, readiness_body):
+        assert "unit_cost_ex_vat" not in body
+        assert "target_markup_pct" not in body
+
+    # L'auditoria tampoc no ha guanyat res de nou.
+    for entry in (await db.scalars(sa.select(AuditLog))).all():
+        assert "99.5" not in (entry.summary or "")

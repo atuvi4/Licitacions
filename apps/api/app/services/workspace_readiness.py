@@ -267,14 +267,16 @@ async def economic_findings(
             severity=INFO,
             domain=DOMAIN_ECONOMIC,
             entity_id=line.id,
-            # Nomes els NOMS dels camps: un d'ells es el cost, i el seu valor
-            # aqui el filtraria a qui no el pot veure.
-            context={
-                "solution_option_id": str(option.id),
-                "changed_fields": [item.field for item in differences],
-            },
+            # Nomes l'opcio, per poder-hi navegar. **Cap nom de camp**: entre
+            # ells hi ha el cost, i saber que "el cost ha canviat" ja es saber
+            # alguna cosa del cost. Readiness no te redaccio per rol —el mateix
+            # finding el llegeix tothom—, aixi que el diff no hi pot viatjar.
+            #
+            # El detall sencer ja existeix al read-model de la linia, que si que
+            # esta redactat.
+            context={"solution_option_id": str(option.id)},
         )
-        for line, option, differences in await sync_service.diverged_lines(
+        for line, option, _differences in await sync_service.diverged_lines(
             session, workspace
         )
     ]

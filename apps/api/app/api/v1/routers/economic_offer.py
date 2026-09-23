@@ -85,9 +85,10 @@ def _line_read(view, *, internal: bool, diverged: list[str] | None = None) -> Li
     indistingible d'un cost que ningu no ha escrit encara. El mateix val per
     a l'objectiu de markup i el preu proposat, que en son derivats.
 
-    De la divergencia nomes en surten els NOMS dels camps. Els valors no: si
-    `unit_cost_ex_vat` hi viatgés, la divergencia seria una porta del darrere
-    cap al cost per a qui no el pot veure.
+    I de la divergencia no en surten ni els valors ni, per a qui no pot veure
+    economia interna, els NOMS dels camps interns: saber que "el cost ha
+    canviat" ja es saber alguna cosa del cost. Es filtra AQUI, al servidor;
+    fer-ho a la pantalla no serviria, perque la resposta ja hauria sortit.
     """
     return LineRead(
         **{
@@ -123,7 +124,9 @@ def _line_read(view, *, internal: bool, diverged: list[str] | None = None) -> Li
         monthly_equivalent_revenue=view.totals.monthly_equivalent_revenue,
         exceeds_unit_max=view.totals.exceeds_unit_max,
         totals=_totals(view.totals),
-        diverged_fields=list(diverged or []),
+        diverged_fields=sync_service.visible_fields(
+            list(diverged or []), internal=internal
+        ),
         internal_economics=(
             LineInternalRead(
                 **_internal(view.totals).model_dump(),

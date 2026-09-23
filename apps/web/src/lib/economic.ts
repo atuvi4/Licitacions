@@ -569,8 +569,10 @@ export const INTERNAL_SYNC_FIELDS = new Set(["unit_cost_ex_vat"]);
 /**
  * Els camps divergents que aquest rol pot veure.
  *
- * Sense permís econòmic, el cost no apareix ni tan sols com a nom: saber que
- * «el cost ha canviat» ja és informació interna.
+ * **Defensa addicional, no la garantia.** Qui redacta és el servidor: per a un
+ * rol sense economia interna, `diverged_fields` ja arriba sense els camps
+ * interns. Filtrar aquí no protegiria res —la resposta ja hauria sortit—, i
+ * només serveix perquè la pantalla no depengui d'haver-ho rebut bé.
  */
 export function visibleDivergedFields(line: OfferLine, internal: boolean): string[] {
   return internal

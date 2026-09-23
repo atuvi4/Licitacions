@@ -1880,9 +1880,10 @@ per netejar-lo. `target_markup_pct`, `proposed_unit_price_ex_vat` i
 `price_matches_target` viuen dins d'`internal_economics` i segueixen el
 contracte d'Sprint 2: el bloc existeix o no existeix.
 
-De la divergència només en surten els **noms** dels camps. I a la pantalla, qui
-no pot veure el cost tampoc no veu que el cost ha canviat: saber-ho ja és
-informació interna.
+De la divergència no en surten els valors, i **per a qui no pot veure economia
+interna tampoc els noms dels camps interns**: saber que «el cost ha canviat» ja
+és saber alguna cosa del cost. Ho redacta el **servidor** (veure Delta
+S3-S8b.1); el filtre de la pantalla és una defensa addicional, mai la garantia.
 
 **Paquet**, mesurat i no assumit: canviar l'objectiu **no** fa el paquet obsolet
 —és economia interna i no és contingut del manifest—; sincronitzar **només** el
@@ -1904,3 +1905,38 @@ ho diu abans d'aplicar.
 Una línia divergida mostra «L'opció ha canviat · Revisa canvis», sense estil
 d'alarma. El diàleg ensenya **una casella per camp divergent, cap marcada**, i
 el botó adopta només el que s'ha triat. No hi ha cap «Sincronitza-ho tot».
+
+
+---
+
+## Delta S3-S8b.1 — la divergència també es redacta
+
+Correcció d'S3-S8b. El detall de la divergència segueix la mateixa redacció
+econòmica que la resta: **els noms dels camps internal-only no es serialitzen
+per a rols que no poden veure economia interna, i readiness no en porta cap.**
+
+**El nom ja és la dada.** `diverged_fields: ["unit_cost_ex_vat"]` diu que el
+cost s'ha mogut, encara que no digui quant. Per a un rol sense economia interna
+això és informació de dins, exactament com el valor.
+
+**Ho fa el servidor.** `visible_fields(fields, internal=...)` filtra abans de
+serialitzar, i és una sola funció que surt del comparador canònic —no se n'ha
+creat cap de segon. El filtre equivalent del frontend es queda com a defensa
+addicional, però la garantia és de backend: filtrar a la pantalla no protegeix
+res, perquè la resposta ja ha sortit.
+
+Camps internal-only avui: `unit_cost_ex_vat`. Els públics —`supplier_name`,
+`product_name`, `quantity`, `pricing_basis`, `duration_months_override`,
+`requirement_id`, `technical_solution_id`— no es filtren per a ningú: amagar-los
+seria amagar la feature sencera en comptes de redactar-la.
+
+**Readiness no porta el diff.** El context d'`economic_line_option_diverged` és
+només `{solution_option_id}`. El finding continua sent `info` i econòmic, i el
+que diu és «la font viva ha canviat»; el detall complet ja viu al read-model de
+la línia, que **sí** que té redacció per rol. Readiness no en té —el mateix
+finding el llegeix qualsevol membre—, i per això no s'hi ha afegit una
+abstracció nova: s'hi ha tret la dada.
+
+`sync-from-option` no canvia: `ECONOMIC_EDIT_ROLES` continua podent adoptar
+`unit_cost_ex_vat`. La correcció és només de LECTURA i de readiness. Cap canvi
+d'esquema.
