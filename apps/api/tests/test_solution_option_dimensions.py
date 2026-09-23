@@ -1089,7 +1089,6 @@ async def test_the_offer_line_never_points_at_a_dimension(db):
 
     assert "solution_option_id" in EconomicOfferLine.__table__.columns
     assert "dimension_id" not in EconomicOfferLine.__table__.columns
-    assert "target_markup_pct" not in EconomicOfferLine.__table__.columns
 
 
 async def test_the_join_table_is_tenant_owned(db):

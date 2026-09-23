@@ -51,6 +51,10 @@ from app.models.enums import PricingBasis
 MONEY_PLACES = Decimal("0.01")
 #: Els percentatges, a 4: amb 2 no es distingiria un 16,66 % d'un 16,67 %.
 PERCENT_PLACES = Decimal("0.0001")
+#: Els preus i costos UNITARIS, a 4. Es l'escala de `Numeric(18,4)` a la
+#: base, i per tant l'unica en que un valor es pot comparar amb el que hi ha
+#: desat: qualsevol cosa mes fina es perd en escriure-la.
+UNIT_PLACES = Decimal("0.0001")
 
 _MONTHS_PER_YEAR = Decimal(12)
 _HUNDRED = Decimal(100)
@@ -62,6 +66,62 @@ def _money(value: Decimal) -> Decimal:
 
 def _percent(value: Decimal) -> Decimal:
     return value.quantize(PERCENT_PLACES, rounding=ROUND_HALF_UP)
+
+
+def unit_amount(value: Decimal) -> Decimal:
+    """Un preu o un cost unitari, a l'escala amb que es desa.
+
+    Publica perque es la MATEIXA transformacio que aplica la base en desar
+    un `Numeric(18,4)`. Comparar un valor de mes precisio amb el que hi ha
+    guardat sense passar per aqui donaria diferencies que no existeixen: un
+    cost d'opcio de 12,345678 i el seu snapshot de 12,3457 son el mateix
+    numero vist a dues escales, no dos numeros.
+
+    `ROUND_HALF_UP` com la resta del modul, que es tambe com arrodoneix
+    PostgreSQL en escriure un `numeric`.
+    """
+    return value.quantize(UNIT_PLACES, rounding=ROUND_HALF_UP)
+
+
+def proposed_unit_price(
+    unit_cost_ex_vat: Decimal | None, target_markup_pct: Decimal | None
+) -> Decimal | None:
+    """El preu que sortiria d'aplicar l'objectiu al cost.
+
+        preu proposat = cost x (1 + markup / 100)
+
+    **Markup sobre cost**, no marge sobre venda: amb un cost de 100 i un
+    markup del 20 %%, el preu proposat es 120, i el marge sobre venda
+    d'aquell preu seria el 16,67 %%. Son tres numeros diferents i el modul
+    els mante separats.
+
+    `None` si falta qualsevol dels dos: no se sap, i no es zero.
+    """
+    if unit_cost_ex_vat is None or target_markup_pct is None:
+        return None
+    return unit_amount(
+        unit_cost_ex_vat * (Decimal(1) + target_markup_pct / _HUNDRED)
+    )
+
+
+def price_matches_target(
+    offered_unit_price_ex_vat: Decimal | None,
+    unit_cost_ex_vat: Decimal | None,
+    target_markup_pct: Decimal | None,
+) -> bool | None:
+    """Si el preu ofert ja es el que proposaria l'objectiu.
+
+    `None` quan falta qualsevol de les tres dades: "no ho sabem" no es "no
+    coincideix", i pintar-ho com un desajust faria semblar que hi ha una
+    feina pendent que ningu no ha deixat a mitges.
+
+    Es compara a l'escala del preu ofert, no en brut: si no, un preu desat
+    com a 120,0000 no coincidiria mai amb un proposat de 120.
+    """
+    proposed = proposed_unit_price(unit_cost_ex_vat, target_markup_pct)
+    if proposed is None or offered_unit_price_ex_vat is None:
+        return None
+    return unit_amount(offered_unit_price_ex_vat) == proposed
 
 
 # --------------------------------------------------------------------------- #

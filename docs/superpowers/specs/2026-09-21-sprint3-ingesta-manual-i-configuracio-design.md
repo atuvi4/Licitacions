@@ -1778,3 +1778,129 @@ producte— i no proposa cap preu de venda.
 **0036 conserva la seva feina**: `target_markup_pct`, `sync-from-option` i
 `economic_line_option_diverged`, que arriben junts perquè el finding de
 divergència només té sentit quan existeix el camí explícit de resolució.
+
+
+---
+
+## Delta S3-S8b — objectiu comercial i sincronització explícita
+
+`0036_offer_line_target_markup` afegeix **un sol camp**:
+`economic_offer_lines.target_markup_pct`, `Numeric(9,4)` nullable, zero backfill,
+cap taula nova.
+
+### A. L'objectiu no és un preu
+
+    preu proposat = cost unitari × (1 + target_markup_pct / 100)
+
+`target_markup_pct` és **markup sobre cost**, i el nom ho diu. Es mantenen
+separats el markup sobre cost, el marge sobre venda i el multiplicador
+comercial: amb un cost de 100 i un markup del 20 %, el preu proposat és 120 i el
+marge sobre venda d'aquell preu és el 16,67 %. Són tres números.
+
+**`offered_unit_price_ex_vat` continua sent l'únic preu autoritatiu.** Editar
+l'objectiu no el mou; canviar el cost no el mou; sincronitzar el cost des de
+l'opció no el mou. **Només `apply-target`** l'escriu, i existeix precisament per
+fer d'aquella escriptura una decisió. Com que l'usuari acaba de demanar-la, sí
+que pot substituir un preu escrit a mà, i la pantalla l'avisa abans.
+
+`apply-target` calcula des del cost de la **LÍNIA**, mai del de l'opció viva. Si
+l'opció ha canviat i es vol el cost nou: primer sincronitzar, després aplicar.
+Dues decisions, i hi ha un test que ho demostra amb l'opció a 50 i la línia a
+100.
+
+**Sense rang al markup.** Una oferta pot anar deliberadament a cost o per sota;
+prohibir-ho seria prohibir una decisió comercial legítima. L'única restricció és
+`Numeric(9,4)`.
+
+**Derivats, mai desats.** `proposed_unit_price_ex_vat` i `price_matches_target`
+es calculen i viuen dins d'`internal_economics`. Tots dos són `None` quan falta
+alguna entrada: «no ho sabem» no és «no coincideix», i tampoc no és zero.
+`apply-target` sense cost o sense objectiu és `422` amb els camps que falten.
+
+**Precisió.** Els preus i costos unitaris es quantitzen a **4 decimals amb
+`ROUND_HALF_UP`** —la regla canònica de `pricing.py`, ara exposada com
+`unit_amount()`—, que és l'escala de `Numeric(18,4)` a la base. La comparació de
+`price_matches_target` passa per aquesta escala als dos costats: si no, un preu
+desat com a `120,0000` no coincidiria mai amb un proposat de `120`.
+
+### B. La font viva pot haver canviat
+
+**`sync-from-option` és per línia i per camps.** Cap trigger, cap event, cap
+«mantenir sincronitzat». `fields` és obligatori i no pot ser buit: no hi ha cap
+«sincronitza-ho tot» implícit, i adoptar el proveïdor no arrossega el cost.
+
+La font és `line.solution_option_id` i **mai un identificador del cos**:
+deixar-lo enviar seria deixar fabricar d'on ve una xifra.
+
+**Whitelist canònica** — exactament el mapatge que fa servir `to-offer-line`, de
+manera que el sync no pot deixar la línia en un estat que l'adopció no hauria
+pogut crear:
+
+`supplier_name` · `product_name` · `quantity` · `unit_cost_ex_vat` ·
+`pricing_basis` · `duration_months_override` · `requirement_id` ·
+`technical_solution_id`
+
+El que **no** hi és: `concept` (l'opció no en té homòleg; el va escriure una
+persona a S3-S8), `offered_unit_price_ex_vat` (l'opció no té preu de venda),
+`vat_rate` i `target_markup_pct` (no són de l'opció) i `solution_option_id` (és
+la provinença). Enviar-ne qualsevol és `422`.
+
+**Nuls.** Un camp nullable de la línia es pot sincronitzar a `NULL` si l'opció el
+té buit i l'usuari l'ha triat explícitament. Els que a la línia són `NOT NULL`
+—`quantity` i `pricing_basis`— **no**: `422` amb els camps que falten, mai
+`quantity = 0` ni `pricing_basis = one_off`.
+
+### C. La divergència és derivada
+
+`economic_line_option_diverged` — **`info`, domini econòmic**. No és un avís ni
+un blocador, i no diu que la línia sigui incorrecta ni que calgui sincronitzar:
+diu que l'opció ja no diu el mateix. Que l'oferta segueixi el que es va adoptar
+pot ser exactament el que es vol.
+
+Res es desa: ni `diverged`, ni `synced_at`, ni cap hash. **Una sola funció de
+domini** (`diverged_fields`) la calcula, i la fan servir el read-model, el
+finding i la pantalla. No hi ha cap «acknowledge»: s'apaga quan els camps tornen
+a coincidir, sigui per sync, per edició manual o perquè l'opció ha tornat enrere.
+Només línies **vives** amb opció.
+
+**Delta crític — la normalització 18,6 → 18,4.** L'opció desa el cost amb sis
+decimals i la línia amb quatre. Comparar-los en brut faria que **tota línia
+acabada de crear es veiés divergida** i que l'avís no volgués dir res. La
+comparació passa per `unit_amount()` als dos costats. El gate de PostgreSQL
+comprova que l'arrodoniment del motor i el de Python coincideixen exactament,
+inclòs el cas frontissa `12,345650 → 12,3457`. Un canvi que no es veu a quatre
+decimals (`12,345678 → 12,345699`) **no** és divergència: res del que l'oferta
+farà servir ha canviat.
+
+### D. Rols, paquet i regressions
+
+Tot el router econòmic ja exigia `ECONOMIC_EDIT_ROLES`, o sigui que un
+`technical` no arriba a `target_markup_pct` per cap camí, ni per escriure'l ni
+per netejar-lo. `target_markup_pct`, `proposed_unit_price_ex_vat` i
+`price_matches_target` viuen dins d'`internal_economics` i segueixen el
+contracte d'Sprint 2: el bloc existeix o no existeix.
+
+De la divergència només en surten els **noms** dels camps. I a la pantalla, qui
+no pot veure el cost tampoc no veu que el cost ha canviat: saber-ho ja és
+informació interna.
+
+**Paquet**, mesurat i no assumit: canviar l'objectiu **no** fa el paquet obsolet
+—és economia interna i no és contingut del manifest—; sincronitzar **només** el
+cost, tampoc; `apply-target` **sí**, perquè canvia el preu ofert; i sincronitzar
+un camp del manifest (`quantity`, proveïdor, producte…) també. Cap flag manual:
+tot deriva del manifest v2.
+
+Sincronitzar `technical_solution_id` no valida, invalida ni edita cap
+`WorkspaceTechnicalSolution`: és el vincle de la línia.
+
+### E. UX
+
+Dins de **Preparar → Oferta econòmica**, sense cap pestanya nova. A l'editor de
+línia, un bloc «Objectiu comercial» **només per a rols econòmics** amb tres
+coses en línia —objectiu, preu proposat i estat— i «Aplica objectiu» com a acció
+separada: la separació visual és el missatge. Si hi ha un preu escrit diferent,
+ho diu abans d'aplicar.
+
+Una línia divergida mostra «L'opció ha canviat · Revisa canvis», sense estil
+d'alarma. El diàleg ensenya **una casella per camp divergent, cap marcada**, i
+el botó adopta només el que s'ha triat. No hi ha cap «Sincronitza-ho tot».

@@ -53,8 +53,15 @@ from app.offer.pricing import (
     aggregate,
     line_totals,
     lot_limit,
+    proposed_unit_price,
 )
+from app.offer.pricing import unit_amount as _unit_amount
 from app.workspace.checklist import applies_to_workspace_lot
+
+
+def unit_amount_of(value: Decimal | None) -> Decimal | None:
+    """`None` es propaga: desconegut no es zero."""
+    return None if value is None else _unit_amount(value)
 
 #: Qui pot escriure preus (C-6). `technical` no hi es: prepara la solucio
 #: tecnica, no compromet el marge de l'empresa.
@@ -915,6 +922,9 @@ LINE_FIELDS = (
     "duration_months_override",
     "unit_cost_ex_vat",
     "offered_unit_price_ex_vat",
+    # Objectiu comercial (S3-S8b). Nomes hi arriben els rols economics,
+    # com a tota la resta d'aquest router.
+    "target_markup_pct",
     "tender_max_unit_price_ex_vat",
     "vat_rate",
     "notes",
@@ -990,3 +1000,63 @@ def audit_summary(**parts: object) -> str:
     una segona porta d'acces al que C-6 amaga a l'API.
     """
     return " ".join(f"{clau}={valor}" for clau, valor in parts.items() if valor is not None)
+
+
+# --------------------------------------------------------------------------- #
+# Objectiu comercial (S3-S8b)                                                   #
+# --------------------------------------------------------------------------- #
+
+
+class TargetInputMissingError(ValidationError):
+    """Per aplicar l'objectiu calen el cost i el markup, i n'hi falta algun.
+
+    No s'hi posa `0` a cap dels dos: un cost desconegut no es zero, i un markup
+    desconegut no es "a cost". Escriuriem un preu que ningu no ha decidit.
+    """
+
+    code = "economic_line_target_inputs_missing"
+
+
+async def apply_target(
+    session: AsyncSession,
+    offer: EconomicOffer,
+    line: EconomicOfferLine,
+    *,
+    expected_revision: int,
+    user: User,
+) -> tuple[EconomicOfferLine, bool]:
+    """Escriu el preu proposat al preu ofert. **Nomes quan algu ho demana.**
+
+    Es l'UNIC cami pel qual el preu ofert canvia a partir del cost i de
+    l'objectiu. Ni editar el markup ni sincronitzar el cost el toquen: aquesta
+    accio existeix justament perque escriure el preu es una decisio, i com que
+    l'usuari acaba de demanar-la, pot substituir un preu escrit a ma.
+
+    El calcul surt del cost de la LINIA —el snapshot adoptat—, mai del de
+    l'opcio viva. Si l'opcio ha canviat i es vol el cost nou, primer se
+    sincronitza i despres s'aplica: son dues decisions.
+    """
+    await _assert_writable_line(session, line)
+
+    missing = [
+        name
+        for name in ("unit_cost_ex_vat", "target_markup_pct")
+        if getattr(line, name) is None
+    ]
+    if missing:
+        raise TargetInputMissingError(
+            "Falten dades per calcular el preu proposat.", details={"missing": missing}
+        )
+
+    proposed = proposed_unit_price(line.unit_cost_ex_vat, line.target_markup_pct)
+    if unit_amount_of(line.offered_unit_price_ex_vat) == proposed:
+        # Ja hi era: aplicar-lo no canvia res i no ha de moure el testimoni.
+        await assert_revision(session, offer, expected_revision)
+        return line, False
+
+    await bump_revision(session, offer, expected_revision, user)
+    line.offered_unit_price_ex_vat = proposed
+    line.updated_by = user.id
+    await session.commit()
+    await session.refresh(line)
+    return line, True

@@ -1093,10 +1093,74 @@ def test_el_downgrade_no_toca_cap_xifra():
         assert money not in down, money
 
 
-def test_0036_encara_no_existeix():
-    """`target_markup_pct`, `sync-from-option` i el finding de divergencia son
-    d'una fase posterior."""
+def test_0036_nomes_porta_lobjectiu_de_markup():
+    """0036 es l'amo de `target_markup_pct`, i 0035 no en sabia res.
+
+    `sync-from-option` i el finding de divergencia arriben amb ell, pero sense
+    cap columna: son comportament i estat derivat, no esquema.
+    """
+    up = _offline_sql("upgrade", _PROVENANCE)
+
+    assert "target_markup_pct" not in up, "0035 no el porta"
+
+
+_TARGET = "0035_offer_line_solution_option:0036_offer_line_target_markup"
+_TARGET_DOWN = "0036_offer_line_target_markup:0035_offer_line_solution_option"
+
+
+def test_lobjectiu_de_markup_es_pot_aplicar_i_desfer():
+    up = _offline_sql("upgrade", _TARGET)
+    down = _offline_sql("downgrade", _TARGET_DOWN)
+
+    assert "ADD COLUMN target_markup_pct" in up
+    assert "DROP COLUMN target_markup_pct" in down
+
+
+def test_nomes_hi_ha_una_columna_i_es_numeric_9_4():
+    """Ni preu proposat, ni coincidencia, ni hash: tot aixo es derivat."""
+    up = _offline_sql("upgrade", _TARGET)
+
+    added = [row for row in up.splitlines() if "ADD COLUMN" in row]
+    assert len(added) == 1, added
+    assert "NUMERIC(9, 4)" in added[0], added[0]
+    assert "NOT NULL" not in added[0]
+    assert "CREATE TABLE" not in up
+    for derived in (
+        "proposed_unit_price",
+        "price_matches_target",
+        "synced_at",
+        "diverged",
+        "option_hash",
+        "last_option_revision",
+    ):
+        assert derived not in up, derived
+
+
+def test_cap_rang_al_markup():
+    """Una oferta pot anar deliberadament a cost, o per sota."""
+    up = _offline_sql("upgrade", _TARGET)
+
+    assert "target_markup_pct >= 0" not in up
+    assert "CHECK" not in up
+
+
+def test_zero_backfill_del_markup():
+    up = _offline_sql("upgrade", _TARGET)
+
+    assert "UPDATE economic_offer_lines" not in up
+    assert "INSERT INTO" not in up
+
+
+def test_el_downgrade_no_toca_cap_preu():
+    down = _offline_sql("downgrade", _TARGET_DOWN)
+
+    for money in ("offered_unit_price_ex_vat", "unit_cost_ex_vat", "quantity"):
+        assert money not in down, money
+    assert "DELETE FROM" not in down
+
+
+def test_0037_encara_no_existeix():
     import pathlib
 
     versions = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
-    assert not list(versions.glob("0036*")), "0036 no toca a S3-S8"
+    assert not list(versions.glob("0037*")), "0037 no toca a S3-S8b"

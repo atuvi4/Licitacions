@@ -293,6 +293,14 @@ class EconomicOfferLine(
 
     unit_cost_ex_vat: Mapped[Decimal | None] = mapped_column(UNIT_MONEY)
     offered_unit_price_ex_vat: Mapped[Decimal | None] = mapped_column(UNIT_MONEY)
+    #: Objectiu comercial: **markup sobre cost**, en tant per cent (20,00 vol
+    #: dir que el preu proposat es el cost x 1,20). No es cap preu, i canviar-lo
+    #: NO toca `offered_unit_price_ex_vat`: el preu ofert es l'unic autoritatiu
+    #: i el mou una persona.
+    #:
+    #: Sense CHECK de rang a proposit: una oferta pot anar a cost o per sota, i
+    #: prohibir-ho seria prohibir una decisio comercial legitima.
+    target_markup_pct: Mapped[Decimal | None] = mapped_column(sa.Numeric(9, 4))
     tender_max_unit_price_ex_vat: Mapped[Decimal | None] = mapped_column(UNIT_MONEY)
     #: En tant per cent (21,00), no en factor. `NULL` vol dir que no se sap.
     vat_rate: Mapped[Decimal | None] = mapped_column(VAT_RATE)

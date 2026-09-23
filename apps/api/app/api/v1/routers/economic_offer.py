@@ -23,6 +23,7 @@ from fastapi import APIRouter
 
 from app.api.deps import CompanyCtx, SessionDep
 from app.models.enums import AuditAction
+from app.offer.pricing import price_matches_target, proposed_unit_price
 from app.schemas.offer import (
     EconomicOfferCreateResult,
     EconomicOfferRead,
@@ -40,11 +41,13 @@ from app.schemas.offer import (
     SectionCreateRequest,
     SectionRead,
     SectionUpdateRequest,
+    SyncFromOptionRequest,
     TotalsRead,
 )
 from app.services import audit
 from app.services import bid_workspace as workspace_service
 from app.services import economic_offer as service
+from app.services import offer_line_option_sync as sync_service
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/economic-offer", tags=["economic-offer"])
 
@@ -75,11 +78,16 @@ def _internal(totals) -> InternalTotalsRead:
     )
 
 
-def _line_read(view, *, internal: bool) -> LineRead:
+def _line_read(view, *, internal: bool, diverged: list[str] | None = None) -> LineRead:
     """El cost unitari viu DINS del bloc intern, no al cos de la linia.
 
     Si fos un camp mes de la fila, amagar-lo el convertiria en un `null`
-    indistingible d'un cost que ningu no ha escrit encara.
+    indistingible d'un cost que ningu no ha escrit encara. El mateix val per
+    a l'objectiu de markup i el preu proposat, que en son derivats.
+
+    De la divergencia nomes en surten els NOMS dels camps. Els valors no: si
+    `unit_cost_ex_vat` hi viatgés, la divergencia seria una porta del darrere
+    cap al cost per a qui no el pot veure.
     """
     return LineRead(
         **{
@@ -115,11 +123,21 @@ def _line_read(view, *, internal: bool) -> LineRead:
         monthly_equivalent_revenue=view.totals.monthly_equivalent_revenue,
         exceeds_unit_max=view.totals.exceeds_unit_max,
         totals=_totals(view.totals),
+        diverged_fields=list(diverged or []),
         internal_economics=(
             LineInternalRead(
                 **_internal(view.totals).model_dump(),
                 unit_cost_ex_vat=view.line.unit_cost_ex_vat,
                 monthly_equivalent_cost=view.totals.monthly_equivalent_cost,
+                target_markup_pct=view.line.target_markup_pct,
+                proposed_unit_price_ex_vat=proposed_unit_price(
+                    view.line.unit_cost_ex_vat, view.line.target_markup_pct
+                ),
+                price_matches_target=price_matches_target(
+                    view.line.offered_unit_price_ex_vat,
+                    view.line.unit_cost_ex_vat,
+                    view.line.target_markup_pct,
+                ),
             )
             if internal
             else None
@@ -127,7 +145,13 @@ def _line_read(view, *, internal: bool) -> LineRead:
     )
 
 
-def _offer_read(view, *, internal: bool, can_select_lots: bool) -> EconomicOfferRead:
+def _offer_read(
+    view,
+    *,
+    internal: bool,
+    can_select_lots: bool,
+    diverged: dict[uuid.UUID, list[str]] | None = None,
+) -> EconomicOfferRead:
     return EconomicOfferRead(
         **{
             camp: getattr(view.offer, camp)
@@ -192,7 +216,11 @@ def _offer_read(view, *, internal: bool, can_select_lots: bool) -> EconomicOffer
                             _internal(section_view.totals) if internal else None
                         ),
                         lines=[
-                            _line_read(line_view, internal=internal)
+                            _line_read(
+                                line_view,
+                                internal=internal,
+                                diverged=(diverged or {}).get(line_view.line.id),
+                            )
                             for line_view in section_view.lines
                         ],
                     )
@@ -209,10 +237,18 @@ async def _read(session: SessionDep, ctx: CompanyCtx, workspace, offer) -> Econo
     # nivells depenen de la fila que s'acaba de tocar.
     fresh = await service.get_offer(session, workspace)
     view = await service.build_view(session, workspace, fresh)
+    # La divergencia la calcula UNA funcio de domini i la fan servir el
+    # read-model, el finding i la pantalla. Si cadascu la dedues pel seu
+    # compte, un dia dirien coses diferents de la mateixa linia.
+    divergence = await sync_service.divergence_by_line(session, workspace)
     return _offer_read(
         view,
         internal=service.can_view_internal_economics(ctx.membership.role),
         can_select_lots=view.shape.selectable,
+        diverged={
+            line_id: [item.field for item in items]
+            for line_id, items in divergence.items()
+        },
     )
 
 
@@ -562,3 +598,104 @@ async def _audit(session, ctx, action, entity_type, offer, row) -> None:
         summary=service.audit_summary(oferta=offer.id, revisio=offer.revision),
     )
     await session.commit()
+
+
+@router.post(
+    "/lines/{line_id}/apply-target",
+    response_model=EconomicOfferRead,
+    summary="Aplica l'objectiu de markup al preu ofert",
+)
+async def apply_target(
+    workspace_id: uuid.UUID,
+    line_id: uuid.UUID,
+    payload: RevisionGuarded,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Escriu el preu proposat al preu ofert. **Nomes quan algu ho demana.**
+
+    Es l'unic cami pel qual el cost i l'objectiu arriben a moure el preu. Editar
+    l'objectiu no el toca, i sincronitzar el cost des de l'opcio tampoc: escriure
+    un preu es una decisio, i aquesta accio existeix per fer-la explicita.
+
+    Com que l'usuari acaba de demanar-la, SI que pot substituir un preu escrit a
+    ma; la pantalla li ho ha de dir abans.
+
+    El calcul surt del cost de la LINIA —el snapshot adoptat—, mai del de l'opcio
+    viva: si l'opcio ha canviat i es vol el cost nou, primer se sincronitza i
+    despres s'aplica. Son dues decisions.
+    """
+    service.assert_can_edit(ctx.membership.role)
+    workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    offer = await service.get_offer(session, workspace)
+    line = await service.get_line(session, offer, line_id)
+
+    _line, changed = await service.apply_target(
+        session, offer, line, expected_revision=payload.expected_revision, user=ctx.user
+    )
+    if changed:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.UPDATE,
+            entity_type="economic_offer_line",
+            entity_id=line_id,
+            # Ni el preu, ni el cost, ni el markup: el resum el poden llegir
+            # rols que no veuen economia interna.
+            summary=f"linia={line_id} objectiu aplicat al preu ofert",
+        )
+        await session.commit()
+    return await _read(session, ctx, workspace, offer)
+
+
+@router.post(
+    "/lines/{line_id}/sync-from-option",
+    response_model=EconomicOfferRead,
+    summary="Adopta camps de l'opcio viva",
+)
+async def sync_from_option(
+    workspace_id: uuid.UUID,
+    line_id: uuid.UUID,
+    payload: SyncFromOptionRequest,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Adopta NOMES els camps demanats. D-07.
+
+    No hi ha cap trigger ni cap "mantenir sincronitzat": quan l'opcio canvia, la
+    linia es queda com esta i el sistema ho diu. Adoptar-ho es una accio d'una
+    persona, i diu quins camps.
+
+    La font es `line.solution_option_id` i mai un identificador del cos:
+    deixar-lo enviar seria deixar fabricar d'on ve una xifra.
+
+    **No toca el preu ofert, ni l'objectiu, ni el concepte**: no son de l'opcio.
+    """
+    service.assert_can_edit(ctx.membership.role)
+    workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    offer = await service.get_offer(session, workspace)
+    line = await service.get_line(session, offer, line_id)
+
+    _line, changed = await sync_service.sync_from_option(
+        session,
+        workspace,
+        offer,
+        line,
+        fields=payload.fields,
+        expected_revision=payload.expected_revision,
+        user=ctx.user,
+    )
+    if changed:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.UPDATE,
+            entity_type="economic_offer_line",
+            entity_id=line_id,
+            # Els NOMS dels camps, mai els valors: entre ells hi ha el cost.
+            summary=f"linia={line_id} camps adoptats de l'opcio: {','.join(sorted(changed))}",
+        )
+        await session.commit()
+    return await _read(session, ctx, workspace, offer)

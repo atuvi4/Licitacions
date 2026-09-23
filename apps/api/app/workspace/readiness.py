@@ -135,6 +135,22 @@ DIMENSION_UNDECIDED_IN_USE = "dimension_undecided_in_use"
 #: sistema no toca `selection` per compte seu.
 SOLUTION_OPTION_QUOTE_EXPIRED = "solution_option_quote_expired"
 
+#: La font viva ha canviat des que aquesta linia la va adoptar.
+#:
+#: **Informatiu, ni avis ni blocador.** No diu que la linia sigui incorrecta ni
+#: que calgui sincronitzar-la: diu que l'opcio ja no diu el mateix. Que
+#: l'oferta segueixi el que es va adoptar pot ser exactament el que es vol
+#: —potser el preu ja esta negociat—, i convertir-ho en una feina pendent seria
+#: decidir per la persona.
+#:
+#: Es DERIVAT: no hi ha cap `diverged` desat ni cap "ja ho he vist". S'apaga
+#: quan els camps tornen a coincidir, sigui perque algu els ha adoptat, perque
+#: ha editat la linia a ma o perque l'opcio ha tornat enrere.
+#:
+#: Al context nomes hi van els NOMS dels camps: entre ells hi ha el cost, i els
+#: valors el filtrarien a qui no el pot veure.
+ECONOMIC_LINE_OPTION_DIVERGED = "economic_line_option_diverged"
+
 ECONOMIC_OFFER_NOT_STARTED = "economic_offer_not_started"
 ECONOMIC_BID_LOTS_NOT_SELECTED = "economic_bid_lots_not_selected"
 ECONOMIC_LOT_EMPTY = "economic_lot_empty"

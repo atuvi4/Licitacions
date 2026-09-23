@@ -1204,8 +1204,9 @@ async def test_the_option_does_not_carry_the_offer_economics(db):
     from app.models.offer import EconomicOfferLine
 
     assert "solution_option_id" in EconomicOfferLine.__table__.columns
-    # El markup encara no existeix enlloc: és d'una fase posterior.
-    assert "target_markup_pct" not in EconomicOfferLine.__table__.columns
+    # L'objectiu de markup viu a la LÍNIA (S3-S8b), que és on hi ha el preu.
+    # A l'opció no: allà només hi ha cost.
+    assert "target_markup_pct" in EconomicOfferLine.__table__.columns
     assert "target_markup_pct" not in WorkspaceSolutionOption.__table__.columns
     for forbidden in ("offered_unit_price_ex_vat", "offer_line_id"):
         assert forbidden not in WorkspaceSolutionOption.__table__.columns

@@ -22,6 +22,7 @@ from app.models.workspace import BidWorkspace
 from app.services import dimensions as dimension_service
 from app.services import document_review, requirement_analysis
 from app.services import economic_offer as offer_service
+from app.services import offer_line_option_sync as sync_service
 from app.services import solution_option_dimensions as link_service
 from app.services import solution_options as option_service
 from app.services import technical_scope as scope_service
@@ -36,6 +37,7 @@ from app.workspace.readiness import (
     DOMAIN_WORKSPACE,
     ECONOMIC_BID_LOTS_NOT_SELECTED,
     ECONOMIC_DURATION_MISSING,
+    ECONOMIC_LINE_OPTION_DIVERGED,
     ECONOMIC_LOT_BUDGET_EXCEEDED,
     ECONOMIC_LOT_BUDGET_UNKNOWN,
     ECONOMIC_LOT_EMPTY,
@@ -257,12 +259,33 @@ async def economic_findings(
         )
     ]
 
+    # La font viva ha canviat des que la linia la va adoptar. Informatiu: que
+    # l'oferta segueixi el que es va adoptar pot ser exactament el que es vol.
+    diverged = [
+        Finding(
+            code=ECONOMIC_LINE_OPTION_DIVERGED,
+            severity=INFO,
+            domain=DOMAIN_ECONOMIC,
+            entity_id=line.id,
+            # Nomes els NOMS dels camps: un d'ells es el cost, i el seu valor
+            # aqui el filtraria a qui no el pot veure.
+            context={
+                "solution_option_id": str(option.id),
+                "changed_fields": [item.field for item in differences],
+            },
+        )
+        for line, option, differences in await sync_service.diverged_lines(
+            session, workspace
+        )
+    ]
+
     view = await offer_service.build_view(session, workspace, offer)
     lots = offer_service.active_views(view.lots)
 
     if view.shape.selectable and not lots:
         return [
             *expired,
+            *diverged,
             Finding(
                 code=ECONOMIC_BID_LOTS_NOT_SELECTED,
                 severity=BLOCKER,
@@ -270,7 +293,7 @@ async def economic_findings(
             ),
         ]
 
-    findings: list[Finding] = [*expired]
+    findings: list[Finding] = [*expired, *diverged]
     for lot_view in lots:
         findings.extend(_lot_findings(lot_view))
     return findings
