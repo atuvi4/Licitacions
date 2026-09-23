@@ -1436,3 +1436,114 @@ pestanyes noves: dimensionar no és una feina a part, és el mateix moment en qu
 algú decideix què proposarà. Qui només mira ho veu tot i no hi pot escriure. La
 creació de cites reutilitza el `CitationPicker` d'S3-S5.1, o sigui que tampoc
 aquí no hi ha cap UUID a la vista.
+
+
+---
+
+## Delta S3-S7 — opcions, proveïdors i cotitzacions, implementades
+
+`0033_workspace_solution_options` crea **una sola taula** i no en toca cap
+altra: cap columna afegida enlloc, cap backfill, cap opció deduïda de res. El
+downgrade l'esborra, i deliberadament **no** converteix cap cost en línia
+d'oferta per "salvar-lo": seria inventar una oferta.
+
+**`WorkspaceSolutionOption` és la font de veritat de** proveïdor, producte,
+configuració, quantitat candidata, **cost**, workflow de cotització i tria
+humana.
+
+**`EconomicOfferLine` continua sent l'única font de veritat del preu de venda**,
+i encara no hi ha cap relació entre totes dues. No hi ha `unit_price`, ni marge,
+ni markup, ni cap sinònim: un test comprova que l'únic nom que conté "cost" a la
+taula és `unit_cost_ex_vat`.
+
+**`WorkspaceTechnicalSolution` no se sincronitza mai.** Crear, editar, cotitzar,
+triar o arxivar una opció no toca ni el proveïdor, ni el producte, ni el
+contingut, ni l'estat, ni la validació de la solució tècnica. La capa d'opcions
+és configuració a part; sincronitzar-la automàticament faria que triar una
+alternativa reescrivís una proposta que algú ja havia validat. El Design Freeze
+no conté cap acció «copia a la solució tècnica», i per tant no se n'ha inventat
+cap.
+
+**Delta sobre §5 — els CHECK dels enums són explícits.** `enum_column()` es
+materialitza com un VARCHAR i SQLAlchemy només en crea el CHECK amb
+`create_constraint=True`, que el projecte no passa. Per a aquesta taula s'han
+escrit a mà, seguint el patró que ja fa servir `workspace_technical_solutions`.
+El gate de PostgreSQL comprova que **disparen de debò**, no només que existeixen:
+un `quote_status = 'aprovada'` i un `selection = 'potser'` són rebutjats pel
+motor. Hi ha un tercer CHECK, `rejected_has_reason`.
+
+**Public i internal són dos contractes, no un amb camps opcionals.** El PATCH
+públic (`PATCH …/{id}`) té `extra="forbid"` i no té ni un lloc on posar el cost:
+enviar-l'hi és un 422, mai un camp descartat en silenci. El cost viu al seu
+endpoint (`PATCH …/{id}/internal-economics`) i només per a
+`ECONOMIC_INTERNAL_ROLES`. Amb un sol PATCH, un `technical` que enviés el
+formulari sencer amb el camp buit netejaria una xifra que ni tan sols veu; hi ha
+un test que ho comprova contra la base.
+
+**La redacció segueix el contracte d'Sprint 2 exactament**, sense cap canal
+paral·lel: el cost viatja dins d'`internal_economics`, que **existeix o no
+existeix**, i `can_view_internal_economics` ho diu explícitament. No s'envia
+`unit_cost_ex_vat = null` (voldria dir «encara no ho sabem») ni `0` (seria una
+xifra falsa). S'ha auditat a totes les respostes: llista, detall, create, PATCH
+públic, PATCH intern, selecció i arxivat. **L'auditoria diu què ha canviat i mai
+quant**: escriure la xifra a `AuditLog` l'exposaria justament a qui no la pot
+veure a la fitxa.
+
+**`undecided` no és `rejected`.** És la distinció que justifica l'enum en comptes
+d'un booleà. Cap opció neix triada, i descartar-ne una exigeix motiu no buit
+—imposat al servei i a la base—. Seleccionar no l'exigeix: el motiu d'una tria
+sol ser que les altres s'han descartat, i obligar-hi faria escriure frases
+buides.
+
+**Triar-ne una no en descarta cap altra.** Sewan, Cable i Orange poden coexistir
+i que algú triï Sewan no vol dir que hagi mirat les altres dues. Auto-rebutjar
+les germanes escriuria una decisió que ningú no ha pres, amb un motiu que ningú
+no ha donat. Quan una opció deixa de ser la triada, `selected_by` i `selected_at`
+s'esborren: mantenir-los faria creure que encara ho és.
+
+**Les FK soles no demostren coherència.** `technical_solution_id` apunta a una
+taula que conté solucions de totes les candidatures, i `requirement_id` a
+requisits que són globals per licitació. El servei comprova que totes dues siguin
+d'aquesta candidatura i d'aquesta licitació, i que el requisit sigui del
+**conjunt efectiu**. Si més endavant en surt —una extracció nova, un manual
+arxivat—, l'opció **no s'esborra ni s'amaga**: `requirement_is_effective` ho diu,
+i la interfície també.
+
+**Tenancy.** `workspace_solution_options` porta `company_id` i queda classificada
+com a taula de tenant directa. Una opció d'una altra candidatura, encara que
+sigui de la mateixa empresa, és `404`. `company_id` mai ve del cos.
+
+**CAS a les quatre escriptures** (PATCH públic, PATCH intern, selecció i
+arxivat), amb `UPDATE … WHERE revision = :expected` i `409
+solution_option_revision_conflict`. Provat contra PostgreSQL amb dues
+transaccions concurrents reals, i el guanyador no tanca fins que
+`pg_stat_activity` confirma que l'altra sessió espera el bloqueig de la fila.
+
+**Delta sobre §22 — `solution_option_quote_pending` ja és calculable.** Warning
+del domini tècnic quan una opció **viva i triada** té la cotització `requested` o
+`pending`. Només les triades: que una alternativa que ningú no farà servir no
+tingui cotització no és cap feina pendent. No bloqueja.
+
+**`solution_option_quote_expired` queda ajornat**, i no per falta de temps: el
+seu contracte exigeix que una **línia econòmica viva** depengui de l'opció, i
+`EconomicOfferLine.solution_option_id` encara no existeix. Deduir-ho pel nom, la
+quantitat o el text seria una heurística. Arribarà amb el vincle real.
+
+**`dimension_undecided_in_use` també queda ajornat** fins a 0034, que és quan
+existirà `workspace_solution_option_dimensions`.
+
+**Cap relació amb les dimensions.** Cap FK, cap taula pont, cap `dimension_id`.
+`quantity` és una propietat de la configuració de l'opció: no ve de
+`working_value_num` ni actualitza cap línia econòmica, i no hi ha cap trigger,
+callback ni efecte de frontend que ho faci.
+
+**El paquet no es mou.** Crear, cotitzar, triar, rebutjar o arxivar una opció no
+fa cap paquet obsolet i no toca el manifest v2.
+
+**UX.** Subsecció «Opcions i cotitzacions» dins de **Preparar → Solució
+tècnica**, convivint amb «Dimensionament» i sense cap pestanya nova. Taula densa
+amb proveïdor, producte, quantitat, unitat, cotització i tria; la columna de cost
+**només existeix** per als rols econòmics —ni «0 €» ni «ocult»—, i la secció
+d'economia interna del formulari tampoc no hi és per a la resta. «Selecciona» i
+«Rebutja» són dos botons separats, mai una casella excloent, i rebutjar obre un
+diàleg que demana motiu.

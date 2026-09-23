@@ -27,6 +27,7 @@ from app.api.v1.routers import (
     projects,
     readiness,
     requirements,
+    solution_options,
     submission,
     technical_solutions,
     tender_documents,
@@ -60,6 +61,7 @@ company_scoped.include_router(dossier.router)
 company_scoped.include_router(technical_solutions.router)
 company_scoped.include_router(economic_offer.router)
 company_scoped.include_router(dimensions.router)
+company_scoped.include_router(solution_options.router)
 company_scoped.include_router(readiness.router)
 # Paquet de presentacio i aprovacio final humana.
 company_scoped.include_router(submission.router)

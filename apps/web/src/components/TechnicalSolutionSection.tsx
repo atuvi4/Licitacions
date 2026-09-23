@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { DimensionsSubsection } from "@/components/DimensionsSubsection";
+import { SolutionOptionsSubsection } from "@/components/SolutionOptionsSubsection";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useInvalidateReadiness, useReadiness } from "@/components/ReadinessProvider";
 import { useSession } from "@/components/SessionProvider";
@@ -759,6 +760,12 @@ export function TechnicalSolutionSection({ workspace, registerLeaveGuard }: Prop
       {/* Aqui i no en una pestanya propia: les xifres de que depen la proposta
           es decideixen mentre s'escriu la proposta, no en un altre moment. */}
       <DimensionsSubsection workspace={workspace} />
+
+      {/* ----- Opcions i cotitzacions -------------------------------------- */}
+      {/* Conviu amb Dimensionament dins de la mateixa seccio: configurar
+          proveidors no es una feina a part, es el mateix moment en que algu
+          decideix que oferira. */}
+      <SolutionOptionsSubsection workspace={workspace} />
 
       {/* ----- Solucions addicionals -------------------------------------- */}
       <Card>

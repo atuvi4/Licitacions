@@ -95,6 +95,18 @@ TECHNICAL_SOLUTION_REQUIREMENT_MISSING = "technical_solution_requirement_missing
 #: no ha contradit no es cap problema pendent.
 DIMENSION_DISPUTED = "dimension_disputed"
 
+#: Una opcio TRIADA que encara espera la cotitzacio. Avis, no blocador: es una
+#: gestio que falta, no un error, i presentar-se amb un preu estimat es una
+#: decisio legitima que no li toca prendre al sistema.
+#:
+#: Nomes compta si l'opcio esta triada: que una alternativa que ningu no fara
+#: servir no tingui cotitzacio no es cap feina pendent.
+#:
+#: NO existeix encara el blocador de cotitzacio CADUCADA. El seu contracte
+#: exigeix que una linia economica VIVA en depengui, i el vincle entre linia i
+#: opcio encara no existeix: calcular-lo ara seria una heuristica.
+SOLUTION_OPTION_QUOTE_PENDING = "solution_option_quote_pending"
+
 # --- Oferta economica --------------------------------------------------------- #
 
 #: Regla de producte de la V1 (C-15): tota candidatura que vulgui arribar a la

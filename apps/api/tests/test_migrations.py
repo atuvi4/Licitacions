@@ -801,3 +801,119 @@ def test_el_downgrade_no_deixa_les_observacions_orfes():
 
     assert "workspace_dimension_observations" in down
     assert "INSERT INTO" not in down
+
+
+_OPTIONS = "0032_workspace_dimensions:0033_workspace_solution_options"
+
+
+def test_les_opcions_es_poden_aplicar_i_desfer():
+    up = _offline_sql("upgrade", _OPTIONS)
+    down = _offline_sql(
+        "downgrade", "0033_workspace_solution_options:0032_workspace_dimensions"
+    )
+
+    assert "CREATE TABLE workspace_solution_options" in up
+    assert "DROP TABLE workspace_solution_options" in down
+
+
+def test_nomes_hi_ha_aquesta_taula():
+    """0033 no toca res mes. Cap columna afegida a res que ja existia."""
+    up = _offline_sql("upgrade", _OPTIONS)
+
+    created = {
+        row.split("CREATE TABLE ")[1].split(" ")[0].strip()
+        for row in up.splitlines()
+        if row.startswith("CREATE TABLE ")
+    }
+    assert created == {"workspace_solution_options"}
+    assert "ALTER TABLE" not in up.replace("ALTER TABLE ONLY", "")
+
+
+def test_loferta_economica_no_es_toca():
+    """El vincle amb la linia arriba mes tard; aqui no existeix."""
+    up = _offline_sql("upgrade", _OPTIONS)
+
+    assert "economic_offer_lines" not in up
+    assert "solution_option_id" not in up
+    assert "target_markup_pct" not in up
+
+
+def test_no_hi_ha_preu_de_venda():
+    """Nomes cost. El preu viu a `economic_offer_lines` i prou."""
+    up = _offline_sql("upgrade", _OPTIONS)
+
+    assert "unit_cost_ex_vat" in up
+    for forbidden in ("unit_price", "sale_price", "margin", "markup"):
+        assert forbidden not in up, forbidden
+
+
+def test_les_xifres_son_numeric_amb_la_seva_escala():
+    """Quantitat amb 4 decimals i cost amb 6: un cost unitari pot portar
+    centims de centim, i arrodonir-lo es multiplicaria per la quantitat."""
+    up = _offline_sql("upgrade", _OPTIONS)
+
+    assert "NUMERIC(18, 4)" in up
+    assert "NUMERIC(18, 6)" in up
+    assert "DOUBLE PRECISION" not in up
+
+
+def test_els_enums_tenen_check_de_debo():
+    """`enum_column()` no en crea cap: sense aquests, un INSERT que no passes
+    per l'ORM hi podria escriure qualsevol cadena."""
+    up = _offline_sql("upgrade", _OPTIONS)
+
+    assert "quote_status_valid" in up
+    assert "selection_valid" in up
+    for value in ("draft", "requested", "pending", "received", "expired", "declined"):
+        assert f"'{value}'" in up, value
+    for value in ("undecided", "selected", "rejected"):
+        assert f"'{value}'" in up, value
+
+
+def test_descartar_sense_motiu_no_hi_cap():
+    up = _offline_sql("upgrade", _OPTIONS)
+
+    assert "rejected_has_reason" in up
+    assert "selection <> 'rejected' OR selection_reason IS NOT NULL" in up
+
+
+def test_perdre_la_solucio_o_el_requisit_no_perd_lopcio():
+    """SET NULL a les tres referencies toves; CASCADE nomes cap a la
+    candidatura i l'empresa."""
+    up = _offline_sql("upgrade", _OPTIONS)
+
+    for name in (
+        "fk_solution_options_technical_solution",
+        "fk_solution_options_requirement",
+        "fk_solution_options_selector",
+    ):
+        row = [line for line in up.splitlines() if name in line]
+        assert row and "ON DELETE SET NULL" in row[0], name
+
+
+def test_no_sinventa_cap_opcio():
+    """Neix buida: cap backfill, cap opcio deduida de res."""
+    up = _offline_sql("upgrade", _OPTIONS)
+
+    assert "INSERT INTO workspace_solution_options" not in up
+
+
+def test_el_downgrade_no_fabrica_cap_linia_economica():
+    """Es perdua de dades, i es deliberada: 0032 no coneix cap opcio.
+
+    L'alternativa seria convertir el cost en una linia d'oferta, que es
+    exactament la confusio que aquesta fase evita.
+    """
+    down = _offline_sql(
+        "downgrade", "0033_workspace_solution_options:0032_workspace_dimensions"
+    )
+
+    assert "INSERT INTO" not in down
+    assert "economic_offer_lines" not in down
+
+
+def test_la_taula_dopcions_i_dimensions_encara_no_existeix():
+    """0034. Aquesta fase prova les opcions soles."""
+    up = _offline_sql("upgrade", _OPTIONS)
+
+    assert "workspace_solution_option_dimensions" not in up

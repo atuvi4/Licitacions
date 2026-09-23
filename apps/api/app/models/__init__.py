@@ -37,6 +37,7 @@ from app.models.requirements import (
     RequirementEvidence,
     RequirementExtractionRun,
 )
+from app.models.solution_options import WorkspaceSolutionOption
 from app.models.sources import IngestionRun, Source, SourceRecord
 from app.models.submission import (
     SubmissionPackage,
@@ -128,6 +129,7 @@ __all__ = [
     "RequirementSourceRefLink",
     "WorkspaceDimension",
     "WorkspaceDimensionObservation",
+    "WorkspaceSolutionOption",
     "User",
     "WorkJob",
     "WorkspaceChecklistItem",

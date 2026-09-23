@@ -22,6 +22,7 @@ from app.models.workspace import BidWorkspace
 from app.services import dimensions as dimension_service
 from app.services import document_review, requirement_analysis
 from app.services import economic_offer as offer_service
+from app.services import solution_options as option_service
 from app.services import technical_scope as scope_service
 from app.services import technical_solution as solution_service
 from app.services import workspace_dossier as dossier_service
@@ -43,6 +44,7 @@ from app.workspace.readiness import (
     ECONOMIC_VAT_MISSING,
     INFO,
     REQUIREMENT_ANALYSIS_PREDATES_DOCUMENTS,
+    SOLUTION_OPTION_QUOTE_PENDING,
     TECHNICAL_SCOPE_STALE,
     TECHNICAL_SCOPE_UNREVIEWED,
     TECHNICAL_SOLUTION_REQUIREMENT_MISSING,
@@ -94,6 +96,23 @@ async def technical_findings(
                 domain=DOMAIN_TECHNICAL,
                 entity_id=dimension.id,
                 context={"key": dimension.key, "scope_label": dimension.scope_label},
+            )
+        )
+
+    # Una opcio triada que espera cotitzacio es una gestio pendent, no un
+    # error: avisa i prou.
+    for option in await option_service.options_awaiting_quote(session, workspace):
+        findings.append(
+            Finding(
+                code=SOLUTION_OPTION_QUOTE_PENDING,
+                severity=WARNING,
+                domain=DOMAIN_TECHNICAL,
+                entity_id=option.id,
+                context={
+                    "supplier_name": option.supplier_name,
+                    "product_name": option.product_name,
+                    "quote_status": option.quote_status.value,
+                },
             )
         )
 

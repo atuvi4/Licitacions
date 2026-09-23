@@ -19,6 +19,9 @@ let canSelectLots = false;
 // La subseccio de Dimensionament viu dins d'aquesta seccio i llegeix la seva
 // propia llista. Aquests tests no la proven: nomes cal que hi sigui.
 const dimensions: unknown[] = [];
+// Igual amb «Opcions i cotitzacions»: aquests tests no la proven, només cal
+// que la seva lectura no peti.
+const solutionOptions = { can_view_internal_economics: false, items: [] };
 
 const post = vi.fn();
 const patch = vi.fn();
@@ -34,6 +37,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     if (path.includes("/analysis/requirements")) return analysisFixture(requirements);
     if (path.endsWith("/technical-solutions")) return solutions;
     if (path.endsWith("/dimensions")) return dimensions;
+    if (path.endsWith("/solution-options")) return solutionOptions;
     if (path.endsWith("/economic-offer")) {
       if (!offerLots) throw new actual.ApiError(404, "not_found", "Sense oferta");
       return { can_select_lots: canSelectLots, lots: offerLots };

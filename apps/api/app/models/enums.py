@@ -1026,3 +1026,49 @@ class PricingBasis(StrEnum):
     #: La quantitat ja son les unitats de tot el contracte: no es multiplica
     #: mai per la durada.
     PER_UNIT = "per_unit"
+
+
+# ---------------------------------------------------------------------------
+# Opcions de solucio (Sprint 3)
+# ---------------------------------------------------------------------------
+
+
+class QuoteStatus(StrEnum):
+    """On es la cotitzacio d'una opcio. Workflow intern, no un CRM.
+
+    No dispara cap correu, no parla amb cap proveidor i no descarrega cap
+    document: diu en quin punt es la gestio, perque la persona que prepara
+    l'oferta sapiga que li falta.
+
+    `RECEIVED` vol dir **rebuda**, no aprovada ni validada. Confondre-ho faria
+    que una xifra encara per contrastar semblés tancada.
+    """
+
+    #: Encara no s'ha gestionat. Es on neix tota opcio.
+    DRAFT = "draft"
+    #: S'ha demanat al proveidor.
+    REQUESTED = "requested"
+    #: Demanada i esperant resposta.
+    PENDING = "pending"
+    #: Ha arribat. Rebuda, que no vol dir bona.
+    RECEIVED = "received"
+    #: Va arribar pero ja no es vigent.
+    EXPIRED = "expired"
+    #: El proveidor no cotitza, o aquesta via s'ha tancat des de l'altra banda.
+    DECLINED = "declined"
+
+
+class OptionSelection(StrEnum):
+    """Si aquesta opcio es la que fara servir la candidatura.
+
+    **`UNDECIDED` no es `REJECTED`.** Es la distincio que justifica que existeixi
+    aquest enum en comptes d'un boolea: una alternativa que ningu no ha mirat
+    encara i una que algu ha descartat amb motiu son coses diferents, i
+    tractar-les igual faria desapareixer feina que no s'ha fet.
+    """
+
+    #: Ningu no ha decidit. Cap opcio neix d'una altra manera.
+    UNDECIDED = "undecided"
+    SELECTED = "selected"
+    #: Descartada per una persona, sempre amb motiu escrit.
+    REJECTED = "rejected"
