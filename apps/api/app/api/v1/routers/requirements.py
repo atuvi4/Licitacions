@@ -51,12 +51,24 @@ from app.services.requirement_analysis import (
     analysis_input,
 )
 from app.services.source_refs import resolve_source_ref
+from app.tenders.visibility import visible_to_user
 
 router = APIRouter(tags=["analisi de plecs"])
 
 
-async def _load_tender(session: SessionDep, tender_id: uuid.UUID) -> Tender:
-    tender = await session.get(Tender, tender_id)
+async def _load_tender(
+    session: SessionDep, tender_id: uuid.UUID, user_id: uuid.UUID
+) -> Tender:
+    """La licitacio, NOMES si aquest usuari la pot veure.
+
+    Aquestes rutes no pengen de cap `company_id`, aixi que la variant que toca
+    es `visible_to_user`: public, o d'alguna empresa de la qual l'usuari es
+    membre. Sense aquest filtre, els requisits d'una licitacio oberta a ma per
+    una altra empresa es podrien llegir sencers amb nomes el seu UUID.
+    """
+    tender = await session.scalar(
+        sa.select(Tender).where(Tender.id == tender_id, visible_to_user(user_id))
+    )
     if tender is None:
         raise NotFoundError("Licitacio no trobada.")
     return tender
@@ -121,8 +133,8 @@ async def run_analysis(tender_id: uuid.UUID, _: CurrentUser):
     response_model=RequirementAnalysisRead,
     summary="Requisits i criteris de l'analisi vigent",
 )
-async def read_analysis(tender_id: uuid.UUID, session: SessionDep, _: CurrentUser):
-    await _load_tender(session, tender_id)
+async def read_analysis(tender_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    await _load_tender(session, tender_id, user.id)
     # El conjunt EFECTIU: l'analisi vigent mes els requisits escrits a ma. Les
     # dues fonts es mantenen separades —`origin` ho diu a cada fila— perque fer
     # veure que un manual surt de l'ultima run seria atribuir a un model una
@@ -205,10 +217,10 @@ async def read_analysis(tender_id: uuid.UUID, session: SessionDep, _: CurrentUse
 async def list_runs(
     tender_id: uuid.UUID,
     session: SessionDep,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=20, ge=1, le=100),
 ):
-    await _load_tender(session, tender_id)
+    await _load_tender(session, tender_id, user.id)
     runs = (
         await session.scalars(
             sa.select(RequirementExtractionRun)

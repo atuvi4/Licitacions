@@ -177,6 +177,110 @@ async def test_subresources_of_a_private_tender_are_closed_too(client_b, scenari
 
 
 # --------------------------------------------------------------------------- #
+# C bis. Les rutes que carregaven la licitacio sense la regla                    #
+# --------------------------------------------------------------------------- #
+#
+# Tres routers resolien el `tender_id` amb un `session.get()` pelat, sense el
+# filtre que la resta del codi ja aplicava. El resultat era exactament el que
+# `app/tenders/visibility.py` avisa que passaria: l'aillament no es perd a la
+# consulta que s'escriu malament, sino a la que algu oblida d'escriure.
+#
+# El pitjor dels tres obria candidatura sobre una licitacio privada d'una altra
+# empresa, i la resposta ja en portava el titol, l'expedient i el termini.
+
+
+async def test_b_cannot_open_a_candidacy_on_a_private_tender_of_a(client_b, scenario):
+    """Escriptura i fuita alhora: la resposta ja porta el titol de la fitxa."""
+    response = await client_b.post(
+        f"/api/v1/companies/{scenario['company_b'].id}"
+        f"/tenders/{scenario['a'].id}/workspace",
+        json={},
+    )
+    assert response.status_code == 404
+    assert "Privada A" not in response.text
+
+
+async def test_b_cannot_read_the_analysis_of_a_private_tender_of_a(client_b, db, scenario):
+    """Els requisits d'una licitacio privada no es llegeixen amb el seu UUID.
+
+    Es la ruta global `/tenders/{id}/analysis/...`, que no penja de cap empresa:
+    la variant que hi toca es `visible_to_user`.
+    """
+    from app.models.enums import RequirementCategory, RequirementOrigin
+    from app.models.requirements import Requirement
+
+    db.add(
+        Requirement(
+            tender_id=scenario["a"].id,
+            title="REQUISIT PRIVAT",
+            category=RequirementCategory.TECHNICAL_REQUIREMENT,
+            origin=RequirementOrigin.MANUAL,
+            dedup_key=f"privat-{uuid.uuid4().hex[:8]}",
+        )
+    )
+    await db.commit()
+
+    response = await client_b.get(f"/api/v1/tenders/{scenario['a'].id}/analysis/requirements")
+    assert response.status_code == 404
+    assert "REQUISIT PRIVAT" not in response.text
+
+    runs = await client_b.get(f"/api/v1/tenders/{scenario['a'].id}/analysis/runs")
+    assert runs.status_code == 404
+
+
+@pytest.mark.parametrize("suffix", ["", "/runs"])
+async def test_compliance_of_a_private_tender_does_not_confirm_it_exists(
+    client_b, scenario, suffix
+):
+    """Encara que el compliment que es calcularia fos el de qui pregunta.
+
+    Respondre `200` sobre un UUID que no es pot veure ja diu que existeix.
+    """
+    response = await client_b.get(
+        f"/api/v1/companies/{scenario['company_b'].id}"
+        f"/tenders/{scenario['a'].id}/compliance{suffix}"
+    )
+    assert response.status_code == 404
+
+
+async def test_the_owner_still_reaches_all_three(client_a, scenario):
+    """El filtre tanca la porta; no la tapia."""
+    company = scenario["company_a"].id
+    tender = scenario["a"].id
+
+    opened = await client_a.post(
+        f"/api/v1/companies/{company}/tenders/{tender}/workspace", json={}
+    )
+    assert opened.status_code in (200, 201), opened.text
+
+    analysis = await client_a.get(f"/api/v1/tenders/{tender}/analysis/requirements")
+    assert analysis.status_code == 200
+
+    compliance = await client_a.get(
+        f"/api/v1/companies/{company}/tenders/{tender}/compliance"
+    )
+    assert compliance.status_code == 200
+
+
+async def test_a_public_tender_stays_reachable_from_any_company(client_b, scenario):
+    """El filtre es `owner IS NULL O owner = C`: el public no en queda fora."""
+    company = scenario["company_b"].id
+    tender = scenario["global"].id
+
+    assert (
+        await client_b.post(
+            f"/api/v1/companies/{company}/tenders/{tender}/workspace", json={}
+        )
+    ).status_code in (200, 201)
+    assert (
+        await client_b.get(f"/api/v1/tenders/{tender}/analysis/requirements")
+    ).status_code == 200
+    assert (
+        await client_b.get(f"/api/v1/companies/{company}/tenders/{tender}/compliance")
+    ).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
 # D. Pre-fit                                                                    #
 # --------------------------------------------------------------------------- #
 

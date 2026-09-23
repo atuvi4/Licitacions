@@ -59,6 +59,7 @@ from app.schemas.workspace import (
 )
 from app.services import audit, workspace_dossier
 from app.services import bid_workspace as service
+from app.tenders.visibility import visible_to_company
 from app.workspace.decision import nothing_to_do_reason
 
 tender_router = APIRouter(prefix="/tenders/{tender_id}/workspace", tags=["candidatura"])
@@ -233,8 +234,22 @@ async def _detail(
     )
 
 
-async def _load_tender(session: SessionDep, tender_id: uuid.UUID) -> Tender:
-    tender = await session.get(Tender, tender_id)
+async def _load_tender(
+    session: SessionDep, tender_id: uuid.UUID, company_id: uuid.UUID
+) -> Tender:
+    """La licitacio, NOMES si aquesta empresa la pot veure.
+
+    Una licitacio oberta a ma es privada de qui la va escriure, i obrir-hi
+    candidatura des d'una altra empresa no nomes seria una escriptura que no
+    toca: la resposta ja en porta el titol, l'expedient i el termini. Sense
+    aquest filtre, un UUID endevinat n'obriria la fitxa.
+
+    `NotFoundError` i no un 403: dir "no hi tens acces" ja seria confirmar que
+    existeix.
+    """
+    tender = await session.scalar(
+        sa.select(Tender).where(Tender.id == tender_id, visible_to_company(company_id))
+    )
     if tender is None:
         raise NotFoundError("Licitacio no trobada.")
     return tender
@@ -253,7 +268,7 @@ async def create_workspace(
     payload: WorkspaceCreateRequest | None = None,
 ):
     """Idempotent: si ja existeix, retorna el que hi ha amb `created=false`."""
-    tender = await _load_tender(session, tender_id)
+    tender = await _load_tender(session, tender_id, ctx.company_id)
     options = payload or WorkspaceCreateRequest()
     outcome = await service.create_workspace(
         session,
