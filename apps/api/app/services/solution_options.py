@@ -227,10 +227,14 @@ async def effective_requirement_ids(
 # --------------------------------------------------------------------------- #
 
 
-async def _claim(
+async def claim_revision(
     session: AsyncSession, option: WorkspaceSolutionOption, expected_revision: int
 ) -> None:
     """Reserva l'opcio per a aquesta escriptura, o falla.
+
+    Publica a proposit: enllacar dimensions (S3-S7b) tambe es configurar
+    aquesta opcio, i ha de moure el MATEIX testimoni. Amb un segon comptador,
+    dues pantalles podrien creure totes dues que tenen la versio bona.
 
     Es un `UPDATE ... WHERE revision = :expected` i no un `if` seguit d'un
     desat: entre llegir i escriure hi cap una altra peticio, i el resultat seria
@@ -253,7 +257,7 @@ async def _claim(
     await session.refresh(option)
 
 
-def _assert_writable(option: WorkspaceSolutionOption) -> None:
+def assert_writable(option: WorkspaceSolutionOption) -> None:
     if option.archived_at is not None:
         raise OptionArchivedError("Aquesta opcio esta arxivada.")
 
@@ -318,7 +322,7 @@ async def update_public(
     El cost NO hi es. Aquest metode el pot cridar un `technical`, i si el cost
     hi viatgés, un desat seu el podria netejar sense que ni tan sols el vegi.
     """
-    _assert_writable(option)
+    assert_writable(option)
     if "technical_solution_id" in fields or "requirement_id" in fields:
         await _assert_links_belong(
             session,
@@ -340,7 +344,7 @@ async def update_public(
             )
         return False
 
-    await _claim(session, option, expected_revision)
+    await claim_revision(session, option, expected_revision)
     for name in PUBLIC_FIELDS:
         if name in fields:
             setattr(option, name, fields[name])
@@ -363,7 +367,7 @@ async def update_internal(
     dues peticions diferents. Sense ell, esborrar un cost i no parlar-ne
     s'escriurien igual.
     """
-    _assert_writable(option)
+    assert_writable(option)
     assert_can_write_internal(role)
 
     incoming = {
@@ -380,7 +384,7 @@ async def update_internal(
             )
         return False
 
-    await _claim(session, option, expected_revision)
+    await claim_revision(session, option, expected_revision)
     for name, value in pending.items():
         setattr(option, name, value)
     await session.flush()
@@ -405,11 +409,11 @@ async def set_selection(
     altres, i posar-les a `rejected` seria escriure una decisio que ningu no ha
     pres, amb un motiu que ningu no ha donat.
     """
-    _assert_writable(option)
+    assert_writable(option)
     if selection == OptionSelection.REJECTED and not (reason or "").strip():
         raise SelectionReasonRequiredError("Cal escriure per que es descarta aquesta opcio.")
 
-    await _claim(session, option, expected_revision)
+    await claim_revision(session, option, expected_revision)
     option.selection = selection
     if reason is not None:
         option.selection_reason = reason.strip() or None
@@ -444,7 +448,7 @@ async def archive_option(
     """
     if option.archived_at is not None:
         return False
-    await _claim(session, option, expected_revision)
+    await claim_revision(session, option, expected_revision)
     option.archived_at = datetime.now(UTC)
     await session.flush()
     return True

@@ -25,8 +25,38 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.enums import OptionSelection, PricingBasis, QuoteStatus
+from app.models.enums import (
+    DimensionStatus,
+    OptionSelection,
+    PricingBasis,
+    QuoteStatus,
+)
 from app.schemas.common import ORMModel
+
+
+class OptionDimensionRead(ORMModel):
+    """La magnitud de què depèn una opció, resumida.
+
+    Prou per llegir-la sense obrir res: què és, quant val ara i si algú ho ha
+    decidit. **Sense les observacions**: cada opció n'arrossegaria desenes i la
+    llista es faria impracticable, i per a mirar-les ja hi ha Dimensionament.
+
+    `working_value_num` és el valor d'ARA, llegit de la dimensió. No és cap
+    còpia desada a la relació: si ho fos, envelliria.
+    """
+
+    id: uuid.UUID
+    key: str
+    label: str
+    unit: str | None = None
+    scope_label: str | None = None
+    status: DimensionStatus
+    working_value_text: str | None = None
+    working_value_num: Decimal | None = None
+    #: Una magnitud arxivada pot continuar sent una dependència declarada: el
+    #: que no es pot és començar-ne una de nova.
+    archived_at: datetime | None = None
+    revision: int
 
 
 class OptionInternalRead(BaseModel):
@@ -73,7 +103,11 @@ class SolutionOptionRead(ORMModel):
 
     archived_at: datetime | None = None
     #: El testimoni de CAS. El seguent escrit ha de portar aquest numero.
+    #: Enllacar o desenllacar una magnitud tambe el mou: son configuracio
+    #: d'aquesta opcio, no una entitat a part.
     revision: int
+    #: De quines magnituds depen. Declarat per una persona; res no ho dedueix.
+    dimensions: list[OptionDimensionRead] = Field(default_factory=list)
 
     #: `None` per a qui no pot veure cost. Veure el docstring del modul.
     internal_economics: OptionInternalRead | None = None
@@ -170,6 +204,14 @@ class SolutionOptionSelectionWrite(BaseModel):
 
 
 class SolutionOptionArchive(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
+
+
+class OptionDimensionWrite(BaseModel):
+    """Enllacar o desenllacar. El CAS es el de l'OPCIO, no un de nou."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=0)

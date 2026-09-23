@@ -21,9 +21,12 @@ import uuid
 from fastapi import APIRouter, status
 
 from app.api.deps import CompanyCtx, SessionDep
+from app.models.dimensions import WorkspaceDimension
 from app.models.enums import AuditAction
 from app.models.solution_options import WorkspaceSolutionOption
 from app.schemas.solution_options import (
+    OptionDimensionRead,
+    OptionDimensionWrite,
     OptionInternalRead,
     SolutionOptionArchive,
     SolutionOptionCreate,
@@ -35,6 +38,7 @@ from app.schemas.solution_options import (
 )
 from app.services import audit
 from app.services import bid_workspace as workspace_service
+from app.services import solution_option_dimensions as link_service
 from app.services import solution_options as service
 
 router = APIRouter(
@@ -47,6 +51,7 @@ def _read(
     *,
     internal: bool,
     effective_ids: set[uuid.UUID] | None = None,
+    dimensions: list[WorkspaceDimension] | None = None,
 ) -> SolutionOptionRead:
     """La fitxa d'una opcio, amb el cost nomes si qui mira el pot veure.
 
@@ -66,6 +71,11 @@ def _read(
     )
     if effective_ids is not None and option.requirement_id is not None:
         read.requirement_is_effective = option.requirement_id in effective_ids
+    # Es passen ja carregades: llegir-les des de l'objecte dispararia una
+    # consulta per opcio, i amb vint opcions serien vint-i-una consultes.
+    read.dimensions = [
+        OptionDimensionRead.model_validate(dimension) for dimension in (dimensions or [])
+    ]
     return read
 
 
@@ -83,9 +93,18 @@ async def list_options(
         session, workspace, include_archived=include_archived
     )
     effective_ids = await service.effective_requirement_ids(session, workspace)
+    linked = await link_service.dimensions_of(session, [row.id for row in rows])
     return SolutionOptionListRead(
         can_view_internal_economics=internal,
-        items=[_read(row, internal=internal, effective_ids=effective_ids) for row in rows],
+        items=[
+            _read(
+                row,
+                internal=internal,
+                effective_ids=effective_ids,
+                dimensions=linked.get(row.id, []),
+            )
+            for row in rows
+        ],
     )
 
 
@@ -101,10 +120,12 @@ async def get_option(
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
     option = await service.load_option(session, workspace, option_id)
     effective_ids = await service.effective_requirement_ids(session, workspace)
+    linked = await link_service.dimensions_of(session, [option.id])
     return _read(
         option,
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=effective_ids,
+        dimensions=linked.get(option.id, []),
     )
 
 
@@ -150,6 +171,7 @@ async def create_option(
         option,
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=await service.effective_requirement_ids(session, workspace),
+        dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
     )
 
 
@@ -200,6 +222,7 @@ async def update_option(
         option,
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=await service.effective_requirement_ids(session, workspace),
+        dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
     )
 
 
@@ -249,6 +272,7 @@ async def update_internal_economics(
         option,
         internal=True,
         effective_ids=await service.effective_requirement_ids(session, workspace),
+        dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
     )
 
 
@@ -295,6 +319,7 @@ async def set_selection(
         option,
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=await service.effective_requirement_ids(session, workspace),
+        dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
     )
 
 
@@ -331,4 +356,134 @@ async def archive_option(
         option,
         internal=service.can_view_internal_economics(ctx.membership.role),
         effective_ids=await service.effective_requirement_ids(session, workspace),
+        dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
+    )
+
+
+@router.get(
+    "/{option_id}/dimensions",
+    response_model=list[OptionDimensionRead],
+    summary="De quines magnituds depen",
+)
+async def list_option_dimensions(
+    workspace_id: uuid.UUID,
+    option_id: uuid.UUID,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Lectura per a qualsevol membre: aqui no hi ha res economic."""
+    workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    option = await service.load_option(session, workspace, option_id)
+    linked = await link_service.dimensions_of(session, [option.id])
+    return [
+        OptionDimensionRead.model_validate(dimension)
+        for dimension in linked.get(option.id, [])
+    ]
+
+
+@router.put(
+    "/{option_id}/dimensions/{dimension_id}",
+    response_model=SolutionOptionRead,
+    summary="Declara que l'opcio depen d'aquesta magnitud",
+)
+async def attach_dimension(
+    workspace_id: uuid.UUID,
+    option_id: uuid.UUID,
+    dimension_id: uuid.UUID,
+    payload: OptionDimensionWrite,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Enllacar NO copia cap xifra.
+
+    Que la magnitud valgui 181 avui no escriu 181 a `quantity`, ni ara ni quan
+    canviï. La dependencia diu de que depen l'opcio; quina quantitat hi posa,
+    ho diu una persona.
+
+    `PUT` i no `POST` perque es idempotent: enviar-ho dues vegades deixa una
+    sola relacio i la segona vegada no mou el testimoni.
+
+    Es pot dependre d'una magnitud encara sense decidir o en disputa: saber de
+    que depen una opcio es justament el que fa evident que cal decidir-ho.
+    """
+    service.assert_can_edit(ctx.membership.role)
+    workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    option = await service.load_option(session, workspace, option_id)
+
+    changed = await link_service.attach_dimension(
+        session,
+        workspace=workspace,
+        option=option,
+        dimension_id=dimension_id,
+        user=ctx.user,
+        expected_revision=payload.expected_revision,
+    )
+    if changed:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.UPDATE,
+            entity_type="workspace_solution_option",
+            entity_id=option.id,
+            summary=f"opcio={option.id} depen de la magnitud {dimension_id}",
+        )
+    await session.commit()
+    return _read(
+        option,
+        internal=service.can_view_internal_economics(ctx.membership.role),
+        effective_ids=await service.effective_requirement_ids(session, workspace),
+        dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
+    )
+
+
+@router.delete(
+    "/{option_id}/dimensions/{dimension_id}",
+    response_model=SolutionOptionRead,
+    summary="Treu la dependencia",
+)
+async def detach_dimension(
+    workspace_id: uuid.UUID,
+    option_id: uuid.UUID,
+    dimension_id: uuid.UUID,
+    expected_revision: int,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Nomes desapareix la relacio: ni l'opcio ni la magnitud es toquen.
+
+    Tambe es pot desenganxar una magnitud arxivada: es justament com es neteja
+    el rastre d'una que ja no compta.
+
+    El testimoni va per query i no al cos: un `DELETE` amb cos es legal pero
+    incomode —el client del repo no en sap enviar i hi ha intermediaris que el
+    descarten—, i aixi no cal tocar el client per a una sola ruta.
+    """
+    service.assert_can_edit(ctx.membership.role)
+    workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    option = await service.load_option(session, workspace, option_id)
+
+    changed = await link_service.detach_dimension(
+        session,
+        workspace=workspace,
+        option=option,
+        dimension_id=dimension_id,
+        expected_revision=expected_revision,
+    )
+    if changed:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.UPDATE,
+            entity_type="workspace_solution_option",
+            entity_id=option.id,
+            summary=f"opcio={option.id} ja no depen de la magnitud {dimension_id}",
+        )
+    await session.commit()
+    return _read(
+        option,
+        internal=service.can_view_internal_economics(ctx.membership.role),
+        effective_ids=await service.effective_requirement_ids(session, workspace),
+        dimensions=(await link_service.dimensions_of(session, [option.id])).get(option.id, []),
     )

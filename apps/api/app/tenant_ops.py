@@ -73,6 +73,14 @@ INDIRECT_TABLES: dict[str, tuple[str, str, str]] = {
     # no de la licitacio: `workspace_dimensions` porta el `company_id` i
     # l'observacio hi penja. Si es destrueix el tenant, se'n va amb ell.
     "workspace_dimension_observations": ("dimension_id", "workspace_dimensions", "id"),
+    # De que depen una opcio es de l'empresa que ho va declarar, com l'opcio
+    # mateixa. Penja de `workspace_solution_options`, que porta el `company_id`;
+    # si es destrueix el tenant, se'n va amb ell i no deixa cap fila orfe.
+    "workspace_solution_option_dimensions": (
+        "solution_option_id",
+        "workspace_solution_options",
+        "id",
+    ),
 }
 
 # Taules publiques i globals: no pertanyen a cap tenant i no s'han de tocar mai.

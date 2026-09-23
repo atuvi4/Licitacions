@@ -2,7 +2,11 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 
 import { workspaceFixture } from "@/test/workspace-fixture";
-import type { SolutionOption, SolutionOptionList } from "@/lib/solutionOptions";
+import type {
+  OptionDimension,
+  SolutionOption,
+  SolutionOptionList,
+} from "@/lib/solutionOptions";
 
 /**
  * Opcions i cotitzacions: Proveïdor A o Proveïdor B.
@@ -22,8 +26,11 @@ import type { SolutionOption, SolutionOptionList } from "@/lib/solutionOptions";
 let role = "bid_manager";
 let payload: SolutionOptionList = { can_view_internal_economics: true, items: [] };
 let failWith: string | null = null;
+let dimensionsPayload: OptionDimension[] = [];
 
 const post = vi.fn();
+const put = vi.fn();
+const del = vi.fn();
 const get = vi.fn();
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -36,9 +43,12 @@ vi.mock("@/lib/api", async (importOriginal) => {
         get(path);
         if (failWith) throw new Error(failWith);
         if (path.endsWith("/solution-options")) return payload;
+        if (path.endsWith("/dimensions")) return dimensionsPayload;
         throw new Error(`GET inesperat: ${path}`);
       },
       post: (...args: unknown[]) => post(...args),
+      put: (...args: unknown[]) => put(...args),
+      delete: (...args: unknown[]) => del(...args),
     },
   };
 });
@@ -86,6 +96,7 @@ function option(overrides: Partial<SolutionOption> = {}): SolutionOption {
     selected_at: null,
     archived_at: null,
     revision: 0,
+    dimensions: [],
     internal_economics: null,
     ...overrides,
   };
@@ -122,8 +133,13 @@ beforeEach(() => {
   role = "bid_manager";
   payload = list([]);
   failWith = null;
+  dimensionsPayload = [];
   post.mockReset();
   post.mockResolvedValue({});
+  put.mockReset();
+  put.mockResolvedValue({});
+  del.mockReset();
+  del.mockResolvedValue({});
   get.mockReset();
 });
 
@@ -413,4 +429,235 @@ it("diu quan el requisit enllaçat ha deixat de ser vigent, sense amagar l'opci�
   await click("Proveïdor A · Terminal X");
 
   expect(screen.getByText(/ja no és del conjunt vigent/)).toBeTruthy();
+});
+
+
+/* ----- De què depèn una opció (S3-S7b) ------------------------------------- */
+
+function dimension(overrides: Partial<OptionDimension> = {}): OptionDimension {
+  return {
+    id: "d1",
+    key: "extensions",
+    label: "Extensions",
+    unit: "unitats",
+    scope_label: null,
+    status: "decided",
+    working_value_text: "181",
+    working_value_num: "181.0000",
+    archived_at: null,
+    revision: 1,
+    ...overrides,
+  };
+}
+
+it("ensenya de quines magnituds depèn una opció", async () => {
+  payload = list([
+    option({
+      dimensions: [
+        dimension({ id: "d1", label: "Extensions", working_value_text: "181" }),
+        dimension({ id: "d2", key: "seus", label: "Seus", working_value_text: "26", unit: null }),
+      ],
+    }),
+  ]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByText("Depèn de")).toBeTruthy();
+  expect(screen.getByText("Extensions")).toBeTruthy();
+  expect(screen.getByText("Seus")).toBeTruthy();
+  expect(screen.getByText("181 unitats")).toBeTruthy();
+  expect(screen.getByText("26")).toBeTruthy();
+});
+
+it("sense cap dependència ho diu", async () => {
+  payload = list([option()]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByText(/Cap magnitud encara/)).toBeTruthy();
+});
+
+it("la magnitud i la quantitat de l'opció són dos camps independents", async () => {
+  /**
+   * La magnitud diu 181 i l'opció en diu 40. Es veuen totes dues i no hi ha cap
+   * botó que digui «fes servir 181»: copiar-la faria que una oferta canviés de
+   * números sense que ningú no ho hagués decidit.
+   */
+  payload = list([
+    option({ quantity: "40.0000", dimensions: [dimension({ working_value_text: "181" })] }),
+  ]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByText("40.0000")).toBeTruthy();
+  expect(screen.getByText("181 unitats")).toBeTruthy();
+  const labels = screen.getAllByRole("button").map((b) => b.textContent ?? "");
+  expect(labels.some((l) => /utilitza|fes servir|aplica|copia|sincronitza/i.test(l))).toBe(false);
+});
+
+it("després que la magnitud canviï, la quantitat de l'opció continua sent l'antiga", async () => {
+  /**
+   * L'estat que arriba del servidor quan algú ha decidit 209 però ningú no ha
+   * tocat l'opció. La pantalla ha d'ensenyar les dues xifres tal com són: la
+   * quantitat surt de `option.quantity` i el valor surt de la magnitud, i cap
+   * de les dues no es deriva de l'altra.
+   */
+  payload = list([
+    option({
+      quantity: "181.0000",
+      dimensions: [dimension({ working_value_text: "209", working_value_num: "209.0000" })],
+    }),
+  ]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByText("209 unitats")).toBeTruthy();
+  expect(screen.getByText("181.0000")).toBeTruthy();
+});
+
+it("el selector només ofereix magnituds actives i no demana cap UUID", async () => {
+  dimensionsPayload = [
+    dimension({ id: "d1", label: "Extensions" }),
+    dimension({ id: "d2", key: "seus", label: "Seus", archived_at: "2026-09-01T00:00:00Z" }),
+  ];
+  payload = list([option()]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+  await click("Relaciona una magnitud");
+  await flush();
+
+  const select = screen.getByLabelText("Magnitud") as HTMLSelectElement;
+  const labels = Array.from(select.options).map((o) => o.textContent ?? "");
+  expect(labels.some((l) => l.includes("Extensions"))).toBe(true);
+  expect(labels.some((l) => l.includes("Seus"))).toBe(false);
+  // Cap camp on escriure un identificador.
+  expect(screen.queryByLabelText(/uuid|identificador/i)).toBeNull();
+});
+
+it("no torna a oferir una magnitud que ja hi és", async () => {
+  dimensionsPayload = [dimension({ id: "d1", label: "Extensions" })];
+  payload = list([option({ dimensions: [dimension({ id: "d1", label: "Extensions" })] })]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+  await click("Relaciona una magnitud");
+  await flush();
+
+  const select = screen.getByLabelText("Magnitud") as HTMLSelectElement;
+  const values = Array.from(select.options).map((o) => o.value).filter(Boolean);
+  expect(values).toEqual([]);
+});
+
+it("relacionar envia el testimoni de la versió llegida", async () => {
+  dimensionsPayload = [dimension({ id: "d1" })];
+  payload = list([option({ revision: 5 })]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+  await click("Relaciona una magnitud");
+  await flush();
+
+  const select = screen.getByLabelText("Magnitud");
+  await act(async () => {
+    fireEvent.change(select, { target: { value: "d1" } });
+  });
+  await click("Relaciona-la");
+
+  expect(put).toHaveBeenCalledWith(
+    "/companies/c1/workspaces/w1/solution-options/o1/dimensions/d1",
+    { expected_revision: 5 },
+  );
+});
+
+it("treure una dependència passa pel testimoni i no esborra res més", async () => {
+  payload = list([option({ revision: 4, dimensions: [dimension({ id: "d1" })] })]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+  await click("Treu-la");
+
+  expect(del).toHaveBeenCalledWith(
+    "/companies/c1/workspaces/w1/solution-options/o1/dimensions/d1?expected_revision=4",
+  );
+});
+
+it("una magnitud arxivada que ja hi era es veu marcada", async () => {
+  payload = list([
+    option({ dimensions: [dimension({ archived_at: "2026-09-01T00:00:00Z" })] }),
+  ]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByText("Arxivada")).toBeTruthy();
+  // I es pot treure: es com se'n neteja el rastre.
+  expect(screen.getByRole("button", { name: "Treu-la" })).toBeTruthy();
+});
+
+it("una magnitud en disputa es pot relacionar i es llegeix com a tal", async () => {
+  payload = list([
+    option({
+      dimensions: [dimension({ status: "disputed", working_value_text: null })],
+    }),
+  ]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByText("Fonts que no coincideixen")).toBeTruthy();
+  expect(screen.getByText("Sense valor de treball")).toBeTruthy();
+});
+
+it("qui només mira veu les dependències però no les pot tocar", async () => {
+  role = "viewer";
+  payload = list([option({ dimensions: [dimension()] })], false);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByText("Extensions")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Relaciona una magnitud" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Treu-la" })).toBeNull();
+});
+
+it("un tècnic sí que les pot gestionar", async () => {
+  role = "technical";
+  payload = list([option({ dimensions: [dimension()] })], false);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByRole("button", { name: "Relaciona una magnitud" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Treu-la" })).toBeTruthy();
+});
+
+it("les dependències no obren cap porta al cost", async () => {
+  role = "technical";
+  payload = list([option({ dimensions: [dimension()], internal_economics: null })], false);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByText("Extensions")).toBeTruthy();
+  expect(screen.queryByText("Cost unitari")).toBeNull();
+  expect(document.body.textContent).not.toMatch(/12\.345678/);
+});
+
+it("una opció arxivada conserva les dependències però no en rep de noves", async () => {
+  payload = list([
+    option({ archived_at: "2026-09-01T00:00:00Z", dimensions: [dimension()] }),
+  ]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+
+  expect(screen.getByText("Extensions")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Relaciona una magnitud" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Treu-la" })).toBeNull();
+});
+
+it("res d'aquesta fase crea cap línia econòmica", async () => {
+  dimensionsPayload = [dimension({ id: "d1" })];
+  payload = list([option()]);
+  await mount();
+  await click("Proveïdor A · Terminal X");
+  await click("Relaciona una magnitud");
+  await flush();
+
+  const labels = screen.getAllByRole("button").map((b) => b.textContent ?? "");
+  expect(labels.some((l) => /oferta|línia|line|preu/i.test(l))).toBe(false);
+  for (const [path] of put.mock.calls as [string, unknown][]) {
+    expect(path).not.toContain("economic-offer");
+  }
 });

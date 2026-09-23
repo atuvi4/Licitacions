@@ -21,6 +21,8 @@ import {
 import { api } from "@/lib/api";
 import { useMutation, useResource } from "@/lib/hooks";
 import {
+  DIMENSION_STATUS_LABELS,
+  DIMENSION_STATUS_LEVEL,
   PRICING_BASIS_LABELS,
   QUOTE_STATUSES,
   QUOTE_STATUS_LABELS,
@@ -28,8 +30,10 @@ import {
   SELECTION_LABELS,
   SELECTION_LEVEL,
   canEditOptions,
+  dimensionValue,
   optionTitle,
   whoCanEditOptions,
+  type OptionDimension,
   type PricingBasis,
   type QuoteStatus,
   type SolutionOption,
@@ -309,6 +313,13 @@ function OptionRow({
               </p>
             )}
 
+            <DependsOn
+              option={option}
+              workspace={workspace}
+              canEdit={canEdit}
+              onChanged={onChanged}
+            />
+
             {canEdit && option.archived_at === null && (
               // Dues accions separades i explícites. Cap casella excloent: triar
               // una opció no diu res de les altres.
@@ -342,6 +353,170 @@ function OptionRow({
         </tr>
       )}
     </>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+
+/**
+ * De què depèn una opció.
+ *
+ * Ensenya el valor d'ARA de cada magnitud al costat de la quantitat de l'opció,
+ * i són **dos camps independents**: si no coincideixen, aquí no és cap error i
+ * no hi ha cap botó que digui «fes servir 181». Copiar la xifra automàticament
+ * faria que una oferta canviés de números sense que ningú no ho hagués decidit.
+ *
+ * El selector només ofereix magnituds **actives**. Una que s'arxivi després
+ * continua sortint marcada, perquè treure-la és una decisió de la persona i no
+ * una neteja silenciosa.
+ */
+function DependsOn({
+  option,
+  workspace,
+  canEdit,
+  onChanged,
+}: {
+  option: SolutionOption;
+  workspace: WorkspaceDetail;
+  canEdit: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const { companyId } = useSession();
+  const mutation = useMutation();
+  const [picking, setPicking] = useState(false);
+  const [choice, setChoice] = useState("");
+
+  const path = companyId
+    ? `/companies/${companyId}/workspaces/${workspace.id}/dimensions`
+    : null;
+  const available = useResource<OptionDimension[]>(picking ? path : null);
+
+  const root = companyId
+    ? `/companies/${companyId}/workspaces/${workspace.id}/solution-options/${option.id}/dimensions`
+    : "";
+
+  const attach = useCallback(async () => {
+    if (!companyId || choice === "") return;
+    const saved = await mutation.run(async () => {
+      await api.put(`${root}/${choice}`, { expected_revision: option.revision });
+    });
+    if (saved) {
+      setChoice("");
+      setPicking(false);
+      await onChanged();
+    }
+  }, [choice, companyId, mutation, onChanged, option.revision, root]);
+
+  const detach = useCallback(
+    async (dimensionId: string) => {
+      if (!companyId) return;
+      const saved = await mutation.run(async () => {
+        await api.delete(`${root}/${dimensionId}?expected_revision=${option.revision}`);
+      });
+      if (saved) await onChanged();
+    },
+    [companyId, mutation, onChanged, option.revision, root],
+  );
+
+  // Les que ja hi són no es tornen a oferir, i les arxivades tampoc: no es pot
+  // començar a dependre d'una magnitud que ja s'ha donat de baixa.
+  const already = new Set(option.dimensions.map((item) => item.id));
+  const candidates = (available.data ?? []).filter(
+    (item) => !already.has(item.id) && item.archived_at === null,
+  );
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <p className={KICKER}>Depèn de</p>
+
+      {mutation.error && (
+        <Banner level="blocking" kicker="Dependències" action={null}>
+          {mutation.error}
+        </Banner>
+      )}
+
+      {option.dimensions.length === 0 && (
+        <p className="mt-1 text-caption text-muted">
+          Cap magnitud encara. S&apos;hi declaren les xifres de què depèn aquesta opció.
+        </p>
+      )}
+
+      <ul className="mt-1.5 grid gap-1.5">
+        {option.dimensions.map((dimension) => (
+          <li
+            key={dimension.id}
+            className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-caption"
+          >
+            <span className="text-body text-ink">{dimension.label}</span>
+            {dimension.scope_label && <span className="text-muted">{dimension.scope_label}</span>}
+            <StatusPill level={DIMENSION_STATUS_LEVEL[dimension.status]} size="sm">
+              {DIMENSION_STATUS_LABELS[dimension.status]}
+            </StatusPill>
+            <span className="tabular-nums text-muted">
+              {dimensionValue(dimension) ?? "Sense valor de treball"}
+            </span>
+            {dimension.archived_at !== null && (
+              <StatusPill level="neutral" size="sm">
+                Arxivada
+              </StatusPill>
+            )}
+            {canEdit && option.archived_at === null && (
+              <button
+                type="button"
+                className="ml-auto text-[13px] text-brand hover:underline"
+                onClick={() => void detach(dimension.id)}
+              >
+                Treu-la
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {canEdit && option.archived_at === null && !picking && (
+        <div className="mt-2">
+          <Button variant="secondary" size="sm" onClick={() => setPicking(true)}>
+            Relaciona una magnitud
+          </Button>
+        </div>
+      )}
+
+      {picking && (
+        <div className="mt-2 flex flex-wrap items-end gap-2">
+          <Field label="Magnitud" className="min-w-60 flex-1">
+            <Select
+              aria-label="Magnitud"
+              value={choice}
+              onChange={(event) => setChoice(event.target.value)}
+              placeholder={available.loading ? "Carregant…" : "Tria una magnitud"}
+              options={candidates.map((item) => ({
+                value: item.id,
+                // Noms i valors, mai identificadors: ningú no ha de copiar un UUID.
+                label: [
+                  item.label,
+                  item.scope_label,
+                  dimensionValue(item) ?? "sense valor",
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
+              }))}
+            />
+          </Field>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={mutation.saving}
+            disabled={choice === ""}
+            onClick={() => void attach()}
+          >
+            Relaciona-la
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => setPicking(false)}>
+            Cancel·la
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 

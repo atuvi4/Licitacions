@@ -1547,3 +1547,103 @@ amb proveïdor, producte, quantitat, unitat, cotització i tria; la columna de c
 d'economia interna del formulari tampoc no hi és per a la resta. «Selecciona» i
 «Rebutja» són dos botons separats, mai una casella excloent, i rebutjar obre un
 diàleg que demana motiu.
+
+
+---
+
+## Delta S3-S7b — la dependència opció ↔ magnitud, implementada
+
+`0034_solution_option_dimensions` crea **una sola taula pont** i no en toca cap
+altra: ni les opcions, ni les magnituds, ni l'oferta econòmica.
+
+**N:N de debò.** Una opció de servei mòbil depèn del nombre de línies, del de
+terminals i del de SIM de dades; i el nombre de línies el fan servir totes les
+opcions que s'hi comparen. Per això no hi ha cap `dimension_id` a l'opció ni cap
+`solution_option_id` a la magnitud.
+
+**Delta sobre §16 — només la parella.** El disseny congelat preveia `role`
+(`quantity_driver` / `scope_reference`), `quantity_factor`, `snapshot_value_num`
+i `snapshot_taken_at`. Res d'això s'ha implementat, i queda **ajornat, no
+descartat**. La relació diu una cosa i prou: *«aquesta opció depèn d'aquesta
+magnitud»*. No diu que `option.quantity` surti de `working_value_num`, ni que el
+valor estigués decidit el dia que es va enllaçar, ni que la magnitud sigui el
+preu.
+
+**Cap snapshot.** L'estat d'ara el diu `workspace_dimensions`, que n'és l'única
+font de veritat. Una còpia aquí voldria dir tenir dues respostes a la mateixa
+pregunta, i un dia no coincidirien sense que ningú sabés quina manava. Quan més
+endavant una línia econòmica adopti una quantitat i un cost, serà **la línia**
+qui en farà el snapshot econòmic; aquesta fase no avança aquella semàntica.
+
+**Delta sobre §16 — `dimension_id` és `CASCADE` i no `RESTRICT`.** El freeze deia
+`RESTRICT` per no deixar esborrar una magnitud de què depèn una opció. A la
+pràctica el producte **no esborra cap magnitud** —les arxiva—, de manera que
+aquella protecció no arribaria a actuar mai; en canvi, amb `RESTRICT` la
+destrucció d'un tenant fallaria i deixaria files que ningú no pot netejar
+(§34). Els dos costats cascaden: una dependència sense cap dels seus dos extrems
+no li serveix a ningú. **Arxivar no és esborrar** i no toca cap relació.
+
+**Zero propagació de quantitat.** Enllaçar una magnitud de 181 no escriu 181
+enlloc; canviar-la després a 209 no toca l'opció; passar d'`undecided` a
+`decided` o de `disputed` a `decided` tampoc. No hi ha cap trigger, cap event
+d'ORM, cap callback ni cap efecte de frontend. Hi ha un test amb la magnitud a
+181 i la quantitat a 40 —diferents a propòsit, perquè amb xifres iguals una
+còpia automàtica seria invisible— i està verificat per mutació.
+
+**El CAS és el de l'OPCIÓ.** Enllaçar i desenllaçar són configuració de l'opció,
+no una entitat amb vida pròpia: no hi ha cap comptador de revisions nou. Un
+attach o un detach real mou `WorkspaceSolutionOption.revision` pel mateix
+`claim_revision()` atòmic d'S3-S7 (ara públic, justament per això), i un no-op
+idempotent **no** el mou. Conflicte: `409 solution_option_revision_conflict`.
+
+**Same workspace.** Les FK no ho garanteixen —`workspace_dimensions` conté les
+magnituds de totes les candidatures—, i el servei ho valida: una opció no pot
+dependre d'una magnitud d'una altra candidatura ni encara que sigui de la
+mateixa empresa.
+
+**Arxivats.** Una opció arxivada conserva les seves dependències com a història i
+no en rep de noves (`409 solution_option_archived`). Una magnitud arxivada no es
+pot començar a fer servir (`422`), però una relació que ja existia es conserva i
+el read-model ho diu amb `archived_at`; treure-la és una decisió de la persona,
+mai una neteja silenciosa.
+
+**Qualsevol estat.** Es pot dependre d'una magnitud `undecided` o `disputed`:
+representar una dependència no és afirmar que el valor ja estigui resolt —al
+revés, saber de què depèn una opció és el que fa evident que cal decidir-ho.
+`dimension_disputed` continua sent l'únic avís; no se n'ha creat cap de segon per
+estar enllaçada, que seria dir dues vegades el mateix problema.
+
+**Delta sobre §22 — `dimension_undecided_in_use` continua ajornat**, tot i que
+ara la dependència existeix. El contracte final exigeix que la magnitud estigui
+en ús **econòmic**: magnitud → opció → `EconomicOfferLine` viva. Aquest darrer
+vincle no existirà fins a 0035. Redefinir «en ús» com «hi ha una opció» o «l'opció
+està triada» seria canviar el significat del blocador per poder-lo escriure
+abans d'hora. `solution_option_quote_expired` segueix ajornat pel mateix motiu.
+
+**API.** `GET …/solution-options/{id}/dimensions`, `PUT …/dimensions/{dim}` i
+`DELETE …/dimensions/{dim}`. `PUT` perquè és idempotent. El `DELETE` porta
+`expected_revision` **per query** i no al cos: un `DELETE` amb cos és legal però
+incòmode —el client del repo no en sap enviar i hi ha intermediaris que el
+descarten—. Escriptura per a `SOLUTION_EDIT_ROLES` (`technical` inclòs):
+enllaçar magnituds és configuració tècnica, no una decisió econòmica.
+
+**La redacció del cost no s'ha mogut.** Afegir dimensions al read-model no obre
+cap escletxa: `technical` i `viewer` continuen sense `internal_economics`, també
+per la ruta nova, i l'auditoria no escriu ni el cost ni el valor de la magnitud.
+
+**Res més s'ha mogut.** Enllaçar no toca `selection`, `selection_reason`,
+`selected_by`, `selected_at`, cap camp de cotització ni el cost; no valida ni
+invalida cap `WorkspaceTechnicalSolution`; no mou el `technical_scope_fingerprint`;
+no fa cap paquet obsolet; i no crea cap `EconomicOfferLine`.
+
+**Nota d'infraestructura.** L'identificador de revisió és `0034_solution_option_dimensions`
+i no el nom llarg de la taula: `alembic_version.version_num` és un `VARCHAR(32)`,
+i un identificador més llarg fa que la migració **no es pugui aplicar a
+PostgreSQL**. A SQLite hi passaria sense dir res; ho va trobar el gate.
+
+**UX.** Dins de «Opcions i cotitzacions», cada opció desplegada mostra un bloc
+**«Depèn de»** amb el nom, l'àmbit, l'estat i el valor d'ara de cada magnitud.
+El selector només ofereix les **actives** i treballa amb noms i valors, mai amb
+identificadors. La quantitat de l'opció i el valor de la magnitud es veuen tots
+dos i són **camps independents**: si no coincideixen no és cap error, i no hi ha
+cap botó que digui «fes servir 181».

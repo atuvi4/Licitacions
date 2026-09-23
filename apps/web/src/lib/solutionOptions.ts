@@ -27,6 +27,28 @@ export type OptionSelection = "undecided" | "selected" | "rejected";
 
 export type PricingBasis = "one_off" | "monthly" | "annual" | "per_unit";
 
+export type DimensionStatus = "undecided" | "decided" | "disputed";
+
+/**
+ * La magnitud de què depèn una opció, resumida.
+ *
+ * `working_value_num` és el valor d'ARA, llegit de la magnitud. No és cap còpia
+ * desada a la relació: si ho fos, envelliria i un dia diria una cosa que ja no
+ * és certa.
+ */
+export interface OptionDimension {
+  id: string;
+  key: string;
+  label: string;
+  unit: string | null;
+  scope_label: string | null;
+  status: DimensionStatus;
+  working_value_text: string | null;
+  working_value_num: string | null;
+  archived_at: string | null;
+  revision: number;
+}
+
 export interface OptionInternalEconomics {
   unit_cost_ex_vat: string | null;
   internal_note: string | null;
@@ -56,6 +78,8 @@ export interface SolutionOption {
   archived_at: string | null;
   /** El testimoni de CAS: el següent escrit l'ha de portar. */
   revision: number;
+  /** De quines magnituds depèn. Ho declara una persona; res no ho dedueix. */
+  dimensions: OptionDimension[];
   /** `null` quan aquest rol no pot veure el cost. No és «encara no escrit». */
   internal_economics: OptionInternalEconomics | null;
 }
@@ -146,4 +170,30 @@ export function awaitsQuote(option: SolutionOption): boolean {
 export function optionTitle(option: SolutionOption): string {
   const parts = [option.supplier_name, option.product_name].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : "Opció sense nom";
+}
+
+export const DIMENSION_STATUS_LABELS: Record<DimensionStatus, string> = {
+  undecided: "Sense decidir",
+  decided: "Decidida",
+  disputed: "Fonts que no coincideixen",
+};
+
+export const DIMENSION_STATUS_LEVEL: Record<DimensionStatus, Level> = {
+  undecided: "neutral",
+  decided: "ready",
+  disputed: "attention",
+};
+
+/**
+ * Com es llegeix el valor d'ara d'una magnitud.
+ *
+ * Deliberadament **no** cau cap a cap altra xifra quan no hi ha valor de
+ * treball: si ningú no l'ha decidit, no n'hi ha, i ensenyar-ne una d'inventada
+ * és el que fa que després algú la copiï a una oferta.
+ */
+export function dimensionValue(dimension: OptionDimension): string | null {
+  if (dimension.working_value_text === null) return null;
+  return dimension.unit
+    ? `${dimension.working_value_text} ${dimension.unit}`
+    : dimension.working_value_text;
 }

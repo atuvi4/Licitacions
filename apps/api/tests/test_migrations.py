@@ -917,3 +917,106 @@ def test_la_taula_dopcions_i_dimensions_encara_no_existeix():
     up = _offline_sql("upgrade", _OPTIONS)
 
     assert "workspace_solution_option_dimensions" not in up
+
+
+_LINKS = "0033_workspace_solution_options:0034_solution_option_dimensions"
+_LINKS_DOWN = "0034_solution_option_dimensions:0033_workspace_solution_options"
+
+
+def test_les_dependencies_es_poden_aplicar_i_desfer():
+    up = _offline_sql("upgrade", _LINKS)
+    down = _offline_sql("downgrade", _LINKS_DOWN)
+
+    assert "CREATE TABLE workspace_solution_option_dimensions" in up
+    assert "DROP TABLE workspace_solution_option_dimensions" in down
+
+
+def test_nomes_hi_ha_aquesta_taula_pont():
+    """0034 no toca res mes: ni les opcions, ni les dimensions, ni l'oferta."""
+    up = _offline_sql("upgrade", _LINKS)
+
+    created = {
+        row.split("CREATE TABLE ")[1].split(" ")[0].strip()
+        for row in up.splitlines()
+        if row.startswith("CREATE TABLE ")
+    }
+    assert created == {"workspace_solution_option_dimensions"}
+    assert "ALTER TABLE" not in up.replace("ALTER TABLE ONLY", "")
+    assert "economic_offer_lines" not in up
+
+
+def test_nomes_hi_ha_la_parella():
+    """Cap snapshot i cap factor: la relacio diu de que depen una opcio i prou.
+
+    Amb una copia del valor aqui hi hauria dues respostes a la mateixa pregunta,
+    i un dia no coincidirien sense que ningu sabes quina manava.
+    """
+    up = _offline_sql("upgrade", _LINKS)
+
+    for forbidden in (
+        "working_value_num",
+        "working_value_text",
+        "snapshot_value_num",
+        "snapshot_taken_at",
+        "dimension_revision",
+        "quantity_factor",
+        "multiplier",
+    ):
+        assert forbidden not in up, forbidden
+
+
+def test_la_parella_es_unica():
+    up = _offline_sql("upgrade", _LINKS)
+
+    assert "uq_solution_option_dimension" in up
+
+
+def test_els_dos_costats_cascaden():
+    """Una dependencia sense cap dels seus dos extrems no li serveix a ningu."""
+    up = _offline_sql("upgrade", _LINKS)
+
+    for name in (
+        "fk_solution_option_dimension_option",
+        "fk_solution_option_dimension_dimension",
+    ):
+        row = [line for line in up.splitlines() if name in line]
+        assert row and "ON DELETE CASCADE" in row[0], name
+
+    author = [
+        line for line in up.splitlines() if "fk_solution_option_dimension_author" in line
+    ]
+    assert author and "ON DELETE SET NULL" in author[0]
+
+
+def test_hi_ha_index_als_dos_costats():
+    """Es consulta en tots dos sentits: de quines depen una opcio, i quines
+    opcions fan servir una magnitud."""
+    up = _offline_sql("upgrade", _LINKS)
+
+    assert "ix_solution_option_dimensions_option" in up
+    assert "ix_solution_option_dimensions_dimension" in up
+
+
+def test_no_sinventa_cap_dependencia():
+    up = _offline_sql("upgrade", _LINKS)
+
+    assert "INSERT INTO workspace_solution_option_dimensions" not in up
+
+
+def test_el_downgrade_no_toca_ni_opcions_ni_dimensions():
+    """Nomes es perden les relacions. Totes dues taules existien abans i totes
+    dues continuen sent completes sense aquesta."""
+    down = _offline_sql("downgrade", _LINKS_DOWN)
+
+    # El que importa es que no hi hagi cap operacio sobre les dues taules
+    # reals. Buscar-hi el nom a pel no serveix: l'identificador de la revisio
+    # que s'escriu a `alembic_version` conte "workspace_solution_options".
+    touched = [
+        line
+        for line in down.splitlines()
+        if line.startswith(("DROP TABLE", "ALTER TABLE", "DROP INDEX"))
+        and "solution_option_dimensions" not in line
+    ]
+    assert touched == [], touched
+    assert "INSERT INTO" not in down
+    assert "DELETE FROM" not in down

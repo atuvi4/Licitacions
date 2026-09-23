@@ -719,13 +719,23 @@ async def test_archiving_twice_is_harmless(client_a, candidacy):
     assert second.json()["revision"] == first.json()["revision"]
 
 
-async def test_there_is_no_delete(client_a):
-    """No és cap oblit: una alternativa descartada explica una decisió."""
+async def test_an_option_is_never_deleted(client_a):
+    """No és cap oblit: una alternativa descartada explica una decisió.
+
+    Des d'S3-S7b hi ha un `DELETE`, però és el d'una DEPENDÈNCIA amb una
+    magnitud: treu una relació, no l'opció. Cap ruta pot esborrar una opció.
+    """
     from app.main import app
 
-    for path, methods in app.openapi()["paths"].items():
-        if "solution-options" in path:
-            assert "delete" not in methods, path
+    deletable = [
+        path
+        for path, methods in app.openapi()["paths"].items()
+        if "solution-options" in path and "delete" in methods
+    ]
+    assert deletable == [
+        "/api/v1/companies/{company_id}/workspaces/{workspace_id}"
+        "/solution-options/{option_id}/dimensions/{dimension_id}"
+    ], deletable
 
 
 # --------------------------------------------------------------------------- #
@@ -1192,11 +1202,15 @@ async def test_the_economic_offer_line_is_untouched(db):
     assert "target_markup_pct" not in EconomicOfferLine.__table__.columns
 
 
-async def test_the_option_dimension_join_does_not_exist_yet(db):
-    """0034. Aquesta fase prova les opcions soles."""
+async def test_the_option_does_not_carry_a_dimension_column(db):
+    """La dependència amb les magnituds és N:N i viu a la seva taula (0034).
+
+    A l'opció no hi ha cap `dimension_id`: una opció depèn de diverses
+    magnituds, i una magnitud la fan servir diverses opcions.
+    """
     from app.models import Base
 
-    assert "workspace_solution_option_dimensions" not in Base.metadata.tables
+    assert "workspace_solution_option_dimensions" in Base.metadata.tables
     assert "dimension_id" not in WorkspaceSolutionOption.__table__.columns
 
 
