@@ -18,8 +18,14 @@ que comparteixen firma (tot ZIP sembla un ZIP; tot OLE2, un OLE2).
 opaca. Pujar dues vegades els mateixos bytes dona, per tant, DOS documents
 logics que comparteixen UN sol contingut. Es deliberat: a S3-S2 no hi ha
 versions —arriben a S3-S3— i fer que la segona pujada es convertis en silenci en
-la primera seria decidir per l'usuari que volia dir. La resposta diu
-`content_reused` perque qui ho hagi fet sense voler ho vegi.
+la primera seria decidir per l'usuari que volia dir.
+
+**La deduplicacio no surt d'aqui.** Es global —per SHA-256, a tot el sistema— i
+per tant "aquests bytes ja hi eren" es una resposta sobre TOTS els tenants, no
+sobre qui pregunta. Qui sospites que un competidor ha pujat un fitxer concret
+nomes hauria de pujar-lo ell per confirmar-ho. Per aixo l'optimitzacio es queda
+a l'storage i cap resposta HTTP no la menciona: el contracte extern diu que el
+document s'ha pujat i processat, i prou.
 
 **Guardar i llegir son dos fets separats.** Un DOCX es guarda perfectament i no
 se'n llegeix el text. Dir-ne error seria mentir sobre el fitxer i dir-ne
@@ -75,8 +81,6 @@ class UploadOutcome:
     file: TenderDocumentFile
     content: TenderDocumentContent
     extraction: TenderDocumentExtraction
-    #: Cert quan aquests bytes ja eren al sistema i no s'han tornat a guardar.
-    content_reused: bool
 
 
 def upload_url_for(token: uuid.UUID) -> str:
@@ -157,7 +161,9 @@ async def upload_tender_document(
     name = sanitize_filename(filename)
     digest = compute_sha256(data)
 
-    content, created = await get_or_create_content(
+    # El `created` que torna aqui diu si els bytes ja eren a l'storage, i es
+    # queda aqui: veure la nota de la capcalera.
+    content, _created = await get_or_create_content(
         session,
         data=data,
         sha256=digest,
@@ -209,7 +215,6 @@ async def upload_tender_document(
         file=file,
         content=content,
         extraction=extraction,
-        content_reused=not created,
     )
 
 

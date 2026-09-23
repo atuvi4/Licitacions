@@ -418,9 +418,11 @@ class TenderDocumentUploadResult(BaseModel):
     mime_type: str | None = None
     #: Els bytes son al sistema. Sempre cert si la resposta es 201.
     stored: bool = True
-    #: Aquests bytes ja hi eren i no s'han tornat a guardar. No es cap error:
-    #: la deduplicacio es de contingut.
-    content_reused: bool = False
+    #: **Aqui NO hi ha cap senyal de deduplicacio.** El contingut es dedupa per
+    #: SHA-256 a tot el sistema, de manera que dir "aquests bytes ja hi eren"
+    #: respondria una pregunta sobre TOTS els tenants: qui sospites que un
+    #: competidor ha pujat un fitxer concret, el podria pujar ell i saber-ho.
+    #: La deduplicacio es una optimitzacio d'storage i es queda a dins.
     file: TenderDocumentFileSummary
 
 

@@ -38,11 +38,17 @@ interface UpdateResult {
   tender: TenderDetail;
 }
 
+/**
+ * La resposta d'una pujada.
+ *
+ * No hi ha cap camp que digui si els bytes ja existien: la deduplicació és
+ * global i respondre-ho seria dir alguna cosa dels altres tenants. És una
+ * decisió del servidor, i aquí només es reflecteix.
+ */
 interface UploadResult {
   id: string;
   name: string;
   stored: boolean;
-  content_reused: boolean;
   file: TenderDocumentFileSummary;
 }
 

@@ -322,7 +322,6 @@ async def upload_tender_document(
         document_type=outcome.document.document_type,
         mime_type=outcome.content.mime_type,
         stored=True,
-        content_reused=outcome.content_reused,
         file=file_summary(outcome.file, outcome.content, outcome.extraction),
     )
 
@@ -389,7 +388,6 @@ async def upload_tender_document_version(
         document_type=outcome.document.document_type,
         mime_type=outcome.content.mime_type,
         stored=True,
-        content_reused=not outcome.created,
         file=file_summary(outcome.file, outcome.content, outcome.extraction),
     )
 

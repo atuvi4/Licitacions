@@ -123,7 +123,6 @@ beforeEach(() => {
     id: "d-1",
     name: "PCAP.pdf",
     stored: true,
-    content_reused: false,
     file: filePayload(),
   });
 });
@@ -234,8 +233,7 @@ describe("pas 2", () => {
       id: "d-2",
       name: "plec.docx",
       stored: true,
-      content_reused: false,
-      file: filePayload({
+        file: filePayload({
         analysis_status: "unsupported",
         text_extraction_supported: false,
         extraction_status: "skipped_unsupported",

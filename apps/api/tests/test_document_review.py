@@ -205,10 +205,13 @@ async def test_the_same_bytes_are_not_a_new_version(client_a, db, tenant_a):
     response = await _version(
         client_a, company, tender_id, first["id"], name="PCAP.pdf", data=payload
     )
+    # Que no hagi passat res ho diu el codi —200 i no 201— i la versio, que no
+    # s'ha mogut. La resposta no hi afegeix cap camp: si digues "aquests bytes
+    # ja hi eren" estaria responent per tots els tenants alhora.
     assert response.status_code == 200
     body = response.json()
     assert body["file"]["version_number"] == 1
-    assert body["content_reused"] is True
+    assert "content_reused" not in body
 
     db.expire_all()
     files = (
@@ -700,8 +703,9 @@ async def test_the_same_bytes_in_two_companies_are_reviewed_separately(
     await db.commit()
     uploaded = await _upload(http, company_b, tender_b.id, name="PCAP.pdf", data=payload)
     assert uploaded.status_code == 201
-    # Mateixos bytes, un sol contingut.
-    assert uploaded.json()["content_reused"] is True
+    # Mateixos bytes i un sol contingut a dins, pero la resposta de B no ho diu
+    # enlloc: seria dir-li que algu altre ja els tenia.
+    assert "content_reused" not in uploaded.json()
 
     # A te la seva revisio feta; B no n'ha fet cap, i les dues empremtes son
     # de licitacions diferents encara que els bytes coincideixin.
