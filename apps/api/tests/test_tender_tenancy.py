@@ -281,6 +281,179 @@ async def test_a_public_tender_stays_reachable_from_any_company(client_b, scenar
 
 
 # --------------------------------------------------------------------------- #
+# C ter. Feines i previews: la frontera es el context d'empresa de la URL       #
+# --------------------------------------------------------------------------- #
+#
+# `app/jobs/requests.py` i `app/jobs/quotes.py` son anteriors a les licitacions
+# privades i carregaven el Tender pel seu identificador i prou. Mentre totes
+# eren publiques era correcte; des de 0027 no ho es.
+#
+# El pitjor dels casos no era una lectura: encuava el processat dels plecs d'una
+# altra empresa. Per aixo aquests tests no es conformen amb el 404 i compten les
+# files. Si algu hi torna a posar un `session.get(Tender, ...)`, el codi HTTP
+# podria continuar semblant correcte i la feina crear-se igualment.
+
+
+JOB_REQUESTS = "/api/v1/companies/{company}/tenders/{tender}/job-requests"
+PROCESS = JOB_REQUESTS + "/process-documents"
+QUOTES = "/api/v1/companies/{company}/tenders/{tender}/analysis-quotes"
+
+
+async def _job_rows(session) -> tuple[int, int]:
+    """Quantes peticions i quantes execucions hi ha ara mateix, a tot arreu."""
+    from app.models.jobs import JobRequest, WorkJob
+
+    session.expire_all()
+    requests = (
+        await session.execute(sa.select(sa.func.count()).select_from(JobRequest))
+    ).scalar_one()
+    jobs = (await session.execute(sa.select(sa.func.count()).select_from(WorkJob))).scalar_one()
+    return requests, jobs
+
+
+@pytest.fixture
+async def with_documents(db, scenario):
+    """La licitacio privada d'A, amb un plec.
+
+    Cal que en tingui: si no, un 404 podria venir de no tenir documents i el
+    test no distingiria l'aillament de la casualitat.
+    """
+    from app.models.enums import TenderDocumentType
+    from app.models.tenders import TenderDocument
+
+    db.add(
+        TenderDocument(
+            tender_id=scenario["a"].id,
+            name="PCAP.pdf",
+            document_type=TenderDocumentType.OTHER,
+            url=f"https://example.com/{uuid.uuid4().hex}.pdf",
+        )
+    )
+    await db.commit()
+    return scenario
+
+
+async def test_b_cannot_queue_the_processing_of_a_private_tender_of_a(
+    client_b, db, with_documents
+):
+    """No es nomes una fuita de lectura: es feina encuada sobre plecs aliens."""
+    # Identificadors com a valors: comptar files expira la sessio.
+    company_b, tender_a = with_documents["company_b"].id, with_documents["a"].id
+    before = await _job_rows(db)
+
+    response = await client_b.post(
+        PROCESS.format(company=company_b, tender=tender_a), json={}
+    )
+    assert response.status_code == 404, response.text
+    assert "Privada A" not in response.text
+
+    # El codi HTTP sol no demostra res: compta les files.
+    assert await _job_rows(db) == before
+
+
+async def test_b_cannot_list_the_job_requests_of_a_private_tender_of_a(
+    client_a, client_b, db, with_documents
+):
+    """Una llista buida tambe es una resposta: diria que la licitacio existeix."""
+    scenario = with_documents
+    mine = await client_a.post(
+        PROCESS.format(company=scenario["company_a"].id, tender=scenario["a"].id), json={}
+    )
+    assert mine.status_code == 202, mine.text
+
+    response = await client_b.get(
+        JOB_REQUESTS.format(company=scenario["company_b"].id, tender=scenario["a"].id)
+    )
+    assert response.status_code == 404, response.text
+    for leak in (mine.json()["id"], "Privada A", "PCAP.pdf", "process_tender_documents"):
+        assert leak not in response.text
+
+
+async def test_b_cannot_price_the_analysis_of_a_private_tender_of_a(client_b, with_documents):
+    """Ni `nothing_analyzable`: l'estat d'una licitacio aliena tampoc es diu."""
+    scenario = with_documents
+    response = await client_b.post(
+        QUOTES.format(company=scenario["company_b"].id, tender=scenario["a"].id), json={}
+    )
+    assert response.status_code == 404, response.text
+    assert "nothing_analyzable" not in response.text
+    for leak in ("document_count", "page_count", "token", "cost", "provider"):
+        assert leak not in response.text
+
+
+async def test_being_a_member_of_both_companies_does_not_move_the_border(
+    client_factory, db, tenant_a, with_documents
+):
+    """La frontera es el context de la URL, no de qui l'obre."""
+    from app.models.enums import MembershipRole
+    from app.models.identity import CompanyMembership
+    from tests.conftest import login
+
+    company_a, company_b = with_documents["company_a"].id, with_documents["company_b"].id
+    tender_a = with_documents["a"].id
+    user, _company = tenant_a
+    email = user.email
+    db.add(
+        CompanyMembership(
+            user_id=user.id,
+            company_id=company_b,
+            role=MembershipRole.OWNER,
+        )
+    )
+    await db.commit()
+
+    http = client_factory()
+    await login(http, email)
+    before = await _job_rows(db)
+
+    refused = await http.post(
+        PROCESS.format(company=company_b, tender=tender_a), json={}
+    )
+    assert refused.status_code == 404, refused.text
+    assert await _job_rows(db) == before
+
+    # I des del seu propi context hi arriba perfectament.
+    allowed = await http.post(
+        PROCESS.format(company=company_a, tender=tender_a), json={}
+    )
+    assert allowed.status_code == 202, allowed.text
+
+
+async def test_the_owner_still_queues_and_prices_its_own_private_tender(
+    client_a, with_documents
+):
+    """El fix tanca la porta aliena; no bloqueja les licitacions privades."""
+    scenario = with_documents
+    company, tender = scenario["company_a"].id, scenario["a"].id
+
+    queued = await client_a.post(PROCESS.format(company=company, tender=tender), json={})
+    assert queued.status_code == 202, queued.text
+
+    listed = await client_a.get(JOB_REQUESTS.format(company=company, tender=tender))
+    assert listed.status_code == 200, listed.text
+    assert queued.json()["id"] in {row["id"] for row in listed.json()}
+
+    # El preview arriba a la logica funcional: 422 i no 404. Que es queixi de no
+    # tenir text extret es exactament el que ha de fer.
+    quoted = await client_a.post(QUOTES.format(company=company, tender=tender), json={})
+    assert quoted.status_code == 422, quoted.text
+    assert quoted.json()["error"]["code"] == "nothing_analyzable"
+
+
+async def test_a_public_tender_is_reachable_from_both_companies(client_a, client_b, scenario):
+    """`visible_to_company` no vol dir «nomes la meva»: el public hi entra."""
+    tender = scenario["global"].id
+    for client, company in (
+        (client_a, scenario["company_a"]),
+        (client_b, scenario["company_b"]),
+    ):
+        queued = await client.post(PROCESS.format(company=company.id, tender=tender), json={})
+        assert queued.status_code == 202, queued.text
+        listed = await client.get(JOB_REQUESTS.format(company=company.id, tender=tender))
+        assert listed.status_code == 200, listed.text
+
+
+# --------------------------------------------------------------------------- #
 # D. Pre-fit                                                                    #
 # --------------------------------------------------------------------------- #
 

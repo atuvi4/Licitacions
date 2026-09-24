@@ -60,6 +60,7 @@ from app.models.jobs import ACTIVE_WORK_JOB_STATUSES, JobRequest, WorkJob
 from app.models.requirements import RequirementExtractionRun
 from app.models.tenders import Tender, TenderDocument
 from app.services.requirement_analysis import analysis_input, find_reusable_run
+from app.tenders.visibility import visible_to_company
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +80,24 @@ class Submission:
     already_requested: bool = False
 
 
-async def _load_tender(session: AsyncSession, tender_id: uuid.UUID) -> Tender:
-    tender = await session.get(Tender, tender_id)
+async def _load_tender(
+    session: AsyncSession, tender_id: uuid.UUID, company_id: uuid.UUID
+) -> Tender:
+    """La licitacio, NOMES si aquesta empresa la pot veure.
+
+    Aquest modul es anterior a les licitacions privades i carregava el Tender
+    pel seu identificador i prou. Mentre totes eren publiques aixo era correcte;
+    des que `owner_company_id` existeix, deixa de ser-ho: sense el filtre, una
+    empresa podria encuar el processat dels plecs d'una licitacio manual d'una
+    altra, que no es nomes saber que existeix sino fer-hi treballar el sistema.
+
+    La regla no es reescriu aqui: es la de `app/tenders/visibility.py`, publica
+    o de la propia empresa. I el `404` va PRIMER, abans de mirar documents,
+    quotes o feines actives: qualsevol altre error ja diria que existeix.
+    """
+    tender = await session.scalar(
+        sa.select(Tender).where(Tender.id == tender_id, visible_to_company(company_id))
+    )
     if tender is None:
         raise NotFoundError("Licitacio no trobada.")
     return tender
@@ -214,7 +231,7 @@ async def submit_analysis_request(
     * `analysis_quote_id`: queda desat a la peticio.
     * `before_commit`: el que ha de passar a la mateixa transaccio.
     """
-    await _load_tender(session, tender_id)
+    await _load_tender(session, tender_id, company_id)
     ids = sorted(set(document_ids or []), key=str)
 
     # Un run llancat fora de la cua (script d'operador) ocupa la licitacio. No
@@ -350,7 +367,7 @@ async def submit_process_request(
     force_download: bool = False,
     force_reextract: bool = False,
 ) -> Submission:
-    await _load_tender(session, tender_id)
+    await _load_tender(session, tender_id, company_id)
     ids = sorted(set(document_ids or []), key=str)
     if ids:
         found = set(
@@ -518,6 +535,10 @@ async def list_requests(
     active_only: bool = False,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
+    # Les files ja estan filtrades per empresa, pero llistar-les sense mirar la
+    # licitacio respondria `200 []` sobre una licitacio privada d'una altra
+    # empresa, i una llista buida tambe es una resposta: diria que existeix.
+    await _load_tender(session, tender_id, company_id)
     query = (
         sa.select(JobRequest, WorkJob)
         .outerjoin(WorkJob, WorkJob.id == JobRequest.work_job_id)
