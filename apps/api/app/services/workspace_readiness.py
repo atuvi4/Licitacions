@@ -264,23 +264,33 @@ async def economic_findings(
 
     # La font viva ha canviat des que la linia la va adoptar. Informatiu: que
     # l'oferta segueixi el que es va adoptar pot ser exactament el que es vol.
+    #
+    # **Nomes si la divergencia es visible publicament.** Readiness es una sola
+    # representacio compartida i no te redaccio per rol: el mateix finding el
+    # llegeix qui te economia interna i qui no. Treure'n els noms de camp no
+    # n'hi ha prou —si l'unic camp divergit es el cost, l'existencia mateixa del
+    # finding ja diu que el cost s'ha mogut, perque el lector veu que cap camp
+    # public no ha canviat i nomes en queda un de possible.
+    #
+    # Aixi que el predicat es el mateix redactor canonic que fa servir el
+    # read-model: si no queda cap camp public, aqui no hi ha res a dir. Qui pot
+    # veure el cost ja ho te al seu read-model de la linia, que si esta redactat
+    # per rol; qui no pot, no se n'assabenta per cap via.
     diverged = [
         Finding(
             code=ECONOMIC_LINE_OPTION_DIVERGED,
             severity=INFO,
             domain=DOMAIN_ECONOMIC,
             entity_id=line.id,
-            # Nomes l'opcio, per poder-hi navegar. **Cap nom de camp**: entre
-            # ells hi ha el cost, i saber que "el cost ha canviat" ja es saber
-            # alguna cosa del cost. Readiness no te redaccio per rol —el mateix
-            # finding el llegeix tothom—, aixi que el diff no hi pot viatjar.
-            #
-            # El detall sencer ja existeix al read-model de la linia, que si que
-            # esta redactat.
+            # Nomes l'opcio, per poder-hi navegar. Cap nom de camp i cap
+            # recompte: saber QUANTS camps han canviat tambe deixaria restar.
             context={"solution_option_id": str(option.id)},
         )
-        for line, option, _differences in await sync_service.diverged_lines(
+        for line, option, differences in await sync_service.diverged_lines(
             session, workspace
+        )
+        if sync_service.visible_fields(
+            [difference.field for difference in differences], internal=False
         )
     ]
 

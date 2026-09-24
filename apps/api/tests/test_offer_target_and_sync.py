@@ -635,6 +635,10 @@ async def test_the_finding_carries_neither_values_nor_field_names(
 
     Transportar-hi el diff la convertiria en una via sense redacció cap al
     cost: el mateix finding el llegeix qualsevol membre.
+
+    La divergència és MIXTA a propòsit —proveïdor i cost—, que és el cas que
+    sí emet finding. Amb una divergència només de cost no n'hi ha cap, i això
+    ho defensa `test_a_cost_only_divergence_says_nothing_in_the_shared_readiness`.
     """
     option = await _option(
         client_a, candidacy, internal_economics={"unit_cost_ex_vat": "12.345678"}
@@ -650,6 +654,11 @@ async def test_the_finding_carries_neither_values_nor_field_names(
         )
         + "/internal-economics",
         json={"expected_revision": stored.revision, "unit_cost_ex_vat": "99.5"},
+    )
+    db.expire_all()
+    stored = await db.get(WorkspaceSolutionOption, uuid.UUID(option["id"]))
+    await _patch_option(
+        client_a, candidacy, option["id"], stored.revision, supplier_name="Proveïdor B"
     )
 
     findings = await _findings(client_a, candidacy, "economic_line_option_diverged")
@@ -1211,6 +1220,144 @@ async def _cost_only_divergence(client, db, ctx) -> str:
     return line["id"]
 
 
+async def _mixed_divergence(client, ctx, line_concept="Terminals IP") -> dict:
+    """Una línia on divergeixen un camp públic i un d'intern.
+
+    Les revisions surten de cada resposta: expirar la sessió caducaria també
+    l'usuari de la fixture.
+    """
+    option = await _option(client, ctx, internal_economics={"unit_cost_ex_vat": "12"})
+    line = await _adopt(client, ctx, option["id"], concept=line_concept)
+
+    renamed = await _patch_option(
+        client, ctx, option["id"], option["revision"], supplier_name="Proveïdor B"
+    )
+    assert renamed.status_code == 200, renamed.text
+
+    repriced = await client.patch(
+        OPTION.format(
+            company=ctx["company_id"], workspace=ctx["workspace_id"], option=option["id"]
+        )
+        + "/internal-economics",
+        json={"expected_revision": renamed.json()["revision"], "unit_cost_ex_vat": "99.5"},
+    )
+    assert repriced.status_code == 200, repriced.text
+    return line
+
+
+async def _diverged_findings(client, ctx) -> list[dict]:
+    return await _findings(client, ctx, "economic_line_option_diverged")
+
+
+async def test_a_cost_only_divergence_says_nothing_in_the_shared_readiness(
+    client_a, db, candidacy
+):
+    """El cas que tanca el forat.
+
+    Readiness és una sola representació compartida i no té redacció per rol.
+    Treure'n els noms de camp no bastava: si l'únic camp divergit és el cost,
+    l'existència mateixa del finding ja ho diu, perquè qui el llegeix veu que
+    cap camp públic no ha canviat i només en queda un de possible.
+    """
+    line_id = await _cost_only_divergence(client_a, db, candidacy)
+
+    # Qui pot veure el cost, el veu divergit al seu read-model.
+    assert await _diverged_of(client_a, candidacy, line_id) == ["unit_cost_ex_vat"]
+    # I la readiness compartida no diu res.
+    assert await _diverged_findings(client_a, candidacy) == []
+
+
+@pytest.mark.parametrize("role", [MembershipRole.TECHNICAL, MembershipRole.VIEWER])
+async def test_a_role_without_internal_economics_cannot_deduce_the_cost_moved(
+    client_a, db, candidacy, tenant_a, role
+):
+    """Les dues meitats alhora, que és com es deduïa.
+
+    Amb el finding present i `diverged_fields` buit, el rol restava: «hi ha
+    divergència i no és cap camp públic, per tant és el cost». Ara no hi ha res
+    a restar.
+    """
+    line_id = await _cost_only_divergence(client_a, db, candidacy)
+    await _set_role(db, tenant_a, role)
+
+    payload = await _offer(client_a, candidacy)
+    line = next(item for item in _lines_of(payload) if item["id"] == line_id)
+    assert line["internal_economics"] is None
+    assert line["diverged_fields"] == []
+    assert await _diverged_findings(client_a, candidacy) == []
+
+
+async def test_a_public_divergence_does_reach_the_shared_readiness(client_a, candidacy):
+    """Amagar-ho tot no seria redactar: seria apagar la funcionalitat."""
+    option = await _option(client_a, candidacy)
+    line = await _adopt(client_a, candidacy, option["id"])
+    await _patch_option(
+        client_a, candidacy, option["id"], option["revision"], supplier_name="Proveïdor B"
+    )
+
+    findings = await _diverged_findings(client_a, candidacy)
+    assert [finding["entity_id"] for finding in findings] == [line["id"]]
+    assert await _diverged_of(client_a, candidacy, line["id"]) == ["supplier_name"]
+
+
+async def test_a_mixed_divergence_reaches_the_shared_readiness_too(
+    client_a, db, candidacy
+):
+    """N'hi ha prou amb un camp públic perquè el finding tingui sentit."""
+    line = await _mixed_divergence(client_a, candidacy)
+
+    assert await _diverged_findings(client_a, candidacy)
+    assert set(await _diverged_of(client_a, candidacy, line["id"])) == {
+        "supplier_name",
+        "unit_cost_ex_vat",
+    }
+
+
+async def test_syncing_the_public_part_removes_the_shared_finding(
+    client_a, db, candidacy
+):
+    """La transició que ho lliga tot.
+
+    Mixta → se sincronitza el proveïdor → només queda el cost. El finding
+    compartit ha de desaparèixer, i el read-model econòmic ha de continuar
+    dient que el cost divergeix: si no, el fix hauria amagat informació a qui
+    sí que la pot veure.
+    """
+    line = await _mixed_divergence(client_a, candidacy)
+    assert await _diverged_findings(client_a, candidacy)
+
+    synced = await _sync(client_a, candidacy, line["id"], ["supplier_name"])
+    assert synced.status_code == 200, synced.text
+
+    assert await _diverged_of(client_a, candidacy, line["id"]) == ["unit_cost_ex_vat"]
+    assert await _diverged_findings(client_a, candidacy) == []
+
+
+async def test_syncing_the_cost_leaves_no_divergence_anywhere(client_a, db, candidacy):
+    """I quan s'adopta el cost, tampoc no en queda al read-model."""
+    line_id = await _cost_only_divergence(client_a, db, candidacy)
+    assert await _diverged_of(client_a, candidacy, line_id) == ["unit_cost_ex_vat"]
+
+    synced = await _sync(client_a, candidacy, line_id, ["unit_cost_ex_vat"])
+    assert synced.status_code == 200, synced.text
+
+    assert await _diverged_of(client_a, candidacy, line_id) == []
+    assert await _diverged_findings(client_a, candidacy) == []
+
+
+async def test_the_shared_finding_never_counts_how_many_fields_moved(
+    client_a, db, candidacy
+):
+    """Un recompte també deixaria restar: 1 públic de 2 en total diria que
+    l'altre és el cost."""
+    await _mixed_divergence(client_a, candidacy)
+
+    finding = (await _diverged_findings(client_a, candidacy))[0]
+    assert set(finding["context"]) == {"solution_option_id"}
+    for leak in ("count", "fields", "unit_cost", "99.5", "12.0000"):
+        assert leak not in str(finding), leak
+
+
 async def test_an_economic_role_sees_the_cost_divergence(client_a, db, candidacy):
     line_id = await _cost_only_divergence(client_a, db, candidacy)
 
@@ -1304,8 +1451,12 @@ async def test_readiness_never_carries_internal_field_names(
     econòmics, perquè seria el mateix camp amb dos significats segons qui
     mira—. El detall sencer ja és al read-model de la línia, que sí que està
     redactat.
+
+    La divergència ha de ser MIXTA: amb una de només cost no s'emet cap finding,
+    que és el que defensa
+    `test_a_cost_only_divergence_says_nothing_in_the_shared_readiness`.
     """
-    await _cost_only_divergence(client_a, db, candidacy)
+    await _mixed_divergence(client_a, candidacy)
     await _set_role(db, tenant_a, role)
 
     findings = await _findings(client_a, candidacy, "economic_line_option_diverged")
