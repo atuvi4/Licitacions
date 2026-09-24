@@ -50,9 +50,38 @@ export interface RequirementEvidence {
   document_name: string | null;
 }
 
+/** Qui ha escrit el requisit. Canvia què se'n pot afirmar, no només la fitxa. */
+export type RequirementOrigin = "extracted" | "manual";
+
+export type { TenderDocumentMeta } from "@/lib/tenders";
+
+/** Una cita immutable: de quins bytes, quina versió i —si n'hi ha— quina pàgina. */
+export interface SourceRefCitation {
+  id: string;
+  ref_kind: "extracted_page" | "document_file";
+  document_id: string | null;
+  document_name: string | null;
+  file_id: string | null;
+  version_number: number | null;
+  content_sha256: string;
+  extraction_id: string | null;
+  page_id: string | null;
+  page_number: number | null;
+  location_label: string | null;
+  quote: string | null;
+  char_start: number | null;
+  char_end: number | null;
+  created_at: string;
+}
+
 export interface Requirement {
   id: string;
-  run_id: string;
+  /** `null` als escrits a mà: no venen de cap execució d'anàlisi. */
+  run_id: string | null;
+  origin: RequirementOrigin;
+  archived_at: string | null;
+  /** La provinença dels manuals. Els extrets la porten a `evidence`. */
+  citations: SourceRefCitation[];
   tender_id: string;
   tender_lot_id: string | null;
   category: RequirementCategory;
@@ -63,7 +92,8 @@ export interface Requirement {
   description: string | null;
   value_json: Record<string, unknown> | null;
   raw_lot_labels: unknown[] | null;
-  confidence: ExtractionConfidence;
+  /** `null` als manuals: no hi ha cap model que hagi declarat res. */
+  confidence: ExtractionConfidence | null;
   review_status: ReviewStatus;
   review_note: string | null;
   manual_override_json: Record<string, unknown> | null;

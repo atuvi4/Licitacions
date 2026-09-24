@@ -56,6 +56,45 @@ TECHNICAL_SCOPE_UNREVIEWED = "technical_scope_unreviewed"
 #: Es va revisar, pero l'abast d'ara ja no es aquell.
 TECHNICAL_SCOPE_STALE = "technical_scope_stale"
 
+# --- Plecs: revisio humana (S3-S3) -------------------------------------------- #
+#
+# Tres preguntes diferents que abans no es podien distingir. Les dues primeres
+# son DOCUMENTALS —parlen del que hi ha per llegir— i la tercera parla de
+# l'analisi. Cap de les tres no diu que els requisits hagin canviat: aixo nomes
+# es pot saber despres de tornar-los a extreure.
+
+#: Ningu no ha confirmat mai haver mirat els plecs que hi ha. No vol dir que hi
+#: hagi res malament: vol dir que no se n'ha dit res, i callar no es aprovar.
+#: Un dubte obert que algu ha decidit que impedeix presentar-se.
+#:
+#: **Blocador, pero per decisio humana i no per regla.** El sistema no marca cap
+#: dubte: ho fa `DECISION_ROLES`, i mentre continui obert la candidatura no es
+#: pot donar per preparada. S'apaga quan es tanca —resolt o descartat— o quan
+#: algu treu la marca.
+#:
+#: No depen del tipus de dubte: una contradiccio no bloqueja mes que una
+#: pregunta a l'organ de contractacio.
+ISSUE_BLOCKING_OPEN = "issue_blocking_open"
+
+#: Quants dubtes oberts hi ha que NO bloquegen.
+#:
+#: Informatiu i **agregat**: un finding per dubte ompliria la llista i faria
+#: semblar que cadascun es una feina pendent, quan obrir preguntes es
+#: exactament el que ha de passar mentre es prepara una oferta.
+#:
+#: Els que bloquegen no s'hi compten: ja tenen el seu blocador, i dir-ho dues
+#: vegades faria semblar que son dos problemes.
+ISSUE_OPEN = "issue_open"
+
+TENDER_DOCUMENTS_UNREVIEWED = "tender_documents_unreviewed"
+#: Algu els va revisar, pero el conjunt d'ara ja no es aquell: hi ha documents
+#: nous o versions noves des d'aleshores.
+TENDER_DOCUMENTS_CHANGED = "tender_documents_changed"
+#: L'analisi vigent es va fer sobre un corpus que ja no es l'actual. NO diu que
+#: els requisits hagin canviat —aixo no es pot saber sense tornar a extreure—,
+#: nomes que encara no cobreix el que hi ha.
+REQUIREMENT_ANALYSIS_PREDATES_DOCUMENTS = "requirement_analysis_predates_documents"
+
 # --- Solucions tecniques ----------------------------------------------------- #
 
 TECHNICAL_SOLUTION_UNVALIDATED = "technical_solution_unvalidated"
@@ -66,10 +105,76 @@ TECHNICAL_SOLUTION_VALIDATION_STALE = "technical_solution_validation_stale"
 #: resoldre. El control fort es la revisio de l'abast, que si que caduca.
 TECHNICAL_SOLUTION_REQUIREMENT_MISSING = "technical_solution_requirement_missing"
 
+# --- Dimensionament (S3-S6) --------------------------------------------------- #
+
+#: Dues fonts diuen numeros diferents i ningu no ha dit quin val. Es AVIS i no
+#: blocador: que hi hagi una discrepancia no impedeix presentar-se, i
+#: convertir-ho en porta tancada obligaria a "resoldre" dimensions que potser
+#: no afecten el que s'ofereix. Qui ho ha de veure, ho veu.
+#:
+#: Una dimensio NOMES `undecided` no genera res: no saber un numero que ningu
+#: no ha contradit no es cap problema pendent.
+DIMENSION_DISPUTED = "dimension_disputed"
+
+#: Una opcio TRIADA que encara espera la cotitzacio. Avis, no blocador: es una
+#: gestio que falta, no un error, i presentar-se amb un preu estimat es una
+#: decisio legitima que no li toca prendre al sistema.
+#:
+#: Nomes compta si l'opcio esta triada: que una alternativa que ningu no fara
+#: servir no tingui cotitzacio no es cap feina pendent.
+#:
+#: No necessita cap linia economica: parla de la gestio, no de l'oferta. Es un
+#: contracte diferent del blocador de cotitzacio caducada, i no s'hi barreja.
+SOLUTION_OPTION_QUOTE_PENDING = "solution_option_quote_pending"
+
+#: Una magnitud SENSE DECISIO de la qual depen una linia economica VIVA.
+#:
+#: Aixo si que es un blocador: vol dir que una xifra que anira a l'oferta es
+#: recolza en un numero que ningu no ha fixat. Abans que existis la linia no ho
+#: era —i el test ho comprova—, perque "en us" vol dir en us ECONOMIC: la
+#: cadena real es linia viva -> opcio -> dependencia -> magnitud.
+#:
+#: No compara numeros. No mira si `option.quantity` quadra amb el valor de
+#: treball: nomes diu que falta una decisio humana.
+#:
+#: Una magnitud `disputed` NO entra aqui: te el seu avis propi
+#: (`DIMENSION_DISPUTED`) i convertir-la en blocador canviaria el que significa.
+DIMENSION_UNDECIDED_IN_USE = "dimension_undecided_in_use"
+
 # --- Oferta economica --------------------------------------------------------- #
 
 #: Regla de producte de la V1 (C-15): tota candidatura que vulgui arribar a la
 #: revisio final necessita oferta. L'absencia no vol dir mai "no cal".
+#: Una linia viva de l'oferta ve d'una opcio triada la cotitzacio de la qual ha
+#: caducat. El preu que s'ofereix es recolza en una xifra que ja no es vigent.
+#:
+#: El quote viu a l'OPCIO, no a la linia: la linia es el snapshot que es va
+#: adoptar i no ha de saber res de com va la gestio amb el proveidor.
+#:
+#: S'apaga quan deixa de complir-se: arriba una cotitzacio nova, s'arxiva la
+#: linia o la persona canvia la tria. "Caducada" no vol dir "rebutjada", i el
+#: sistema no toca `selection` per compte seu.
+SOLUTION_OPTION_QUOTE_EXPIRED = "solution_option_quote_expired"
+
+#: La font viva ha canviat des que aquesta linia la va adoptar.
+#:
+#: **Informatiu, ni avis ni blocador.** No diu que la linia sigui incorrecta ni
+#: que calgui sincronitzar-la: diu que l'opcio ja no diu el mateix. Que
+#: l'oferta segueixi el que es va adoptar pot ser exactament el que es vol
+#: —potser el preu ja esta negociat—, i convertir-ho en una feina pendent seria
+#: decidir per la persona.
+#:
+#: Es DERIVAT: no hi ha cap `diverged` desat ni cap "ja ho he vist". S'apaga
+#: quan els camps tornen a coincidir, sigui perque algu els ha adoptat, perque
+#: ha editat la linia a ma o perque l'opcio ha tornat enrere.
+#:
+#: Al context hi va NOMES l'opcio, per poder-hi navegar. Cap nom de camp:
+#: entre ells hi ha el cost, i saber que "el cost ha canviat" ja es saber
+#: alguna cosa del cost. Aquest finding el llegeix tothom, i readiness no te
+#: redaccio per rol; el diff detallat viu al read-model de la linia, que si
+#: que n'hi te.
+ECONOMIC_LINE_OPTION_DIVERGED = "economic_line_option_diverged"
+
 ECONOMIC_OFFER_NOT_STARTED = "economic_offer_not_started"
 ECONOMIC_BID_LOTS_NOT_SELECTED = "economic_bid_lots_not_selected"
 ECONOMIC_LOT_EMPTY = "economic_lot_empty"
@@ -171,13 +276,19 @@ def evaluate_final(
     dossier: ReadinessResult,
     technical: Sequence[Finding] = (),
     economic: Sequence[Finding] = (),
+    workspace: Sequence[Finding] = (),
 ) -> FinalReadiness:
-    """Ajunta els tres dominis. No en recalcula cap.
+    """Ajunta els dominis. No en recalcula cap.
 
-    L'ordre es fix —workspace i dossier, despres tecnic, despres economic— perque
-    dues lectures iguals no donin dues respostes ordenades diferent.
+    L'ordre es fix —workspace i dossier, despres la resta de workspace, despres
+    tecnic, despres economic— perque dues lectures iguals no donin dues
+    respostes ordenades diferent.
+
+    `workspace` son els fets que parlen de la candidatura sencera i que NO venen
+    del dossier: la revisio dels plecs, per exemple, que no es cap paper nostre
+    sino material de l'organ.
     """
     return FinalReadiness(
         dossier_state=dossier.state,
-        findings=(*_dossier_findings(dossier), *technical, *economic),
+        findings=(*_dossier_findings(dossier), *workspace, *technical, *economic),
     )

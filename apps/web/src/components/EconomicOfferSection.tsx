@@ -54,6 +54,8 @@ import {
   type OfferLine,
   type OfferLot,
   type PricingBasis,
+  SYNC_FIELD_LABELS,
+  visibleDivergedFields,
 } from "@/lib/economic";
 import type { TenderLot } from "@/lib/tenders";
 import type { WorkspaceDetail } from "@/lib/workspace";
@@ -136,6 +138,7 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
   // perquè la persona pugui tornar-hi a mirar el que havia escrit: si
   // desaparegues en silenci, el conflicte hauria esborrat feina seva.
   const [previousDraft, setPreviousDraft] = useState<LineDraft | null>(null);
+  const [divergedLine, setDivergedLine] = useState<OfferLine | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   // Dos editors petits més. Només un obert alhora, com la línia: obrir-ne un
   // passa per la mateixa pregunta que qualsevol altra manera de perdre feina.
@@ -267,6 +270,30 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
     } finally {
       setSaving(false);
     }
+  }
+
+  /** Escriu el preu proposat al preu ofert. Nomes quan algu ho demana. */
+  async function applyTarget(line: OfferLine | null) {
+    if (!line) return;
+    await mutate(
+      (revision) =>
+        api.post<EconomicOffer>(`${base}/economic-offer/lines/${line.id}/apply-target`, {
+          expected_revision: revision,
+        }),
+      "line",
+    );
+  }
+
+  /** Adopta NOMES els camps triats. Cap "sincronitza-ho tot". */
+  async function syncFromOption(line: OfferLine, fields: string[]) {
+    await mutate(
+      (revision) =>
+        api.post<EconomicOffer>(
+          `${base}/economic-offer/lines/${line.id}/sync-from-option`,
+          { expected_revision: revision, fields },
+        ),
+      "line",
+    );
   }
 
   async function saveLine() {
@@ -545,6 +572,22 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
                 Arxivada
               </StatusPill>
             )}
+            {/* Informatiu: la font ha canviat. No diu que la línia sigui
+                dolenta —seguir el que es va adoptar pot ser el que es vol—,
+                per això no hi ha estil d'alarma ni de blocador. */}
+            {row.line.archived_at === null &&
+              visibleDivergedFields(row.line, internal).length > 0 && (
+                <button
+                  type="button"
+                  className="mt-1 text-[13px] text-brand hover:underline"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setDivergedLine(row.line);
+                  }}
+                >
+                  L&apos;opció ha canviat · Revisa canvis
+                </button>
+              )}
           </div>
         );
       },
@@ -707,6 +750,9 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
           error={rowError}
           currency={currency}
           isNew={!row.line}
+          line={row.line}
+          onApplyTarget={() => void applyTarget(row.line)}
+          applying={saving}
           onSave={() => void saveLine()}
           onCancel={() => void cancelEditor()}
         />
@@ -1026,6 +1072,19 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
       )}
 
       {/* ----- Diàlegs ------------------------------------------------------ */}
+      <DivergenceDrawer
+        line={divergedLine}
+        currency={currency}
+        internal={internal}
+        onClose={() => setDivergedLine(null)}
+        onSync={async (fields) => {
+          if (!divergedLine) return;
+          await syncFromOption(divergedLine, fields);
+          setDivergedLine(null);
+        }}
+        syncing={saving}
+      />
+
       <ConfirmDialog
         open={discardOpen}
         title="Canvis sense desar"
@@ -1166,6 +1225,9 @@ function LineEditor({
   error,
   currency,
   isNew,
+  line,
+  onApplyTarget,
+  applying,
   onSave,
   onCancel,
 }: {
@@ -1180,6 +1242,10 @@ function LineEditor({
   error: { code: string | null; message: string } | null;
   currency: string;
   isNew: boolean;
+  /** La línia desada. `null` mentre se'n crea una de nova. */
+  line: OfferLine | null;
+  onApplyTarget: () => void;
+  applying: boolean;
   onSave: () => void;
   onCancel: () => void;
 }) {
@@ -1296,6 +1362,19 @@ function LineEditor({
           </Field>
         </div>
 
+        {/* L'objectiu comercial va en un bloc propi i separat del preu: la
+            separacio visual ES el missatge. Nomes per a rols economics. */}
+        {internal && !isNew && line && (
+          <TargetBlock
+            line={line}
+            currency={currency}
+            draft={draft.target_markup_pct}
+            onChange={(value) => set("target_markup_pct", value)}
+            onApply={onApplyTarget}
+            applying={applying}
+          />
+        )}
+
         <Field label="Notes">
           <Textarea rows={2} value={draft.notes} onChange={(event) => set("notes", event.target.value)} maxLength={4000} />
         </Field>
@@ -1396,6 +1475,188 @@ function ConflictDialog({
         </section>
       </div>
       <p className="mt-3 text-caption text-muted">No es fusiona res: el preu d&apos;una oferta no es pot endevinar.</p>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+
+/**
+ * L'objectiu comercial d'una línia.
+ *
+ * Tres coses en tres línies, i la separació és el missatge: **l'objectiu no és
+ * el preu**. Editar el markup mou el preu proposat i deixa el preu ofert
+ * exactament on era; escriure'l és una acció a part, amb el seu botó, perquè
+ * és una decisió.
+ *
+ * Només per a rols econòmics: sense el bloc `internal_economics` del servidor
+ * aquí no hi ha ni camp ni valor.
+ */
+function TargetBlock({
+  line,
+  currency,
+  draft,
+  onChange,
+  onApply,
+  applying,
+}: {
+  line: OfferLine;
+  currency: string;
+  draft: string;
+  onChange: (value: string) => void;
+  onApply: () => void;
+  applying: boolean;
+}) {
+  const internal = line.internal_economics;
+  const proposed = internal?.proposed_unit_price_ex_vat ?? null;
+  const matches = internal?.price_matches_target ?? null;
+  const offered = line.offered_unit_price_ex_vat;
+  // Si ja hi ha un preu escrit i no és el proposat, aplicar-lo el substituirà.
+  // Val més dir-ho abans que ensenyar un penediment després.
+  const replaces = proposed !== null && offered !== null && matches === false;
+
+  return (
+    <div className="grid gap-3 rounded-card border border-border px-4 py-3">
+      <p className="font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase">
+        Objectiu comercial
+      </p>
+
+      <div className="grid gap-3 md:grid-cols-12">
+        <Field
+          label="Objectiu de markup (%)"
+          className="md:col-span-4"
+          hint="Sobre cost. Editar-lo no toca el preu ofert."
+        >
+          <Input
+            inputMode="decimal"
+            value={draft}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        </Field>
+
+        <Field label={`Preu proposat (${currency})`} className="md:col-span-4">
+          <p className="text-body tabular-nums text-ink">
+            {proposed === null ? "—" : formatAmount(proposed, currency)}
+          </p>
+        </Field>
+
+        <Field label="Estat" className="md:col-span-4">
+          {matches === null ? (
+            <StatusPill level="neutral" size="sm">
+              Sense determinar
+            </StatusPill>
+          ) : matches ? (
+            <StatusPill level="ready" size="sm">
+              El preu ofert ja és l&apos;objectiu
+            </StatusPill>
+          ) : (
+            <StatusPill level="attention" size="sm">
+              El preu ofert no és l&apos;objectiu
+            </StatusPill>
+          )}
+        </Field>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          loading={applying}
+          disabled={proposed === null || matches === true}
+          onClick={onApply}
+        >
+          Aplica objectiu
+        </Button>
+        {replaces && (
+          <span className="text-caption text-muted">
+            Substituirà el preu ofert actual ({formatAmount(offered, currency)}).
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Què ha canviat a l'opció des que aquesta línia la va adoptar.
+ *
+ * **Informatiu, no un error.** Que l'oferta segueixi el que es va adoptar pot
+ * ser exactament el que es vol —potser el preu ja està negociat—, i per això no
+ * hi ha cap estil d'alarma ni cap «Sincronitza-ho tot».
+ *
+ * Una casella per camp, cap marcada, i el botó adopta només el que s'ha triat.
+ */
+function DivergenceDrawer({
+  line,
+  currency,
+  internal,
+  onClose,
+  onSync,
+  syncing,
+}: {
+  line: OfferLine | null;
+  currency: string;
+  internal: boolean;
+  onClose: () => void;
+  onSync: (fields: string[]) => Promise<void>;
+  syncing: boolean;
+}) {
+  const [picked, setPicked] = useState<string[]>([]);
+  const fields = line ? visibleDivergedFields(line, internal) : [];
+
+  return (
+    <Modal
+      open={line !== null}
+      title="L'opció ha canviat"
+      description="Tria què vols adoptar. El que no marquis es queda com està."
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={syncing}>
+            Tanca
+          </Button>
+          <Button
+            variant="primary"
+            loading={syncing}
+            disabled={picked.length === 0}
+            onClick={() => void onSync(picked).then(() => setPicked([]))}
+          >
+            Actualitza els camps seleccionats
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-2">
+        <p className="text-caption text-muted">
+          El preu ofert i l&apos;objectiu no es toquen: no són de l&apos;opció.
+        </p>
+        {fields.map((field) => (
+          <label key={field} className="flex items-center gap-2.5 text-body">
+            <input
+              type="checkbox"
+              className="h-4 w-4 shrink-0 accent-brand"
+              checked={picked.includes(field)}
+              onChange={(event) =>
+                setPicked((current) =>
+                  event.target.checked
+                    ? [...current, field]
+                    : current.filter((item) => item !== field),
+                )
+              }
+            />
+            <span>{SYNC_FIELD_LABELS[field] ?? field}</span>
+          </label>
+        ))}
+        {fields.length === 0 && (
+          <p className="text-caption text-muted">
+            No hi ha res que aquest rol pugui revisar.
+          </p>
+        )}
+        <p className="text-caption text-faint">{currency}</p>
+      </div>
     </Modal>
   );
 }

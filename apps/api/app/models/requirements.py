@@ -27,7 +27,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column
+from app.db.base import ActorMixin, Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column
 from app.models.enums import (
     AnalysisRunStatus,
     AwardCriterionType,
@@ -38,6 +38,7 @@ from app.models.enums import (
     RequirementModality,
     RequirementObligation,
     RequirementOperator,
+    RequirementOrigin,
     RequirementScope,
     ReviewStatus,
 )
@@ -193,7 +194,7 @@ class RequirementExtractionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         return f"<RequirementExtractionRun {self.status} {self.input_fingerprint[:12]}>"
 
 
-class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, ActorMixin, Base):
     """Una exigencia del plec, estructurada i amb evidencia.
 
     `obligation = MANDATORY` NO vol dir "no-go": nomes vol dir que el plec ho
@@ -214,13 +215,32 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         # Deduplicacio determinista dins d'un run: la mateixa clau canonica no
         # s'hi pot repetir. Es calcula al servei, no la decideix el model.
         sa.UniqueConstraint("run_id", "dedup_key", name="uq_requirements_run_dedup"),
+        # Un requisit extret TE run i un de manual NO en te. Ho garanteix la
+        # base de dades i no nomes el servei: sense aixo, un dia algu escriuria
+        # una fila manual amb run i el conjunt efectiu comptaria dues vegades.
+        sa.CheckConstraint(
+            "(origin = 'extracted' AND run_id IS NOT NULL)"
+            " OR (origin = 'manual' AND run_id IS NULL)",
+            name="requirement_origin_matches_run",
+        ),
+        sa.Index("ix_requirements_origin_archived", "tender_id", "origin", "archived_at"),
     )
 
-    run_id: Mapped[uuid.UUID] = mapped_column(
+    #: NUL nomes per als manuals. Un requisit extret sense run no podria dir
+    #: d'on surt, i el CHECK de sobre ho impedeix.
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True),
         sa.ForeignKey("requirement_extraction_runs.id", ondelete="CASCADE"),
-        nullable=False,
     )
+    #: Qui l'ha escrit. Veure `RequirementOrigin`.
+    origin: Mapped[RequirementOrigin] = mapped_column(
+        enum_column(RequirementOrigin, "requirement_origin"),
+        nullable=False,
+        default=RequirementOrigin.EXTRACTED,
+    )
+    #: Nomes per als manuals: un d'extret surt del conjunt efectiu quan la seva
+    #: run deixa de ser vigent, i no li cal cap marca.
+    archived_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     tender_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False
     )
@@ -316,7 +336,7 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: Quin chunk l'ha produit. Util per diagnosticar l'extractor.
     source_chunk_index: Mapped[int | None] = mapped_column(sa.Integer)
 
-    run: Mapped[RequirementExtractionRun] = relationship(back_populates="requirements")
+    run: Mapped[RequirementExtractionRun | None] = relationship(back_populates="requirements")
     evidence: Mapped[list[RequirementEvidence]] = relationship(
         back_populates="requirement", cascade="all, delete-orphan", lazy="selectin"
     )

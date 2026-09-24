@@ -8,12 +8,14 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
     ContractType,
+    DocumentFileOrigin,
     DownloadStatus,
     ExtractionQuality,
     ExtractionStatus,
@@ -85,6 +87,45 @@ class TenderLotRead(ORMModel):
     cpvs: list[TenderCPVRead] = []
 
 
+class DocumentAnalysisStatus(StrEnum):
+    """Que se sap del TEXT d'un document. Mai que se sap del fitxer.
+
+    Es un read-model: no hi ha cap columna que el guardi, i es calcula des de
+    l'estat i la qualitat de l'extraccio vigent. Existeix perque la interficie
+    no hagi de deduir de tres camps si ha de dir "llegit", "no se'n pot llegir
+    el text" o "ha fallat", i sobretot perque no pugui confondre'ls: guardar be
+    un fitxer i poder-ne llegir el text son dos fets independents.
+    """
+
+    #: Encara no s'ha intentat llegir.
+    PENDING = "pending"
+    #: S'ha llegit i hi ha text aprofitable.
+    EXTRACTED = "extracted"
+    #: S'ha llegit i no hi ha text usable. El cas tipic es un PDF escanejat: no
+    #: es cap error i tampoc no es una analisi. No s'hi fa OCR.
+    NO_USABLE_TEXT = "no_usable_text"
+    #: D'aquest format no en llegim el text en aquesta versio. El fitxer es
+    #: perfectament valid i esta guardat.
+    UNSUPPORTED = "unsupported"
+    #: S'ha intentat llegir i el parser no se n'ha sortit.
+    FAILED = "failed"
+
+
+def analysis_status_for(
+    status: ExtractionStatus | None, quality: ExtractionQuality | None
+) -> DocumentAnalysisStatus:
+    """El veredicte sobre el text, des dels camps reals de l'extraccio."""
+    if status is None or status in (ExtractionStatus.PENDING, ExtractionStatus.EXTRACTING):
+        return DocumentAnalysisStatus.PENDING
+    if status == ExtractionStatus.SKIPPED_UNSUPPORTED:
+        return DocumentAnalysisStatus.UNSUPPORTED
+    if status == ExtractionStatus.FAILED:
+        return DocumentAnalysisStatus.FAILED
+    if quality in (ExtractionQuality.EMPTY, ExtractionQuality.LOW_TEXT):
+        return DocumentAnalysisStatus.NO_USABLE_TEXT
+    return DocumentAnalysisStatus.EXTRACTED
+
+
 class TenderDocumentFileSummary(ORMModel):
     """Estat documental d'un document, prou per pintar una fila de la llista.
 
@@ -95,8 +136,16 @@ class TenderDocumentFileSummary(ORMModel):
     file_id: uuid.UUID
     version_number: int
     download_status: DownloadStatus
+    #: D'on venen els bytes: descarregats d'una font o pujats per una persona.
+    origin: DocumentFileOrigin = DocumentFileOrigin.FETCHED
     file_size: int | None = None
     sha256: str | None = None
+    mime_type: str | None = None
+    #: Si d'aquest format en sabem llegir el text. Es una propietat del FORMAT,
+    #: no d'aquest fitxer: separa "no ho hem provat" de "no ho sabem fer".
+    text_extraction_supported: bool = False
+    #: El veredicte sobre el text, ja calculat. Veure `DocumentAnalysisStatus`.
+    analysis_status: DocumentAnalysisStatus = DocumentAnalysisStatus.PENDING
     extraction_status: ExtractionStatus | None = None
     quality: ExtractionQuality | None = None
     page_count: int | None = None
@@ -272,3 +321,127 @@ class TenderHistoryRevisionRead(ORMModel):
     created_at: datetime
     change_summary: dict[str, Any] | None = None
     events: list[TenderChangeEventRead] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Alta manual (S3-S1)                                                           #
+# --------------------------------------------------------------------------- #
+
+
+class ManualBuyerCreate(BaseModel):
+    """Un organisme escrit a ma. Privat de l'empresa que l'escriu."""
+
+    #: Estable durant tots els reintents de la MATEIXA alta. Diferent del token
+    #: de la licitacio: el mateix organisme pot servir per a mes d'un expedient.
+    client_token: uuid.UUID
+    name: str = Field(min_length=1, max_length=500)
+    tax_identifier: str | None = Field(default=None, max_length=64)
+    nuts_code: str | None = Field(default=None, max_length=10)
+
+
+class ManualTenderCreate(BaseModel):
+    """El minim per obrir un expedient. La resta s'edita despres."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: El genera el formulari en obrir-se i no canvia entre reintents. D'aqui
+    #: surt `external_id`, que no es deriva mai del numero d'expedient.
+    client_token: uuid.UUID
+    title: str = Field(min_length=1, max_length=1000)
+    #: El que dona l'organisme. **No es unic**: dos organismes diferents en
+    #: poden fer servir el mateix.
+    expediente_number: str | None = Field(default=None, max_length=200)
+    #: Un organisme que ja existeix —global o de la mateixa empresa— o un de nou.
+    #: Excloents. Cap dels dos tambe val: l'expedient pot comencar sense.
+    buyer_id: uuid.UUID | None = None
+    buyer_manual: ManualBuyerCreate | None = None
+
+
+class ManualTenderCreateResult(BaseModel):
+    """`created=False` vol dir que el reintent ha trobat la que ja hi havia."""
+
+    created: bool
+    tender: TenderDetail
+
+
+class ManualTenderUpdate(BaseModel):
+    """Correccions sobre una licitacio oberta a ma.
+
+    Tots els camps son opcionals i s'apliquen **nomes si arriben**: es fa servir
+    `model_fields_set`, que es la manera fiable de distingir «no toquis aixo»
+    d'«escriu-hi NULL». Per aixo no cal cap indicador del tipus `buyer_clear`:
+    enviar `buyer_id: null` treu l'organisme i ometre'l no el toca.
+
+    La identitat no hi es i no s'hi pot colar: `extra="forbid"` rebutja
+    `id`, `source_id`, `external_id` i `owner_company_id` amb un 422 en comptes
+    d'ignorar-los en silenci.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: La revisio que el client creu vigent. Si ja no ho es, 409.
+    expected_revision: int = Field(ge=0)
+
+    title: str | None = Field(default=None, min_length=1, max_length=1000)
+    description: str | None = None
+    expediente_number: str | None = Field(default=None, max_length=200)
+    procedure_type: ProcedureType | None = None
+    contract_type: ContractType | None = None
+    estimated_value: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    base_budget: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    base_budget_without_tax: Decimal | None = Field(
+        default=None, ge=0, max_digits=18, decimal_places=2
+    )
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    publication_date: date | None = None
+    deadline_at: datetime | None = None
+    place_of_execution: str | None = Field(default=None, max_length=500)
+    nuts_code: str | None = Field(default=None, max_length=10)
+    country_code: str | None = Field(default=None, min_length=2, max_length=2)
+
+    #: Excloents, com al POST. `null` explicit treu l'organisme.
+    buyer_id: uuid.UUID | None = None
+    buyer_manual: ManualBuyerCreate | None = None
+
+
+class TenderDocumentUploadResult(BaseModel):
+    """El que Step 2 necessita per pintar una fila sense tornar a preguntar res.
+
+    `stored` i l'estat d'analisi son camps separats a proposit: un DOCX surt
+    d'aqui amb `stored=True` i `analysis_status="unsupported"`, i col·lapsar-ho
+    en un sol "ok/error" obligaria la interficie a dir una de les dues mentides.
+    """
+
+    id: uuid.UUID
+    name: str
+    document_type: TenderDocumentType
+    mime_type: str | None = None
+    #: Els bytes son al sistema. Sempre cert si la resposta es 201.
+    stored: bool = True
+    #: **Aqui NO hi ha cap senyal de deduplicacio.** El contingut es dedupa per
+    #: SHA-256 a tot el sistema, de manera que dir "aquests bytes ja hi eren"
+    #: respondria una pregunta sobre TOTS els tenants: qui sospites que un
+    #: competidor ha pujat un fitxer concret, el podria pujar ell i saber-ho.
+    #: La deduplicacio es una optimitzacio d'storage i es queda a dins.
+    file: TenderDocumentFileSummary
+
+
+class ManualTenderUpdateResult(BaseModel):
+    """`revised` vol dir **s'ha creat una `TenderRevision`**, res mes.
+
+    Es fals nomes quan els valors ja eren aquests. Tota escriptura real en crea
+    una, sigui material o informativa: si la materialitat decidis l'existencia
+    de la revisio, el testimoni de CAS no es mouria i dos clients que han
+    llegit la mateixa revisio podrien escriure tots dos.
+
+    Si un canvi obliga a tornar a mirar-se un paquet aprovat es una pregunta
+    **separada**, i qui la respon es `evaluate_staleness` amb la taxonomia
+    material/informativa que ja existia.
+    """
+
+    #: S'ha creat una revisio nova (i per tant `revision` ha pujat).
+    revised: bool
+    #: La revisio vigent despres de la peticio. El seguent PATCH ha de portar
+    #: aquest numero a `expected_revision`.
+    revision: int
+    tender: TenderDetail

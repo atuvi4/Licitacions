@@ -175,6 +175,9 @@ class SourceType(StrEnum):
     SYNDICATION_ATOM = "syndication_atom"
     API = "api"
     FILE = "file"
+    #: Licitacions introduides per una persona. La font segueix sent provinenca:
+    #: qui pot veure la licitacio ho diu `Tender.owner_company_id`, mai la font.
+    MANUAL = "manual"
 
 
 class IngestionStatus(StrEnum):
@@ -299,6 +302,19 @@ class DownloadStatus(StrEnum):
     FAILED = "failed"
 
 
+class DocumentFileOrigin(StrEnum):
+    """D'on ha sortit una versio de document.
+
+    `FETCHED` es el que fa la ingesta sindicada: hi ha una URL d'origen i algu
+    l'ha baixada. `UPLOADED` es el que fara la ingesta manual: no hi ha URL, hi
+    ha una persona que ha pujat el fitxer. Sense aquesta distincio, un fitxer
+    sense `source_url` no es podria distingir d'una descarrega feta malament.
+    """
+
+    FETCHED = "fetched"
+    UPLOADED = "uploaded"
+
+
 class ExtractionStatus(StrEnum):
     """Estat d'una passada de parser sobre un blob."""
 
@@ -318,6 +334,52 @@ class ExtractionQuality(StrEnum):
     EMPTY = "empty"
     FAILED = "failed"
     NOT_APPLICABLE = "not_applicable"
+
+
+class DimensionStatus(StrEnum):
+    """En quin punt esta el valor de treball d'una dimensio.
+
+    `UNDECIDED` NO es `DECIDED`: vol dir que ningu no ha dit encara quin numero
+    fara servir la candidatura, i tractar-ho com si fos decidit seria justament
+    l'error que aquesta taula existeix per evitar.
+    """
+
+    #: Hi ha observacions, o no n'hi ha cap, pero ningu no ha fixat el valor.
+    UNDECIDED = "undecided"
+    #: Una persona ha triat un valor i ha escrit per que.
+    DECIDED = "decided"
+    #: Dues fonts diuen numeros diferents. Ho detecta el sistema; el resol algu.
+    DISPUTED = "disputed"
+
+
+class ObservationSourceKind(StrEnum):
+    """QUI afirma un valor. No es la provinenca documental.
+
+    La provinenca —quins bytes, quina versio, quina pagina— viu a
+    `TenderSourceRef`. Aixo diu d'on ve l'afirmacio: del plec, d'un proveidor,
+    d'un calcul nostre. Un proveidor pot dir un numero per telefon i seguir
+    sent una font legitima que no te cap document al darrere.
+    """
+
+    TENDER_DOCUMENT = "tender_document"
+    SUPPLIER = "supplier"
+    INTERNAL = "internal"
+    OTHER = "other"
+
+
+class SourceRefKind(StrEnum):
+    """A que s'ancora una cita.
+
+    Son dues coses diferents i no una de sola amb camps opcionals: d'un PDF
+    llegit se'n pot citar la pagina exacta, i d'un XLSX guardat nomes se'n pot
+    dir on mirar. Fer veure que un full de calcul te pagines seria inventar-se
+    una precisio que no tenim.
+    """
+
+    #: Una pagina concreta d'una extraccio concreta. La cita mes forta.
+    EXTRACTED_PAGE = "extracted_page"
+    #: Una versio concreta d'un fitxer, sense text. `location_label` diu on.
+    DOCUMENT_FILE = "document_file"
 
 
 class PageExtractionStatus(StrEnum):
@@ -403,6 +465,20 @@ class ExtractionConfidence(StrEnum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+
+
+class RequirementOrigin(StrEnum):
+    """Qui ha escrit aquest requisit.
+
+    No es un detall de metadata: canvia que se'n pot afirmar. Un requisit
+    EXTRET el va treure un model d'uns documents concrets i te una run al
+    darrere que diu quins; un de MANUAL l'ha escrit una persona i no te run ni
+    en pot tenir. Barrejar-los obligaria a inventar una execucio d'analisi que
+    no ha existit mai (D-09).
+    """
+
+    EXTRACTED = "extracted"
+    MANUAL = "manual"
 
 
 class ReviewStatus(StrEnum):
@@ -950,3 +1026,90 @@ class PricingBasis(StrEnum):
     #: La quantitat ja son les unitats de tot el contracte: no es multiplica
     #: mai per la durada.
     PER_UNIT = "per_unit"
+
+
+# ---------------------------------------------------------------------------
+# Opcions de solucio (Sprint 3)
+# ---------------------------------------------------------------------------
+
+
+class QuoteStatus(StrEnum):
+    """On es la cotitzacio d'una opcio. Workflow intern, no un CRM.
+
+    No dispara cap correu, no parla amb cap proveidor i no descarrega cap
+    document: diu en quin punt es la gestio, perque la persona que prepara
+    l'oferta sapiga que li falta.
+
+    `RECEIVED` vol dir **rebuda**, no aprovada ni validada. Confondre-ho faria
+    que una xifra encara per contrastar semblés tancada.
+    """
+
+    #: Encara no s'ha gestionat. Es on neix tota opcio.
+    DRAFT = "draft"
+    #: S'ha demanat al proveidor.
+    REQUESTED = "requested"
+    #: Demanada i esperant resposta.
+    PENDING = "pending"
+    #: Ha arribat. Rebuda, que no vol dir bona.
+    RECEIVED = "received"
+    #: Va arribar pero ja no es vigent.
+    EXPIRED = "expired"
+    #: El proveidor no cotitza, o aquesta via s'ha tancat des de l'altra banda.
+    DECLINED = "declined"
+
+
+class OptionSelection(StrEnum):
+    """Si aquesta opcio es la que fara servir la candidatura.
+
+    **`UNDECIDED` no es `REJECTED`.** Es la distincio que justifica que existeixi
+    aquest enum en comptes d'un boolea: una alternativa que ningu no ha mirat
+    encara i una que algu ha descartat amb motiu son coses diferents, i
+    tractar-les igual faria desapareixer feina que no s'ha fet.
+    """
+
+    #: Ningu no ha decidit. Cap opcio neix d'una altra manera.
+    UNDECIDED = "undecided"
+    SELECTED = "selected"
+    #: Descartada per una persona, sempre amb motiu escrit.
+    REJECTED = "rejected"
+
+
+# ---------------------------------------------------------------------------
+# Dubtes i discrepancies (Sprint 3)
+# ---------------------------------------------------------------------------
+
+
+class IssueType(StrEnum):
+    """Quina mena de pregunta oberta es.
+
+    Classifica per **a qui cal preguntar o que cal esbrinar**, no per gravetat:
+    la urgencia ja la diuen `due_at` i `blocks_final_review`, i una taxonomia de
+    risc convidaria a inventar-ne la severitat.
+    """
+
+    #: Ho hem de resoldre nosaltres.
+    INTERNAL_QUESTION = "internal_question"
+    #: Cal preguntar-ho a l'organ de contractacio.
+    AUTHORITY_QUESTION = "authority_question"
+    SUPPLIER_QUESTION = "supplier_question"
+    #: Dues fonts diuen coses diferents i cal decidir quina val.
+    CONTRADICTION = "contradiction"
+    #: Falta una dada que encara no te ningu.
+    MISSING_INFORMATION = "missing_information"
+
+
+class IssueStatus(StrEnum):
+    """On es la pregunta.
+
+    `DISMISSED` **no** es `RESOLVED`: descartar vol dir que la pregunta ja no ve
+    al cas, no que en tinguem la resposta. Barrejar-los faria que "ho sabem"
+    inclogues coses que ningu no ha contestat mai.
+    """
+
+    OPEN = "open"
+    #: Depen d'algu o d'alguna cosa de fora: no hi podem fer res ara mateix.
+    WAITING = "waiting"
+    #: Hi ha resposta, i esta escrita.
+    RESOLVED = "resolved"
+    #: Es tanca perque ja no es pertinent.
+    DISMISSED = "dismissed"

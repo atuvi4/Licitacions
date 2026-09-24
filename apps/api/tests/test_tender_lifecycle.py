@@ -62,6 +62,7 @@ from app.tenders.changes import (
     DOCUMENT_FIELDS,
     IMPACT_MATRIX,
     LOT_FIELDS,
+    MANUAL_ONLY_FIELDS,
     ChangeCode,
     ChangeImpact,
     canonical_instant,
@@ -194,7 +195,48 @@ class TestDeteccioPura:
         """
         snapshot = await build_snapshot(db, tender)
 
+        assert set(snapshot) == COMPARED_FIELDS - MANUAL_ONLY_FIELDS
+
+    async def test_una_de_sindicada_no_canvia_gens_amb_els_camps_nous(self, db, tender):
+        """Les que ja hi ha no poden semblar canviades perque hem ampliat res.
+
+        `expediente_number` i `country_code` son a la fila d'aquesta licitacio,
+        pero no a la seva fotografia. Si hi entressin, el dia que aquest codi
+        arribes a produccio TOTES les licitacions sindicades donarien un hash
+        diferent i es despertaria mig sistema per un canvi que no ha existit.
+        """
+        first = await lifecycle.record_revision(db, tender)
+        second = await lifecycle.record_revision(db, tender)
+
+        assert first.revision.revision_number == 1
+        assert second.unchanged is True
+        assert "expediente_number" not in first.revision.normalized_snapshot
+
+    async def test_una_licitacio_oberta_a_ma_hi_aporta_dos_camps_mes(self, db, tenant_a):
+        """La fotografia d'una manual ha de cobrir tot el que se'n pot corregir.
+
+        Un camp editable que no hi entres no mouria el hash, i per tant no
+        crearia revisio: dos clients que haguessin llegit la mateixa revisio
+        podrien escriure'l tots dos sense que el segon s'assabentes que
+        l'objecte ja havia canviat. El CAS protegeix la licitacio, no nomes
+        els camps que publica un organ.
+        """
+        from app.services import manual_tender
+
+        user, company = tenant_a
+        tender, _created = await manual_tender.create_manual_tender(
+            db,
+            company_id=company.id,
+            user=user,
+            data=manual_tender.ManualTenderInput(
+                client_token=uuid.uuid4(), title="Oberta a ma"
+            ),
+        )
+
+        snapshot = await build_snapshot(db, tender)
+
         assert set(snapshot) == COMPARED_FIELDS
+        assert MANUAL_ONLY_FIELDS <= set(snapshot)
 
     async def test_tot_el_que_entra_al_hash_dun_lot_i_dun_document_es_compara(
         self, db, tender

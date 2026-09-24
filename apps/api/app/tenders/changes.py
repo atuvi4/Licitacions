@@ -123,6 +123,10 @@ class ChangeCode(StrEnum):
     CONTRACT_TYPE_CHANGED = "CONTRACT_TYPE_CHANGED"
     TENDER_CANCELLED = "TENDER_CANCELLED"
     PUBLICATION_DATE_CHANGED = "PUBLICATION_DATE_CHANGED"
+    #: Nomes a les licitacions obertes a ma: a les sindicades el numero
+    #: d'expedient i el pais els fixa la font i no els corregeix ningu.
+    EXPEDIENTE_NUMBER_CHANGED = "EXPEDIENTE_NUMBER_CHANGED"
+    COUNTRY_CHANGED = "COUNTRY_CHANGED"
 
     DEADLINE_CHANGED = "DEADLINE_CHANGED"
     DEADLINE_ADDED = "DEADLINE_ADDED"
@@ -240,6 +244,13 @@ IMPACT_MATRIX: dict[ChangeCode, frozenset[ChangeImpact]] = {
         {ChangeImpact.PREFIT_AFFECTING, ChangeImpact.COMPLIANCE_AFFECTING}
     ),
     ChangeCode.PLACE_CHANGED: frozenset({ChangeImpact.PREFIT_AFFECTING}),
+    #: Corregir com es diu un expedient no canvia que es. Es una etiqueta per a
+    #: qui el busca, i cap calcul no la llegeix.
+    ChangeCode.EXPEDIENTE_NUMBER_CHANGED: frozenset({ChangeImpact.INFORMATIONAL}),
+    #: El pais NO es l'equivalent gros de `nuts_code`: el motor de pre-fit
+    #: nomes llegeix `nuts_code` i `place_of_execution`, i marcar-lo com a
+    #: `PREFIT_AFFECTING` faria caducar paquets per un camp que ningu calcula.
+    ChangeCode.COUNTRY_CHANGED: frozenset({ChangeImpact.INFORMATIONAL}),
 
     ChangeCode.CPV_ADDED: frozenset({ChangeImpact.PREFIT_AFFECTING}),
     ChangeCode.CPV_REMOVED: frozenset({ChangeImpact.PREFIT_AFFECTING}),
@@ -271,9 +282,18 @@ IMPACT_MATRIX: dict[ChangeCode, frozenset[ChangeImpact]] = {
     ),
     ChangeCode.LOT_METADATA_CHANGED: frozenset({ChangeImpact.INFORMATIONAL}),
 
-    ChangeCode.DOCUMENT_ADDED: frozenset(
-        {ChangeImpact.REQUIREMENTS_AFFECTING, ChangeImpact.COMPLIANCE_AFFECTING}
-    ),
+    #: Un plec NOU diu que hi ha material per llegir, no que el que ja sabiem
+    #: hagi canviat. Obliga a tornar a extreure requisits —per aixo es
+    #: `requirements_affecting` i per aixo continua sent material—, pero no
+    #: afirma res del compliment: el veredicte de compliment es calcula sobre
+    #: els requisits, i mentre ningu no hagi llegit el document nou els
+    #: requisits vigents son exactament els d'abans. Quan algu el llegeixi i
+    #: en surtin requisits diferents, hi haura un run nou i qui en depengui ho
+    #: sabra per aquell cami.
+    #:
+    #: Es diferent de substituir-ne un o de perdre'n un: alla el material que
+    #: ja formava part del que s'havia decidit deixa de ser el mateix.
+    ChangeCode.DOCUMENT_ADDED: frozenset({ChangeImpact.REQUIREMENTS_AFFECTING}),
     ChangeCode.DOCUMENT_REMOVED: frozenset(
         {
             ChangeImpact.REQUIREMENTS_AFFECTING,
@@ -332,6 +352,25 @@ class Change:
         }
 
 
+#: Els impactes que fan que un paquet congelat deixi de ser vigent.
+#:
+#: NO hi es `REQUIREMENTS_AFFECTING`, i es la distincio que sosté tota la
+#: pantalla d'aprovacio: que arribi material per llegir no vol dir que el que
+#: s'enviaria hagi canviat. Qui ha de reaccionar a material nou es l'extraccio
+#: de requisits (`requirements_outdated`); si en surten requisits diferents,
+#: el paquet ho sabra per `requirement_run_changed`, que compara runs i no
+#: events. Sense aquesta separacio, qualsevol annex publicat despres de
+#: l'aprovacio la faria caducar, i el dia que canviés un plec de veritat ningu
+#: no s'ho miraria.
+PACKAGE_STALE_IMPACTS: frozenset[ChangeImpact] = frozenset(
+    {
+        ChangeImpact.PREFIT_AFFECTING,
+        ChangeImpact.COMPLIANCE_AFFECTING,
+        ChangeImpact.WORKSPACE_CRITICAL,
+    }
+)
+
+
 def impacts_of(changes: list[Change]) -> frozenset[ChangeImpact]:
     """Tots els impactes d'un conjunt de canvis."""
     result: set[ChangeImpact] = set()
@@ -388,7 +427,18 @@ _SCALAR_FIELDS: tuple[tuple[str, ChangeCode], ...] = (
     ("currency", ChangeCode.CURRENCY_CHANGED),
     ("place_of_execution", ChangeCode.PLACE_CHANGED),
     ("nuts_code", ChangeCode.PLACE_CHANGED),
+    ("expediente_number", ChangeCode.EXPEDIENTE_NUMBER_CHANGED),
+    ("country_code", ChangeCode.COUNTRY_CHANGED),
 )
+
+#: Els dos camps que nomes hi ha a la fotografia d'una licitacio oberta a ma.
+#:
+#: A una de sindicada els fixa la font i ningu no els corregeix, aixi que
+#: afegir-los-hi faria semblar canviades totes les que ja hi ha el dia que
+#: tornessin a passar per aqui. A una de manual, en canvi, son editables, i un
+#: camp editable que no entra a la fotografia deixa forats al CAS: dos clients
+#: que llegeixen la mateixa revisio poden escriure tots dos sense saber-ho.
+MANUAL_ONLY_FIELDS: frozenset[str] = frozenset({"expediente_number", "country_code"})
 
 #: Els camps de la fotografia que NO son escalars i els compara un detector
 #: propi. Amb `_SCALAR_FIELDS` han de cobrir la fotografia sencera.

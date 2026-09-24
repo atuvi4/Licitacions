@@ -125,6 +125,38 @@ describe("Codis → text i destinació", () => {
     expect(findingCopy("mandatory_checklist_blocked")?.destination).toEqual({ kind: "area", area: "pla" });
   });
 
+  it("els plecs es resolen als plecs, no dins de Preparar", () => {
+    expect(findingCopy("tender_documents_unreviewed")?.destination).toEqual({
+      kind: "tender",
+      tab: "plecs",
+    });
+    expect(findingCopy("tender_documents_changed")?.destination).toEqual({
+      kind: "tender",
+      tab: "plecs",
+    });
+  });
+
+  it("que l'anàlisi no cobreixi els plecs es resol on viu l'anàlisi", () => {
+    // Portar-ho a Decidir enviaria algú a un lloc on no hi ha el botó que
+    // necessita: tornar a executar l'anàlisi es fa a la pestanya de requisits.
+    expect(findingCopy("requirement_analysis_predates_documents")?.destination).toEqual({
+      kind: "tender",
+      tab: "requisits",
+    });
+  });
+
+  it("cap dels tres findings de plecs no diu que els requisits hagin canviat", () => {
+    for (const code of [
+      "tender_documents_unreviewed",
+      "tender_documents_changed",
+      "requirement_analysis_predates_documents",
+    ]) {
+      const copy = findingCopy(code);
+      const text = `${copy?.label} ${copy?.hint ?? ""}`.toLowerCase();
+      expect(text).not.toMatch(/requisits han canviat/);
+    }
+  });
+
   it("el que no es resol preparant res porta a Decidir", () => {
     expect(findingCopy("decision_not_go")?.destination).toEqual({ kind: "step", step: "decidir" });
     expect(findingCopy("analysis_outdated")?.destination).toEqual({ kind: "step", step: "decidir" });

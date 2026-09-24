@@ -27,6 +27,7 @@ import {
   StatusPill,
 } from "@/components/ui";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { useSession } from "@/components/SessionProvider";
 import { formatDate } from "@/lib/format";
 import { useResource } from "@/lib/hooks";
 import { DOCUMENT_STATE_LEVEL, QA_LEVEL, formatDateTime } from "@/lib/labels";
@@ -35,6 +36,7 @@ import {
   TENDER_DOCUMENT_LABELS,
   documentState,
   formatBytes,
+  analysisStatusOf,
   type TenderDetail,
   type TenderDocumentFileSummary,
 } from "@/lib/tenders";
@@ -44,11 +46,18 @@ interface FileRead {
   version_number: number;
   is_current: boolean;
   download_status: string;
-  source_url: string;
+  /** Nul quan el fitxer l'ha pujat una persona: no ve de cap URL. */
+  source_url: string | null;
+  origin: "fetched" | "uploaded";
   original_filename: string | null;
   downloaded_at: string | null;
   error_code: string | null;
-  content: { sha256: string; file_size: number; mime_type: string } | null;
+  content: {
+    sha256: string;
+    file_size: number;
+    mime_type: string;
+    is_text_extractable: boolean;
+  } | null;
   extraction: {
     id: string;
     parser_version: string;
@@ -110,7 +119,14 @@ function DocumentText() {
   const citedPage = Number(search.get("page")) || null;
 
   // Les rutes van sense `/api/v1`: el proxy `/bff/*` ja hi reescriu a sobre.
-  const files = useResource<FileRead[]>(`/tenders/${params.tenderId}/documents/${params.documentId}/files`);
+  //
+  // Els plecs es llegeixen DINS d'una empresa. No és un detall de ruta: qui és
+  // membre de dues no ha de poder llegir des d'una el document de l'altra, i
+  // canviar d'empresa ha de deixar de servir el que es llegia abans.
+  const { companyId } = useSession();
+  const files = useResource<FileRead[]>(
+    `/companies/${companyId}/tenders/${params.tenderId}/documents/${params.documentId}/files`,
+  );
   const [pageNumber, setPageNumber] = useState(citedPage ?? 1);
 
   // El títol ha de ser el NOM del document («Plec de prescripcions tècniques»),
@@ -127,7 +143,9 @@ function DocumentText() {
   const showingCitedRevision = Boolean(citedExtraction && extraction?.id === citedExtraction);
 
   const page = useResource<PageRead>(
-    extraction ? `/tender-document-extractions/${extraction.id}/pages/${pageNumber}` : null,
+    extraction
+      ? `/companies/${companyId}/tender-document-extractions/${extraction.id}/pages/${pageNumber}`
+      : null,
   );
 
   const total = extraction?.page_count ?? 0;
@@ -139,8 +157,12 @@ function DocumentText() {
         file_id: current.id,
         version_number: current.version_number,
         download_status: current.download_status as never,
+        origin: current.origin,
         file_size: current.content?.file_size ?? null,
         sha256: current.content?.sha256 ?? null,
+        mime_type: current.content?.mime_type ?? null,
+        text_extraction_supported: current.content?.is_text_extractable ?? false,
+        analysis_status: analysisStatusOf(extraction),
         extraction_status: (extraction?.status ?? null) as never,
         quality: (extraction?.quality ?? null) as never,
         page_count: extraction?.page_count ?? null,
@@ -208,7 +230,7 @@ function DocumentText() {
   const state = documentState(summary);
   const issues = extraction?.qa_issues ?? [];
   const readingWarnings = issues.length > 0 || Boolean(extraction?.ocr_candidate);
-  const originalHref = `/bff/tender-document-files/${current.id}/original`;
+  const originalHref = `/bff/companies/${companyId}/tender-document-files/${current.id}/original`;
 
   return (
     <div className="space-y-4">

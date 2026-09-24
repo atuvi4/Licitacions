@@ -69,6 +69,21 @@ INDIRECT_TABLES: dict[str, tuple[str, str, str]] = {
     "project_cpvs": ("project_id", "company_projects", "id"),
     "project_services": ("project_id", "company_projects", "id"),
     "service_cpvs": ("service_id", "company_services", "id"),
+    # El que una font deia sobre una magnitud es de l'empresa que ho va anotar,
+    # no de la licitacio: `workspace_dimensions` porta el `company_id` i
+    # l'observacio hi penja. Si es destrueix el tenant, se'n va amb ell.
+    "workspace_dimension_observations": ("dimension_id", "workspace_dimensions", "id"),
+    # De que depen una opcio es de l'empresa que ho va declarar, com l'opcio
+    # mateixa. Penja de `workspace_solution_options`, que porta el `company_id`;
+    # si es destrueix el tenant, se'n va amb ell i no deixa cap fila orfe.
+    "workspace_solution_option_dimensions": (
+        "solution_option_id",
+        "workspace_solution_options",
+        "id",
+    ),
+    # Les cites d'un dubte pengen del dubte, que porta el `company_id`. La cita
+    # en si (`tender_source_refs`) no: es de la licitacio i es publica.
+    "workspace_issue_source_refs": ("issue_id", "workspace_issues", "id"),
 }
 
 # Taules publiques i globals: no pertanyen a cap tenant i no s'han de tocar mai.
@@ -87,6 +102,10 @@ PUBLIC_TABLES = frozenset(
         "requirement_evidence",
         "requirement_extraction_runs",
         "requirements",
+        # Les cites d'un requisit pengen del requisit, que penja de la
+        # licitacio. Cap empresa n'es propietaria i per tant no s'esborren en
+        # destruir un tenant.
+        "requirement_source_ref_links",
         "tender_cpvs",
         "tender_documents",
         # La capa documental dels plecs es publica i global: els mateixos bytes
@@ -102,6 +121,11 @@ PUBLIC_TABLES = frozenset(
         # que el miren comparteixen les mateixes revisions i els mateixos canvis.
         "tender_revisions",
         "tender_change_events",
+        # Una cita penja de la LICITACIO, no de cap empresa: no te `company_id`
+        # i hereta la visibilitat de l'expedient, com els plecs que cita. Per
+        # aixo tampoc no s'ha d'esborrar en destruir un tenant: la font que
+        # senyala segueix sent la mateixa per a qui la pugui veure.
+        "tender_source_refs",
         "tender_lot_cpvs",
         "tender_lots",
         "tenders",

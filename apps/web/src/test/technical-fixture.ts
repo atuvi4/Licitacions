@@ -7,6 +7,9 @@ export function requirementFixture(overrides: Partial<Requirement> = {}): Requir
   return {
     id,
     run_id: "run1",
+    origin: "extracted" as const,
+    archived_at: null,
+    citations: [],
     tender_id: "t1",
     tender_lot_id: null,
     category: "technical_requirement",

@@ -173,7 +173,9 @@ async def test_a_new_parser_version_re_extracts_without_re_downloading(
 ):
     await process(session, tender_document)
 
-    monkeypatch.setattr("app.services.tender_document_processing.PARSER_VERSION", "pypdf-v2")
+    # La versio vigent ja no es una constant global del processat: la diu
+    # `parser_version_for`, que tria segons el tipus del contingut.
+    monkeypatch.setattr("app.services.document_parsers.PDF_PARSER_VERSION", "pypdf-v2")
     monkeypatch.setattr("app.services.pdf_text.PARSER_VERSION", "pypdf-v2")
 
     calls: list[str] = []
@@ -295,7 +297,10 @@ async def test_a_failed_reextraction_does_not_dethrone_the_working_one(
             error_message="simulat",
         )
 
-    monkeypatch.setattr(processing, "extract_pdf_text_async", failing)
+    async def failing_dispatch(_mime, data):
+        return await failing(data)
+
+    monkeypatch.setattr(processing, "extract_text_async", failing_dispatch)
     await process(session, tender_document, force_reextract=True)
 
     extractions = (

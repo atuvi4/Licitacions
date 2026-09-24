@@ -141,6 +141,20 @@ class BidWorkspace(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, Base)
     #: deixa de ser vigent; no s'esborra, es deriva en llegir.
     technical_scope_fingerprint: Mapped[str | None] = mapped_column(sa.String(64))
 
+    # Revisio HUMANA del conjunt documental (S3-S3). Mateix patro que l'abast
+    # tecnic i pel mateix motiu: que hi hagi plecs no vol dir que algu se'ls
+    # hagi mirat, i NULL vol dir "no revisat", mai "correcte".
+    #
+    # No hi ha cap columna que digui "caducat": es deriva comparant l'empremta
+    # d'ara amb la revisada. Guardar-ho voldria dir tenir dues versions del
+    # mateix fet, i la desada quedaria enrere a la primera cosa que canvies
+    # sense passar per aqui.
+    documents_reviewed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True)
+    )
+    #: Quin conjunt de plecs es va revisar. Veure `document_review.fingerprint_of`.
+    documents_reviewed_fingerprint: Mapped[str | None] = mapped_column(sa.String(64))
+
     #: Fotografia del pre-fit quan es va obrir/refrescar el workspace. NO es
     #: fusiona mai amb l'elegibilitat: son dues preguntes diferents.
     prefit_score: Mapped[int | None] = mapped_column(sa.Integer)

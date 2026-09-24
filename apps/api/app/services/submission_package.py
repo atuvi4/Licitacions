@@ -48,6 +48,7 @@ from app.services import bid_workspace as workspace_service
 from app.services import workspace_dossier as dossier_service
 from app.services.storage import StorageError, get_storage
 from app.services.tender_lifecycle import load_change_log, revision_of
+from app.tenders.changes import PACKAGE_STALE_IMPACTS
 from app.workspace.dossier import UNUSABLE_VALIDITIES
 from app.workspace.manifest import MANIFEST_VERSION
 from app.workspace.transitions import TransitionActor
@@ -485,7 +486,11 @@ async def evaluate_staleness(
         # que segueixi coherent, i afirmar-ho seria justament el que no toca en
         # una pantalla d'aprovacio final.
         reasons.append("tender_revision_unknown")
-    elif log.since(frozen_on):
+    elif log.impacts_since(frozen_on) & PACKAGE_STALE_IMPACTS:
+        # Nomes els canvis que toquen el que s'enviaria. Un plec NOU no hi
+        # entra: diu que hi ha material per llegir, i qui ha de reaccionar a
+        # aixo es l'extraccio de requisits, no l'aprovacio. Veure
+        # `PACKAGE_STALE_IMPACTS`.
         reasons.append("tender_changed")
     if not state.workspace_actionable:
         reasons.append("lot_removed" if state.lot_removed else "tender_not_actionable")

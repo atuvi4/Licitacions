@@ -1,10 +1,11 @@
 "use client";
 
-import { SlidersHorizontal } from "lucide-react";
+import { Plus, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
+import { ImportTenderWizard } from "@/components/ImportTenderWizard";
 import { PreFitDisclaimer, ScoreValue } from "@/components/PreFit";
 import { useSession } from "@/components/SessionProvider";
 import {
@@ -24,6 +25,7 @@ import {
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { api } from "@/lib/api";
+import { canImportTender } from "@/lib/import-wizard";
 import { formatDate, formatMoney } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
 import { TENDER_STATUS_LEVEL, deadlineLevel } from "@/lib/labels";
@@ -108,7 +110,7 @@ function FitCell({ match }: { match: TenderMatchListItem["match"] }) {
 }
 
 function TendersFeed() {
-  const { companyId } = useSession();
+  const { companyId, membership } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
   const urlQ = searchParams.get("q") ?? "";
@@ -120,6 +122,8 @@ function TendersFeed() {
   const [sort, setSort] = useState("score");
   const [offset, setOffset] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(urlQ !== "");
+  const [importOpen, setImportOpen] = useState(false);
+  const canImport = canImportTender(membership?.role);
   const recalculation = useMutation();
 
   // La cerca global i «Avui» arriben per la URL. Si la URL canvia sense
@@ -145,7 +149,9 @@ function TendersFeed() {
   const list = useResource<Page<TenderMatchListItem>>(
     companyId ? `/companies/${companyId}/matches?${query}` : null,
   );
-  const facets = useResource<TenderFacets>("/tenders/facets");
+  const facets = useResource<TenderFacets>(
+    companyId ? `/companies/${companyId}/tenders/facets` : null,
+  );
   const summary = useResource<MatchSummary>(
     companyId ? `/companies/${companyId}/matches/summary` : null,
   );
@@ -362,6 +368,22 @@ function TendersFeed() {
       <PageHeader
         title="Oportunitats"
         description="Licitacions publicades a la Plataforma de Contratación del Sector Público, amb el pre-fit calculat sobre el vostre perfil."
+        actions={
+          canImport ? (
+            <Button variant="secondary" onClick={() => setImportOpen(true)}>
+              <Plus size={15} strokeWidth={1.5} aria-hidden /> Importa licitació
+            </Button>
+          ) : null
+        }
+      />
+
+      <ImportTenderWizard
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onFinished={() => {
+          void list.reload();
+          void summary.reload();
+        }}
       />
 
       {recalculation.error ? (

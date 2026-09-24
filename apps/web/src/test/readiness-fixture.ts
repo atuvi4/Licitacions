@@ -17,8 +17,10 @@ export function readinessFixture(overrides: Partial<FinalReadiness> = {}): Final
   const findings = overrides.findings ?? [];
   return {
     workspace_id: "w1",
+    tender_id: "t1",
     ready_for_final_review: findings.every((finding) => finding.severity !== "blocker"),
     dossier: { state: "ready_for_final_review", blockers: [] },
+    documents: { reviewed: true, stale: false, reviewed_at: "2026-09-17T09:00:00Z", documents: 2 },
     technical: {
       scope_reviewed: true,
       scope_stale: false,

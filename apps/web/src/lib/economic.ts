@@ -43,6 +43,12 @@ export interface InternalTotals {
 export interface LineInternal extends InternalTotals {
   unit_cost_ex_vat: Money;
   monthly_equivalent_cost: Money;
+  /** Objectiu comercial: markup **sobre cost**, en tant per cent. */
+  target_markup_pct: Money;
+  /** `cost × (1 + markup/100)`. Derivat: mai és el preu ofert. */
+  proposed_unit_price_ex_vat: Money;
+  /** `null` quan falta alguna de les tres dades: no ho sabem ≠ no coincideix. */
+  price_matches_target: boolean | null;
 }
 
 export interface LotLimit {
@@ -56,6 +62,14 @@ export interface OfferLine {
   id: string;
   section_id: string;
   concept: string;
+  /**
+   * D'on ve la línia, si ve d'una opció de solució.
+   *
+   * Només de lectura: la provinença es guanya adoptant una opció, no enviant-ne
+   * l'identificador. I la línia és un **snapshot**: que després canviï l'opció
+   * no la toca.
+   */
+  solution_option_id: string | null;
   requirement_id: string | null;
   technical_solution_id: string | null;
   supplier_name: string | null;
@@ -68,6 +82,13 @@ export interface OfferLine {
   vat_rate: Money;
   notes: string | null;
   position: number;
+  /**
+   * Els camps en què el snapshot ja no diu el que diu l'opció viva.
+   *
+   * Només els NOMS: entre ells hi ha el cost, i el seu valor aquí el
+   * filtraria a qui no el pot veure.
+   */
+  diverged_fields: string[];
   archived_at: string | null;
   created_at: string;
   updated_at: string;
@@ -394,6 +415,7 @@ export interface LineDraft {
   offered_unit_price_ex_vat: string;
   tender_max_unit_price_ex_vat: string;
   vat_rate: string;
+  target_markup_pct: string;
   notes: string;
 }
 
@@ -409,6 +431,7 @@ export function draftFromLine(line: OfferLine): LineDraft {
     offered_unit_price_ex_vat: line.offered_unit_price_ex_vat ?? "",
     tender_max_unit_price_ex_vat: line.tender_max_unit_price_ex_vat ?? "",
     vat_rate: line.vat_rate ?? "",
+    target_markup_pct: line.internal_economics?.target_markup_pct ?? "",
     notes: line.notes ?? "",
   };
 }
@@ -418,6 +441,7 @@ export function emptyDraft(): LineDraft {
     concept: "",
     quantity: "1",
     pricing_basis: "one_off",
+    target_markup_pct: "",
     supplier_name: "",
     product_name: "",
     duration_months_override: "",
@@ -431,6 +455,8 @@ export function emptyDraft(): LineDraft {
 
 const TEXT_FIELDS = ["supplier_name", "product_name", "notes"] as const;
 const DECIMAL_FIELDS = ["quantity", "unit_cost_ex_vat", "offered_unit_price_ex_vat", "tender_max_unit_price_ex_vat", "vat_rate"] as const;
+/** Economia interna: viatgen pel mateix camí que el cost, mai sense permís. */
+const INTERNAL_DECIMAL_FIELDS = ["unit_cost_ex_vat", "target_markup_pct"] as const;
 
 export type LinePayload = Record<string, string | number | null>;
 
@@ -456,10 +482,12 @@ export function diffLine(original: OfferLine, draft: LineDraft, includeCost: boo
     if (next !== original[field]) payload[field] = next;
   }
 
-  for (const field of DECIMAL_FIELDS) {
-    if (field === "unit_cost_ex_vat" && !includeCost) continue;
+  for (const field of [...DECIMAL_FIELDS, "target_markup_pct" as const]) {
+    if ((INTERNAL_DECIMAL_FIELDS as readonly string[]).includes(field) && !includeCost) continue;
     const next = orNull(draft[field]);
-    const current = field === "unit_cost_ex_vat" ? (original.internal_economics?.unit_cost_ex_vat ?? null) : (original[field] as Money);
+    const current = (INTERNAL_DECIMAL_FIELDS as readonly string[]).includes(field)
+      ? ((original.internal_economics?.[field as "unit_cost_ex_vat" | "target_markup_pct"] ?? null) as Money)
+      : (original[field as keyof OfferLine] as Money);
     if (!sameDecimal(next, current)) payload[field] = next;
   }
 
@@ -483,9 +511,9 @@ export function createPayload(draft: LineDraft, includeCost: boolean): LinePaylo
     const value = orNull(draft[field]);
     if (value !== null) payload[field] = value;
   }
-  for (const field of DECIMAL_FIELDS) {
+  for (const field of [...DECIMAL_FIELDS, "target_markup_pct" as const]) {
     if (field === "quantity") continue;
-    if (field === "unit_cost_ex_vat" && !includeCost) continue;
+    if ((INTERNAL_DECIMAL_FIELDS as readonly string[]).includes(field) && !includeCost) continue;
     const value = orNull(draft[field]);
     if (value !== null) payload[field] = value;
   }
@@ -522,3 +550,32 @@ export const CONFLICT_FIELDS: ReadonlyArray<{ key: keyof LineDraft; label: strin
   { key: "duration_months_override", label: "Durada pròpia", money: false },
   { key: "vat_rate", label: "IVA", money: false },
 ];
+
+/** Com es llegeix cada camp sincronitzable a la pantalla. */
+export const SYNC_FIELD_LABELS: Record<string, string> = {
+  supplier_name: "Proveïdor",
+  product_name: "Producte",
+  quantity: "Quantitat",
+  unit_cost_ex_vat: "Cost unitari",
+  pricing_basis: "Facturació",
+  duration_months_override: "Durada (mesos)",
+  requirement_id: "Requisit",
+  technical_solution_id: "Solució tècnica",
+};
+
+/** Els camps que són economia interna: no s'ensenyen sense permís. */
+export const INTERNAL_SYNC_FIELDS = new Set(["unit_cost_ex_vat"]);
+
+/**
+ * Els camps divergents que aquest rol pot veure.
+ *
+ * **Defensa addicional, no la garantia.** Qui redacta és el servidor: per a un
+ * rol sense economia interna, `diverged_fields` ja arriba sense els camps
+ * interns. Filtrar aquí no protegiria res —la resposta ja hauria sortit—, i
+ * només serveix perquè la pantalla no depengui d'haver-ho rebut bé.
+ */
+export function visibleDivergedFields(line: OfferLine, internal: boolean): string[] {
+  return internal
+    ? line.diverged_fields
+    : line.diverged_fields.filter((field) => !INTERNAL_SYNC_FIELDS.has(field));
+}

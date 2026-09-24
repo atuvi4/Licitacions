@@ -49,6 +49,7 @@ from app.models.identity import Company
 from app.models.jobs import JobRequest
 from app.models.tenders import Tender
 from app.services.analysis_planning import AnalysisPreview, build_preview
+from app.tenders.visibility import visible_to_company
 
 
 class QuoteReplacedError(Exception):
@@ -144,13 +145,24 @@ def _quote_identity(quote: AnalysisQuote) -> tuple:
 async def _preview(
     session: AsyncSession,
     *,
+    company_id: uuid.UUID,
     tender_id: uuid.UUID,
     force: bool,
     document_ids: list[uuid.UUID] | list[str],
     profile: ExtractorProfile,
     provider_factory: Callable[[], StructuredLLMProvider],
 ) -> AnalysisPreview:
-    if await session.get(Tender, tender_id) is None:
+    """El volum de l'analisi, i abans de res de qui es la licitacio.
+
+    La visibilitat es comprova PRIMER, i per la regla unica de
+    `app/tenders/visibility.py`. `nothing_analyzable`, el recompte de documents,
+    les pagines, els tokens i el cost son respostes sobre una licitacio: donar-ne
+    cap sobre la d'una altra empresa ja en confirma l'existencia i l'estat.
+    """
+    visible = await session.scalar(
+        sa.select(Tender.id).where(Tender.id == tender_id, visible_to_company(company_id))
+    )
+    if visible is None:
         raise NotFoundError("Licitacio no trobada.")
     return await build_preview(
         session,
@@ -176,6 +188,7 @@ async def create_quote(
     """Calcula i desa el preview. Nomes lectures del plec; cap proveidor."""
     preview = await _preview(
         session,
+        company_id=company_id,
         tender_id=tender_id,
         force=force,
         document_ids=document_ids or [],
@@ -267,6 +280,7 @@ async def confirm_quote(
     profile = PROFILES.get(quote.profile, DEFAULT_PROFILE)
     preview = await _preview(
         session,
+        company_id=company_id,
         tender_id=quote.tender_id,
         force=quote.force,
         document_ids=quote.document_ids,
@@ -344,6 +358,7 @@ async def confirm_quote(
         fresh = await session.get(AnalysisQuote, confirmed_quote_id, populate_existing=True)
         preview = await _preview(
             session,
+            company_id=company_id,
             tender_id=fresh.tender_id,
             force=fresh.force,
             document_ids=fresh.document_ids,

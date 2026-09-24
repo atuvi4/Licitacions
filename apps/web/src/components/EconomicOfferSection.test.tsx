@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readinessFixture } from "@/test/readiness-fixture";
-import { lineFixture, lotFixture, offerFixture, redactedOffer, sectionFixture, totalsFixture } from "@/test/economic-fixture";
+import { lineFixture, lineInternalFixture, lotFixture, offerFixture, redactedOffer, sectionFixture, totalsFixture } from "@/test/economic-fixture";
 import { workspaceFixture } from "@/test/workspace-fixture";
 import type { EconomicOffer } from "@/lib/economic";
 
@@ -1080,5 +1080,289 @@ describe("Oferta econòmica · seccions", () => {
     expect(dialogs).toHaveLength(1);
     expect(dialogs[0].textContent).toContain("Canvis sense desar");
     expect(screen.queryByLabelText(/Títol de la secció/)).toBeNull();
+  });
+});
+
+
+/* ----- Objectiu comercial i sincronització (S3-S8b) ------------------------ */
+
+/** Una oferta amb una línia que té cost, preu i, si es vol, objectiu. */
+function offerWithLine(line: Partial<Parameters<typeof lineFixture>[0]> = {}) {
+  return offerFixture({
+    lots: [
+      lotFixture({
+        sections: [
+          sectionFixture({
+            lines: [
+              lineFixture({
+                id: "ln1",
+                concept: "Terminals IP",
+                offered_unit_price_ex_vat: "140.0000",
+                internal_economics: lineInternalFixture({
+                  unit_cost_ex_vat: "100.0000",
+                }),
+                ...line,
+              }),
+            ],
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
+describe("Oferta econòmica · objectiu comercial", () => {
+  it("un rol econòmic veu l'objectiu, el preu proposat i l'estat", async () => {
+    offer = offerWithLine({
+      internal_economics: lineInternalFixture({
+        unit_cost_ex_vat: "100.0000",
+        target_markup_pct: "20.0000",
+        proposed_unit_price_ex_vat: "120.0000",
+        price_matches_target: false,
+      }),
+    });
+    await mount();
+    await click("Edita", rowOf("Terminals IP"));
+
+    expect(screen.getByText("Objectiu comercial")).toBeTruthy();
+    expect(screen.getByLabelText(/^Objectiu de markup/)).toBeTruthy();
+    expect(screen.getByText("El preu ofert no és l'objectiu")).toBeTruthy();
+  });
+
+  it("editar l'objectiu no toca el camp del preu ofert", async () => {
+    offer = offerWithLine({
+      internal_economics: lineInternalFixture({
+        unit_cost_ex_vat: "100.0000",
+        target_markup_pct: "20.0000",
+        proposed_unit_price_ex_vat: "120.0000",
+        price_matches_target: false,
+      }),
+    });
+    await mount();
+    await click("Edita", rowOf("Terminals IP"));
+
+    const price = screen.getByLabelText(/^Preu ofert/) as HTMLInputElement;
+    const before = price.value;
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/^Objectiu de markup/), {
+        target: { value: "30" },
+      });
+    });
+
+    expect((screen.getByLabelText(/^Preu ofert/) as HTMLInputElement).value).toBe(before);
+  });
+
+  it("aplicar l'objectiu és una acció separada i explícita", async () => {
+    offer = offerWithLine({
+      internal_economics: lineInternalFixture({
+        unit_cost_ex_vat: "100.0000",
+        target_markup_pct: "20.0000",
+        proposed_unit_price_ex_vat: "120.0000",
+        price_matches_target: false,
+      }),
+    });
+    await mount();
+    await click("Edita", rowOf("Terminals IP"));
+    await click("Aplica objectiu");
+
+    expect(post).toHaveBeenCalledWith(
+      "/companies/c1/workspaces/w1/economic-offer/lines/ln1/apply-target",
+      { expected_revision: offer!.revision },
+    );
+  });
+
+  it("avisa que substituirà el preu escrit a mà", async () => {
+    offer = offerWithLine({
+      offered_unit_price_ex_vat: "140.0000",
+      internal_economics: lineInternalFixture({
+        unit_cost_ex_vat: "100.0000",
+        target_markup_pct: "20.0000",
+        proposed_unit_price_ex_vat: "120.0000",
+        price_matches_target: false,
+      }),
+    });
+    await mount();
+    await click("Edita", rowOf("Terminals IP"));
+
+    expect(screen.getByText(/Substituirà el preu ofert actual/)).toBeTruthy();
+  });
+
+  it("amb el preu ja a l'objectiu no ofereix aplicar-lo", async () => {
+    offer = offerWithLine({
+      offered_unit_price_ex_vat: "120.0000",
+      internal_economics: lineInternalFixture({
+        unit_cost_ex_vat: "100.0000",
+        target_markup_pct: "20.0000",
+        proposed_unit_price_ex_vat: "120.0000",
+        price_matches_target: true,
+      }),
+    });
+    await mount();
+    await click("Edita", rowOf("Terminals IP"));
+
+    expect(screen.getByText("El preu ofert ja és l'objectiu")).toBeTruthy();
+    const apply = screen.getByRole("button", { name: "Aplica objectiu" });
+    expect(apply.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("sense cost ni objectiu, l'estat és «sense determinar»", async () => {
+    offer = offerWithLine({
+      internal_economics: lineInternalFixture({
+        unit_cost_ex_vat: null,
+        target_markup_pct: null,
+        proposed_unit_price_ex_vat: null,
+        price_matches_target: null,
+      }),
+    });
+    await mount();
+    await click("Edita", rowOf("Terminals IP"));
+
+    expect(screen.getByText("Sense determinar")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Aplica objectiu" }).hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("qui no pot veure el cost tampoc no veu l'objectiu", async () => {
+    /**
+     * Un `technical` no té ni el botó d'editar una línia, que és una garantia
+     * més forta que amagar el bloc: no hi arriba per cap camí. I els números
+     * tampoc no viatgen —`redactedOffer` treu `internal_economics` sencer, com
+     * fa el servidor.
+     */
+    role = "technical";
+    offer = redactedOffer(
+      offerWithLine({
+        internal_economics: lineInternalFixture({
+          target_markup_pct: "20.0000",
+          proposed_unit_price_ex_vat: "120.0000",
+        }),
+      }),
+    );
+    await mount();
+
+    expect(within(rowOf("Terminals IP")).queryByRole("button", { name: "Edita" })).toBeNull();
+    expect(screen.queryByText("Objectiu comercial")).toBeNull();
+    expect(screen.queryByLabelText(/^Objectiu de markup/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Aplica objectiu" })).toBeNull();
+    expect(pageText()).not.toContain("120.0000");
+    expect(pageText()).not.toContain("20.0000");
+  });
+});
+
+describe("Oferta econòmica · l'opció ha canviat", () => {
+  it("una línia divergida ho diu sense estil d'alarma", async () => {
+    offer = offerWithLine({
+      solution_option_id: "op1",
+      diverged_fields: ["supplier_name", "unit_cost_ex_vat"],
+    });
+    await mount();
+
+    const notice = screen.getByRole("button", { name: /L'opció ha canviat/ });
+    expect(notice).toBeTruthy();
+    expect(notice.className).not.toMatch(/danger|blocking/);
+  });
+
+  it("una línia sense opció no ofereix res a revisar", async () => {
+    offer = offerWithLine({ solution_option_id: null, diverged_fields: [] });
+    await mount();
+
+    expect(screen.queryByRole("button", { name: /L'opció ha canviat/ })).toBeNull();
+  });
+
+  it("una línia arxivada no ofereix revisar canvis", async () => {
+    offer = offerWithLine({
+      solution_option_id: "op1",
+      diverged_fields: ["supplier_name"],
+      archived_at: "2026-09-01T00:00:00Z",
+    });
+    await mount();
+
+    expect(screen.queryByRole("button", { name: /L'opció ha canviat/ })).toBeNull();
+  });
+
+  it("el calaix ensenya un camp per divergència i cap marcat", async () => {
+    offer = offerWithLine({
+      solution_option_id: "op1",
+      diverged_fields: ["supplier_name", "product_name"],
+    });
+    await mount();
+    await click(/L'opció ha canviat/);
+
+    const boxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+    expect(boxes).toHaveLength(2);
+    expect(boxes.every((box) => !box.checked)).toBe(true);
+    expect(screen.getByText("Proveïdor")).toBeTruthy();
+    expect(screen.getByText("Producte")).toBeTruthy();
+    // Cap botó que ho adopti tot d'un cop.
+    expect(screen.queryByRole("button", { name: /Sincronitza-ho tot/i })).toBeNull();
+  });
+
+  it("adopta només els camps marcats", async () => {
+    offer = offerWithLine({
+      solution_option_id: "op1",
+      diverged_fields: ["supplier_name", "product_name", "unit_cost_ex_vat"],
+    });
+    await mount();
+    await click(/L'opció ha canviat/);
+
+    const boxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+    await act(async () => {
+      fireEvent.click(boxes[0]);
+    });
+    await click("Actualitza els camps seleccionats");
+
+    expect(post).toHaveBeenCalledWith(
+      "/companies/c1/workspaces/w1/economic-offer/lines/ln1/sync-from-option",
+      { expected_revision: offer!.revision, fields: ["supplier_name"] },
+    );
+  });
+
+  it("sense cap camp marcat no deixa continuar", async () => {
+    offer = offerWithLine({ solution_option_id: "op1", diverged_fields: ["supplier_name"] });
+    await mount();
+    await click(/L'opció ha canviat/);
+
+    expect(
+      screen
+        .getByRole("button", { name: "Actualitza els camps seleccionats" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("qui no pot veure el cost no sap ni que el cost ha canviat", async () => {
+    role = "technical";
+    offer = redactedOffer(
+      offerWithLine({ solution_option_id: "op1", diverged_fields: ["unit_cost_ex_vat"] }),
+    );
+    await mount();
+
+    // L'única divergència era interna: per a aquest rol no hi ha res a revisar.
+    expect(screen.queryByRole("button", { name: /L'opció ha canviat/ })).toBeNull();
+    expect(pageText()).not.toContain("Cost unitari");
+  });
+
+  it("un tècnic sí que veu una divergència pública", async () => {
+    role = "technical";
+    offer = redactedOffer(
+      offerWithLine({
+        solution_option_id: "op1",
+        diverged_fields: ["supplier_name", "unit_cost_ex_vat"],
+      }),
+    );
+    await mount();
+    await click(/L'opció ha canviat/);
+
+    expect(screen.getByText("Proveïdor")).toBeTruthy();
+    expect(screen.queryByText("Cost unitari")).toBeNull();
+  });
+
+  it("el calaix no obre cap pestanya nova", async () => {
+    offer = offerWithLine({ solution_option_id: "op1", diverged_fields: ["supplier_name"] });
+    await mount();
+    await click(/L'opció ha canviat/);
+
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
   });
 });

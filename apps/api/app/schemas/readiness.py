@@ -56,6 +56,22 @@ class TechnicalReadinessRead(BaseModel):
     findings: list[FinalReadinessFinding] = Field(default_factory=list)
 
 
+class DocumentReviewRead(BaseModel):
+    """Fins on arriba la revisio HUMANA dels plecs.
+
+    `reviewed=False` no vol dir que hi hagi res malament: vol dir que ningu no
+    n'ha dit res, i callar no es aprovar. `stale` vol dir que des d'aleshores
+    han arribat documents o versions noves —**no** que els requisits hagin
+    canviat, que es una altra pregunta i te el seu propi avis.
+    """
+
+    reviewed: bool = False
+    stale: bool = False
+    reviewed_at: datetime | None = None
+    #: Quants plecs te la licitacio ara. Zero vol dir que no hi ha res a revisar.
+    documents: int = 0
+
+
 class EconomicReadinessRead(BaseModel):
     offer_exists: bool = False
     findings: list[FinalReadinessFinding] = Field(default_factory=list)
@@ -70,8 +86,12 @@ class FinalReadinessRead(BaseModel):
     """
 
     workspace_id: uuid.UUID
+    #: La licitacio d'aquesta candidatura. Hi es perque hi ha fets —els plecs—
+    #: que no es resolen dins de Preparar sino a la fitxa de la licitacio.
+    tender_id: uuid.UUID
     ready_for_final_review: bool
     findings: list[FinalReadinessFinding] = Field(default_factory=list)
     dossier: DossierReadinessRead
+    documents: DocumentReviewRead
     technical: TechnicalReadinessRead
     economic: EconomicReadinessRead

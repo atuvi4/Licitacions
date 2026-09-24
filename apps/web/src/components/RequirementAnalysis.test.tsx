@@ -11,6 +11,14 @@ const confirmAnalysis = vi.fn();
 const track = vi.fn();
 let jobRequest: JobRequest | null = null;
 let onFinishedRef: ((request: JobRequest) => void | Promise<void>) | null = null;
+let role = "owner";
+vi.mock("@/components/SessionProvider", () => ({
+  useSession: () => ({
+    companyId: "c1",
+    membership: { id: "m1", company_id: "c1", role, is_default: true },
+    user: { id: "u1", email: "anna@example.org", full_name: "Anna Puig" },
+  }),
+}));
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: { ...actual.api, get: (...args: unknown[]) => get(...args), post: (...args: unknown[]) => post(...args) } };
@@ -72,6 +80,9 @@ function requirement(overrides: Partial<Requirement> = {}): Requirement {
   return {
     id: "r1",
     run_id: "x1",
+    origin: "extracted" as const,
+    archived_at: null,
+    citations: [],
     tender_id: "t1",
     tender_lot_id: null,
     category: "certification",
@@ -234,5 +245,143 @@ describe("RequirementAnalysisSection", () => {
     expect(container.textContent).toContain("5 de 18");
     expect(container.textContent).toContain("Pots tancar la pàgina");
     expect((screen.getByRole("button", { name: /Torna a analitzar|Analitza/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+
+/* ----- Requisits escrits a mà (S3-S5) -------------------------------------- */
+
+describe("requisits escrits a mà", () => {
+  function manual(overrides: Partial<Requirement> = {}): Requirement {
+    return {
+      ...requirement(),
+      id: "manual-1",
+      run_id: null,
+      origin: "manual",
+      archived_at: null,
+      citations: [],
+      confidence: null,
+      title: "Assegurança de responsabilitat civil",
+      evidence: [],
+      ...overrides,
+    };
+  }
+
+  it("sense licitació editable no s'ofereix escriure'n cap", async () => {
+    renderSection({ run: run(), requirements: [manual()], award_criteria: [], is_stale: false });
+    await flush();
+
+    expect(screen.queryByRole("button", { name: /Afegeix un requisit/ })).toBeNull();
+  });
+
+  it("qui no prepara la candidatura tampoc no n'escriu", async () => {
+    role = "viewer";
+    renderSection({ run: run(), requirements: [manual()], award_criteria: [], is_stale: false }, { editable: true });
+    await flush();
+
+    expect(screen.queryByRole("button", { name: /Afegeix un requisit/ })).toBeNull();
+    role = "owner";
+  });
+
+  it("un requisit manual no porta atribució d'IA", async () => {
+    renderSection({ run: run(), requirements: [manual()], award_criteria: [], is_stale: false }, { editable: true });
+    await flush();
+
+    expect(screen.getByText(/Escrit a mà/)).toBeTruthy();
+    expect(screen.queryByText(/Proposat per l'anàlisi/)).toBeNull();
+    expect(screen.queryByText(/confiança/i)).toBeNull();
+  });
+
+  it("un requisit extret manté només la revisió: editar-lo seria reescriure una run", async () => {
+    renderSection({
+          run: run(),
+          requirements: [requirement()],
+          award_criteria: [],
+          is_stale: false,
+        }, { editable: true });
+    await flush();
+
+    expect(screen.queryByRole("button", { name: "Edita" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Arxiva" })).toBeNull();
+    expect(screen.getByText(/Proposat per l'anàlisi/)).toBeTruthy();
+  });
+
+  it("escriure'n un el crea per la ruta de l'empresa", async () => {
+    renderSection({ run: run(), requirements: [], award_criteria: [], is_stale: false }, { editable: true });
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: /Afegeix un requisit/ }));
+    await flush();
+    fireEvent.change(screen.getByLabelText(/Què exigeix el plec/), {
+      target: { value: "Assegurança de 600.000 €" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Desa" }));
+    await flush();
+
+    expect(post).toHaveBeenCalled();
+    const [path, body] = post.mock.calls.at(-1) as [string, Record<string, unknown>];
+    expect(path).toBe("/companies/c1/tenders/t1/requirements");
+    expect(body.title).toBe("Assegurança de 600.000 €");
+    // Cap camp que digui com ha nascut la fila.
+    for (const forbidden of ["origin", "run_id", "confidence", "archived_at"]) {
+      expect(body).not.toHaveProperty(forbidden);
+    }
+  });
+
+  it("arxivar-lo no l'esborra: es demana l'arxivat", async () => {
+    renderSection({ run: run(), requirements: [manual()], award_criteria: [], is_stale: false }, { editable: true });
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "Arxiva" }));
+    await flush();
+
+    const [path] = post.mock.calls.at(-1) as [string];
+    expect(path).toBe("/companies/c1/tenders/t1/requirements/manual-1/archive");
+    expect(path).not.toContain("delete");
+  });
+
+  it("les cites es veuen amb la versió i la pàgina que citaven", async () => {
+    render(
+      <RequirementAnalysisSection
+        tenderId="t1"
+        companyId="c1"
+        analysis={{
+          run: run(),
+          requirements: [
+            manual({
+              citations: [
+                {
+                  id: "ref-1",
+                  ref_kind: "document_file",
+                  document_id: "d1",
+                  document_name: "Preus.xlsx",
+                  file_id: "f1",
+                  version_number: 1,
+                  content_sha256: "a".repeat(64),
+                  extraction_id: null,
+                  page_id: null,
+                  page_number: null,
+                  location_label: "Full Càlculs, fila 42",
+                  quote: null,
+                  char_start: null,
+                  char_end: null,
+                  created_at: "2026-09-22T10:00:00Z",
+                },
+              ],
+            }),
+          ],
+          award_criteria: [],
+          is_stale: false,
+        }}
+        loading={false}
+        error={null}
+        onReload={reload}
+        editable
+      />,
+    );
+    await flush();
+
+    expect(screen.getByText(/Preus.xlsx/)).toBeTruthy();
+    expect(screen.getByText(/Full Càlculs, fila 42/)).toBeTruthy();
   });
 });

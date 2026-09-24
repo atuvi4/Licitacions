@@ -1,0 +1,2178 @@
+# Sprint 3 — Ingesta manual i configuració (Design Freeze)
+
+Data: 2026-09-21
+Estat: **disseny congelat**. Cap model, cap migració i cap endpoint implementats.
+Font de veritat d'Sprint 3.
+
+---
+
+## 0. Per què existeix aquest document
+
+Sprint 2 va deixar el motor de l'oferta econòmica complet i correcte. El benchmark
+de Palamós 2024 va demostrar que el producte **no hi pot arribar**: la licitació no
+hi pot entrar, els documents que apareixen durant la licitació no tenen on anar, i
+les decisions que precedeixen el preu —quin proveïdor, quina quantitat quan les
+fonts no coincideixen, quins dubtes queden oberts— no tenen representació.
+
+Aquest document fixa l'arquitectura d'Sprint 3 perquè la implementació no hagi de
+tornar a obrir cap decisió de producte. Les seccions **D-01 … D-09** són decisions
+literals i no es reinterpreten. Tota la resta és enginyeria derivada, i això sí que
+es pot discutir sense reobrir la decisió.
+
+Sprint 3 **no és «fer que Palamós funcioni»**: és generalitzar els workflows que
+Palamós va demostrar. **El codi de producció no conté cap dada de Palamós.**
+
+---
+
+## 1. Goal
+
+> Que una licitació real pugui entrar manualment amb els seus documents, créixer
+> amb documents posteriors, i recórrer el camí fins a una oferta econòmica
+> **reproduïble**, amb les decisions intermèdies registrades i atribuïbles a una
+> persona.
+
+---
+
+## 2. Evidence from Palamós
+
+Cada capacitat d'Sprint 3 té una evidència dels tres benchmarks congelats
+(`var/benchmarks/PALAMOS-2024-{BLIND-GOLD,REALITY,OUTCOME}-v1.md`).
+
+| Evidència | Capacitat que exigeix |
+|---|---|
+| La licitació va entrar per una alerta comercial de correu, no per PLACSP | Ingesta manual |
+| Un document de dimensionament es va publicar **durant** la licitació i la va canviar | Documents sobrevinguts + staleness |
+| 4 divergències de dimensionament detectades a mà; 14 no vistes | Dimensions multi-font |
+| Es van costejar 181 línies mòbils i se'n van desplegar 151 | Dimensions multi-font (impacte econòmic provat) |
+| Un requisit obligatori no costejat va acabar en excepció contractual escrita | Readiness sobre dependències vives |
+| L'operador d'accés i el mòbil van canviar entre preparació i execució | Cotitzacions amb estat i data |
+| Proveïdors pendents, seleccionats i descartats vivien en columnes lliures | `SolutionOption` amb `quote_status` i `selection` |
+| 12 multiplicadors comercials escrits a mà, `preu = cost × factor` | Factor objectiu com a **entrada** |
+| 15 dubtes en text lliure; 4 encara oberts en presentar | Issues amb cicle de vida |
+| El preu preparat va arribar intacte a l'adjudicació | El motor econòmic **no es toca** |
+
+---
+
+## 3. Scope (IN)
+
+Tenancy de licitacions privades i tancament de la fuita de matching · creació i
+edició manual de licitacions amb `TenderRevision` i CAS · camí real a Oportunitats
+via `CompanyTenderMatch` · pujada manual de documents amb contracte de formats
+explícit · versions i documents sobrevinguts amb staleness separada ·
+`tender_source_refs` (provinença tender-level amb FK reals) · requisits manuals
+sense LLM de pagament · dimensions multi-font · `SolutionOption` amb cotitzacions i
+redacció econòmica estricta · dependències opció↔dimensió · opció→línia idempotent ·
+`target_markup_pct` + `sync-from-option` explícita · issues amb blocatge humà ·
+findings nous de FinalReadiness · oracle econòmic independent.
+
+## 4. Non-goals (OUT)
+
+Criteris d'adjudicació, scoring i anormalitat (tornen amb manifest v3) · manifest v3 ·
+migració `Float→Numeric` d'`award_criteria` · extracció de text de DOCX, XLSX i HTML ·
+OCR · deduplicació automàtica amb PLACSP · escenaris de preu · master/CRM de
+proveïdors · compartició de licitacions manuals · presentació automàtica d'ofertes ·
+probabilitat de victòria · historial complet de `Requirement` · integracions de correu
+o ERP.
+
+---
+
+## 5. Human-in-the-loop invariants
+
+| Invariant | Com es fa complir |
+|---|---|
+| `unknown ≠ no` | `OptionSelection.undecided` ≠ `rejected`; `DimensionStatus.undecided` ≠ `decided` |
+| `partial ≠ complete` | Els findings distingeixen «desconegut» de «correcte»; mai s'assumeix zero |
+| recomanació ≠ decisió | `sync-from-option` i `apply-target` són accions explícites; mai recàlcul implícit |
+| requisit sense solució és neutral | **No es toca.** Cap opció ni cap issue es crea automàticament per requisit |
+| opció seleccionada ≠ solució validada | `selection=selected` no altera `TechnicalSolutionStatus` |
+| document seleccionat ≠ evidència acreditada | El dossier no canvia |
+| **la IA mai presenta** | Cap endpoint nou envia res enlloc |
+| cap càlcul econòmic toca un LLM | `pricing.py` i els serveis nous són deterministes i purs |
+
+**Decideix la persona:** el valor de treball quan les fonts discrepen · el proveïdor
+i el producte · el factor comercial · què bloqueja la revisió final · el GO/NO-GO ·
+el freeze · l'aprovació.
+
+---
+
+## 6. Manual Tender identity — invariant tancada
+
+### Camps reals
+
+| Camp | Tipus | Rol |
+|---|---|---|
+| `tenders.id` | `UUID` PK, `default=uuid.uuid4` | **Identitat interna canònica.** Vegeu la nota de sota |
+| `tenders.owner_company_id` | `UUID NULL` FK companies CASCADE | **Boundary de tenancy.** `NULL` ⇔ pública/global |
+| `tenders.source_id` | `UUID NOT NULL` FK sources | La `Source` **MANUAL global i única** |
+| `tenders.external_id` | `String(500) NOT NULL` | Identificador sintètic immutable |
+| `tenders.expediente_number` | `String(200) NULL` | **El número d'expedient que escriu la persona.** El model ja documenta que **no és únic**: dos organismes poden compartir-lo |
+
+### Format de l'`external_id` manual
+
+```
+external_id           = "manual:<company_id>:<client_token>"        (Tender)
+external_identifier   = "manual:<company_id>:<buyer_client_token>"  (Buyer)
+```
+
+**El prefix d'empresa no és decoratiu.** La `Source` MANUAL és una i global, i
+amb ella ho és `UNIQUE(source_id, external_id)`. Sense el prefix, que l'empresa A
+fes servir un token impediria a B fer servir el mateix, i l'espai de claus d'una
+limitaria el de l'altra. La clau d'idempotència conceptual és
+**`(company_id, client_token)`**, i així s'escriu. 80 caràcters, dins de
+`tenders.external_id` (500) i de `buyers.external_identifier` (200).
+
+Coherent amb la convenció existent: PLACSP fa servir l'`<id>` d'ATOM, un
+identificador **opac i natiu de la font**. `manual:<uuid>` és el mateix patró per a
+la font manual. Longitud 43 caràcters, molt per sota de `String(500)`.
+
+> **On es genera cada UUID, exactament.** Són dos i no s'han de confondre.
+>
+> `UUIDPrimaryKeyMixin` declara `default=uuid.uuid4`. En vocabulari de SQLAlchemy
+> això és un default *client-side*, on «client» vol dir **el procés Python de
+> l'API** — ni el navegador ni el servidor SQL — i s'avalua **en el moment de
+> l'INSERT**, no en construir l'objecte. Verificat: `Tender(...).id` és `None`
+> fins al `flush()`, i la columna no té `server_default`.
+>
+> D'aquí que `external_id` **no es derivi de `Tender.id`**: quan cal escriure'l,
+> l'id encara no existeix. El **`client_token` sí que el genera el navegador**,
+> una sola vegada en obrir l'assistent d'importació, i es manté estable durant
+> tots els reintents de la mateixa creació. És això el que fa idempotent el
+> reintent, no el PK.
+
+| Qüestió | Resposta |
+|---|---|
+| **Qui el genera** | **El servidor, sempre.** Mai l'usuari. Si el cos porta `client_token` (UUID), s'hi fa servir; si no, `uuid.uuid4()` |
+| **És editable** | **No.** `source_id` i `external_id` són immutables després de la creació. `expediente_number` **sí** que és editable |
+| **Constraint final** | `UNIQUE(source_id, external_id)` **sense cap canvi**. No cal unicitat tenant-aware |
+| **Comportament al POST** | `201` amb la licitació creada, `owner_company_id` = l'empresa del path, `source_id` = Source MANUAL global |
+| **Retry / idempotency** | L'assistent genera un `client_token` en obrir el formulari i l'envia a cada intent. Un reintent col·lideix amb `UNIQUE(source_id, external_id)`; el servei captura la col·lisió i retorna **`200`** amb la licitació existent si és de la mateixa empresa, o **`409 tender_external_id_conflict`** si és d'una altra. Sense `client_token`, un reintent crea un esborrany separat, visible i arxivable |
+
+### Organismes de contractació — delta descobert a S3-S1
+
+`Buyer` no tenia tenancy. Com que el wizard ha de poder escriure un organisme que
+cap font sindicada no porta, **`buyers.owner_company_id` segueix exactament la
+mateixa regla que `tenders.owner_company_id`**: `NULL` és públic i canònic, amb
+valor és privat de l'empresa que el va escriure. Una importació privada **no pot
+publicar en silenci** al catàleg global.
+
+| Regla | |
+|---|---|
+| Identitat | `UNIQUE(source_id, external_identifier)`; el manual és `manual:<company_id>:<buyer_client_token>`, amb un token **propi i diferent del de la licitació** |
+| Reintent amb el mateix token | Material = `name`, `tax_identifier`, `nuts_code`. Igual → **es reutilitza**. Diferent → **`409 manual_buyer_payload_conflict`**. Com que no hi ha PATCH de `Buyer` a Sprint 3, acceptar-ho seria triar en silenci quina versió es queda |
+| Lectura | `GET /companies/{c}/buyers` i `/buyers/{buyer_id}`, **company-scoped**. Les rutes globals `/buyers*` **s'eliminen**: no tenien cap consumidor i filtraven malament |
+| Reutilitzar-ne un | Global o de la mateixa empresa. D'una altra: **404** |
+| Modificar-ne un | **Mai** des del wizard. No hi ha PATCH de `Buyer` a Sprint 3 |
+| `buyer_id` i `buyer_manual` | **Com a molt un** (`at most one`, no `exactly one`): cap dels dos és vàlid, un dels dos és vàlid, tots dos donen `422 buyer_choice_ambiguous`. Intencionat: *unknown ≠ no* |
+| Selecció a la UI | **Company-scoped**, mai una ruta user-global que barregi privats de dues empreses del mateix usuari |
+| Esborrat | `ON DELETE CASCADE`, auditat: `tenders.buyer_id` ja va amb `SET NULL`, així que no queda cap licitació impossible, i `NULL` no coincideix mai amb l'empresa esborrada |
+| Deduplicació | **Cap.** Ni fuzzy matching de noms ni automatismes |
+
+**Migració 0028 s'amplia a «manual ingestion support»** — organismes privats **i**
+el fonament d'esquema de pujada de documents (`source_url` nul·lable, `origin`,
+`uploaded_by`) — per no haver de crear una revisió extra i **no renumerar 0029–0037**.
+
+### Per què queda resolt
+
+Dues empreses que importen l'expedient `2024-3137` obtenen `external_id` diferents
+(`manual:<uuid-A>`, `manual:<uuid-B>`), el mateix `expediente_number`, i
+`owner_company_id` diferents. **Cap col·lisió, cap unicitat tenant-aware, cap
+`Source` per empresa.** La tenancy viu a `Tender`; la `Source` continua sent
+**provinença pura**.
+
+---
+
+## 7. Tenant isolation
+
+- `Tender.owner_company_id NULL` ⇔ pública. Font MANUAL ⇒ `owner_company_id NOT NULL`.
+- Un únic helper **`visible_tenders(company_id)`** obligatori a **totes** les consultes:
+  `GET /tenders`, `/tenders/facets`, `/tenders/{id}`, `/tenders/{id}/documents*`,
+  `/buyers*`, `/companies/{c}/matches*`, `/matches/recalculate`, lectura d'anàlisi de
+  requisits i `job-requests`.
+- **`MatchingService._tenders()` fa avui `select(Tender)` sense cap filtre d'empresa.**
+  És una fuita entre tenants **ja existent**, i es tanca a 0027. No és opcional.
+- Esborrar una empresa: `ON DELETE CASCADE` sobre `owner_company_id` esborra només
+  les seves licitacions privades. Les globals no s'hi veuen afectades.
+- `TenderCompanyAccess` queda documentat com el camí d'ampliació si mai s'obre la
+  compartició (D-04: no a V1).
+
+---
+
+## 8. Oportunitats / Match path
+
+Camí real verificat: la pàgina `/licitacions` (etiquetada «Oportunitats») llegeix
+`/companies/{c}/matches`, **no `/tenders`**.
+
+> Una licitació creada **no apareix sola** a Oportunitats. El feed llegeix
+> `CompanyTenderMatch`.
+
+**Disseny:** `POST /companies/{c}/tenders` executa **síncronament**
+`MatchingService.recalculate(company_id, tender_ids=[nou_id])`. La signatura ja
+accepta `tender_ids`; és una sola licitació, sense fan-out. Si el pre-fit surt
+`insufficient_data` —probable en una licitació acabada d'escriure— apareix al mode
+**«Sense dades suficients»**, que ja existeix. Apareix, i honestament etiquetada.
+
+---
+
+## 9. Manual document lifecycle
+
+Es reutilitza **íntegrament** el pipeline existent:
+`TenderDocument` → `TenderDocumentFile` (versions, `is_current`) →
+`TenderDocumentContent` (**dedup per SHA-256**, storage) → `TenderDocumentExtraction`
+→ `TenderDocumentPage`.
+
+Pujar és crear un `TenderDocumentFile` amb `origin=uploaded`, `source_url=NULL` i
+`uploaded_by`. El contingut es dedupica pel `sha256` que ja existeix. L'original es
+preserva sempre: `TenderDocumentContent` és immutable per contracte.
+
+Un **document sobrevingut** és un `TenderDocument` nou, o una versió nova d'un
+existent, amb `created_at` posterior a la creació de la candidatura.
+
+---
+
+## 10. Format support contract
+
+> **Pujar ≠ analitzable.** Cada document exposa
+> `text_extraction ∈ {supported, unsupported, pending, failed}` i el frontend l'ha de
+> mostrar. Un XLSX pujat és **preservat i citable**, mai «analitzat».
+
+| Format | Upload | Guardat | Text | Pàgines | Requisits | OCR |
+|---|---|---|---|---|---|---|
+| PDF amb text | ✅ | ✅ | ✅ `pypdf` | ✅ | ✅ | n/a |
+| PDF escanejat | ✅ | ✅ | ⚠️ `low_text`, `ocr_candidate` | ✅ buides | ❌ | ❌ |
+| DOCX · DOC | ✅ | ✅ | ❌ `skipped_unsupported` | ❌ | ❌ | ❌ |
+| XLSX · XLS | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| XML · ZIP | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| TXT | ✅ | ✅ | ✅ **(s'afegeix a Sprint 3, zero dependències)** | ✅ 1 | ✅ | n/a |
+| HTML · PPT/PPTX | ❌ no admès com a document de licitació | — | — | — | — | — |
+
+`DOCUMENT_ALLOWED_MIME_TYPES` (documents de licitació) i `ALLOWED_UPLOAD_MIME_TYPES`
+(evidència d'empresa) són **llistes diferents** i no s'han de confondre.
+
+---
+
+## 11. Document review / staleness
+
+Tres eixos **separats**. `technical_scope_fingerprint` conté `lot_mode`,
+`tender_lot_ids`, `requirements` i `selected_requirement_ids` — **no conté documents**,
+i per tant un document nou no el pot tocar.
+
+| Eix | Mecanisme |
+|---|---|
+| Conjunt documental revisat | `bid_workspaces.documents_reviewed_at` + `documents_reviewed_fingerprint` = SHA-256 sobre `(tender_document_id, current_file_id, content_sha256)` ordenats |
+| Anàlisi vigent/obsoleta | `RequirementExtractionRun.is_current` + `input_fingerprint` (existent) |
+| Abast tècnic | `technical_scope_stale` (existent, **sense canvis**) |
+
+**Regla dura:** un document nou **mai** invalida una `TechnicalSolution` validada ni
+un paquet congelat. Només diu que ha arribat material. Si la persona reextreu i els
+requisits canvien, `technical_scope_stale` s'encén **pel mecanisme que ja existeix**.
+
+---
+
+## 12. Tender-level provenance
+
+`Requirement` és **tender-level** i pot existir sense `BidWorkspace`. La provinença
+també ho ha de ser.
+
+### `tender_source_refs`
+
+| Camp | Tipus | Null | Nota |
+|---|---|---|---|
+| `tender_id` | FK tenders **CASCADE** | no | índex. **Cap `company_id`**: hereta la visibilitat de la licitació |
+| `ref_kind` | enum `{extracted_page, document_file}` | no | |
+| `extraction_id` | FK tender_document_extractions **RESTRICT** | sí | obligatori si `extracted_page` |
+| `page_id` | FK tender_document_pages **RESTRICT** | sí | obligatori si `extracted_page` |
+| `page_number` | Integer | sí | CHECK ≥ 1 quan no és null |
+| `tender_document_file_id` | FK tender_document_files **RESTRICT** | sí | obligatori si `document_file`; porta `version_number` i `content_id` |
+| `tender_document_id` | FK **SET NULL** | sí | només per mostrar |
+| `content_sha256` | String(64) | **no** | desnormalitzat: els bytes exactes sempre identificables |
+| `location_label` | String(200) | sí | «p. 27», «full Càlculs, fila 42» |
+| `quote` | Text | sí | |
+| `char_start` · `char_end` | Integer | sí | només `extracted_page` |
+| `created_by` · `created_at` | | | |
+
+`CHECK`: `(ref_kind='extracted_page' AND extraction_id IS NOT NULL AND page_id IS NOT NULL) OR (ref_kind='document_file' AND tender_document_file_id IS NOT NULL)`
+
+Consumidors amb integritat referencial, **sense JSON d'UUIDs**:
+`requirement_source_ref_links` (N:N) · `workspace_dimension_observations.source_ref_id`
+(1, SET NULL) · `workspace_issue_source_ref_links` (N:N).
+
+**`RequirementEvidence` no es toca.** Continua sent la provinença dels requisits
+extrets, amb `char_start`/`char_end` calculats pel backend i àncores `RESTRICT`. El
+read model projecta **una sola llista `citations[]`** que fusiona les dues formes:
+un vocabulari a l'API, dos emmagatzematges amb garanties diferents, zero risc per a
+Sprint 2.
+
+---
+
+## 13. Manual Requirement semantics
+
+### Per què `RequirementExtractionRun` no serveix
+
+Modela una **execució d'anàlisi**: `provider`, `model`, `prompt_version`,
+`extractor_version`, tokens, cost, `chunk_coverage`. Una persona que escriu un
+requisit no en té cap. `input_fingerprint` és, verificat al codi,
+`SHA-256(sorted("{extraction_id}|{revision_number}|{content_sha256}|{parser_version}"))`
+— **identitat del corpus d'entrada d'una extracció real**. Omplir-lo per un requisit
+manual el falsejaria.
+
+### Alternativa mínima
+
+```
+Requirement.run_id      → NULLABLE
+Requirement.origin      → enum {extracted, manual} NOT NULL default 'extracted'
+Requirement.archived_at → TZ datetime NULL
+Requirement             → hereta ActorMixin (created_by, updated_by)
+
+CHECK: (origin='extracted' AND run_id IS NOT NULL)
+    OR (origin='manual'    AND run_id IS NULL)
+```
+
+| Qüestió | Resolució |
+|---|---|
+| Historial | Els extrets, per run. Els manuals: `created_by`, `updated_by`, `updated_at` i els camps de revisió. **D-08: això NO és historial complet de versions** |
+| Edició | `PATCH /requirements/{id}` només si `origin='manual'` → `403 requirement_not_manual` |
+| Current | Els manuals no tenen `is_current`: són efectius fins que s'arxiven |
+| Archive / delete | **Només arxivat.** Esborrar és impossible: `requirement_source_ref_links.source_ref_id` és RESTRICT |
+| Effective set | `requirements(run_id = current_run.id)` ∪ `requirements(tender_id, origin='manual', archived_at IS NULL)` |
+| `technical_scope_fingerprint` | **Signatura intacta.** Se li passa la unió. Crear, editar o arxivar un manual canvia el fingerprint → `technical_scope_stale` s'encén sol |
+| `is_stale` del router | **Intacte.** Descriu només la run extreta. Una afirmació humana no caduca perquè s'hagi reextret un PDF |
+
+---
+
+## 14. Dimensions
+
+`workspace_dimensions`: `key` (slug lliure, **sense ontologia**), `label`, `unit`,
+`scope_label`, `working_value_text`, `working_value_num` (`Numeric(18,4)`),
+`status ∈ {undecided, decided, disputed}`, `decision_reason`, `decided_by`,
+`decided_at`, `archived_at`, `revision` (CAS).
+`UNIQUE(workspace_id, key, scope_label)` ·
+`CHECK(status <> 'decided' OR decision_reason IS NOT NULL)`
+
+`workspace_dimension_observations`: `dimension_id` (CASCADE),
+`source_kind ∈ {tender_document, supplier, internal, other}`, `source_ref_id`
+(SET NULL), `value_text`, `value_num`, `note`, `created_by`.
+
+**Regla determinista, sense IA:** dues observacions amb `value_num` diferent i no nul
+→ el servei posa `status = disputed`. Sortir-ne exigeix **persona + motiu**.
+
+Deliberadament **no** hi ha entitat `Site`, ni agenda d'adreces, ni graf de coneixement.
+
+---
+
+## 15. SolutionOptions
+
+`workspace_solution_options`: `technical_solution_id` (SET NULL), `requirement_id`
+(SET NULL), `supplier_name` i `product_name` (**text lliure, sense master**),
+`description`, `quantity`, `unit`, **`unit_cost_ex_vat`** (`Numeric(18,6)`),
+`pricing_basis`, `duration_months_override`,
+`quote_status ∈ {draft, requested, pending, received, expired, declined}`,
+`quote_date`, `quote_reference`, `quote_source`,
+`selection ∈ {undecided, selected, rejected}`, `selection_reason`, `selected_by`,
+`selected_at`, `internal_note`, `archived_at`, `revision` (CAS).
+
+**No hi ha `unit_price`.** El preu viu només a `EconomicOfferLine`.
+
+Casos reals coberts sense CRM: proveïdor pendent de cotitzar (`quote_status=pending`) ·
+operador pendent (`requested`) · producte seleccionat i alternativa descartada amb
+motiu, totes dues conservades · dues opcions germanes `undecided` fins que algú decideix.
+
+---
+
+## 16. Dimension dependencies
+
+> **SUPERAT per la V1 (0034).** La taula d'aquesta secció descriu el disseny
+> original. La V1 implementada és una **relació pura N:N**: només
+> `solution_option_id` i `dimension_id` (més qui i quan). `role`,
+> `quantity_factor`, `snapshot_value_num` i `snapshot_taken_at` **queden fora de
+> l'Sprint 3**, i `dimension_id` és **`CASCADE`**. Veure «Delta S3-S7b».
+
+`workspace_solution_option_dimensions` (**N:N**):
+
+| Camp | Tipus | Nota |
+|---|---|---|
+| `solution_option_id` | FK **CASCADE** | |
+| `dimension_id` | FK **RESTRICT** | no s'esborra una dimensió de què depèn una opció |
+| `role` | enum `{quantity_driver, scope_reference}` | |
+| `quantity_factor` | `Numeric(18,4)` NULL, default 1 | només `quantity_driver` |
+| `snapshot_value_num` | `Numeric(18,4)` NULL | valor de treball en vincular |
+| `snapshot_taken_at` | TZ datetime | |
+
+`UNIQUE(solution_option_id, dimension_id)`
+
+- **`quantity_driver`**: s'**espera** `option.quantity == dimension.working_value_num × quantity_factor`. **Mai s'escriu automàticament.**
+- **`scope_reference`**: informa l'opció sense governar-ne la quantitat.
+- **Staleness determinista**: `working_value_num != snapshot_value_num` en un enllaç
+  `quantity_driver` d'una opció viva. Refrescar el snapshot és una acció explícita.
+- **Cap mutació automàtica de quantitat, en cap cas.**
+
+El `quantity_factor` és el que permet repartir una mateixa dimensió entre dues
+opcions de proveïdors diferents sense duplicar-la.
+
+---
+
+## 17. Option vs EconomicOfferLine source-of-truth
+
+| Camp | Significat | Muta |
+|---|---|---|
+| `WorkspaceSolutionOption.unit_cost_ex_vat` | **Cost/cotització viva de l'opció** | Sí, quan arriba o caduca una cotització |
+| `EconomicOfferLine.unit_cost_ex_vat` | **Snapshot econòmic adoptat** (Sprint 2, sense canvis) | Només per edició humana explícita |
+| `EconomicOfferLine.supplier_name` · `product_name` | Snapshot en crear la línia | No segueix l'opció |
+| `WorkspaceTechnicalSolution.supplier_name` · `product_name` | Snapshot de l'opció triada; **ja és contingut del manifest v2** | No automàticament; acció explícita «copia a la solució tècnica» |
+
+**Cap sincronització automàtica, mai.**
+
+`option_line_diverged` — **calculat, no emmagatzemat**: la línia té opció viva i
+`(cost, supplier, product)` difereixen. S'exposa com
+`option_divergence: {supplier, product}` **públic** i el component `cost` **dins
+`internal_economics`**.
+
+Quan una opció `selected` canvia, **res cascadeja**: si la solució era `validated`,
+segueix validada — el `validated_content_fingerprint` del manifest ja la protegeix.
+Les opcions **no són** contingut del manifest a Sprint 3 i per tant no poden fer
+obsolet cap paquet congelat.
+
+---
+
+## 18. Cost redaction / write schemas
+
+| Schema | Rols | Contingut |
+|---|---|---|
+| `SolutionOptionPublicRead` | tots | Tot excepte el cost. **El camp no hi és: no és `null`, és absent del model** |
+| `SolutionOptionPublicWrite` | `SOLUTION_EDIT_ROLES` (inclou `technical`) | Subconjunt editable. **`extra="forbid"`** → enviar `unit_cost_ex_vat` dona **`422`** |
+| `SolutionOptionInternalRead` | `ECONOMIC_INTERNAL_ROLES` | Public + `internal_economics: { unit_cost_ex_vat }` |
+| `SolutionOptionInternalWrite` | `ECONOMIC_INTERNAL_ROLES` | Public write + `unit_cost_ex_vat: Decimal \| None \| UNSET` amb el **sentinella `UNSET` existent** |
+
+**Preservació per construcció, no per condicional.** La signatura del servei és
+`unit_cost_ex_vat: object = UNSET`. El router públic **no passa mai l'argument**, de
+manera que el valor ocult es preserva sense que cap desenvolupador ho hagi de recordar.
+
+Un `null` explícit només té efecte des del write schema intern.
+
+---
+
+## 19. `to-offer-line` idempotency
+
+```
+POST .../solution-options/{id}/to-offer-line
+body: { section_id, expected_revision }
+```
+
+| Aspecte | Decisió |
+|---|---|
+| Unicitat | Índex únic **parcial** sobre `economic_offer_lines(solution_option_id)` WHERE `solution_option_id IS NOT NULL AND archived_at IS NULL` |
+| Idempotència | Si ja hi ha línia viva per a l'opció → **`200`** amb la línia existent. **No `409`.** Doble clic i reintent convergeixen |
+| CAS | `expected_revision` de l'**`EconomicOffer`**; conflicte → `409 economic_offer_revision_conflict` |
+| Opció arxivada | `409 solution_option_archived` |
+| Opció no seleccionada | **`422 solution_option_not_selected`** (D-03) |
+| Arxivar la línia | Allibera l'opció. Recrear produeix una línia **nova**; l'arxivada conserva `solution_option_id` com a història |
+
+---
+
+## 20. Target markup
+
+```
+unit_cost_ex_vat × (1 + target_markup_pct/100) → proposed_unit_price   [assist, efímer]
+offered_unit_price_ex_vat                                              [autoritatiu, persistit]
+```
+
+`target_markup_pct` (`Numeric(9,4)`, dins `internal_economics`) és **markup sobre
+cost**, i el camp es diu així. El **multiplicador** és `1 + markup/100`; el **marge
+sobre venda** és `markup/(100+markup)`. Els tres noms es mantenen separats, com ja fa
+el docstring de `app/offer/pricing.py`. `Decimal` a tot arreu, **cap `Float`**.
+
+`apply-target` és una acció explícita sobre línies triades. Mai massiva, mai automàtica.
+El preu es pot editar sempre a mà; `price_matches_target` només informa.
+
+---
+
+## 21. Explicit `sync-from-option` (D-07)
+
+```
+POST .../economic-offer/lines/{id}/sync-from-option
+body: { expected_revision, fields: ["unit_cost","supplier_name","product_name"] }
+```
+
+Rol `ECONOMIC_EDIT_ROLES` · **per línia i per camps** · mai bulk · mai trigger · mai
+disparada perquè l'opció canviï.
+`422 line_has_no_option` · `409 solution_option_archived` ·
+`409 economic_offer_revision_conflict`.
+
+---
+
+## 22. Issues
+
+`workspace_issues`: `issue_type ∈ {internal_question, authority_question,
+supplier_question, contradiction, missing_information}` ·
+`status ∈ {open, waiting, resolved, dismissed}` · `title` · `description` ·
+FK nul·lables **totes `SET NULL`** cap a requirement, technical_solution,
+solution_option, economic_offer_line i dimension · `supplier_name` lliure ·
+`owner_id` · `due_at` · `resolution` · `resolution_source` · `resolved_by` ·
+`resolved_at` · **`blocks_final_review: bool` default `false`** ·
+`created_by` · `created_at`.
+
+Provinença per `workspace_issue_source_ref_links` → `tender_source_refs`.
+
+**`blocks_final_review` només el pot escriure `DECISION_ROLES`**: marcar que una cosa
+impedeix presentar és una decisió d'oferta. No es fa un sistema de tickets generalista:
+una tasca és *feina per fer* (`WorkspaceTask`, ja existeix), un issue és *coneixement
+que falta*.
+
+---
+
+## 23. FinalReadiness findings
+
+Contracte objectiu. **`open issue` no és blocador per defecte.**
+
+| Codi | Sev. | Domini | Disparador objectiu | S'apaga quan |
+|---|---|---|---|---|
+| `tender_documents_unreviewed` | info | workspace | mai revisat, ≥1 document | revisió marcada |
+| `tender_documents_changed` | warning | workspace | fingerprint del conjunt ≠ el revisat | revisió marcada |
+| `requirement_analysis_predates_documents` | warning | technical | fitxer vigent amb `created_at` > `completed_at` de la run vigent | run nova o revisió |
+| `dimension_disputed` | warning | technical | ≥1 dimensió `disputed` | decidides o arxivades |
+| **`dimension_undecided_in_use`** | **blocker** | technical | dimensió `undecided` enllaçada a una opció viva que té línia econòmica viva | decidida |
+| `dimension_snapshot_outdated` | warning | technical | `working_value_num ≠ snapshot_value_num` en enllaç `quantity_driver` d'opció viva | snapshot refrescat |
+| `solution_option_quote_pending` | warning | technical | opció `selected` amb `quote_status ∈ {requested, pending}` | rebuda o decidida |
+| **`solution_option_quote_expired`** | **blocker** | economic | opció `selected`, `quote_status=expired`, i línia viva que en depèn | cotització actualitzada |
+| `economic_line_option_diverged` | info | economic | la línia i la seva opció ja no coincideixen | sincronitzada o acceptada |
+| **`issue_blocking_open`** | **blocker** | workspace | issue amb `blocks_final_review=true` i `status ∈ {open, waiting}` | resolt o desmarcat |
+| `issue_open` | info | workspace | comptador d'issues obertes sense marca | totes tancades |
+
+Els blocadors automàtics **exigeixen una dependència viva**, de manera que mai poden
+quedar en un estat irresoluble.
+
+---
+
+## 24. C-12 semantics
+
+**El backend no bloqueja mai** l'edició d'una licitació manual per l'existència d'un
+paquet aprovat. **No hi ha `409 tender_has_approved_package` ni
+`acknowledge_package_impact`** (D-05).
+
+Mecanisme, tot existent:
+
+1. Un PATCH material escriu un `TenderRevision` nou amb un `normalized_hash`
+   diferent. **Material = allò que canvia `normalized_hash`**, la mateixa definició
+   que ja fa servir la ingesta: edició manual i actualització PLACSP comparteixen una
+   sola regla.
+2. `evaluate_staleness()` carrega `load_change_log(tender_id)` i
+   `revision_of(package.tender_revision_id)`.
+3. `log.since(frozen_on)` → motiu **`tender_changed`** → `StaleReport` no buit.
+4. Si es va congelar abans que la licitació tingués historial: `log.basis_unknown()` →
+   **`tender_revision_unknown`**.
+5. Un paquet obsolet **no es pot aprovar**; el remei és congelar una revisió nova.
+6. **L'historial d'aprovació és immutable**: les files de `SubmissionPackage` ho són.
+
+El frontend pot mostrar un `ConfirmDialog`. **És presentació, no contracte de servidor.**
+
+Camps editables: títol, descripció, organisme, expedient, tipus de procediment i de
+contracte, valor estimat, pressupostos, moneda, dates, lloc, NUTS, país, `source_url`,
+CPVs, lots. **No editables:** `id`, `source_id`, `external_id`, `owner_company_id`.
+CAS per `expected_revision_count` → `409 tender_revision_conflict`.
+
+---
+
+## 25. Palamós benchmark oracle (D-06)
+
+`tests/fixtures/palamos_s3_benchmark.json` amb **inputs independents transcrits de
+REALITY-v1** i **outputs esperats fixos**:
+
+```jsonc
+{
+  "currency": "EUR",
+  "duration_months": 48,
+  "sections": [ { "title": "...", "lines": [
+      { "concept": "...", "quantity": "2", "pricing_basis": "monthly",
+        "unit_cost_ex_vat": "35.0000", "target_markup_pct": "50.0000",
+        "offered_unit_price_ex_vat": "52.5000" } ] } ],
+  "expected": {
+    "documented_total_ex_vat": "219351.55",   // REALITY-v1, arrodonit al final
+    "canonical_total_ex_vat":  "<derivat a mà línia a línia>",
+    "canonical_note": "El motor quantitza cada línia a 2 decimals i després suma.",
+    "total_cost": "...", "markup_on_cost_pct": "...", "margin_on_sales_pct": "..."
+  }
+}
+```
+
+**El test afirma el valor canònic.** Mai es deriva l'expected del mateix motor que
+s'està provant.
+
+**Condició verificada:** el motor **suma els imports ja quantitzats de cada línia**,
+mentre que el full de càlcul va multiplicar en precisió plena i va arrodonir al final.
+Amb una vintena de línies **les dues regles poden diferir en cèntims**. Per això el
+fixture desa **totes dues xifres** amb nota explícita.
+
+**El codi de producció i la llavor de demo contenen ZERO dades de Palamós.**
+
+---
+
+## 26. Migrations 0027–0037
+
+```
+0026_technical_scope_review                       ← head actual
+0027  Tender tenancy + manual tender foundation + matching isolation
+0028  manual ingestion support (organismes privats + fonament de pujada)
+0029  document review / staleness
+0030  tender_source_refs
+0031  manual requirements
+0032  dimensions
+0033  solution options
+0034  solution option ↔ dimensions
+0035  option → economic offer line
+0036  target markup + explicit sync-from-option
+0037  issues + readiness
+```
+
+**No es renumera.** Totes additives o relaxants. Cap migració `Float → Numeric`.
+Cap canvi al manifest.
+
+---
+
+## 27. Fases S3-S0 … S3-S11
+
+| Fase | Objectiu | Migr. | Depèn | Exit criteria |
+|---|---|---|---|---|
+| **S3-S0** | Tenancy + `visible_tenders()` + **fix de la fuita de `MatchingService`** | 0027 | — | Cap ruta ni cap job veu una licitació privada d'una altra empresa |
+| **S3-S1** | Licitació manual + camí a Oportunitats | — | S0 | Apareix a `/licitacions` via match recalculat; retry idempotent |
+| **S3-S1b** | **Edició de licitació manual**: només la pròpia i manual · CAS per `TenderRevision.revision_number` (veure Delta S3-S1b) · `TenderRevision` a cada canvi material · staleness canònic · **C-12: cap bloqueig per paquet aprovat** · `id`, `source_id`, `external_id` i `owner_company_id` immutables | — | S1 | Editar no bloqueja; `evaluate_staleness` → `tender_changed` |
+| **S3-S2** | Pujada manual + contracte de formats | 0028 | S1b | `text_extraction` exposat; dedup per SHA-256 |
+| **S3-S3** | Actualitzacions + staleness | 0029 | S2 | Els 3 findings; **cap validació tècnica invalidada** |
+| **S3-S4** | `tender_source_refs` | 0030 | S2 | Citació reconstruïble després d'una versió nova |
+| **S3-S5** | Requisits manuals | 0031 | S4 | Funciona amb `LLM_PROVIDER=fake`; **auditoria completa dels usos de `Requirement.run_id`** (D-09) |
+| **S3-S6** | Dimensions | 0032 | S4 | `disputed` automàtic; decidir exigeix motiu |
+| **S3-S7** | Opcions i cotitzacions | 0033 | S6 | `technical` no veu ni pot escriure el cost |
+| **S3-S8** | Opció ↔ dimensions | 0034 | S7 | `dimension_undecided_in_use` determinista |
+| **S3-S9** | Opció → línia idempotent | 0035 | S8 | Doble POST = una línia, `200` |
+| **S3-S10** | Target markup + `sync-from-option` | 0036 | S9 | Preu manual mai sobreescrit; sync per camps |
+| **S3-S11** | Issues + readiness + E2E Palamós | 0037 | totes | §28 en verd |
+
+---
+
+## 28. Tests i gates
+
+Obligatoris a **cada fase amb migració**:
+
+- Suite normal (SQLite en memòria).
+- Test de migració marcat PostgreSQL contra **`licitacions_test`**.
+- **`current_database()` ha de ser `licitacions_test`** abans de qualsevol test destructiu.
+- **Mai el port 5432 / 3CX.**
+- **Alembic amb un sol head.**
+- `downgrade` i `upgrade` de la migració que s'introdueix.
+- Tests d'aïllament entre tenants.
+- Tests de fuita d'economia interna.
+- Cap contrasenya als informes.
+
+**Tests obligatoris de redacció de cost** (S3-S7): `technical` GET sense la clau ·
+`technical` PATCH amb cost → `422` i valor intacte · `technical` PATCH amb `null` →
+`422` i valor intacte · `technical` PATCH d'un camp públic → `200`, cost intacte ·
+`bid_manager` ometent el camp → intacte · `bid_manager` amb `null` explícit → NULL ·
+`viewer` escriptura → `403` · `technical` no rep el component `cost` de la divergència.
+
+**Nota sobre enums:** `enum_column` fa `native_enum=False` **sense
+`create_constraint=True`**, de manera que els enums es materialitzen com a VARCHAR
+**sense CHECK**. Els enums nous s'han d'exercitar **via ORM, mai amb SQL cru**, que
+donaria fals verd. El helper **no es toca**: canviar-lo afectaria 26 migracions.
+
+### Test d'acceptació E2E congelat
+
+Licitació manual creada → **visible només per a l'empresa A** → apareix a Oportunitats
+via Match → **l'empresa B no la veu** (ni a `/matches`, ni a `/tenders`, ni a
+`/facets`) → pujada de PDF → **pujada duplicada dedupicada per SHA-256** → DOCX i XLSX
+**preservats amb extracció `unsupported` i 0 pàgines** → document posterior produeix
+**`tender_documents_changed`** sense invalidar cap solució validada → **requisits
+manuals amb `LLM_PROVIDER=fake`, sense cap run falsa** → **citació immutable**
+reconstruïble després d'una versió nova → dimensió amb observacions discrepants →
+**`disputed`** → **decisió humana del valor de treball amb motiu obligatori** → dues
+opcions de proveïdor → una `selected`, una `rejected` amb motiu, **totes dues
+conservades** → **`technical` no pot llegir ni escriure el cost** → **opció → línia
+idempotent** (doble POST = una línia) → **snapshot de cost a la línia** → target markup
+→ **sync explícita per camps** → issue amb `blocks_final_review` → **`issue_blocking_open`**
+→ **benchmark econòmic amb fixture independent i valors esperats fixos**.
+
+---
+
+## 29. Decisions congelades D-01 … D-09
+
+| ID | Decisió |
+|---|---|
+| **D-01** | **Parser DOCX fora del core d'Sprint 3.** Els DOCX/XLSX es preserven i se citen per `tender_source_refs` amb `ref_kind=document_file` |
+| **D-02** | **Criteris d'adjudicació, scoring i anormalitat fora d'Sprint 3.** Quan tornin, amb **manifest v3** |
+| **D-03** | **Opció `undecided` → línia econòmica = `422`** |
+| **D-04** | **Licitacions manuals privades i no compartibles a V1.** `TenderCompanyAccess` és el camí futur |
+| **D-05** | **Cap acknowledgement de servidor** per editar una licitació amb paquets aprovats. **C-12 mana:** edició permesa → canònic obsolet → historial d'aprovació immutable. La UX pot advertir |
+| **D-06** | **Palamós té oracle independent al fixture.** Valor documental `219351.55 EUR` ex IVA. Si la quantització canònica línia a línia en produeix un de diferent, el fixture **desa tots dos** i documenta per què. **Mai es deriva l'expected del motor que s'està provant** |
+| **D-07** | **`sync-from-option` és una acció EXPLÍCITA.** Mai trigger, mai sincronització automàtica |
+| **D-08** | **Per V1, `Requirement` mutable** amb `created_by`, `updated_by`, `archived_at`, **sense historial complet de versions**. ⚠️ **Això NO equival a historial.** Historial/versionat de `Requirement` queda **LATER** |
+| **D-09** | **`Requirement.run_id` nullable.** `origin` distingeix `extracted`/`manual`. Un requisit manual **NO crea cap `RequirementExtractionRun` falsa**. `input_fingerprint` continua significant **exclusivament** el fingerprint del corpus d'entrada d'una extracció real |
+
+---
+
+## 30. Riscos R-1 … R-6
+
+| # | Risc | Sev. | Fase que el tanca | Mitigació |
+|---|---|---|---|---|
+| **R-1** | Faltaven les migracions 0027–0029 a l'ordre previst | 🔴 | **Resolt** | Afegides al davant; 0030–0037 conserven la numeració |
+| **R-2** | `MatchingService._tenders()` fa `select(Tender)` **sense filtre d'empresa** — fuita entre tenants **ja existent avui** | 🔴 | **S3-S0 / 0027** | `visible_tenders()` obligatori + test que cap ruta ni cap job creui el límit |
+| **R-3** | `enum_column` sense `create_constraint=True` → VARCHAR **sense CHECK** | 🟠 | Totes | Enums nous exercitats via ORM, mai amb SQL cru. El helper no es toca |
+| **R-4** | 136 referències a `run_id`; el subconjunt de `Requirement` assumeix NOT NULL | 🟠 | **S3-S5 / 0031** | Auditoria enumerada com a **exit criterion** (D-09) |
+| **R-5** | Tests per defecte a SQLite; migracions només exercitades amb `--postgres` | 🟡 | Totes | Gate `--postgres` contra `licitacions_test` a cada fase amb migració |
+| **R-6** | Dev local via `dev_bootstrap`/`create_all`, no Alembic | 🟡 | Totes | El `dev.db` es regenera després de cada fase; no és font de veritat |
+
+---
+
+# UX Design Freeze
+
+Sistema visual d'Sprint 1/2 intacte. **Cap redisseny global. Les 4 pestanyes de
+Preparar no es toquen: Solució tècnica · Oferta econòmica · Dossier · Pla de treball.**
+
+Dos drawers nous des de la capçalera de Preparar (mateix patró que Final Readiness) i
+dues subseccions dins de pestanyes existents. **Zero pestanyes noves.**
+
+### A. Oportunitats
+
+| | |
+|---|---|
+| Acció | CTA **«Importa licitació»** a la capçalera, al costat del recàlcul de pre-fit |
+| Buit | El missatge de feed buit existent, amb el CTA visible |
+| Càrrega | Skeleton de llista existent |
+| Permisos | El CTA només per a `owner`, `admin`, `bid_manager`; ocult per a `technical` i `viewer` |
+| Estat obsolet | Sense canvis |
+
+### B. Import wizard
+
+| | Pas 1 — Metadades | Pas 2 — Documents |
+|---|---|---|
+| Acció | Expedient, títol, organisme, CPV, dates, pressupostos, lots | Arrossegar o triar fitxers |
+| Buit | Formulari net; només títol obligatori | «Encara no hi ha documents» amb CTA de pujada |
+| Càrrega | Botó amb `loading`; el `client_token` es genera en obrir el pas 1 | Barra per fitxer |
+| Validació | Camps monetaris amb `Decimal`; dates coherents; CPV existent | Mida i MIME contra `DOCUMENT_ALLOWED_MIME_TYPES` |
+| Conflicte/CAS | Reintent amb el mateix `client_token` → es reprèn la mateixa licitació, no se'n crea una altra | Fitxer idèntic → s'informa que ja hi era (dedup SHA-256) |
+| Permisos | Si el rol no pot, no s'arriba a l'assistent | Igual |
+| Dades sensibles | — | — |
+| Estat | Pas 2 mostra per fitxer: **Text disponible** / **Es conserva, sense text** / **Processant** / **Ha fallat** |
+
+Finalitzar l'assistent recalcula el match i navega a la fitxa de la licitació.
+
+### C. Tender detail
+
+| | |
+|---|---|
+| Acció | Llista de documents amb versió vigent; desplegable d'històric; secció **«Actualitzacions»** amb el que ha arribat després; botó **«He revisat les actualitzacions»** |
+| Buit | «Cap actualització des de l'última revisió» |
+| Càrrega | Skeleton de secció |
+| Validació | — |
+| Conflicte | Si algú altre marca la revisió, es refresca el fingerprint |
+| Permisos | Marcar com a revisat: `owner`, `admin`, `bid_manager` |
+| Sensibles | — |
+| Estat | Xip **«Sense revisar»** (info) o **«Hi ha material nou»** (warning), amb enllaç a Final Readiness |
+
+### D. Manual Requirements
+
+| | |
+|---|---|
+| Acció | Crear, editar, arxivar; adjuntar citacions |
+| Buit | «Cap requisit manual. Els extrets es mostren a sota» |
+| Càrrega | Skeleton de fila |
+| Validació | Títol obligatori; categoria i obligació obligatòries; arxivar demana confirmació |
+| Conflicte | `updated_at` divergent → avís de recàrrega |
+| Permisos | Editar/arxivar només `origin=manual`; els extrets són de només lectura excepte la revisió existent |
+| Sensibles | — |
+| Estat | **Distintiu visual explícit** entre `Extret` i `Manual`. Citacions: pàgina i cita per a documents amb text; etiqueta d'ubicació lliure per a DOCX/XLSX |
+
+### E. Solució tècnica
+
+**Subsecció «Dimensionament»**
+
+| | |
+|---|---|
+| Acció | Crear dimensió; afegir observacions amb font i cita; decidir el valor de treball |
+| Buit | «Cap dimensió. Afegeix-ne una quan dues fonts no coincideixin» |
+| Validació | **Decidir exigeix motiu**; el botó resta desactivat sense ell |
+| Conflicte | CAS per `revision` → `409` amb el que hi ha ara; el que s'ha escrit es conserva |
+| Permisos | Escriptura `SOLUTION_EDIT_ROLES` |
+| Estat | Xip **`En disputa`** (warning) / **`Decidida`** / **`Sense decidir`** |
+
+**Panell «Opcions i cotitzacions»** (expansible per fila de solució)
+
+| | |
+|---|---|
+| Acció | Afegir opció; marcar estat de cotització; seleccionar o descartar amb motiu; arxivar |
+| Buit | «Cap opció encara» |
+| Validació | Descartar exigeix motiu |
+| Conflicte | CAS per `revision` |
+| Permisos | `technical` pot editar camps públics |
+| **Sensibles** | **El cost unitari no apareix per a `technical` ni `viewer`: el camp no hi és, no surt en blanc** |
+| Estat | Xips de `quote_status` i de `selection`; les arxivades només amb «Mostra els arxivats» |
+
+### F. Oferta econòmica
+
+| | |
+|---|---|
+| Acció | Per línia lligada a opció: veure el snapshot, editar `target_markup_pct`, aplicar-lo, editar el preu, sincronitzar des de l'opció |
+| Buit | Sense canvis respecte d'Sprint 2 |
+| Validació | `Decimal`, mai `Float`; markup ≥ 0 |
+| Conflicte | `expected_revision` de l'oferta → `409 economic_offer_revision_conflict`; el que s'ha escrit es conserva |
+| Permisos | `ECONOMIC_EDIT_ROLES` |
+| **Sensibles** | Cost, markup, preu proposat i el component `cost` de la divergència, tots dins `internal_economics` |
+| Estat | Xip **«Difereix de l'opció»** amb el detall del que difereix; **`sync-from-option` és un diàleg amb caselles per camp**, mai un botó que ho aplica tot |
+
+### G. Issues — drawer
+
+| | |
+|---|---|
+| Acció | Obrir des de la capçalera o des d'un requisit, opció, línia o dimensió amb context precarregat |
+| Buit | «Cap dubte obert» |
+| Validació | Resoldre exigeix `resolution` |
+| Conflicte | Edició concurrent → avís de recàrrega |
+| Permisos | Escriptura per a tots els editors; **`blocks_final_review` només `DECISION_ROLES`** |
+| Estat | Agrupat per `status`; **`blocks_final_review` amb marca visual inequívoca**; comptador al botó del drawer |
+
+### H. Final Readiness
+
+Sense canvis estructurals: mateix drawer, **agrupació per severitat** (Bloquegen /
+Avisos / Per informació) i ordre estable de dominis dossier → technical → economic →
+workspace. S'hi afegeixen els 11 findings de §23, cadascun amb el seu camí de
+resolució: revisar actualitzacions, decidir dimensió, refrescar snapshot, actualitzar
+cotització, sincronitzar o acceptar la divergència, resoldre o desmarcar l'issue.
+
+---
+
+## Apèndix — Convencions que no canvien
+
+CAS per `expected_revision` amb `409 *_revision_conflict` · arxivat en comptes
+d'esborrat · `Decimal` per a tot el que sigui diners o percentatges · economia interna
+dins `internal_economics` amb el sentinella `UNSET` per distingir «no toquis» de «posa
+NULL» · findings sense text ni xifres internes, només codi, severitat, domini, entitat
+i context · rutes sota `/companies/{company_id}/workspaces/{workspace_id}/…`.
+
+---
+
+## Delta S3-S1b — el que la implementació ha corregit del disseny
+
+Cinc punts que el codi real desmenteix o precisa. Es documenten aquí perquè la
+fila d'S3-S1b de §27 deia coses que no es podien sostenir.
+
+**1. El testimoni de CAS no és `revision_count`.** `Tender.revision_count`
+compta **publicacions de la font** —s'assigna des de `SourceRecord.revision_number`
+i s'exposa com a `source_publication_count`—, no correccions. Fer-lo servir com a
+testimoni voldria dir que una edició manual no el mou i que dues correccions
+simultànies no xocarien mai. El CAS va contra
+**`TenderRevision.revision_number`**, que és el que sí que avança a cada revisió.
+**No cal cap canvi d'esquema**: la columna ja hi era.
+
+**2. Una licitació manual neix amb revisió 1.** Abans d'S3-S1b, l'alta no
+escrivia cap `TenderRevision`, i sense fotografia inicial el primer PATCH no
+tenia amb què comparar-se ni el paquet base de què penjar
+(`evaluate_staleness` hauria dit `tender_revision_unknown`).
+
+**3. Dos disparadors, no un.** La revisió base es desa amb
+`trigger="manual_create"` i cada correcció amb `trigger="manual_edit"`. Obrir un
+expedient no és corregir-lo, i dir-ne `manual_edit` faria semblar que algú ja
+l'havia tocat abans que ningú l'hagués tocat. `trigger` és `String(40)`: no
+necessita esquema.
+
+**4. Tota escriptura real crea revisió.** Aquest és l'invariant, i el primer
+intent no el complia: `expediente_number` i `country_code` es desaven sense
+crear-ne cap perquè eren fora de la fotografia canònica, i això obria un forat
+al CAS —dos clients que havien llegit la revisió 1 podien escriure tots dos, i
+el segon no tenia manera d'assabentar-se que l'objecte ja havia canviat. La
+fotografia d'una licitació **oberta a mà** ara inclou els dos camps
+(`MANUAL_ONLY_FIELDS`). La d'una **sindicada no**: els hi fixa la font, ningú no
+els corregeix, i afegir-los-hi globalment faria semblar canviades totes les que
+ja hi ha. Mateixa taula, mateix `record_revision`, mateixa classificació, mateix
+`evaluate_staleness`: cap segon sistema de revisions.
+
+Per tant:
+
+| | revisió | `revised` |
+|---|---|---|
+| Cap valor diferent | no | `false` |
+| Qualsevol valor diferent, material o informatiu | **sí, +1** | `true` |
+
+`revised` vol dir **s'ha creat una `TenderRevision`**, i res més.
+
+**5. Corregir ≠ invalidar.** Que hi hagi revisió nova no vol dir que el paquet
+quedi obsolet: això ho decideix la **taxonomia que ja existia**, i és una
+pregunta separada. `TITLE_CHANGED`, `EXPEDIENTE_NUMBER_CHANGED` i
+`COUNTRY_CHANGED` són `INFORMATIONAL` —el motor de pre-fit només llegeix
+`nuts_code` i `place_of_execution`, així que classificar el país com a
+`PREFIT_AFFECTING` faria caducar paquets per un camp que ningú calcula. El que
+sí que dona `tender_changed` és un canvi material: termini, imports, tipus, CPV,
+lots, documents. C-12 es compleix igualment: el paquet aprovat no bloqueja mai
+l'edició.
+
+**Recàlcul de pre-fit.** Va lligat a **si hi ha hagut canvi**, no a la
+materialitat: el motor llegeix camps que la taxonomia classifica per a una altra
+pregunta, i mantenir dues classificacions paral·leles acabaria amb un pre-fit
+calculat sobre dades velles. És una sola licitació
+(`recalculate(company_id, tender_ids=[tender.id])`). Un no-op no recalcula res.
+
+**Codis d'error.** Editar una licitació d'una altra empresa és `404`, com arreu.
+Editar-ne una de **pública** és `422 tender_not_manual` i no `404`: una licitació
+publicada existeix per a tothom i dir que no s'edita per aquesta via no revela
+res.
+
+---
+
+## Delta S3-S2 — el que la implementació ha precisat
+
+Quatre punts que el codi real obliga a concretar. No canvia cap decisió
+congelada: DOCX fora d'extracció, OCR fora, XLSX fora, criteris fora.
+
+**1. Ruta d'upload.** `POST /companies/{company_id}/tenders/{tender_id}/documents`,
+`multipart/form-data`, camp `file`. Company-scoped i amb els rols que decideixen
+(`EDIT_ROLES`). Una licitació d'una altra empresa és `404`; una de **pública** és
+`422 tender_not_manual`, perquè a Sprint 3 els plecs d'una licitació publicada
+els porta la font.
+
+**2. Identitat del document lògic.** `TenderDocument` té `url` NOT NULL i
+`UNIQUE(tender_id, url)`, i un fitxer pujat no ve de cap URL. Se li'n dona una de
+sintètica i opaca, `upload://<uuid4>`, que no resol enlloc. Conseqüència, i és
+deliberada: **cada pujada és un document lògic nou**. Pujar dues vegades els
+mateixos bytes dona DOS documents que comparteixen UN sol contingut; la resposta
+ho diu amb `content_reused`. A S3-S2 no hi ha versions —arriben a S3-S3— i fer
+que la segona pujada es convertís en silenci en la primera seria decidir per
+l'usuari què volia dir.
+
+**3. Read-model de l'extracció.** No hi ha cap columna nova. `analysis_status`
+es calcula des de `ExtractionStatus` i `ExtractionQuality`:
+
+| valor | què vol dir |
+|---|---|
+| `pending` | encara no s'ha intentat llegir |
+| `extracted` | s'ha llegit i hi ha text aprofitable |
+| `no_usable_text` | s'ha llegit i no n'hi ha. El cas típic és un PDF escanejat. **No s'hi fa OCR** |
+| `unsupported` | d'aquest format no en llegim el text. El fitxer és vàlid i està guardat |
+| `failed` | s'ha intentat i el parser no se n'ha sortit |
+
+Va al costat de `stored` i de `text_extraction_supported`, que és una propietat
+del **format**. Els tres camps són separats perquè guardar bé un fitxer i
+poder-ne llegir el text són fets independents, i col·lapsar-los obligaria la
+interfície a dir una de les dues mentides.
+
+**4. TXT i versions de parser.** `text/plain` entra a
+`DOCUMENT_TEXT_EXTRACTION_MIME_TYPES`: llegir-lo és descodificar-lo, sense cap
+dependència nova ni cap model. Es representa amb **una sola pàgina lògica**, que
+és una frontera nostra i no del document, posada perquè la fase de requisits cita
+pàgines i necessita on apuntar; inventar-ne més faria que una cita digués
+«pàgina 4» d'una cosa que no en té. No se li aplica el llindar de caràcters per
+pàgina: aquest llindar existeix per detectar una pàgina de PDF a la qual li falta
+la capa de text, i un fitxer de text no en té cap que pugui faltar. La
+`parser_version` passa a ser **per tipus** (`pypdf-v1`, `plaintext-v1`): una de
+global faria caducar un TXT cada cop que canviés el parser de PDF.
+
+**Dedup.** El nivell són els BYTES, com abans: mateix SHA-256, un sol objecte a
+l'storage i una sola extracció per versió de parser, vinguin d'una descàrrega o
+d'una pujada. No s'hi ha introduït cap dedup per títol ni difús.
+
+**Un plec que arriba és un canvi de la licitació.** Pujar-lo passa per la mateixa
+porta que la sindicació (`record_revision`, trigger `document_processing`) i
+genera el mateix `DOCUMENT_ADDED`, que ja era material. Per tant un paquet
+aprovat queda `tender_changed`. **No és una regla nova d'S3-S2** i no és
+l'obsolescència documental de S3-S3 (`documents_reviewed_*`), que aquí no
+existeix.
+
+---
+
+## Delta S3-S2.1 — arribada ≠ obsolescència, i lectura dins d'una empresa
+
+Dos invariants que el primer intent d'S3-S2 no complia.
+
+### A. Un document nou NO caduca el que s'enviaria
+
+La cadena era: pujar → `record_revision` → `DOCUMENT_ADDED` → qualsevol event
+material → `tender_changed`. Això confonia dues preguntes diferents.
+
+**Causa exacta**, en dues peces:
+
+1. `DOCUMENT_ADDED` portava `{REQUIREMENTS_AFFECTING, COMPLIANCE_AFFECTING}`.
+2. `evaluate_staleness` derivava `tender_changed` de **qualsevol** event
+   material (`log.since`), sense mirar quin impacte tenia.
+
+**Correcció final**, amb la taxonomia que ja existia i sense cap de nova:
+
+- `DOCUMENT_ADDED` passa a `{REQUIREMENTS_AFFECTING}`. Continua sent **material**
+  i continua generant revisió i event: la traçabilitat no es toca. El que deixa
+  d'afirmar és res sobre el compliment, que es calcula sobre els requisits —i
+  mentre ningú no hagi llegit el document, els requisits vigents són els d'abans.
+- `evaluate_staleness` deriva `tender_changed` de `PACKAGE_STALE_IMPACTS`
+  = `{PREFIT_AFFECTING, COMPLIANCE_AFFECTING, WORKSPACE_CRITICAL}`.
+  `REQUIREMENTS_AFFECTING` no hi és.
+
+| Fet | Revisió | `tender_changed` | Qui hi reacciona |
+|---|---|---|---|
+| Plec **nou** | sí | **no** | `requirements_outdated` (ja existia) |
+| Plec **substituït** o **retirat** | sí | sí | també `workspace_critical` |
+| Termini, imports, tipus, CPV, lots | sí | sí | pre-fit / compliment |
+| URL d'un document que canvia | sí | no | és informatiu |
+
+Quan algú llegeixi el document i l'extracció doni requisits diferents, hi haurà
+un `RequirementExtractionRun` nou i el paquet ho sabrà per
+`requirement_run_changed`, que compara runs i no events. La revisió documental
+(`documents_reviewed_*`) és **S3-S3** i aquí no existeix.
+
+**La regla és conceptual, no del canal**: no hi ha cap `if origin == uploaded`.
+Un plec sindicat i un de pujat a mà es comporten igual, perquè l'arribada vol dir
+el mateix en tots dos casos.
+
+**TechnicalSolution**: una validació es lliga a l'empremta del contingut i a la
+del requisit, i l'abast tècnic a una empremta feta de requisits. Cap de les tres
+no la mou un document que ningú no ha llegit, així que l'invariant congelat es
+compleix pel mecanisme que ja hi havia.
+
+### B. Els plecs es llegeixen dins d'una empresa
+
+`visible_to_user` no n'hi havia prou: qui és membre d'A i de B treballa sempre
+**dins** d'una, i en context B podia llegir un plec d'A només perquè també era
+d'A. El límit d'un tenant no és qui ets, és on ets.
+
+Els set camins de lectura passen a penjar de `/companies/{company_id}` i filtren
+amb `visible_to_company(company_id)`:
+
+| Ruta final |
+|---|
+| `GET /companies/{c}/tenders/{t}/documents` |
+| `GET /companies/{c}/tenders/{t}/documents/{d}/files` |
+| `GET /companies/{c}/tender-document-files/{f}` |
+| `GET /companies/{c}/tender-document-files/{f}/extractions` |
+| `GET /companies/{c}/tender-document-files/{f}/pages` |
+| `GET /companies/{c}/tender-document-files/{f}/original` |
+| `GET /companies/{c}/tender-document-extractions/{e}/pages[/{n}]` |
+
+**No queda cap ruta user-global de lectura documental.** No calia cap excepció
+per als plecs públics: `visible_to_company` ja inclou les licitacions sense
+propietari, així que un plec publicat es llegeix des de qualsevol empresa,
+exactament com abans.
+
+**Contingut compartit**: els mateixos bytes donen un sol `TenderDocumentContent`
+i una sola extracció. Per tant el dret sobre una extracció **no** pot dependre de
+qui la va crear —la segona empresa que puja el mateix plec es quedaria sense
+poder llegir el text del seu propi document. La pregunta és si aquell contingut
+el referencia algun `TenderDocument` visible **en aquesta empresa**; si només el
+referencia l'altra, és un `404`.
+
+**Superfície que queda fora d'aquesta passada**: `GET /tenders/{tender_id}` (la
+fitxa) continua resolent-se amb `visible_to_user` i el seu cos inclou la
+metadata dels documents. És el contracte del feed, decidit a S3-S0, i
+company-scoparlo tocaria Oportunitats i la fitxa senceres.
+
+---
+
+## Delta S3-S3 — revisió documental, versions i els tres findings
+
+### Migració 0029
+
+`bid_workspaces.documents_reviewed_at` (timestamptz, NULL) i
+`documents_reviewed_fingerprint` (varchar(64), NULL). Cap índex, cap FK, cap
+`reviewed_by`, cap backfill. **NULL vol dir NO revisat.** No hi ha cap columna
+«caducat»: es deriva comparant empremtes en llegir, igual que l'abast tècnic.
+
+### Empremta documental canònica
+
+`document_review.fingerprint_of(session, tender_id)` → SHA-256 de les línies
+ordenades `document_id|file_id|version_number|content_sha256`, una per document
+lògic, amb `-` on no hi ha fitxer vigent.
+
+Hi entra **tot document admès**, inclosos els formats dels quals no sabem llegir
+el text: un XLSX l'ha de revisar una persona igual que un PDF, i que el nostre
+parser el sàpiga obrir o no és una limitació nostra, no un fet del document.
+**No** hi entra res de l'extracció —ni estat, ni qualitat, ni pàgines— ni cap
+sortida de model. És documental.
+
+**Zero documents**: cap finding. «Cap document per revisar» no és un pendent, és
+que no hi ha res; demanar que algú confirmi el buit seria feina inventada.
+
+### Versions
+
+`POST /companies/{c}/tenders/{t}/documents/{d}/versions`, multipart. Mateix
+`TenderDocument.id`, `TenderDocumentFile` nou amb `version_number` anterior + 1,
+l'anterior passa a `is_current=false` i **no es toca mai**: conserva el seu
+contingut, la seva extracció i les seves pàgines, que són l'evidència que una
+citació pot haver referenciat.
+
+**Bytes idèntics als de la versió vigent → cap versió nova**, `200` en comptes de
+`201`, l'empremta no es mou i la revisió no caduca. Tornar a pujar el mateix
+fitxer passa, i convertir-ho en «els plecs han canviat» gastaria el senyal.
+
+### Revisió humana
+
+`POST /companies/{c}/workspaces/{w}/documents/review`. Desa l'empremta d'ara i la
+data. Roles de decisió. **Idempotent**: si l'empremta ja és aquella, no mou ni la
+data ni l'auditoria. No extreu requisits, no valida cap solució, no aprova cap
+paquet i no afirma que no hi hagi canvis.
+
+### Els tres findings
+
+| Codi | Sev. | Domini | Predicat exacte |
+|---|---|---|---|
+| `tender_documents_unreviewed` | info | workspace | `document_count > 0` i `documents_reviewed_fingerprint IS NULL` |
+| `tender_documents_changed` | warning | workspace | `documents_reviewed_fingerprint IS NOT NULL` i `≠ fingerprint_of(ara)` |
+| `requirement_analysis_predates_documents` | warning | technical | hi ha run vigent, el corpus analitzable d'ara no és buit, i `analysis_input(ara).fingerprint ≠ run.input_fingerprint` |
+
+**Delta sobre §23**: el disparador del tercer ja no és `created_at > completed_at`.
+Es compara el **corpus**, no dates: `input_fingerprint` diu sobre quines
+extraccions es va fer la run i `analysis_input` recalcula la mateixa empremta amb
+el que hi ha ara. Dues dates poden ordenar-se bé i parlar de coses diferents —un
+document reextret amb un parser nou no mou cap `created_at`—, i aquesta
+comparació no té aquest problema. **No calia cap columna nova.**
+
+Sense run vigent no es diu res per aquí: que no s'hagi analitzat mai ja té el seu
+finding al dossier. Amb un corpus analitzable buit tampoc: un XLSX nou s'ha de
+revisar, però l'anàlisi no el cobria abans ni ara.
+
+**D-09**: el finding es limita a comparar runs reals. Un requisit manual no té
+run i **no** el dispara; quan `origin` existeixi (0031), el predicat no s'ha de
+tocar, perquè mai mira `run_id IS NULL`.
+
+### Camins de resolució
+
+A i B → fitxa de la licitació, pestanya **Plecs**, amb «Marca com revisats».
+C → fitxa de la licitació, pestanya **Requisits**, on viu `RequirementAnalysisSection`
+i on es pot tornar a executar l'anàlisi. **No** a Decidir: allà no hi ha el botó
+que cal.
+
+Marcar la revisió **no** apaga C: dir que has mirat els plecs no fa que l'anàlisi
+els cobreixi.
+
+### Tipus de document en una pujada manual
+
+`POST …/documents` accepta `document_type` (opcional al servidor, per defecte
+`other`). No és cosmètic: l'anàlisi automàtica només tria PCAP, PPT i annexos
+(`DEFAULT_DOCUMENT_TYPES`), així que un plec pujat sense classificar **no hi
+entra sol** — es guarda, es revisa i es pot triar a mà, però no hi entra.
+
+**És una declaració humana, per document.** Al pas 2 de l'assistent, triar
+fitxers ja no els puja: els posa en espera amb un selector de tipus per fitxer, i
+s'envien quan qui els puja ha dit què són. Un reintent conserva el tipus ja
+triat. El valor per defecte és `other` i **no s'endevina res del nom del
+fitxer**: un «PCAP-administratiu.pdf» surt com a `other` si ningú no diu el
+contrari.
+
+El tipus és del `TenderDocument` **lògic**, no del fitxer: pujar una versió nova
+**no** el reclassifica.
+
+### Versió nova i paquet — **congelat**
+
+`DOCUMENT_ADDED` i `DOCUMENT_REPLACED` **no** volen dir el mateix, i la
+taxonomia actual ja ho expressa bé:
+
+| | `DOCUMENT_ADDED` | `DOCUMENT_REPLACED` |
+|---|---|---|
+| Revisió i event | sí | sí |
+| Empremta documental | canvia | canvia |
+| `tender_documents_changed` | sí | sí |
+| L'anàlisi pot quedar desfasada | sí | sí |
+| Impactes | `REQUIREMENTS_AFFECTING` | + `COMPLIANCE_AFFECTING`, `WORKSPACE_CRITICAL` |
+| **Paquet existent `tender_changed`** | **no** | **sí** |
+| TechnicalSolution | no invalida | no invalida |
+
+El motiu de la diferència no és que un afirmi que els requisits han canviat.
+Cap dels dos ho afirma. És que **la font vigent que formava part de la base
+documental del paquet ha estat substituïda**: el que es va aprovar penjava d'uns
+bytes concrets i aquells bytes ja no són els vigents. Un document nou, en canvi,
+no toca cap font que el paquet citi.
+
+Val igual per a una pujada manual i per a una substitució d'una font sindicada:
+**cap cas especial per `origin`**.
+
+**C-12 intacte**: pujar una versió amb un paquet aprovat està permès, l'aprovació
+queda immutable, el paquet no es degrada ni es desbloqueja res, i no hi ha cap
+`409` ni cap acknowledge. Obsolet **no** és revocat.
+
+---
+
+## Delta S3-S4 — les cites immutables, implementades
+
+La taula de §12 s'ha implementat **tal com estava congelada**, amb el nom
+canònic `tender_source_refs` (no `workspace_source_refs`: un `Requirement` és
+tender-level i pot existir abans que cap `BidWorkspace`, així que la provinença
+tampoc no en pot dependre). Migració `0030_tender_source_refs`, head única.
+
+### El que el codi ha precisat
+
+**L'enum no porta CHECK de valors.** `enum_column` és `native_enum=False` sense
+`create_constraint=True` a tot el projecte, i aquí no es canvia. Tot i així el
+valor queda acotat de fet: `source_ref_is_anchored` només és cert per a
+`extracted_page` o `document_file`, i qualsevol altra cadena fa fallar la fila.
+Verificat contra PostgreSQL.
+
+**El `quote` es DERIVA, no s'accepta.** Quan hi ha `char_start`/`char_end`, el
+text citat surt del text real d'aquella pàgina i es valida que el tros hi
+càpiga. Un span que se'n surt és un error i no es retalla en silenci: una cita
+escapçada seguiria semblant una prova. El `content_sha256` també el deriva el
+servidor, del contingut real.
+
+**Una FK sola no demostra res.** El servei comprova la cadena sencera: la pàgina
+és d'aquella extracció, l'extracció d'un contingut que referencia un document
+**d'aquesta licitació**, i el fitxer d'un document d'aquesta licitació. Conèixer
+els dos UUID no els fa compatibles.
+
+### Conseqüència real del `RESTRICT`, verificada contra PostgreSQL
+
+| Esborrar | Resultat |
+|---|---|
+| Pàgina citada | **refusat** |
+| Extracció citada | **refusat** |
+| Fitxer citat | **refusat** |
+| El `TenderDocument` lògic del fitxer citat | **refusat**, pel CASCADE cap als seus fitxers |
+| La licitació sencera | permès; s'endú les cites (CASCADE) |
+
+La quarta fila no estava escrita enlloc i val la pena saber-la: el `SET NULL` de
+`tender_document_id` només tindria efecte si algú esborrés el document per un
+camí que no s'endugués els fitxers, i avui no n'hi ha cap. És coherent —no s'ha
+de poder fer desaparèixer la font d'una cita sense adonar-se'n— i el que
+importa és que l'última fila funciona: esborrar una licitació (o una empresa)
+no queda bloquejat perquè algú l'hagi citada.
+
+### Contracte per tipus
+
+| | `extracted_page` | `document_file` |
+|---|---|---|
+| Àncora | `extraction_id` + `page_id` | `tender_document_file_id` |
+| `page_number` | sí | no |
+| `quote` | derivat del text real | opcional, lliure |
+| `char_start`/`char_end` | opcional, validat contra la pàgina | no |
+| `location_label` | opcional | opcional, i és el que diu on mirar |
+
+`document_file` és el cas d'un XLSX o un DOCX: guardats, sense cap pàgina i amb
+`ExtractionStatus = skipped_unsupported`, i tot i així citables. No s'hi afegeix
+cap parser ni es converteix res a pàgines.
+
+### Què NO porta
+
+Cap `workspace_id`, `requirement_id`, `dimension_id` ni `issue_id`; cap JSON
+d'UUID; cap `updated_at` ni `archived_at` —una fila que no canvia mai no en
+necessita, i tenir-los convidaria a modificar-la. `RequirementEvidence` no s'ha
+tocat: continua sent la provinença dels requisits extrets amb les seves
+garanties, i això és una via genèrica **addicional**.
+
+`requirement_source_ref_links` és 0031. Cap consumidor encara, i per tant cap
+UX: la primera pantalla de citacions arribarà amb els requisits manuals.
+
+---
+
+## Delta S3-S5 — requisits manuals i conjunt efectiu
+
+La §13 s'ha implementat tal com estava congelada. Els deltes reals:
+
+**Restricció V1 de tenancy.** `Requirement` és tender-level i 0031 **no** hi
+afegeix `owner_company_id`. Per tant escriure requisits a mà només es pot sobre
+una licitació **de la font MANUAL i de la pròpia empresa**: fer-ho sobre una de
+pública faria que el que escriu una empresa aparegués a totes les altres, sense
+cap model de tenancy que ho impedeixi. La lectura dels extrets d'una licitació
+pública no canvia gens.
+
+**Codi d'error.** El freeze deia `403 requirement_not_manual`; la implementació
+retorna **`422`**, per coherència amb `tender_not_manual` d'S3-S1b i amb la
+resta de `ValidationError` del repo. El `404` es reserva per al que és d'una
+altra empresa.
+
+**`confidence` no s'exposa als manuals.** La columna és NOT NULL i ve de quan
+tot requisit sortia d'un model; es desa al mínim per satisfer-la, però el
+read-model la retorna `null` quan `origin=manual` i la interfície pinta
+atribució humana. Dir «confiança baixa de la IA» d'una cosa escrita per una
+persona seria una atribució falsa.
+
+**`dedup_key` es calcula però no s'imposa.** `UNIQUE(run_id, dedup_key)` no
+dispara amb `run_id` NULL, i és correcte: que dues persones escriguin el mateix
+requisit és cosa seva, i fusionar-los seria decidir-ho per elles.
+
+**Downgrade amb pèrdua deliberada.** 0030 no sap representar un requisit sense
+run. El downgrade esborra els manuals i els seus enllaços **abans** de tornar
+`run_id` a NOT NULL. L'alternativa —fabricar-los una `RequirementExtractionRun`—
+és exactament la mentida que 0031 existeix per evitar.
+
+**Provinença.** `requirement_source_ref_links` (N:N), `RESTRICT` cap a la cita i
+`CASCADE` cap al requisit. Treure un enllaç **no** esborra la cita: pot
+sostenir-ne d'altres i era certa el dia que es va crear. Arxivar un requisit
+tampoc no toca els enllaços.
+
+### Callers de `Requirement.run_id` auditats
+
+| Fitxer / funció | Assumpció abans | Classificació | Canvi |
+|---|---|---|---|
+| `services/technical_scope._requirements` | `run_id == run.id` | conjunt efectiu | usa `effective_requirements` |
+| `services/bid_workspace.relevant_requirements` | `run_id == run.id` | conjunt efectiu | usa `effective_requirements` |
+| `services/compliance_analysis.analyze_company_compliance` | `run_id == run.id` | conjunt efectiu | `OR manual_filter(tender)` |
+| `routers/requirements.read_analysis` | `run_id == run.id`, `run` no-null | conjunt efectiu | unió + `run` opcional |
+| `services/requirement_analysis` (1046-1178) | escriu amb `run_id=run.id` | extracted-only | intacte |
+| `evaluation/runner` | `run_id == run.id` | extracted-only | intacte |
+| `services/submission_package`, `submission_manifest`, `routers/submission` | `requirement_run_id` del **paquet** | extracted-only | intacte |
+| `services/bid_workspace` (`current_requirement_run_id`) | run vigent del workspace | extracted-only | intacte |
+| `models/requirements.Requirement.run` | relació no-null | manual-aware | `Requirement \| None` |
+| `schemas/requirements.RequirementRead` | `run_id: uuid` | manual-aware | `uuid \| None` + `origin` |
+| `ai/normalize_v2`, `jobs/*`, `ingestion/*` | `run_id` d'altres entitats | no afectats | intacte |
+
+**Conseqüències volgudes**: crear, editar materialment o arxivar un requisit
+manual mou l'empremta de l'abast tècnic → `technical_scope_stale`. Un PATCH que
+no canvia res, no. I `analysis_input().fingerprint` **no** es mou mai per CRUD
+manual: parla del corpus documental, no dels requisits.
+
+### S3-S5.1 — escriure una cita
+
+S3-S4 va deixar el servei de provinença fet i **sense endpoint a propòsit**: no
+hi havia cap consumidor, i una UX que després s'hagués de retirar és pitjor que
+cap. Amb els requisits manuals ja n'hi ha un de real, i per tant s'exposa.
+
+| Endpoint | Per a |
+|---|---|
+| `POST /companies/{c}/tenders/{t}/source-refs/extracted-page` | PDF i TXT: extracció + pàgina, amb `char_start`/`char_end` opcionals |
+| `POST /companies/{c}/tenders/{t}/source-refs/document-file` | DOCX, XLSX i companyia: versió + `location_label` |
+| `POST …/requirements/{r}/citations` | enganxar-ne una d'existent |
+| `DELETE …/requirements/{r}/citations/{ref}` | desenganxar-la |
+
+Mateix contracte que la resta d'S3-S5: licitació **de la font MANUAL i pròpia**,
+rols que preparen la candidatura (`technical` inclòs), `viewer` read-only. Els
+routers no validen res pel seu compte: hi passen a través de `source_refs.py`.
+
+**El client no dicta la prova.** `content_sha256` i `quote` no són als schemas
+de creació: el SHA el deriva el servidor dels bytes reals i el `quote` del text
+real de la pàgina quan hi ha posicions. `location_label`, en canvi, sí que
+l'escriu una persona: és coneixement seu, no una dada derivable.
+
+**Cap UUID a la vista.** El selector treballa amb noms —document, versió,
+pàgina— i resol els identificadors ell mateix, reutilitzant els endpoints
+company-scoped d'S3-S2.1. Hi ha un test que escaneja el DOM buscant UUIDs.
+
+**Atomicitat.** Primer es creen les cites, després el requisit amb els seus
+`source_ref_ids`. Si el segon pas falla, les cites queden **òrfenes i inertes**:
+són immutables, no les referencia ningú i la següent cita dels mateixos bytes no
+en crea cap de nova. És acceptable i deliberat: l'alternativa seria una
+transacció distribuïda al navegador.
+
+**Desenganxar no esborra.** Treure una cita elimina el `RequirementSourceRefLink`
+i prou. El `TenderSourceRef` es queda: pot sostenir-ne d'altres i era cert el dia
+que es va crear. I no s'edita mai — per corregir-la, se'n crea una de nova i es
+desenganxa l'anterior.
+
+**Citar no verifica.** Adjuntar evidència no canvia `review_status` ni
+l'atribució: un requisit manual amb cita continua sent una afirmació humana amb
+font, no una extracció.
+
+
+---
+
+## Delta S3-S6 — dimensions multi-font, implementades
+
+`0032_workspace_dimensions` crea **exactament dues taules** i no toca cap de les
+que ja hi havia: cap columna afegida, cap backfill, cap dimensió inventada. Les
+dues neixen buides, i el downgrade les esborra —0031 no sap representar cap
+dimensió i no hi ha res a preservar-hi que tingui sentit fora d'aquesta fase.
+
+**Delta sobre §14 — la provinença no es duplica.** El disseny original portava
+`tender_document_id`, `page_number` i `quote` a l'observació. Queda superat:
+`source_ref_id` apunta a `tender_source_refs`, que des d'S3-S4 ja porta la
+versió, el SHA, la pàgina i la cita derivada del text real. Tenir-ne dues còpies
+voldria dir que un dia dirien coses diferents, i la còpia de l'observació
+sobreviuria a una v2 del document afirmant una cosa que aquella font no va dir
+mai. Hi ha un test que puja una v2 i comprova que la cita continua apuntant a la
+v1 amb el seu SHA.
+
+**Delta sobre §14 — «evidència nova» no és una comparació de dates.** La regla
+de no reobrir una decisió sola estava escrita com «observacions posteriors a
+`decided_at`». No es pot implementar honestament: `created_at` el posa el
+rellotge de la base de dades (`CURRENT_TIMESTAMP`, resolució de **segon**) i
+`decided_at` el del procés, i comparar-los és comparar dos rellotges. Una
+observació que arribés el mateix segon que la decisió semblaria anterior. Com
+que `add_observation` és l'única manera de crear-ne una, la detecció és
+**incremental**: la font que acaba d'arribar la tenim a la mà i no cal
+preguntar-ho a cap rellotge.
+
+* dimensió **no** decidida → `disputed` si hi ha ≥2 `value_num` distints;
+* dimensió **decidida** → `disputed` només si la font que acaba d'arribar porta
+  un `value_num` que no és el decidit.
+
+Les observacions que van motivar la decisió es conserven totes i **no** tornen a
+comptar. Si comptessin, la dimensió quedaria disputada just després de
+resoldre-la i l'avís no serviria per a res.
+
+**Només números.** `value_num` l'omple qui registra la font. El sistema no dedueix
+que «cent vuitanta-una» és 181, no normalitza text i no tria la font més fiable.
+Dues fonts sense xifra no són mai una discrepància: es mostren totes dues i prou.
+La comparació és de `Decimal`, o sigui que `1.5000` i `1.5` són el mateix número.
+
+**El UNIQUE no basta sol.** `UNIQUE(workspace_id, key, scope_label)` no dispara
+quan `scope_label IS NULL`, perquè a PostgreSQL dos NULL són distints. El
+constraint es queda tal com el fixa §14 i el servei ho complementa amb una
+comprovació pròpia (`409 dimension_duplicate_key`). El gate de PostgreSQL ho
+prova en tots dos sentits: amb àmbit dispara, sense àmbit no.
+
+**CAS a les quatre escriptures.** Corregir metadades, afegir una font, decidir i
+arxivar porten `expected_revision` i avancen el testimoni via
+`UPDATE … WHERE revision = :expected` (`409 dimension_revision_conflict`). Un
+PATCH que no canvia res **no** el mou: un desat que no canvia res no ha de
+caducar la lectura de ningú.
+
+**Decidir té el seu endpoint, i no és un camp.** `status`, `working_value_*` i
+`decision_reason` no són a cap schema d'escriptura de metadades. Si s'hi
+poguessin tocar, «decidit» seria un valor més i el motiu es podria esquivar. El
+motiu és obligatori al schema (`min_length=1`), al servei (no accepta espais) i
+a la base de dades (`CHECK`) — el gate de PostgreSQL comprova que el CHECK
+dispara de debò, no només que existeix.
+
+**Arxivar, mai esborrar.** Treu la dimensió de la llista activa i apaga el seu
+avís; les observacions es conserven. És idempotent.
+
+**Append-only de veritat.** No hi ha cap PATCH ni cap DELETE d'observació, i la
+taula no té ni `updated_at` ni `archived_at`: no hi ha on desar-hi un canvi. Una
+observació no diu «el valor és 151», diu «aquesta font deia 151».
+
+**`SET NULL` cap a la cita, no `RESTRICT`.** A diferència de
+`requirement_source_ref_links`, perdre la cita no ha de fer perdre l'observació:
+el que la font deia segueix sent cert encara que ja no en sapiguem el full
+exacte. Cap a la dimensió, `CASCADE`.
+
+**Delta sobre §22 — `dimension_disputed` sí, `dimension_undecided_in_use` no.**
+El primer és un **warning** del domini tècnic, amb `entity_id` i el `key` de la
+dimensió al context. No bloqueja: bloquejar diria que el sistema sap que hi ha un
+error, i el que sap és que dues fonts no diuen el mateix. Una dimensió
+`undecided` no genera res —queixar-se'n seria soroll—, i
+`dimension_undecided_in_use` queda ajornat a S3-S8, que és quan existiran les
+opcions a les quals una dimensió es pot enllaçar.
+
+**Cap propagació de quantitats.** Res no escriu una quantitat a partir de
+`working_value_num`; §16 continua sent feina d'S3-S8.
+
+**Tenancy.** `workspace_dimensions` porta `company_id` i és de tenant;
+`workspace_dimension_observations` hi penja i queda classificada com a indirecta
+a `app/tenant_ops.py`. Una dimensió d'una altra candidatura, encara que sigui de
+la mateixa empresa, és `404`: un identificador no és cap autorització.
+
+**UX.** Subsecció «Dimensionament» dins de **Preparar → Solució tècnica**, zero
+pestanyes noves: dimensionar no és una feina a part, és el mateix moment en què
+algú decideix què proposarà. Qui només mira ho veu tot i no hi pot escriure. La
+creació de cites reutilitza el `CitationPicker` d'S3-S5.1, o sigui que tampoc
+aquí no hi ha cap UUID a la vista.
+
+
+---
+
+## Delta S3-S7 — opcions, proveïdors i cotitzacions, implementades
+
+`0033_workspace_solution_options` crea **una sola taula** i no en toca cap
+altra: cap columna afegida enlloc, cap backfill, cap opció deduïda de res. El
+downgrade l'esborra, i deliberadament **no** converteix cap cost en línia
+d'oferta per "salvar-lo": seria inventar una oferta.
+
+**`WorkspaceSolutionOption` és la font de veritat de** proveïdor, producte,
+configuració, quantitat candidata, **cost**, workflow de cotització i tria
+humana.
+
+**`EconomicOfferLine` continua sent l'única font de veritat del preu de venda**,
+i encara no hi ha cap relació entre totes dues. No hi ha `unit_price`, ni marge,
+ni markup, ni cap sinònim: un test comprova que l'únic nom que conté "cost" a la
+taula és `unit_cost_ex_vat`.
+
+**`WorkspaceTechnicalSolution` no se sincronitza mai.** Crear, editar, cotitzar,
+triar o arxivar una opció no toca ni el proveïdor, ni el producte, ni el
+contingut, ni l'estat, ni la validació de la solució tècnica. La capa d'opcions
+és configuració a part; sincronitzar-la automàticament faria que triar una
+alternativa reescrivís una proposta que algú ja havia validat. El Design Freeze
+no conté cap acció «copia a la solució tècnica», i per tant no se n'ha inventat
+cap.
+
+**Delta sobre §5 — els CHECK dels enums són explícits.** `enum_column()` es
+materialitza com un VARCHAR i SQLAlchemy només en crea el CHECK amb
+`create_constraint=True`, que el projecte no passa. Per a aquesta taula s'han
+escrit a mà, seguint el patró que ja fa servir `workspace_technical_solutions`.
+El gate de PostgreSQL comprova que **disparen de debò**, no només que existeixen:
+un `quote_status = 'aprovada'` i un `selection = 'potser'` són rebutjats pel
+motor. Hi ha un tercer CHECK, `rejected_has_reason`.
+
+**Public i internal són dos contractes, no un amb camps opcionals.** El PATCH
+públic (`PATCH …/{id}`) té `extra="forbid"` i no té ni un lloc on posar el cost:
+enviar-l'hi és un 422, mai un camp descartat en silenci. El cost viu al seu
+endpoint (`PATCH …/{id}/internal-economics`) i només per a
+`ECONOMIC_INTERNAL_ROLES`. Amb un sol PATCH, un `technical` que enviés el
+formulari sencer amb el camp buit netejaria una xifra que ni tan sols veu; hi ha
+un test que ho comprova contra la base.
+
+**La redacció segueix el contracte d'Sprint 2 exactament**, sense cap canal
+paral·lel: el cost viatja dins d'`internal_economics`, que **existeix o no
+existeix**, i `can_view_internal_economics` ho diu explícitament. No s'envia
+`unit_cost_ex_vat = null` (voldria dir «encara no ho sabem») ni `0` (seria una
+xifra falsa). S'ha auditat a totes les respostes: llista, detall, create, PATCH
+públic, PATCH intern, selecció i arxivat. **L'auditoria diu què ha canviat i mai
+quant**: escriure la xifra a `AuditLog` l'exposaria justament a qui no la pot
+veure a la fitxa.
+
+**`undecided` no és `rejected`.** És la distinció que justifica l'enum en comptes
+d'un booleà. Cap opció neix triada, i descartar-ne una exigeix motiu no buit
+—imposat al servei i a la base—. Seleccionar no l'exigeix: el motiu d'una tria
+sol ser que les altres s'han descartat, i obligar-hi faria escriure frases
+buides.
+
+**Triar-ne una no en descarta cap altra.** Sewan, Cable i Orange poden coexistir
+i que algú triï Sewan no vol dir que hagi mirat les altres dues. Auto-rebutjar
+les germanes escriuria una decisió que ningú no ha pres, amb un motiu que ningú
+no ha donat. Quan una opció deixa de ser la triada, `selected_by` i `selected_at`
+s'esborren: mantenir-los faria creure que encara ho és.
+
+**Les FK soles no demostren coherència.** `technical_solution_id` apunta a una
+taula que conté solucions de totes les candidatures, i `requirement_id` a
+requisits que són globals per licitació. El servei comprova que totes dues siguin
+d'aquesta candidatura i d'aquesta licitació, i que el requisit sigui del
+**conjunt efectiu**. Si més endavant en surt —una extracció nova, un manual
+arxivat—, l'opció **no s'esborra ni s'amaga**: `requirement_is_effective` ho diu,
+i la interfície també.
+
+**Tenancy.** `workspace_solution_options` porta `company_id` i queda classificada
+com a taula de tenant directa. Una opció d'una altra candidatura, encara que
+sigui de la mateixa empresa, és `404`. `company_id` mai ve del cos.
+
+**CAS a les quatre escriptures** (PATCH públic, PATCH intern, selecció i
+arxivat), amb `UPDATE … WHERE revision = :expected` i `409
+solution_option_revision_conflict`. Provat contra PostgreSQL amb dues
+transaccions concurrents reals, i el guanyador no tanca fins que
+`pg_stat_activity` confirma que l'altra sessió espera el bloqueig de la fila.
+
+**Delta sobre §22 — `solution_option_quote_pending` ja és calculable.** Warning
+del domini tècnic quan una opció **viva i triada** té la cotització `requested` o
+`pending`. Només les triades: que una alternativa que ningú no farà servir no
+tingui cotització no és cap feina pendent. No bloqueja.
+
+**`solution_option_quote_expired` queda ajornat**, i no per falta de temps: el
+seu contracte exigeix que una **línia econòmica viva** depengui de l'opció, i
+`EconomicOfferLine.solution_option_id` encara no existeix. Deduir-ho pel nom, la
+quantitat o el text seria una heurística. Arribarà amb el vincle real.
+
+**`dimension_undecided_in_use` també queda ajornat** fins a 0034, que és quan
+existirà `workspace_solution_option_dimensions`.
+
+**Cap relació amb les dimensions.** Cap FK, cap taula pont, cap `dimension_id`.
+`quantity` és una propietat de la configuració de l'opció: no ve de
+`working_value_num` ni actualitza cap línia econòmica, i no hi ha cap trigger,
+callback ni efecte de frontend que ho faci.
+
+**El paquet no es mou.** Crear, cotitzar, triar, rebutjar o arxivar una opció no
+fa cap paquet obsolet i no toca el manifest v2.
+
+**UX.** Subsecció «Opcions i cotitzacions» dins de **Preparar → Solució
+tècnica**, convivint amb «Dimensionament» i sense cap pestanya nova. Taula densa
+amb proveïdor, producte, quantitat, unitat, cotització i tria; la columna de cost
+**només existeix** per als rols econòmics —ni «0 €» ni «ocult»—, i la secció
+d'economia interna del formulari tampoc no hi és per a la resta. «Selecciona» i
+«Rebutja» són dos botons separats, mai una casella excloent, i rebutjar obre un
+diàleg que demana motiu.
+
+
+---
+
+## Delta S3-S7b — la dependència opció ↔ magnitud, implementada
+
+`0034_solution_option_dimensions` crea **una sola taula pont** i no en toca cap
+altra: ni les opcions, ni les magnituds, ni l'oferta econòmica.
+
+**N:N de debò.** Una opció de servei mòbil depèn del nombre de línies, del de
+terminals i del de SIM de dades; i el nombre de línies el fan servir totes les
+opcions que s'hi comparen. Per això no hi ha cap `dimension_id` a l'opció ni cap
+`solution_option_id` a la magnitud.
+
+**Delta sobre §16 — la V1 és la relació pura, i §16 queda superat.** El disseny
+original preveia `role` (`quantity_driver` / `scope_reference`),
+`quantity_factor`, `snapshot_value_num` i `snapshot_taken_at`. **Cap d'aquests
+camps forma part de l'Sprint 3**: no són feina pendent dins de l'sprint, són
+disseny **substituït** per la relació pura. Si algun dia apareix un cas de
+negoci que els necessiti, serà una decisió i una migració futures i explícites,
+no la continuació d'aquesta.
+
+La relació diu una cosa i prou: *«aquesta opció depèn d'aquesta magnitud»*. No
+diu que `option.quantity` surti de `working_value_num`, ni que el valor estigués
+decidit el dia que es va enllaçar, ni que la magnitud sigui el preu.
+
+**Cap snapshot, i no n'hi haurà cap aquí.** L'estat d'ara el diu
+`workspace_dimensions`, que n'és l'única font de veritat. Una còpia a la relació
+voldria dir tenir dues respostes a la mateixa pregunta, i un dia no coincidirien
+sense que ningú sabés quina manava. **El snapshot econòmic el fa la línia**
+(`EconomicOfferLine`, 0035): quan una línia adopta una quantitat i un cost, els
+copia i ja no es mouen. Aquesta és la V1 i no un pas intermedi.
+
+**Delta sobre §16 — `dimension_id` és `CASCADE` i no `RESTRICT`, i aquest és el
+valor congelat de la V1.** El disseny original deia
+`RESTRICT` per no deixar esborrar una magnitud de què depèn una opció. A la
+pràctica el producte **no esborra cap magnitud** —les arxiva—, de manera que
+aquella protecció no arribaria a actuar mai; en canvi, amb `RESTRICT` la
+destrucció d'un tenant fallaria i deixaria files que ningú no pot netejar
+(§34). Els dos costats cascaden: una dependència sense cap dels seus dos extrems
+no li serveix a ningú. **Arxivar no és esborrar** i no toca cap relació.
+
+**Zero propagació de quantitat.** Enllaçar una magnitud de 181 no escriu 181
+enlloc; canviar-la després a 209 no toca l'opció; passar d'`undecided` a
+`decided` o de `disputed` a `decided` tampoc. No hi ha cap trigger, cap event
+d'ORM, cap callback ni cap efecte de frontend. Hi ha un test amb la magnitud a
+181 i la quantitat a 40 —diferents a propòsit, perquè amb xifres iguals una
+còpia automàtica seria invisible— i està verificat per mutació.
+
+**El CAS és el de l'OPCIÓ.** Enllaçar i desenllaçar són configuració de l'opció,
+no una entitat amb vida pròpia: no hi ha cap comptador de revisions nou. Un
+attach o un detach real mou `WorkspaceSolutionOption.revision` pel mateix
+`claim_revision()` atòmic d'S3-S7 (ara públic, justament per això), i un no-op
+idempotent **no** el mou. Conflicte: `409 solution_option_revision_conflict`.
+
+**Same workspace.** Les FK no ho garanteixen —`workspace_dimensions` conté les
+magnituds de totes les candidatures—, i el servei ho valida: una opció no pot
+dependre d'una magnitud d'una altra candidatura ni encara que sigui de la
+mateixa empresa.
+
+**Arxivats.** Una opció arxivada conserva les seves dependències com a història i
+no en rep de noves (`409 solution_option_archived`). Una magnitud arxivada no es
+pot començar a fer servir (`422`), però una relació que ja existia es conserva i
+el read-model ho diu amb `archived_at`; treure-la és una decisió de la persona,
+mai una neteja silenciosa.
+
+**Qualsevol estat.** Es pot dependre d'una magnitud `undecided` o `disputed`:
+representar una dependència no és afirmar que el valor ja estigui resolt —al
+revés, saber de què depèn una opció és el que fa evident que cal decidir-ho.
+`dimension_disputed` continua sent l'únic avís; no se n'ha creat cap de segon per
+estar enllaçada, que seria dir dues vegades el mateix problema.
+
+**Delta sobre §22 — `dimension_undecided_in_use` continua ajornat**, tot i que
+ara la dependència existeix. El contracte final exigeix que la magnitud estigui
+en ús **econòmic**: magnitud → opció → `EconomicOfferLine` viva. Aquest darrer
+vincle no existirà fins a 0035. Redefinir «en ús» com «hi ha una opció» o «l'opció
+està triada» seria canviar el significat del blocador per poder-lo escriure
+abans d'hora. `solution_option_quote_expired` segueix ajornat pel mateix motiu.
+
+**API.** `GET …/solution-options/{id}/dimensions`, `PUT …/dimensions/{dim}` i
+`DELETE …/dimensions/{dim}`. `PUT` perquè és idempotent. El `DELETE` porta
+`expected_revision` **per query** i no al cos: un `DELETE` amb cos és legal però
+incòmode —el client del repo no en sap enviar i hi ha intermediaris que el
+descarten—. Escriptura per a `SOLUTION_EDIT_ROLES` (`technical` inclòs):
+enllaçar magnituds és configuració tècnica, no una decisió econòmica.
+
+**La redacció del cost no s'ha mogut.** Afegir dimensions al read-model no obre
+cap escletxa: `technical` i `viewer` continuen sense `internal_economics`, també
+per la ruta nova, i l'auditoria no escriu ni el cost ni el valor de la magnitud.
+
+**Res més s'ha mogut.** Enllaçar no toca `selection`, `selection_reason`,
+`selected_by`, `selected_at`, cap camp de cotització ni el cost; no valida ni
+invalida cap `WorkspaceTechnicalSolution`; no mou el `technical_scope_fingerprint`;
+no fa cap paquet obsolet; i no crea cap `EconomicOfferLine`.
+
+**Nota d'infraestructura.** L'identificador de revisió és `0034_solution_option_dimensions`
+i no el nom llarg de la taula: `alembic_version.version_num` és un `VARCHAR(32)`,
+i un identificador més llarg fa que la migració **no es pugui aplicar a
+PostgreSQL**. A SQLite hi passaria sense dir res; ho va trobar el gate.
+
+**UX.** Dins de «Opcions i cotitzacions», cada opció desplegada mostra un bloc
+**«Depèn de»** amb el nom, l'àmbit, l'estat i el valor d'ara de cada magnitud.
+El selector només ofereix les **actives** i treballa amb noms i valors, mai amb
+identificadors. La quantitat de l'opció i el valor de la magnitud es veuen tots
+dos i són **camps independents**: si no coincideixen no és cap error, i no hi ha
+cap botó que digui «fes servir 181».
+
+
+---
+
+## Delta S3-S8 — la línia d'oferta que ve d'una opció, implementada
+
+`0035_offer_line_solution_option` afegeix **un sol camp**:
+`economic_offer_lines.solution_option_id`, UUID nullable, `SET NULL`. Cap altra
+columna, cap taula nova, cap backfill: les línies que ja hi havia no venen de
+cap opció i es queden a `NULL`, que és exactament el que són.
+
+    l'opció és la configuració VIVA; la línia és el snapshot ADOPTAT
+
+Quan es crea la línia es copien els homòlegs i s'hi queden. Que després canviï
+el proveïdor, la quantitat o el cost de l'opció **no toca la línia**: la xifra
+que va a l'oferta la va adoptar una persona un dia concret, i moure-la sola
+voldria dir canviar una oferta sense que ningú ho hagués decidit.
+
+**L'índex únic és PARCIAL** —`WHERE solution_option_id IS NOT NULL AND
+archived_at IS NULL`— i és l'última defensa, no una comoditat: entre comprovar
+que no hi ha línia i inserir-la hi cap una altra petició. Alhora deixa que una
+línia arxivada conservi el seu `solution_option_id` com a història i que l'opció
+quedi lliure per tornar a convertir-se, amb el snapshot d'aleshores.
+
+**Delta sobre §19 — `concept` és entrada humana explícita.** El cos passa a ser
+`{section_id, expected_revision, concept}`. `WorkspaceSolutionOption` **no té cap
+homòleg de `concept`**, i `EconomicOfferLine.concept` és `NOT NULL`: derivar-lo
+de `product_name`, `supplier_name` o `description` voldria dir que una línia
+d'una oferta real es podria acabar dient «Opció». S'hi fa `trim` i no pot ser
+buit. **No s'afegeix `concept` a l'opció**: el nom d'una línia és vocabulari
+d'oferta, no de configuració.
+
+**Delta sobre §19 — `quantity` i `pricing_basis` han d'estar definits a
+l'opció.** Totes dues són `NOT NULL` a la línia i nullables a l'opció. No
+viatgen al cos: l'opció continua sent-ne la font autoritativa. Si en falta
+alguna → **`422 solution_option_not_ready_for_offer_line`** amb `details.missing`.
+No hi ha cap default: `quantity = 0` faria que la línia sumés zero a l'oferta
+sense que ningú se n'adonés, i `pricing_basis = one_off` canviaria el total pels
+mesos del contracte. `unknown` no és `zero` ni `one_off`.
+
+**Mapatge del snapshot**, amb els noms canònics reals dels dos models:
+`concept` ← petició · `quantity`, `pricing_basis`, `unit_cost_ex_vat`,
+`supplier_name`, `product_name`, `duration_months_override`, `requirement_id`,
+`technical_solution_id` ← opció. **`offered_unit_price_ex_vat` no es deriva mai
+del cost** i queda `NULL`: que ens costi 10 no vol dir que ho oferim a 10.
+
+**Precisió del cost.** L'opció el guarda a `Numeric(18,6)` i la línia a
+`Numeric(18,4)` (Sprint 2). El snapshot **arrodoneix**: `12.345678` → `12.3457`.
+No és una pèrdua accidental sinó la precisió amb què treballa l'oferta, i 0035
+no toca cap altra columna. Hi ha un test que ho documenta en comptes d'afirmar
+una igualtat que la columna no pot sostenir.
+
+**Idempotència abans que res.** Si ja hi ha línia viva per a l'opció, es retorna
+aquella amb `200` —mai `409`, mai una segona línia, mai un increment de
+revisió—, i la comprovació va **primer**, abans de mirar l'arxivat, la selecció i
+la revisió: el `expected_revision` d'un reintent ha quedat antic justament
+perquè la primera crida va tenir èxit, i castigar-lo seria castigar l'èxit. Un
+reintent sobre una opció ja arxivada també retorna la línia, i **no reviu
+l'opció**.
+
+**La cursa de debò.** Si dues peticions veuen totes dues que no hi ha línia,
+guanya la que arriba primer i l'altra hi convergeix. Els dos camins de fallada
+es tracten diferent perquè deixen la transacció en estats diferents: el CAS
+falla sense escriure res i la transacció segueix sana, mentre que la violació de
+l'índex la trenca i cal desfer-la abans de tornar a llegir. En tots dos casos la
+perdedora no consumeix cap revisió. Si la revisió s'havia mogut per una altra
+cosa, això sí que és un conflicte de debò i és un `409`.
+
+**CAS de l'oferta, no de l'opció.** `expected_revision` és el d'`EconomicOffer` i
+es fa servir el `bump_revision` canònic d'Sprint 2. **L'opció no muta**: no es
+toca `selection`, `selected_by`, `selected_at` ni cap camp de cotització.
+
+**Permisos.** `ECONOMIC_EDIT_ROLES`. Un `technical` pot configurar l'opció i
+triar-la, però posar una xifra a l'oferta no li toca.
+
+**La provinença és només de lectura.** `solution_option_id` és a `LineRead` i no
+és a `LineCreateRequest` ni a `LineUpdateRequest`: es guanya adoptant una opció,
+no enviant-ne l'identificador. El servei canònic `create_line()` l'accepta com a
+argument intern —així la línia neix amb la seva provinença en un sol `INSERT` i
+l'índex la protegeix de debò—, i cap router genèric el passa.
+
+**Delta sobre §22 — els dos blocadors ja són calculables.**
+
+`dimension_undecided_in_use` (blocker, tècnic) segueix la cadena real
+`EconomicOfferLine viva → solution_option_id → workspace_solution_option_dimensions
+→ WorkspaceDimension activa i undecided`. Sense línia **no hi ha blocador**, i
+això és exactament què vol dir «en ús»: una opció triada que depèn d'una
+magnitud per decidir és feina normal; el que no pot passar és que una xifra que
+ja ha entrat a l'oferta es recolzi en un número que ningú no ha fixat. No compara
+xifres. Una magnitud `disputed` **no** hi entra: té `dimension_disputed`, i
+convertir-la aquí canviaria el que significa.
+
+`solution_option_quote_expired` (blocker, econòmic): línia viva + opció
+`selected` + `quote_status = expired`. El quote viu a l'**opció**, no a la línia.
+S'apaga quan deixa de complir-se, i el sistema **no toca `selection`**: caducada
+no vol dir rebutjada.
+
+`solution_option_quote_pending` no canvia: continua sent un avís, no necessita
+cap línia i és un contracte a part.
+
+Cap dels findings nous exposa cost, preu, marge ni notes internes: només ids i
+context públic.
+
+**Paquet.** Crear una línia **sí** que és una mutació econòmica i el manifest
+canvia pel mecanisme d'Sprint 2 —no s'ha preservat res artificialment—. Crear o
+editar una **opció**, en canvi, no el mou: la línia és un snapshot i l'opció no
+és contingut del manifest. Hi ha un test que mesura les tres coses.
+
+**UX.** Dins de «Opcions i cotitzacions», sense cap pestanya nova. El CTA
+«Afegeix a l'oferta» només surt per a rols econòmics i només quan l'opció es pot
+adoptar de debò (triada, viva, amb quantitat i base, i sense línia): oferir una
+acció que el servidor rebutjarà seria fer perdre el temps a qui la prem. Amb
+línia viva, un xip **«A l'oferta»** i cap botó que en crearia una segona. El
+diàleg demana el bloc de preus i el concepte —buit, mai preomplert amb el
+producte— i no proposa cap preu de venda.
+
+**0036 conserva la seva feina**: `target_markup_pct`, `sync-from-option` i
+`economic_line_option_diverged`, que arriben junts perquè el finding de
+divergència només té sentit quan existeix el camí explícit de resolució.
+
+
+---
+
+## Delta S3-S8b — objectiu comercial i sincronització explícita
+
+`0036_offer_line_target_markup` afegeix **un sol camp**:
+`economic_offer_lines.target_markup_pct`, `Numeric(9,4)` nullable, zero backfill,
+cap taula nova.
+
+### A. L'objectiu no és un preu
+
+    preu proposat = cost unitari × (1 + target_markup_pct / 100)
+
+`target_markup_pct` és **markup sobre cost**, i el nom ho diu. Es mantenen
+separats el markup sobre cost, el marge sobre venda i el multiplicador
+comercial: amb un cost de 100 i un markup del 20 %, el preu proposat és 120 i el
+marge sobre venda d'aquell preu és el 16,67 %. Són tres números.
+
+**`offered_unit_price_ex_vat` continua sent l'únic preu autoritatiu.** Editar
+l'objectiu no el mou; canviar el cost no el mou; sincronitzar el cost des de
+l'opció no el mou. **Només `apply-target`** l'escriu, i existeix precisament per
+fer d'aquella escriptura una decisió. Com que l'usuari acaba de demanar-la, sí
+que pot substituir un preu escrit a mà, i la pantalla l'avisa abans.
+
+`apply-target` calcula des del cost de la **LÍNIA**, mai del de l'opció viva. Si
+l'opció ha canviat i es vol el cost nou: primer sincronitzar, després aplicar.
+Dues decisions, i hi ha un test que ho demostra amb l'opció a 50 i la línia a
+100.
+
+**Sense rang al markup.** Una oferta pot anar deliberadament a cost o per sota;
+prohibir-ho seria prohibir una decisió comercial legítima. L'única restricció és
+`Numeric(9,4)`.
+
+**Derivats, mai desats.** `proposed_unit_price_ex_vat` i `price_matches_target`
+es calculen i viuen dins d'`internal_economics`. Tots dos són `None` quan falta
+alguna entrada: «no ho sabem» no és «no coincideix», i tampoc no és zero.
+`apply-target` sense cost o sense objectiu és `422` amb els camps que falten.
+
+**Precisió.** Els preus i costos unitaris es quantitzen a **4 decimals amb
+`ROUND_HALF_UP`** —la regla canònica de `pricing.py`, ara exposada com
+`unit_amount()`—, que és l'escala de `Numeric(18,4)` a la base. La comparació de
+`price_matches_target` passa per aquesta escala als dos costats: si no, un preu
+desat com a `120,0000` no coincidiria mai amb un proposat de `120`.
+
+### B. La font viva pot haver canviat
+
+**`sync-from-option` és per línia i per camps.** Cap trigger, cap event, cap
+«mantenir sincronitzat». `fields` és obligatori i no pot ser buit: no hi ha cap
+«sincronitza-ho tot» implícit, i adoptar el proveïdor no arrossega el cost.
+
+La font és `line.solution_option_id` i **mai un identificador del cos**:
+deixar-lo enviar seria deixar fabricar d'on ve una xifra.
+
+**Whitelist canònica** — exactament el mapatge que fa servir `to-offer-line`, de
+manera que el sync no pot deixar la línia en un estat que l'adopció no hauria
+pogut crear:
+
+`supplier_name` · `product_name` · `quantity` · `unit_cost_ex_vat` ·
+`pricing_basis` · `duration_months_override` · `requirement_id` ·
+`technical_solution_id`
+
+El que **no** hi és: `concept` (l'opció no en té homòleg; el va escriure una
+persona a S3-S8), `offered_unit_price_ex_vat` (l'opció no té preu de venda),
+`vat_rate` i `target_markup_pct` (no són de l'opció) i `solution_option_id` (és
+la provinença). Enviar-ne qualsevol és `422`.
+
+**Nuls.** Un camp nullable de la línia es pot sincronitzar a `NULL` si l'opció el
+té buit i l'usuari l'ha triat explícitament. Els que a la línia són `NOT NULL`
+—`quantity` i `pricing_basis`— **no**: `422` amb els camps que falten, mai
+`quantity = 0` ni `pricing_basis = one_off`.
+
+### C. La divergència és derivada
+
+`economic_line_option_diverged` — **`info`, domini econòmic**. No és un avís ni
+un blocador, i no diu que la línia sigui incorrecta ni que calgui sincronitzar:
+diu que l'opció ja no diu el mateix. Que l'oferta segueixi el que es va adoptar
+pot ser exactament el que es vol.
+
+Res es desa: ni `diverged`, ni `synced_at`, ni cap hash. **Una sola funció de
+domini** (`diverged_fields`) la calcula, i la fan servir el read-model, el
+finding i la pantalla. No hi ha cap «acknowledge»: s'apaga quan els camps tornen
+a coincidir, sigui per sync, per edició manual o perquè l'opció ha tornat enrere.
+Només línies **vives** amb opció.
+
+**Delta crític — la normalització 18,6 → 18,4.** L'opció desa el cost amb sis
+decimals i la línia amb quatre. Comparar-los en brut faria que **tota línia
+acabada de crear es veiés divergida** i que l'avís no volgués dir res. La
+comparació passa per `unit_amount()` als dos costats. El gate de PostgreSQL
+comprova que l'arrodoniment del motor i el de Python coincideixen exactament,
+inclòs el cas frontissa `12,345650 → 12,3457`. Un canvi que no es veu a quatre
+decimals (`12,345678 → 12,345699`) **no** és divergència: res del que l'oferta
+farà servir ha canviat.
+
+### D. Rols, paquet i regressions
+
+Tot el router econòmic ja exigia `ECONOMIC_EDIT_ROLES`, o sigui que un
+`technical` no arriba a `target_markup_pct` per cap camí, ni per escriure'l ni
+per netejar-lo. `target_markup_pct`, `proposed_unit_price_ex_vat` i
+`price_matches_target` viuen dins d'`internal_economics` i segueixen el
+contracte d'Sprint 2: el bloc existeix o no existeix.
+
+De la divergència no en surten els valors, i **per a qui no pot veure economia
+interna tampoc els noms dels camps interns**: saber que «el cost ha canviat» ja
+és saber alguna cosa del cost. Ho redacta el **servidor** (veure Delta
+S3-S8b.1); el filtre de la pantalla és una defensa addicional, mai la garantia.
+
+**Paquet**, mesurat i no assumit: canviar l'objectiu **no** fa el paquet obsolet
+—és economia interna i no és contingut del manifest—; sincronitzar **només** el
+cost, tampoc; `apply-target` **sí**, perquè canvia el preu ofert; i sincronitzar
+un camp del manifest (`quantity`, proveïdor, producte…) també. Cap flag manual:
+tot deriva del manifest v2.
+
+Sincronitzar `technical_solution_id` no valida, invalida ni edita cap
+`WorkspaceTechnicalSolution`: és el vincle de la línia.
+
+### E. UX
+
+Dins de **Preparar → Oferta econòmica**, sense cap pestanya nova. A l'editor de
+línia, un bloc «Objectiu comercial» **només per a rols econòmics** amb tres
+coses en línia —objectiu, preu proposat i estat— i «Aplica objectiu» com a acció
+separada: la separació visual és el missatge. Si hi ha un preu escrit diferent,
+ho diu abans d'aplicar.
+
+Una línia divergida mostra «L'opció ha canviat · Revisa canvis», sense estil
+d'alarma. El diàleg ensenya **una casella per camp divergent, cap marcada**, i
+el botó adopta només el que s'ha triat. No hi ha cap «Sincronitza-ho tot».
+
+
+---
+
+## Delta S3-S8b.1 — la divergència també es redacta
+
+Correcció d'S3-S8b. El detall de la divergència segueix la mateixa redacció
+econòmica que la resta: **els noms dels camps internal-only no es serialitzen
+per a rols que no poden veure economia interna, i readiness no en porta cap.**
+
+**El nom ja és la dada.** `diverged_fields: ["unit_cost_ex_vat"]` diu que el
+cost s'ha mogut, encara que no digui quant. Per a un rol sense economia interna
+això és informació de dins, exactament com el valor.
+
+**Ho fa el servidor.** `visible_fields(fields, internal=...)` filtra abans de
+serialitzar, i és una sola funció que surt del comparador canònic —no se n'ha
+creat cap de segon. El filtre equivalent del frontend es queda com a defensa
+addicional, però la garantia és de backend: filtrar a la pantalla no protegeix
+res, perquè la resposta ja ha sortit.
+
+Camps internal-only avui: `unit_cost_ex_vat`. Els públics —`supplier_name`,
+`product_name`, `quantity`, `pricing_basis`, `duration_months_override`,
+`requirement_id`, `technical_solution_id`— no es filtren per a ningú: amagar-los
+seria amagar la feature sencera en comptes de redactar-la.
+
+**Readiness no porta el diff.** El context d'`economic_line_option_diverged` és
+només `{solution_option_id}`. El finding continua sent `info` i econòmic, i el
+que diu és «la font viva ha canviat»; el detall complet ja viu al read-model de
+la línia, que **sí** que té redacció per rol. Readiness no en té —el mateix
+finding el llegeix qualsevol membre—, i per això no s'hi ha afegit una
+abstracció nova: s'hi ha tret la dada.
+
+`sync-from-option` no canvia: `ECONOMIC_EDIT_ROLES` continua podent adoptar
+`unit_cost_ex_vat`. La correcció és només de LECTURA i de readiness. Cap canvi
+d'esquema.
+
+
+---
+
+## Delta S3-S10 — dubtes i discrepàncies, implementats
+
+`0037_workspace_issues` crea **exactament dues taules** i no en toca cap altra:
+`workspace_issues` i `workspace_issue_source_refs`. És l'última migració de
+l'Sprint 3.
+
+**Un dubte no és una tasca.** Una tasca és feina per fer i es tanca fent-la
+(`WorkspaceTask`, ja existia); un dubte és **coneixement que falta** i es tanca
+sabent alguna cosa. Per això resoldre exigeix escriure la resposta —imposat al
+servei i per un `CHECK`—: un dubte «resolt» sense resposta no seria resolt,
+seria oblidat.
+
+**Cap dubte neix sol.** Ni per una dimensió en disputa, ni per una cotització
+pendent, ni per una línia divergida, ni per un document nou. Tot això ja té el
+seu avís a `FinalReadiness`; convertir-ho en dubtes ompliria la llista de
+preguntes que ningú no s'ha fet i hi enterraria les que sí. Hi ha un test que
+crea una discrepància real i comprova que la taula continua buida.
+
+**`source_refs_json` queda SUPERAT.** La provinença va per
+`workspace_issue_source_refs` cap a `tender_source_refs`, que és la cadena de
+cites d'S3-S4. Un JSON d'identificadors no pot garantir que la cita existeixi ni
+impedir que algú l'esborri sense adonar-se'n. `RESTRICT` cap a la cita i
+`CASCADE` cap al dubte, com a `requirement_source_ref_links`. **Desenganxar no
+esborra la cita**, i una cita segueix apuntant a la versió que es va llegir: puja
+una v2 i el dubte continua citant la v1.
+
+**Divergència de nom amb el freeze:** §22 anomenava la taula
+`workspace_issue_source_ref_links`; la fase la va especificar com
+`workspace_issue_source_refs`, i és el nom implementat.
+
+**`blocks_final_review` és una decisió d'oferta, no una propietat del dubte.**
+Neix sempre a `false`, no és a cap schema d'escriptura general, i té la seva
+acció (`POST …/final-review-block`) reservada a `DECISION_ROLES`. Un `technical`
+pot obrir el dubte, moure'l, citar-lo i resoldre'l; marcar que atura la
+candidatura, no. **Resoldre no la neteja**: que algú decidís un dia que això
+impedia presentar-se continua sent cert, i esborrar-ho seria perdre per què la
+candidatura va estar aturada.
+
+**`dismissed` no és `resolved`.** Descartar tanca el dubte perquè ja no ve al
+cas, i **deixa `resolved_by` i `resolved_at` buits**: si els omplís,
+`resolved_at IS NOT NULL` voldria dir dues coses diferents i «ho sabem»
+inclouria coses que ningú no ha contestat mai. Qui descarta i quan viu a
+`AuditLog` i a `updated_by`/`updated_at`. **No s'ha afegit cap segona parella**
+de camps.
+
+**Readiness.** `issue_blocking_open` (**blocker**, domini workspace) quan hi ha
+un dubte marcat i `status ∈ {open, waiting}`; s'apaga en tancar-lo o en
+desmarcar-lo, i no depèn del tipus. `issue_open` (**info**) és un **comptador
+agregat** dels oberts **no marcats**: un finding per dubte faria semblar que
+cadascun és una feina pendent, i comptar-hi també els que bloquegen diria el
+mateix problema dues vegades. Cap dels dos porta economia interna: si el dubte
+apunta a una línia, del finding no en surt cap xifra.
+
+**Cap cascada.** Resoldre un dubte de contradicció **no decideix** la dimensió, i
+decidir la dimensió **no resol** el dubte. Són dues decisions relacionades i
+diferents; encadenar-les faria que respondre una pregunta mogués xifres que
+ningú no ha mirat. El mateix val per a requisits, solucions tècniques, opcions i
+línies.
+
+**Coherència i inquilins.** Les FK soles no demostren res: el servei valida que
+requisit i criteri siguin de la licitació, i que solució tècnica, opció, línia i
+magnitud siguin de la candidatura. El responsable ha de ser de l'empresa. Un
+dubte és de la **candidatura**, no de l'expedient: sobre una licitació pública
+compartida, cada empresa té els seus i no veu els de l'altra —hi ha un test.
+
+**Cap esborrat.** No hi ha `DELETE` de dubte; l'únic `DELETE` del recurs treu una
+**cita** d'un dubte. Es tanca resolent o descartant, i es conserven la pregunta,
+la provinença, la resolució, l'actor i les dates. Els vincles històrics no se
+sincronitzen amb l'estat de l'entitat: un dubte pot continuar apuntant a una
+magnitud que després s'arxiva.
+
+**El paquet no es mou.** `WorkspaceIssue` no entra al manifest v2: crear,
+bloquejar, resoldre o descartar no el toquen i no revoquen cap aprovació. El que
+sí que canvia és la **preparació d'ara**: una aprovació històrica és la
+fotografia del que es va presentar, i un dubte d'avui no la pot reescriure.
+
+**Nota d'implementació.** `workspace_issues` porta `company_id`
+(`CompanyOwnedMixin`), com totes les taules que pengen d'una candidatura
+(`workspace_dimensions`, `workspace_solution_options`,
+`workspace_technical_solutions`). No era al freeze §22, però és la convenció del
+repositori i la que fa servir `tenant_ops` per destruir un tenant sense recórrer
+cap cadena.
+
+**Limitació coneguda i deliberada:** els endpoints de creació de cites
+(`source-refs/*`) només accepten **licitacions manuals pròpies**, i S3-S10 no
+relaxa aquesta política. Sobre una licitació pública, un dubte pot existir i
+tenir tot el seu contingut, però no s'hi poden crear cites noves per aquesta via.
+Obrir-ho exigiria tocar el model de tenancy de la provinença, i això no és
+d'aquesta fase.
+
+**UX.** Calaix **«Dubtes i discrepàncies»** a la capçalera de Preparar, al costat
+de les quatre àrees i sense afegir-ne cap: un dubte és transversal per definició
+—pot ser d'un requisit, d'una magnitud o d'un preu— i posar-lo dins d'una àrea
+obligaria a triar-ne una d'arbitrària. «Obre dubte» prepara el formulari amb el
+context preseleccionat i **no crea res** fins que algú confirma. El control de
+bloqueig **no existeix** per als rols que no el poden decidir.
+
+---
+
+## Delta S3-S11 — l'acceptació reproduïble, executada
+
+**Fixture.** `apps/api/tests/fixtures/benchmarks/palamos_s3_benchmark.json`,
+SHA-256 `9df32715c9f1192dc0f1023c6b0f04a163a8347fb8c20043b138c0284b66c2ae`
+(16.250 bytes). El §25 apuntava a `tests/fixtures/palamos_s3_benchmark.json`;
+s'ha posat sota `benchmarks/` seguint el patró de `tests/fixtures/placsp/`. El
+que sí que era una condició i s'ha respectat és que **entri al commit**: `var/`
+està al `.gitignore` i un oracle que no es versiona no és un oracle.
+
+**Els dos oracles (D-06), amb xifres.**
+
+| | |
+|---|---|
+| `documented_total_ex_vat` | `219351.55` |
+| `canonical_total_ex_vat` | `215276.17` |
+| delta | `-4075.38` |
+
+El delta es descompon, i la descomposició és part del fixture:
+
+* **`-4075.5798` · partides que l'artefacte no enumera.** La taula de
+  multiplicadors anomena un *pool* de 5 IP públiques (K = 2,0) i un mòdul
+  d'expansió EXP43 (K = 4,0), però **no en dona mai el cost unitari**. No
+  s'inventen. Es veuen com els 48,544000 i 2,984297 €/mes que falten als blocs
+  de veu i d'internet.
+* **`+0.1998` · la regla canònica i l'escala.** Preu unitari a quatre decimals
+  —l'escala de `Numeric(18,4)`— i total de cada línia a dos abans de sumar.
+
+**El bloc de mòbils quadra EXACTAMENT**, cost `1097.816926` i preu
+`1423.615557` a sis decimals. Això no és decoració: és la comprovació que la
+transcripció i el mapatge del multiplicador K a `target_markup_pct`
+(K = 1 + markup/100) són correctes, i el que permet afirmar que el delta dels
+altres dos blocs és una absència de dades i no un error de lectura.
+
+**Regla canònica escrita, no derivada.** `quantize-line-then-sum`. El valor es
+va derivar una sola vegada fora de pytest, amb `Decimal` pur i sense importar
+`app.offer.pricing`. `test_palamos_fixture.py` el protegeix: comprova que el
+total canònic és la suma dels totals de línia **escrits al fixture**, que cada
+un segueix la regla reimplementada en tres línies, i que el fitxer de test no
+importa res d'`app`. Si algú substituís el canònic pel resultat del motor sense
+tocar les línies, deixaria de quadrar.
+
+**Punts de control de l'E2E** (`test_palamos_end_to_end.py`, un sol recorregut
+amb 22 seccions): licitació manual i idempotència del `client_token` · tenancy
+A/B amb sis proves d'escriptura i lectura · candidatura per la ruta real ·
+2 documents lògics / 1 contingut / 1 extracció · DOCX i XLSX `unsupported` amb
+0 pàgines · revisió documental, empremta i `tender_documents_changed` sense
+invalidar la solució tècnica · requisits manuals (`origin=manual`,
+`run_id=NULL`) que sí que mouen l'empremta d'abast · cita d'XLSX v1 que
+sobreviu la v2 · magnitud 151/181 → `disputed` → decidida a 181 · una
+observació que concorda no reobre, una de 209 sí · dues opcions germanes on
+triar-ne una no en rebutja cap · relació opció ↔ magnitud sense propagació ·
+cost invisible per a `technical` i `viewer`, i un PATCH públic que no se
+l'emporta · `to-offer-line` tres vegades (una fresca) amb una sola línia viva ·
+snapshot que no es mou sol · sync camp a camp · objectiu i `apply-target` ·
+les 21 línies i el total contra l'oracle · `technical_scope_stale`,
+`solution_option_quote_pending` i `dimension_undecided_in_use` encesos i
+apagats · dubte marcat, resolt i descartat · manifest v2 que una opció no mou,
+una nota tampoc, i un `concept` sí.
+
+**Zero model de pagament**, i no per confiança: un fixture `autouse` substitueix
+`AnthropicProvider` per una cridada que peta. `get_provider` importa el SDK dins
+de la funció, de manera que això tanca totes les vies alhora. L'acceptació
+acaba amb **zero `RequirementExtractionRun`**.
+
+**Zero dades de producció.** Només `licitacions_test` (port 5433,
+`current_database()` comprovat), cada test al seu schema temporal.
+
+**Dents (§43), demostrades revertint el guard:**
+
+| invariant | mutació | test que cau |
+|---|---|---|
+| `to-offer-line` idempotent | `existing = None` | reintent amb revisió fresca |
+| la cita no segueix la versió vigent | resoldre al fitxer `is_current` | assercions de v1 |
+| `technical` no veu el cost | `can_view_internal_economics → True` | `internal_economics is None` |
+| resoldre un dubte no decideix res | cascada a la magnitud | no-cascada |
+
+**Gates.** Suite backend completa verda a SQLite i a PostgreSQL. Head
+`0037_workspace_issues`; **S3-S11 no crea cap migració**.
+
+### Defectes trobats per l'acceptació, i corregits a part
+
+Tres rutes resolien el `tender_id` amb un `session.get()` pelat, sense el filtre
+que `app/tenders/visibility.py` escriu una sola vegada. És exactament el que
+aquell mòdul avisa que passaria: l'aïllament no es perd a la consulta que
+s'escriu malament, sinó a la que algú oblida d'escriure.
+
+1. **`POST /companies/{c}/tenders/{t}/workspace`** — una empresa podia obrir
+   candidatura sobre una licitació **privada d'una altra**, i la resposta ja en
+   portava el títol, l'expedient i el termini. Escriptura i fuita alhora.
+2. **`GET /tenders/{t}/analysis/requirements`** i `/analysis/runs` — qualsevol
+   usuari autenticat podia llegir **sencers** els requisits d'una licitació
+   manual d'una altra empresa amb només el seu UUID.
+3. **`…/compliance`** i `/compliance/runs` — responien `200` en comptes de
+   `404`: oracle d'existència, sense contingut.
+
+Cap dels tres demana schema, columna ni contracte nou: només aplicar
+`visible_to_company` / `visible_to_user`. Corregits en un commit propi, amb sis
+regressions a `test_tender_tenancy.py`.
+
+4. **`create_line` no acceptava `target_markup_pct`** encara que
+   `LineCreateRequest` el porta des d'S3-S8b: el PATCH l'admetia i la creació
+   esclatava amb un `TypeError`. Afegit el paràmetre, que només s'escriu:
+   posar-hi un objectiu continua sense moure cap preu.
+
+### El senyal de deduplicació global, retirat del contracte
+
+`TenderDocumentContent` es dedupa per **SHA-256 a tot el sistema**, i la resposta
+de la pujada tornava `content_reused`. Per tant, pujant uns bytes que sospitava
+que algú altre ja tenia, una empresa podia saber si hi eren. Un oracle
+cross-tenant: no revela contingut, però revela **possessió**, i sota la tenancy
+d'Sprint 3 això no és acceptable.
+
+**El dedup físic es queda.** Mateixos bytes → un sol `TenderDocumentContent` →
+una sola extracció compartida. No es fa dedup per tenant: seria una altra
+decisió d'arquitectura i no és d'aquesta fase.
+
+**El que desapareix és el senyal extern.** `content_reused` surt de
+`TenderDocumentUploadResult`, de les dues respostes de pujada (document nou i
+versió nova) i de `UploadOutcome`: un camp que només existia per ser exposat no
+es guarda «per si de cas». I no se substitueix per cap equivalent —
+`content_exists`, `globally_reused`, `deduplicated`, `already_known`— perquè el
+forat el tornaria a obrir qualsevol booleà amb el mateix significat.
+
+Que una versió nova no hagi canviat res ho continuen dient el **`200` en comptes
+del `201`** i el número de versió, que no es mou. Això parla d'aquell document i
+de ningú més. La resposta de la primera pujada ja porta el `sha256` dels bytes
+que el client acaba d'enviar, així que dins d'una empresa un duplicat propi
+continua sent detectable sense preguntar res del sistema.
+
+Dos tests ho fixen: el de dues empreses comprova **a dins** un sol contingut i
+una sola extracció per a dos fitxers, i **a fora** que cap de les dues respostes
+porta el camp ni cap dels seus sinònims; el de versions comprova que dins de la
+mateixa empresa el contracte tampoc no explica optimitzacions d'storage.

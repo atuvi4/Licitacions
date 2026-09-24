@@ -10,8 +10,10 @@ from app.models.compliance import (
 )
 from app.models.cpv import CompanyCPVPreference, CPVCode, ServiceCPV
 from app.models.credentials import CompanyCertification, CompanyInsurance, CompanyRegistration
+from app.models.dimensions import WorkspaceDimension, WorkspaceDimensionObservation
 from app.models.documents import Document, DocumentLink
 from app.models.identity import Company, CompanyMembership, User
+from app.models.issues import WorkspaceIssue, WorkspaceIssueSourceRef
 from app.models.jobs import JobRequest, WorkJob
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
 from app.models.offer import (
@@ -28,6 +30,7 @@ from app.models.profile import (
     CompanyTerritory,
 )
 from app.models.projects import CompanyProject, ProjectCPV, project_services
+from app.models.provenance import RequirementSourceRefLink, TenderSourceRef
 from app.models.requirements import (
     AwardCriterion,
     AwardCriterionEvidence,
@@ -35,6 +38,8 @@ from app.models.requirements import (
     RequirementEvidence,
     RequirementExtractionRun,
 )
+from app.models.solution_option_dimensions import WorkspaceSolutionOptionDimension
+from app.models.solution_options import WorkspaceSolutionOption
 from app.models.sources import IngestionRun, Source, SourceRecord
 from app.models.submission import (
     SubmissionPackage,
@@ -122,6 +127,14 @@ __all__ = [
     "TenderLot",
     "TenderLotCPV",
     "TenderRevision",
+    "TenderSourceRef",
+    "RequirementSourceRefLink",
+    "WorkspaceDimension",
+    "WorkspaceDimensionObservation",
+    "WorkspaceIssue",
+    "WorkspaceIssueSourceRef",
+    "WorkspaceSolutionOption",
+    "WorkspaceSolutionOptionDimension",
     "User",
     "WorkJob",
     "WorkspaceChecklistItem",

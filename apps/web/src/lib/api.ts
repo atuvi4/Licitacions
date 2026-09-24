@@ -87,6 +87,23 @@ export const api = {
   // projecte), per aixo el tipus de retorn es parametritzable.
   delete: <T = void>(path: string) => request<T>(path, { method: "DELETE" }),
   upload: <T>(path: string, form: FormData) => request<T>(path, { method: "POST", body: form }),
+  /**
+   * Com `upload`, però conservant el codi d'estat.
+   *
+   * Cal quan el servidor distingeix «s'ha creat» de «ja hi era» amb `201` i
+   * `200`: una versió nova d'un plec i tornar a pujar el mateix fitxer són
+   * dues coses diferents, i el cos sol no ho diu.
+   */
+  uploadRaw: async <T>(path: string, form: FormData): Promise<{ status: number; body: T }> => {
+    const response = await fetch(`${BASE}${path}`, {
+      credentials: "same-origin",
+      cache: "no-store",
+      method: "POST",
+      body: form,
+    });
+    if (!response.ok) throw await parseError(response);
+    return { status: response.status, body: (await response.json()) as T };
+  },
   /** Descarrega un fitxer respectant el nom que proposa l'API. */
   download: async (path: string, filename: string) => {
     const response = await fetch(`${BASE}${path}`, { credentials: "same-origin" });

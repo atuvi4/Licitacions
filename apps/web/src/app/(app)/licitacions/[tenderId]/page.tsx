@@ -49,6 +49,7 @@ import {
   type TenderLot,
   type TenderRevision,
 } from "@/lib/tenders";
+import { DocumentReviewPanel, NewVersionButton } from "@/components/DocumentReviewPanel";
 import type { WorkspaceDetail } from "@/lib/workspace";
 
 import { extractedText, fileErrorText, jobPill, readingSubtext, selectionLabel, versionText } from "./documents";
@@ -272,6 +273,10 @@ function TenderDetail() {
   const selection = selectionLabel(selected.size);
   const LINK = "text-[13px] text-brand-strong hover:text-accent-800";
 
+  // Una licitacio oberta a ma es la unica que aquesta empresa pot editar: si la
+  // veiem i ve de la font MANUAL, es seva.
+  const isManual = data.traceability?.source_code === "manual";
+
   const documentColumns: Array<DataTableColumn<TenderDocumentMeta>> = [
     {
       key: "select",
@@ -312,6 +317,27 @@ function TenderDetail() {
         );
       },
     },
+    ...(isManual
+      ? [
+          {
+            key: "versions",
+            header: "",
+            width: "14%",
+            // Nomes a una licitacio oberta a ma: els plecs d'una de publicada
+            // els porta la font, i substituir-los des d'aqui seria escriure per
+            // sobre del que ha publicat l'organ.
+            cell: (document: TenderDocumentMeta) => (
+              <NewVersionButton
+                tenderId={data.id}
+                documentId={document.id}
+                onUploaded={(created) => {
+                  if (created) void reload();
+                }}
+              />
+            ),
+          } satisfies DataTableColumn<TenderDocumentMeta>,
+        ]
+      : []),
     {
       key: "text",
       header: "Text extret",
@@ -729,6 +755,12 @@ function TenderDetail() {
             processError && <ErrorNotice message={processError} />
           )}
 
+          <DocumentReviewPanel
+            workspaceId={candidature.workspace?.id ?? null}
+            documents={data.documents.length}
+            onReviewed={() => void reload()}
+          />
+
           <Card>
             <CardHeader
               title={`Plecs (${data.documents.length})`}
@@ -808,6 +840,10 @@ function TenderDetail() {
           <RequirementAnalysisSection
             tenderId={tenderId}
             companyId={companyId}
+            // Només a una licitació oberta a mà i pròpia: `Requirement` no té
+            // propietari, així que escriure'n sobre una de pública els faria
+            // aparèixer a totes les empreses.
+            editable={isManual}
             analysis={analysis.data}
             loading={analysis.loading}
             error={analysis.error}

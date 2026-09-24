@@ -621,17 +621,21 @@ async def create_workspace(
 async def relevant_requirements(
     session: AsyncSession, workspace: BidWorkspace
 ) -> list[Requirement]:
-    """Els requisits de l'analisi VIGENT que afecten aquest workspace."""
-    run = await current_requirement_run(session, workspace.tender_id)
-    if run is None:
-        return []
-    requirements = (
-        await session.scalars(
-            sa.select(Requirement)
-            .where(Requirement.run_id == run.id)
-            .order_by(Requirement.category, Requirement.title)
-        )
-    ).all()
+    """Els requisits VIGENTS que afecten aquest workspace.
+
+    Conjunt efectiu: l'extraccio vigent mes els manuals no arxivats. La
+    checklist en surt, i per tant un requisit escrit a ma genera feina com
+    qualsevol altre; un d'arxivat deixa de generar-ne de nova, pero la que ja hi
+    havia no es toca —`generate_checklist` no esborra mai res.
+    """
+    from app.services import manual_requirement
+
+    effective = await manual_requirement.effective_requirements(
+        session, workspace.tender_id
+    )
+    requirements = sorted(
+        effective.all, key=lambda r: (str(r.category), r.title or "")
+    )
     return [r for r in requirements if applies_to_workspace_lot(r, workspace.tender_lot_id)]
 
 

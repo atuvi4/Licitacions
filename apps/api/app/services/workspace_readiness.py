@@ -19,16 +19,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import NotFoundError
 from app.models.enums import PricingBasis, TechnicalSolutionSource, TechnicalSolutionStatus
 from app.models.workspace import BidWorkspace
+from app.services import dimensions as dimension_service
+from app.services import document_review, requirement_analysis
 from app.services import economic_offer as offer_service
+from app.services import issues as issue_service
+from app.services import offer_line_option_sync as sync_service
+from app.services import solution_option_dimensions as link_service
+from app.services import solution_options as option_service
 from app.services import technical_scope as scope_service
 from app.services import technical_solution as solution_service
 from app.services import workspace_dossier as dossier_service
 from app.workspace.readiness import (
     BLOCKER,
+    DIMENSION_DISPUTED,
+    DIMENSION_UNDECIDED_IN_USE,
     DOMAIN_ECONOMIC,
     DOMAIN_TECHNICAL,
+    DOMAIN_WORKSPACE,
     ECONOMIC_BID_LOTS_NOT_SELECTED,
     ECONOMIC_DURATION_MISSING,
+    ECONOMIC_LINE_OPTION_DIVERGED,
     ECONOMIC_LOT_BUDGET_EXCEEDED,
     ECONOMIC_LOT_BUDGET_UNKNOWN,
     ECONOMIC_LOT_EMPTY,
@@ -38,11 +48,18 @@ from app.workspace.readiness import (
     ECONOMIC_UNIT_LIMIT_UNKNOWN,
     ECONOMIC_VAT_MISSING,
     INFO,
+    ISSUE_BLOCKING_OPEN,
+    ISSUE_OPEN,
+    REQUIREMENT_ANALYSIS_PREDATES_DOCUMENTS,
+    SOLUTION_OPTION_QUOTE_EXPIRED,
+    SOLUTION_OPTION_QUOTE_PENDING,
     TECHNICAL_SCOPE_STALE,
     TECHNICAL_SCOPE_UNREVIEWED,
     TECHNICAL_SOLUTION_REQUIREMENT_MISSING,
     TECHNICAL_SOLUTION_UNVALIDATED,
     TECHNICAL_SOLUTION_VALIDATION_STALE,
+    TENDER_DOCUMENTS_CHANGED,
+    TENDER_DOCUMENTS_UNREVIEWED,
     WARNING,
     FinalReadiness,
     Finding,
@@ -76,6 +93,56 @@ async def technical_findings(
     """
     scope = scope or await scope_service.resolve(session, workspace)
     findings: list[Finding] = []
+
+    # Una discrepancia de dimensionament es tecnica: parla de com es dimensiona
+    # el que s'oferira, no dels papers ni del preu.
+    for dimension in await dimension_service.disputed_dimensions(session, workspace):
+        findings.append(
+            Finding(
+                code=DIMENSION_DISPUTED,
+                severity=WARNING,
+                domain=DOMAIN_TECHNICAL,
+                entity_id=dimension.id,
+                context={"key": dimension.key, "scope_label": dimension.scope_label},
+            )
+        )
+
+    # Una opcio triada que espera cotitzacio es una gestio pendent, no un
+    # error: avisa i prou.
+    for option in await option_service.options_awaiting_quote(session, workspace):
+        findings.append(
+            Finding(
+                code=SOLUTION_OPTION_QUOTE_PENDING,
+                severity=WARNING,
+                domain=DOMAIN_TECHNICAL,
+                entity_id=option.id,
+                context={
+                    "supplier_name": option.supplier_name,
+                    "product_name": option.product_name,
+                    "quote_status": option.quote_status.value,
+                },
+            )
+        )
+
+    # "En us" vol dir en us ECONOMIC. Nomes quan una linia viva de l'oferta
+    # depen d'una magnitud sense decidir hi ha res a bloquejar: fins llavors,
+    # una opcio triada que encara espera un numero es feina normal.
+    for dimension, option in await link_service.dimensions_undecided_in_use(
+        session, workspace
+    ):
+        findings.append(
+            Finding(
+                code=DIMENSION_UNDECIDED_IN_USE,
+                severity=BLOCKER,
+                domain=DOMAIN_TECHNICAL,
+                entity_id=dimension.id,
+                context={
+                    "key": dimension.key,
+                    "scope_label": dimension.scope_label,
+                    "solution_option_id": str(option.id),
+                },
+            )
+        )
 
     review = await scope_service.review_state(session, workspace, scope)
     if not review.reviewed:
@@ -173,19 +240,75 @@ async def economic_findings(
             )
         ]
 
+    # El preu que s'ofereix es recolza en una cotitzacio que ja no es vigent.
+    # Va en una llista a part i s'afegeix a TOTS els camins de sortida: si
+    # compartis la variable amb els findings dels lots, el `findings = []` de
+    # mes avall se l'emportaria sense que ningu ho veies.
+    expired = [
+        Finding(
+            code=SOLUTION_OPTION_QUOTE_EXPIRED,
+            severity=BLOCKER,
+            domain=DOMAIN_ECONOMIC,
+            entity_id=option.id,
+            # Ni cost ni preu: aquest finding el poden llegir rols que no veuen
+            # economia interna.
+            context={
+                "supplier_name": option.supplier_name,
+                "product_name": option.product_name,
+            },
+        )
+        for option in await link_service.options_with_expired_quote_in_use(
+            session, workspace
+        )
+    ]
+
+    # La font viva ha canviat des que la linia la va adoptar. Informatiu: que
+    # l'oferta segueixi el que es va adoptar pot ser exactament el que es vol.
+    #
+    # **Nomes si la divergencia es visible publicament.** Readiness es una sola
+    # representacio compartida i no te redaccio per rol: el mateix finding el
+    # llegeix qui te economia interna i qui no. Treure'n els noms de camp no
+    # n'hi ha prou —si l'unic camp divergit es el cost, l'existencia mateixa del
+    # finding ja diu que el cost s'ha mogut, perque el lector veu que cap camp
+    # public no ha canviat i nomes en queda un de possible.
+    #
+    # Aixi que el predicat es el mateix redactor canonic que fa servir el
+    # read-model: si no queda cap camp public, aqui no hi ha res a dir. Qui pot
+    # veure el cost ja ho te al seu read-model de la linia, que si esta redactat
+    # per rol; qui no pot, no se n'assabenta per cap via.
+    diverged = [
+        Finding(
+            code=ECONOMIC_LINE_OPTION_DIVERGED,
+            severity=INFO,
+            domain=DOMAIN_ECONOMIC,
+            entity_id=line.id,
+            # Nomes l'opcio, per poder-hi navegar. Cap nom de camp i cap
+            # recompte: saber QUANTS camps han canviat tambe deixaria restar.
+            context={"solution_option_id": str(option.id)},
+        )
+        for line, option, differences in await sync_service.diverged_lines(
+            session, workspace
+        )
+        if sync_service.visible_fields(
+            [difference.field for difference in differences], internal=False
+        )
+    ]
+
     view = await offer_service.build_view(session, workspace, offer)
     lots = offer_service.active_views(view.lots)
 
     if view.shape.selectable and not lots:
         return [
+            *expired,
+            *diverged,
             Finding(
                 code=ECONOMIC_BID_LOTS_NOT_SELECTED,
                 severity=BLOCKER,
                 domain=DOMAIN_ECONOMIC,
-            )
+            ),
         ]
 
-    findings: list[Finding] = []
+    findings: list[Finding] = [*expired, *diverged]
     for lot_view in lots:
         findings.extend(_lot_findings(lot_view))
     return findings
@@ -290,6 +413,118 @@ def _lot_findings(lot_view) -> list[Finding]:
 
 
 # --------------------------------------------------------------------------- #
+# Els plecs (S3-S3)                                                             #
+# --------------------------------------------------------------------------- #
+
+
+async def document_findings(
+    session: AsyncSession, workspace: BidWorkspace
+) -> list[Finding]:
+    """Que se sap dels plecs: si algu se'ls ha mirat i si l'analisi els cobreix.
+
+    Son TRES preguntes separades i cap d'elles no diu que els requisits hagin
+    canviat. Un document que acaba d'arribar nomes diu que hi ha material per
+    llegir; saber si el que demana l'organ es un altre exigeix tornar a
+    extreure'l, i aixo es una accio a part que ningu no fa sol.
+
+    Sense plecs no hi ha cap finding: "cap document per revisar" no es un
+    problema pendent, es que no hi ha res. Dir-hi "pendent de revisio" seria
+    demanar a algu que confirmi el buit.
+    """
+    findings: list[Finding] = []
+    review = await document_review.review_state(session, workspace)
+
+    # Atencio: NO es pot sortir aqui. Una candidatura sense plecs pot tenir
+    # dubtes igualment, i un blocador que desaparegues per no haver-hi documents
+    # seria un forat.
+
+    if review.document_count and not review.reviewed:
+        findings.append(
+            Finding(
+                code=TENDER_DOCUMENTS_UNREVIEWED,
+                severity=INFO,
+                domain=DOMAIN_WORKSPACE,
+                context={"documents": review.document_count},
+            )
+        )
+    elif review.document_count and review.stale:
+        findings.append(
+            Finding(
+                code=TENDER_DOCUMENTS_CHANGED,
+                severity=WARNING,
+                domain=DOMAIN_WORKSPACE,
+                context={"documents": review.document_count},
+            )
+        )
+
+    # Els dubtes. El blocador NOMES surt d'una decisio humana explicita; la
+    # resta es un comptador, no una llista de feines.
+    for issue in await issue_service.blocking_open_issues(session, workspace):
+        findings.append(
+            Finding(
+                code=ISSUE_BLOCKING_OPEN,
+                severity=BLOCKER,
+                domain=DOMAIN_WORKSPACE,
+                entity_id=issue.id,
+                # Titol i estat i prou. Si el dubte apunta a una linia economica,
+                # aqui no hi entra res d'aquella linia: el cost te el seu canal.
+                context={"title": issue.title, "status": issue.status.value},
+            )
+        )
+
+    open_count = await issue_service.open_issue_count(session, workspace)
+    if open_count:
+        findings.append(
+            Finding(
+                code=ISSUE_OPEN,
+                severity=INFO,
+                domain=DOMAIN_WORKSPACE,
+                context={"count": open_count},
+            )
+        )
+
+    if await _analysis_predates_documents(session, workspace):
+        findings.append(
+            Finding(
+                code=REQUIREMENT_ANALYSIS_PREDATES_DOCUMENTS,
+                severity=WARNING,
+                domain=DOMAIN_TECHNICAL,
+                context={"documents": review.document_count},
+            )
+        )
+    return findings
+
+
+async def _analysis_predates_documents(
+    session: AsyncSession, workspace: BidWorkspace
+) -> bool:
+    """Si l'analisi vigent no cobreix el corpus documental d'ara.
+
+    **No es compara cap data.** Es compara el corpus: `input_fingerprint` d'una
+    run diu exactament sobre quines extraccions es va fer, i `analysis_input`
+    recalcula la mateixa empremta amb el que hi ha ara. Dues dates poden
+    ordenar-se be i parlar de coses diferents —un document reextret amb un
+    parser nou no mou cap `created_at` de la run—, i aquesta comparacio no te
+    aquest problema.
+
+    Si no hi ha cap run vigent NO es diu res per aqui: que no s'hagi analitzat
+    mai ja te el seu propi finding al dossier, i repetir-ho seria soroll sobre
+    el mateix fet.
+
+    Si ara mateix no hi ha res analitzable —nomes XLSX, per exemple— tampoc:
+    l'analisi vigent no queda desfasada perque hagi arribat un document del qual
+    no sabem llegir el text.
+    """
+    run = await requirement_analysis.current_run_for(session, workspace.tender_id)
+    if run is None:
+        return False
+    current = await requirement_analysis.analysis_input(session, workspace.tender_id)
+    if not current.documents:
+        return False
+    return current.fingerprint != run.input_fingerprint
+
+
+# --------------------------------------------------------------------------- #
 # El veredicte                                                                  #
 # --------------------------------------------------------------------------- #
 
@@ -305,8 +540,16 @@ async def final_readiness(
     """
     dossier = await dossier_service.evaluate_workspace_readiness(session, workspace)
     scope = await scope_service.resolve(session, workspace)
+    # Els findings dels plecs es reparteixen entre dos dominis a proposit: que
+    # ningu no els hagi revisat parla de la candidatura sencera, i que l'analisi
+    # no cobreixi el corpus d'ara parla del tecnic.
+    documents = await document_findings(session, workspace)
     return evaluate_final(
         dossier=dossier,
-        technical=await technical_findings(session, workspace, scope),
+        technical=[
+            *(f for f in documents if f.domain == DOMAIN_TECHNICAL),
+            *await technical_findings(session, workspace, scope),
+        ],
         economic=await economic_findings(session, workspace),
+        workspace=[f for f in documents if f.domain == DOMAIN_WORKSPACE],
     )

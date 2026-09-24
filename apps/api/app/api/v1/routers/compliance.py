@@ -39,14 +39,25 @@ from app.services.compliance_analysis import (
     is_run_stale,
     review_assessment,
 )
+from app.tenders.visibility import visible_to_company
 
 router = APIRouter(prefix="/tenders/{tender_id}/compliance", tags=["compliment"])
 #: Els assessments s'adrecen sols, pero igualment validen la pertinenca.
 assessments_router = APIRouter(prefix="/assessments", tags=["compliment"])
 
 
-async def _load_tender(session: SessionDep, tender_id: uuid.UUID) -> Tender:
-    tender = await session.get(Tender, tender_id)
+async def _load_tender(
+    session: SessionDep, tender_id: uuid.UUID, company_id: uuid.UUID
+) -> Tender:
+    """La licitacio, NOMES si aquesta empresa la pot veure.
+
+    Sense el filtre, respondre `200` sobre una licitacio privada d'una altra
+    empresa ja en confirma l'existencia, encara que el compliment que es calcula
+    sigui el de qui pregunta.
+    """
+    tender = await session.scalar(
+        sa.select(Tender).where(Tender.id == tender_id, visible_to_company(company_id))
+    )
     if tender is None:
         raise NotFoundError("Licitacio no trobada.")
     return tender
@@ -152,7 +163,7 @@ async def run_compliance(
     ctx: CompanyCtx,
     payload: ComplianceRequest | None = None,
 ):
-    tender = await _load_tender(session, tender_id)
+    tender = await _load_tender(session, tender_id, ctx.company_id)
     company = await session.get(Company, ctx.company_id)
     options = payload or ComplianceRequest()
 
@@ -170,7 +181,7 @@ async def run_compliance(
 
 @router.get("", response_model=ComplianceRead, summary="Compliment vigent")
 async def read_compliance(tender_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
-    await _load_tender(session, tender_id)
+    await _load_tender(session, tender_id, ctx.company_id)
     run = await current_run_for(session, ctx.company_id, tender_id)
     if run is None:
         return ComplianceRead()
@@ -208,7 +219,7 @@ async def list_runs(
     ctx: CompanyCtx,
     limit: int = Query(default=20, ge=1, le=100),
 ):
-    await _load_tender(session, tender_id)
+    await _load_tender(session, tender_id, ctx.company_id)
     runs = (
         await session.scalars(
             sa.select(CompanyComplianceRun)

@@ -24,7 +24,15 @@ export function internalFixture(overrides: Partial<InternalTotals> = {}): Intern
 }
 
 export function lineInternalFixture(overrides: Partial<LineInternal> = {}): LineInternal {
-  return { ...internalFixture(), unit_cost_ex_vat: "1520.0000", monthly_equivalent_cost: null, ...overrides };
+  return {
+    ...internalFixture(),
+    unit_cost_ex_vat: "1520.0000",
+    monthly_equivalent_cost: null,
+    target_markup_pct: null,
+    proposed_unit_price_ex_vat: null,
+    price_matches_target: null,
+    ...overrides,
+  };
 }
 
 /** Una línia per unitat, amb preu, IVA i màxim del plec. */
@@ -32,6 +40,8 @@ export function lineFixture(overrides: Partial<OfferLine> = {}): OfferLine {
   return {
     id: "ln1",
     section_id: "sec1",
+    solution_option_id: null,
+    diverged_fields: [],
     concept: "Commutadors d'accés 48p",
     requirement_id: null,
     technical_solution_id: null,

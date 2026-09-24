@@ -4,9 +4,11 @@ Aquest model es NOSTRE, no de PLACSP. Els noms de camp no imiten l'XML de
 CODICE: hi ha un normalitzador entremig precisament perque dema TED o una
 plataforma autonomica puguin alimentar les mateixes taules.
 
-Totes aquestes entitats son PUBLIQUES i GLOBALS: cap d'elles te `company_id`.
-La relacio amb una empresa (match, guardat, workspace) sera una taula a part en
-una iteracio futura.
+Gairebe totes aquestes entitats son PUBLIQUES i GLOBALS. L'excepcio es
+`Tender.owner_company_id`: una licitacio introduida a ma per una empresa nomes
+la veu aquella empresa. `NULL` vol dir publica, que es el que son totes les que
+arriben d'una font sindicada. La relacio empresa-licitacio (match, workspace)
+continua sent una taula a part.
 """
 
 from __future__ import annotations
@@ -41,10 +43,19 @@ class Buyer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.UniqueConstraint("source_id", "external_identifier", name="uq_buyers_source_external"),
         sa.Index("ix_buyers_name", "name"),
         sa.Index("ix_buyers_tax_identifier", "tax_identifier"),
+        sa.Index("ix_buyers_owner_company_id", "owner_company_id"),
     )
 
     source_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("sources.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Qui el pot veure, amb la mateixa regla que `Tender.owner_company_id`:
+    #: `NULL` es public i canonic, amb valor es privat de l'empresa que el va
+    #: introduir a ma. Un organisme public es informacio publica, pero el que
+    #: una empresa escriu al seu wizard no ho es fins que algu ho valida, i
+    #: publicar-ho al cataleg global en silenci seria decidir-ho per ella.
+    owner_company_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("companies.id", ondelete="CASCADE")
     )
     external_identifier: Mapped[str] = mapped_column(sa.String(200), nullable=False)
     name: Mapped[str] = mapped_column(sa.String(500), nullable=False)
@@ -82,6 +93,7 @@ class Tender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.Index("ix_tenders_contract_type", "contract_type"),
         sa.Index("ix_tenders_estimated_value", "estimated_value"),
         sa.Index("ix_tenders_expediente_number", "expediente_number"),
+        sa.Index("ix_tenders_owner_company_id", "owner_company_id"),
         sa.CheckConstraint(
             "estimated_value IS NULL OR estimated_value >= 0", name="tender_estimated_value_positive"
         ),
@@ -89,6 +101,14 @@ class Tender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     source_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("sources.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Qui la pot veure. `NULL` es publica; amb valor, nomes aquella empresa.
+    #:
+    #: Viu aqui i no a `Source` a proposit: la font es PROVINENCA —d'on han
+    #: sortit les dades— i barrejar-hi autoritzacio faria que esborrar una
+    #: empresa arrossegues la font i, amb ella, licitacions d'altri.
+    owner_company_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("companies.id", ondelete="CASCADE")
     )
     external_id: Mapped[str] = mapped_column(sa.String(500), nullable=False)
     # Numero d'expedient que dona l'organisme. NO es identificador unic: dos
