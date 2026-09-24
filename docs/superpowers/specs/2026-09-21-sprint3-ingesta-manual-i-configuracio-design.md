@@ -2176,4 +2176,3 @@ Dos tests ho fixen: el de dues empreses comprova **a dins** un sol contingut i
 una sola extracció per a dos fitxers, i **a fora** que cap de les dues respostes
 porta el camp ni cap dels seus sinònims; el de versions comprova que dins de la
 mateixa empresa el contracte tampoc no explica optimitzacions d'storage.
-
