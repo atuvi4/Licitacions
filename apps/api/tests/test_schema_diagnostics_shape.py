@@ -88,7 +88,7 @@ def test_json_tallat_es_distingeix_de_text_lliure():
     truncated = json.dumps([_requirement()])[:-3]
     assert describe_shape(truncated).startswith("string(not_json,starts:[")
     assert describe_shape(SECRET).startswith("string(not_json,starts:text")
-    assert describe_shape('{"a": 1}') == "string(json:object,chars:8)"
+    assert describe_shape('{"a": 1}') == "string(json:object(keys:a),chars:8)"
     assert describe_shape("null") == "string(json:null,chars:4)"
     assert describe_shape("") == "string(not_json,starts:empty,chars:0)"
     assert describe_shape("   ") == "string(not_json,starts:empty,chars:3)"
@@ -160,3 +160,56 @@ def test_la_llista_com_a_text_json_segueix_normalitzant_se():
 
     assert applied == ["requirements:json_string_list"]
     ChunkExtractionOut.model_validate(data)
+
+
+# --------------------------------------------------------------------------- #
+# Chunk 3 (run a18fa4a6): text JSON que decodifica a un objecte                 #
+# --------------------------------------------------------------------------- #
+
+
+def test_chunk_3_el_text_json_que_es_un_objecte_diu_les_seves_claus():
+    """La forma observada: `string(json:object,chars:22)` a `award_criteria`.
+
+    Amb les claus es podra saber si el model embolcalla la llista amb el nom del
+    mateix camp. Aqui NO es desfa res: continua sent `list_type`.
+    """
+    wrapped = json.dumps({"award_criteria": []})
+    assert len(wrapped) == 22, "la mateixa llargada que al run real"
+
+    applied, detail = _diagnose(
+        {
+            "requirements": json.dumps({"requirements": [_requirement()]}),
+            "award_criteria": wrapped,
+            "document_notes": json.dumps({"notes": [], "extra": 1}),
+            "uncertainties": json.dumps({SECRET: []}),
+        }
+    )
+
+    assert applied == [], "cap desembolcallament: encara no es un patro provat"
+    shapes = {d["path"]: d["shape"] for d in detail}
+    assert shapes["requirements"].startswith("string(json:object(keys:requirements),chars:")
+    assert shapes["award_criteria"] == "string(json:object(keys:award_criteria),chars:22)"
+    assert shapes["document_notes"].startswith("string(json:object(keys:extra,notes),chars:")
+    assert shapes["uncertainties"].startswith("string(json:object(keys:<key>),chars:")
+    assert all(d["type"] == "list_type" for d in detail)
+
+
+def test_les_claus_insegures_de_l_objecte_decodificat_no_es_nomenen():
+    shape = describe_shape(json.dumps({SECRET: 1, "Majuscula": 2, "ok_key": 3}))
+
+    assert shape.startswith("string(json:object(keys:<key>,<key>,ok_key),chars:")
+    assert "Majuscula" not in shape
+    assert "155" not in shape
+
+
+def test_mai_no_es_desa_cap_valor_de_l_objecte_decodificat():
+    shape = describe_shape(json.dumps({"requirements": [{"title": SECRET}]}))
+
+    assert SECRET not in shape
+    assert "title" not in shape, "nomes les claus del primer nivell"
+
+
+def test_un_objecte_amb_moltes_claus_es_retalla():
+    shape = describe_shape(json.dumps({f"k{i}": i for i in range(8)}))
+
+    assert shape.startswith("string(json:object(keys:k0,k1,k2,k3,k4,...),chars:")

@@ -1244,12 +1244,7 @@ def describe_shape(value: Any) -> str:
     if isinstance(value, list):
         return f"array({len(value)})"
     if isinstance(value, dict):
-        keys = sorted(
-            key if isinstance(key, str) and _IDENTIFIER.fullmatch(key) else UNKNOWN_PATH_SEGMENT
-            for key in value
-        )
-        shown = ",".join(keys[:5]) + (",..." if len(keys) > 5 else "")
-        return f"object(keys:{shown})"
+        return f"object(keys:{_safe_keys(value)})"
     if isinstance(value, str):
         stripped = value.lstrip()
         first = stripped[:1]
@@ -1263,11 +1258,25 @@ def describe_shape(value: Any) -> str:
             decoded = json.loads(value)
         except (ValueError, RecursionError):
             return f"string(not_json,starts:{starts},chars:{len(value)})"
-        kind = {list: "array", dict: "object", str: "string"}.get(type(decoded), "scalar")
+        if isinstance(decoded, dict):
+            # Les claus de l'objecte decodificat, amb la mateixa regla: diuen si
+            # el model ha embolcallat la llista (`{"requirements": [...]}`) o ha
+            # enviat una altra estructura, sense copiar cap valor.
+            return f"string(json:object(keys:{_safe_keys(decoded)}),chars:{len(value)})"
+        kind = {list: "array", str: "string"}.get(type(decoded), "scalar")
         if decoded is None:
             kind = "null"
         return f"string(json:{kind},chars:{len(value)})"
     return type(value).__name__
+
+
+def _safe_keys(value: dict) -> str:
+    """Noms de clau amb forma d'identificador; la resta, `<key>`. Com a molt 5."""
+    keys = sorted(
+        key if isinstance(key, str) and _IDENTIFIER.fullmatch(key) else UNKNOWN_PATH_SEGMENT
+        for key in value
+    )
+    return ",".join(keys[:5]) + (",..." if len(keys) > 5 else "")
 
 
 async def _run_chunk(
