@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
@@ -1180,6 +1181,16 @@ def known_schema_fields(json_schema: Mapping[str, Any]) -> frozenset[str]:
     return frozenset(names)
 
 
+#: Errors de tipus en que la FORMA del que ha arribat diu quina normalitzacio
+#: caldria (una llista que arriba com a text, com a objecte, buida...).
+SHAPE_ERROR_TYPES = frozenset(
+    {"list_type", "dict_type", "model_type", "model_attributes_type", "string_type"}
+)
+#: Una clau inventada nomes es desa si te forma d'identificador curt en
+#: minuscules (`items`, `extraction_id`): aixo no pot portar una frase del plec.
+_IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,39}")
+
+
 def schema_diagnostics(
     exc: PydanticValidationError, known_fields: frozenset[str]
 ) -> list[dict[str, str]]:
@@ -1189,19 +1200,74 @@ def schema_diagnostics(
     indexs de llista. Qualsevol altre segment —una clau que el model s'ha
     inventat (`extra_forbidden`), l'etiqueta d'una branca d'union— es
     `<key>`: una clau dinamica pot portar text del plec, i retallar-la no ho evita.
+
+    `shape` (nomes en errors de tipus i en claus inventades) descriu la FORMA
+    del que va arribar, mai el contingut: `null`, `string(not_json,starts:[)`,
+    `object(keys:items)`, `key:foo`... Sense aixo, "list_type" no diu si la
+    llista va arribar com a text, com a objecte o buida, i no es pot decidir
+    quina normalitzacio estricta caldria.
     """
     diagnostics: list[dict[str, str]] = []
-    for error in exc.errors(include_url=False, include_context=False, include_input=False):
+    for error in exc.errors(include_url=False, include_context=False, include_input=True):
+        loc = tuple(error.get("loc", ()))
         segments = [
             str(part)
             if isinstance(part, int) or part in known_fields
             else UNKNOWN_PATH_SEGMENT
-            for part in error.get("loc", ())
+            for part in loc
         ]
-        diagnostics.append({"path": ".".join(segments) or "$", "type": str(error.get("type", ""))})
+        kind = str(error.get("type", ""))
+        item = {"path": ".".join(segments) or "$", "type": kind}
+        if kind in SHAPE_ERROR_TYPES:
+            item["shape"] = describe_shape(error.get("input"))
+        elif kind == "extra_forbidden" and loc and isinstance(loc[-1], str):
+            item["shape"] = describe_unknown_key(loc[-1])
+        diagnostics.append(item)
         if len(diagnostics) == MAX_SCHEMA_DIAGNOSTICS:
             break
     return diagnostics
+
+
+def describe_unknown_key(key: str) -> str:
+    """El nom d'una clau inventada nomes si no pot ser text del plec."""
+    return f"key:{key}" if _IDENTIFIER.fullmatch(key) else f"key:<text,{len(key)} chars>"
+
+
+def describe_shape(value: Any) -> str:
+    """La forma d'un valor, sense cap part del seu contingut."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int | float):
+        return "number"
+    if isinstance(value, list):
+        return f"array({len(value)})"
+    if isinstance(value, dict):
+        keys = sorted(
+            key if isinstance(key, str) and _IDENTIFIER.fullmatch(key) else UNKNOWN_PATH_SEGMENT
+            for key in value
+        )
+        shown = ",".join(keys[:5]) + (",..." if len(keys) > 5 else "")
+        return f"object(keys:{shown})"
+    if isinstance(value, str):
+        stripped = value.lstrip()
+        first = stripped[:1]
+        if not first:
+            starts = "empty"
+        elif first in "[{\"":
+            starts = first
+        else:
+            starts = "text"
+        try:
+            decoded = json.loads(value)
+        except (ValueError, RecursionError):
+            return f"string(not_json,starts:{starts},chars:{len(value)})"
+        kind = {list: "array", dict: "object", str: "string"}.get(type(decoded), "scalar")
+        if decoded is None:
+            kind = "null"
+        return f"string(json:{kind},chars:{len(value)})"
+    return type(value).__name__
 
 
 async def _run_chunk(

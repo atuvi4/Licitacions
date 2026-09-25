@@ -401,8 +401,13 @@ async def test_una_sortida_que_no_compleix_el_contracte_es_schema_invalid(sessio
     assert (chunk["input_tokens"], chunk["output_tokens"]) == (700, 300)
     detail = chunk["error_detail"]
     assert {"path": "requirements.0.category", "type": "enum"} in detail
-    assert {"path": "requirements.0.<key>", "type": "extra_forbidden"} in detail
-    assert all(set(item) == {"path", "type"} for item in detail)
+    # Una clau amb forma d'identificador es pot nomenar: no pot ser una frase.
+    assert {
+        "path": "requirements.0.<key>",
+        "type": "extra_forbidden",
+        "shape": "key:camp_inventat",
+    } in detail
+    assert all(set(item) <= {"path", "type", "shape"} for item in detail)
     assert secret not in str(run.chunk_coverage)
     assert secret not in (run.error_message or "")
 
@@ -450,9 +455,15 @@ def test_el_path_de_la_diagnosi_nomes_admet_camps_coneguts_i_indexs():
     detail = schema_diagnostics(caught.value, known)
 
     assert known == {"items", "quote"}
-    assert {"path": "items.0.quote", "type": "string_type"} in detail
-    assert {"path": "items.0.<key>", "type": "extra_forbidden"} in detail
-    assert all(set(item) == {"path", "type"} for item in detail)
+    # La forma, no el valor: "number", i una clau que es text queda sense nom.
+    assert {"path": "items.0.quote", "type": "string_type", "shape": "number"} in detail
+    assert {
+        "path": "items.0.<key>",
+        "type": "extra_forbidden",
+        "shape": "key:<text,20 chars>",
+    } in detail
+    assert all(set(item) <= {"path", "type", "shape"} for item in detail)
+    assert "secret" not in str(detail)
 
 
 async def test_la_diagnosi_de_schema_invalid_es_limitada(session, analyzable):
@@ -1150,7 +1161,9 @@ class TestNormalitzacioEstricta:
         [chunk] = run.chunk_coverage["chunks"]
         assert run.status == AnalysisRunStatus.FAILED
         assert chunk["error"] == "schema_invalid"
-        assert chunk["error_detail"] == [{"path": "extraction_id", "type": "extra_forbidden"}]
+        assert chunk["error_detail"] == [
+            {"path": "extraction_id", "type": "extra_forbidden", "shape": "key:extraction_id"}
+        ]
         assert chunk["normalised"] is None
 
 
