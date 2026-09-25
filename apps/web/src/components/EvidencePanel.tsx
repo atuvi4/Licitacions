@@ -330,7 +330,7 @@ export function EvidencePanel({
               }
             />
           ) : (
-            <ul className="max-h-72 divide-y divide-border overflow-y-auto border border-border scroll-thin">
+            <ul className="max-h-72 divide-y divide-border overflow-y-auto rounded-card border border-border scroll-thin">
               {filteredLibrary.map((document) => (
                 <li key={document.id}>
                   <button

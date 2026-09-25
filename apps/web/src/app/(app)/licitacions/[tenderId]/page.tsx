@@ -790,7 +790,7 @@ function TenderDetail() {
                       href={data.source_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="ui-action-md inline-flex items-center justify-center border border-border-strong px-3 text-[13.5px] font-semibold text-ink"
+                      className="ui-action-md inline-flex items-center justify-center rounded-control border border-border-strong bg-surface px-3 font-heading text-[13.5px] font-semibold text-ink shadow-control hover:bg-subtle"
                     >
                       Obre l&apos;expedient a la font ↗
                     </a>

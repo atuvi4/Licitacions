@@ -2,12 +2,12 @@ import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTML
 
 import { cn } from "./cn";
 
-/* Camps de formulari, tal com eren: només canvien els valors dels tokens
-   (cantonades quadrades, cap ombra, fons del canvas amb vora hairline). */
+/* Camps de formulari: fons blanc, vora subtil, radi de control i anell de
+   focus tou de l'accent. El placeholder va en #9ca3af, mai el valor. */
 
 const CONTROL_CLASS =
   "ui-control rounded-control border border-border-strong bg-surface px-3 text-body text-ink shadow-control transition-colors duration-150 max-sm:min-h-11 " +
-  "placeholder:text-faint focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 " +
+  "placeholder:text-disabled focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-brand/20 " +
   "disabled:cursor-not-allowed disabled:bg-subtle disabled:text-disabled";
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
@@ -74,7 +74,7 @@ export function Checkbox({
       <input
         type="checkbox"
         {...props}
-        className="h-4 w-4 shrink-0 rounded-none border-border-strong accent-brand disabled:cursor-not-allowed"
+        className="h-4 w-4 shrink-0 rounded-[4px] border-border-strong accent-brand disabled:cursor-not-allowed"
       />
       {label}
     </label>

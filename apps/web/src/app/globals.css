@@ -4,58 +4,57 @@
    Sistema visual compartit. Els noms semàntics es mantenen per compatibilitat
    amb totes les pantalles; els components de domini continuen decidint l'estat.
 
-   Valors del design system Industry (handoff Sprint 1, secció 1): fons clar
-   tècnic, un sol accent acer, cap cantonada rodona, cap ombra a les targetes.
-   Els tipus de lletra els carrega `app/layout.tsx` amb next/font (Barlow i
-   Barlow Condensed) a les variables --font-barlow / --font-barlow-condensed.
+   Direcció «SaaS clar»: fons de pàgina molt clar, targetes blanques amb vora
+   subtil i ombra mínima, radi de 8 px, un sol accent blau sobri i estats
+   desaturats. Els tipus de lletra els carrega `app/layout.tsx` amb next/font
+   (Barlow i Barlow Condensed) a les variables --font-barlow / --font-barlow-condensed.
    ------------------------------------------------------------------------- */
 @theme {
   /* Estructura */
-  --color-canvas: #f2f2f3;
-  --color-surface: #f2f2f3; /* les targetes són transparents: mateix color que el canvas */
-  --color-subtle: #f5f5f8; /* capçaleres de taula, fons de grup (neutral-100) */
-  --color-border: color-mix(in srgb, #1d1f20 16%, transparent); /* hairline */
-  --color-border-strong: #98989b; /* neutral-500 */
+  --color-canvas: #f8fafc; /* fons de pàgina */
+  --color-surface: #ffffff; /* targetes, panells, controls */
+  --color-subtle: #f9fafb; /* capçaleres de taula, fons de grup, hover de fila */
+  --color-border: #e5e7eb; /* vora subtil de targetes i separadors */
+  --color-border-strong: #d1d5db; /* vora de controls (inputs, secundaris) */
 
-  --color-ink: #1d1f20;
-  /* Text secundari i terciari: Barlow en cos petit sobre #f2f2f3 es rentava amb
-     neutral-700 (5,9:1) i #6c6c6f (4,7:1). Es baixen dos passos sense arribar
-     mai a la tinta: el secundari a 8,4:1 i el terciari a 5,9:1 (el nivell que
-     abans tenia el secundari), de manera que continuen diferenciats entre ells
-     i cap dels dos no sembla desactivat. Desactivat = --color-disabled. */
-  --color-muted: #454649; /* cos secundari, descripcions, breadcrumbs: 8,4:1 sobre canvas */
-  --color-faint: #5c5d61; /* metadades, denominadors, subtext: 5,9:1 sobre canvas */
-  --color-disabled: #7a7a7d; /* neutral-600: només controls desactivats (3,8:1, a propòsit) */
+  --color-ink: #111827; /* text principal: 17,7:1 sobre blanc */
+  /* Text secundari i metadades comparteixen #6b7280 (4,8:1 sobre blanc, 4,6:1
+     sobre el canvas): és el gris més clar que encara passa AA en cos petit.
+     El #9ca3af (2,5:1) queda només per a placeholders i controls desactivats. */
+  --color-muted: #6b7280;
+  --color-faint: #6b7280;
+  --color-disabled: #9ca3af;
 
-  /* Acció (acer). El botó primari sòlid i el pas actiu porten text blanc a
-     sobre: per complir WCAG AA es fan amb accent-700 (6,5:1), no amb
-     l'accent-500 del sistema (2,9:1), que queda com a acer decoratiu. */
-  --color-brand: #416180; /* accent-700: botó primari, pas actiu, selecció amb text blanc */
-  --color-brand-strong: #416180; /* accent-700: enllaços i text sobre fons clar */
-  --color-brand-soft: #eef6ff; /* accent-100 */
-  --color-accent-200: #d6ebff; /* fons de la xifra d'encaix < 60 (text accent-900) */
-  --color-accent-300: #b5d9fd; /* fons de la xifra d'encaix 60–79 (text accent-900) */
-  --color-accent-500: #749dc4; /* l'acer del sistema: només línies, subratllats i marques, mai sota text */
-  --color-accent-600: #597ea3;
-  --color-accent-800: #2c455d; /* hover del primari i dels enllaços */
-  --color-accent-900: #1d2d3d; /* premut del primari */
+  /* Acció: un únic blau sobri. Text blanc a sobre a 6,9:1. */
+  --color-brand: #2f5d8a; /* botó primari, pas actiu, selecció amb text blanc */
+  --color-brand-strong: #2f5d8a; /* enllaços i text d'acció sobre fons clar */
+  --color-brand-soft: #eaf2fb; /* selecció de fila, fons d'info */
+  --color-accent-200: #e3edf7; /* fons de la xifra d'encaix < 60 (text accent-900) */
+  --color-accent-300: #cddff0; /* fons de la xifra d'encaix 60–79 (text accent-900) */
+  --color-accent-500: #7fa2c6; /* decoratiu: línies i subratllats, mai sota text */
+  --color-accent-600: #4a7299;
+  --color-accent-800: #264c72; /* hover del primari i dels enllaços */
+  --color-accent-900: #1d3b59; /* premut del primari */
 
-  /* Senyal: els cinc nivells de StatusPill */
-  --color-success: #16624a; /* A punt */
-  --color-success-soft: #dce9e2;
-  --color-warning: #7a4b00; /* Atenció */
-  --color-warning-soft: #f0e6d6;
-  --color-danger: #9e2b20; /* Bloqueig */
-  --color-danger-soft: #f0dcd9;
-  --color-running: #2c455d; /* En curs */
-  --color-running-soft: #dbe7f1;
-  --color-row-blocking: #fcf6f5; /* tint de fila amb bloqueig */
-  --color-row-attention: #fdfaf3; /* tint de fila per revisar */
+  /* Senyal: els cinc nivells de StatusPill, desaturats. El text d'atenció és
+     #8a5c00 i no #9a6700: aquest últim queda a 4,4:1 sobre el seu fons. */
+  --color-success: #2e7d4f; /* A punt: 4,6:1 */
+  --color-success-soft: #eaf7ee;
+  --color-warning: #8a5c00; /* Atenció: 5,3:1 */
+  --color-warning-soft: #fdf3e6;
+  --color-danger: #b42318; /* Bloqueig: 5,8:1 */
+  --color-danger-soft: #fdecec;
+  --color-running: #2f5d8a; /* En curs (info): 6,1:1 */
+  --color-running-soft: #eaf2fb;
+  --color-row-blocking: #fef7f7; /* tint de fila amb bloqueig */
+  --color-row-attention: #fffaf2; /* tint de fila per revisar */
 
   /* Rampa neutra */
-  --color-neutral-200: #e7e7ea;
-  --color-neutral-300: #d4d4d7;
-  --color-neutral-400: #b7b7ba;
+  --color-neutral-100: #f3f4f6; /* fons de la pastilla neutra */
+  --color-neutral-200: #e5e7eb;
+  --color-neutral-300: #d1d5db;
+  --color-neutral-400: #9ca3af;
+  --color-neutral-600: #4b5563; /* text de la pastilla neutra: 6,9:1 sobre neutral-100 */
 
   /* Barra lateral */
   --color-sidebar: #1d2d3d; /* accent-900 */
@@ -85,11 +84,12 @@
   --spacing-topbar: 3.5rem; /* 56 px */
   --container-workspace: 72rem;
 
-  --radius-control: 0px; /* cap cantonada rodona */
-  --radius-card: 0px;
-  --shadow-card: none; /* les targetes són dibuixos de línia */
-  --shadow-control: none;
-  --shadow-dialog: 0 12px 32px color-mix(in srgb, #2b2b2d 22%, transparent); /* única elevació */
+  --radius-control: 6px;
+  --radius-card: 8px;
+  --radius-pill: 6px;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-control: 0 1px 2px rgba(0, 0, 0, 0.03);
+  --shadow-dialog: 0 12px 32px rgba(17, 24, 39, 0.12); /* modals i calaixos */
   --default-transition-duration: 150ms;
 }
 
@@ -136,10 +136,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Focus visible coherent a tota l'aplicacio. */
+/* Focus visible coherent a tota l'aplicacio: anell tou de l'accent. */
 :focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(47, 93, 138, 0.18);
 }
 
 /* Barres de desplacament discretes dins de panells. */

@@ -396,7 +396,7 @@ export default function ExperiencePage() {
           </div>
 
           <Field label="Serveis executats" hint="Marca els serveis que van intervenir en el projecte.">
-            <div className="flex flex-wrap gap-2 border border-border p-3">
+            <div className="flex flex-wrap gap-2 rounded-card border border-border p-3">
               {(services.data ?? []).length === 0 ? (
                 <span className="text-[12px] text-faint">
                   Encara no hi ha serveis definits. Crea&apos;ls a Empresa → Serveis.

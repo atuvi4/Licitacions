@@ -117,7 +117,7 @@ describe("Candidatures (llistat)", () => {
     expect(urgent.textContent).toContain("Candidata");
     const urgentAction = [...urgent.querySelectorAll("a[href='/candidatures/urgent']")].pop()!;
     expect(urgentAction.textContent).toContain("Decideix");
-    expect(urgentAction.querySelector("[data-mark]")).not.toBeNull();
+    expect(urgentAction.getAttribute("data-variant")).toBe("primary");
 
     // Recomanació automàtica NO-GO amb decisió humana GO: dues columnes, dos valors.
     const prep = screen.getByText("Energia elèctrica").closest("tr")!;

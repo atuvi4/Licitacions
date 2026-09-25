@@ -83,7 +83,7 @@ export function Drawer({ open, title, description, onClose, children, footer }: 
         aria-label={title}
         className={cn(
           "animate-fade-in relative z-10 flex h-full w-full max-w-[26rem] flex-col",
-          "border-l border-border-strong bg-canvas shadow-dialog",
+          "border-l border-border bg-surface shadow-dialog",
         )}
       >
         <header className="flex items-start justify-between gap-4 border-b border-border px-4 py-3.5">

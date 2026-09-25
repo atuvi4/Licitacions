@@ -28,4 +28,3 @@ export {
 export { Checkbox, Field, Input, Select, Textarea } from "./Form";
 export { Spinner } from "./Spinner";
 export { ErrorNotice, LoadingRows, ResultNotice, Skeleton } from "./Feedback";
-export { RegistrationMarks } from "./Marks";

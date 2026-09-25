@@ -766,7 +766,7 @@ export function SubmissionPackageSection({
             </div>
           </dl>
 
-          <p className="border border-border px-4 py-3 text-[13px] leading-5 text-ink">
+          <p className="rounded-card border border-border px-4 py-3 text-[13px] leading-5 text-ink">
             <strong>Aprovar aquest paquet NO el presenta a la plataforma pública.</strong> Vol dir que aquesta és
             exactament la documentació que una persona dona per bona.
           </p>

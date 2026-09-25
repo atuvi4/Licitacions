@@ -255,7 +255,7 @@ export default function CpvPage() {
               onChange={(event) => setForm({ ...form, priority: event.target.value })}
             />
           </Field>
-          <div className="space-y-2 border border-border p-3">
+          <div className="space-y-2 rounded-card border border-border p-3">
             <Checkbox
               label="Actiu (ara mateix ens interessa)"
               checked={form.active}

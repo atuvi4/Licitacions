@@ -1444,7 +1444,7 @@ function ConflictDialog({
       }
     >
       <div className="grid gap-4 sm:grid-cols-2">
-        <section className="border border-border-strong">
+        <section className="overflow-hidden rounded-card border border-border">
           <h3 className={cn(KICKER, "border-b border-border bg-subtle px-3 py-1.5")}>El que has escrit tu</h3>
           <dl className="divide-y divide-border">
             {fields.map((field) => (
@@ -1457,7 +1457,7 @@ function ConflictDialog({
           <p className="border-t border-border px-3 py-1.5 text-caption text-muted">Esborrany local, sense desar</p>
         </section>
 
-        <section className="border border-border-strong">
+        <section className="overflow-hidden rounded-card border border-border">
           <h3 className={cn(KICKER, "border-b border-border bg-subtle px-3 py-1.5")}>El valor actual del servidor</h3>
           {server ? (
             <dl className="divide-y divide-border">

@@ -141,8 +141,8 @@ describe("Avui", () => {
     expect(titles).toEqual(["Fibra òptica municipal", "Manteniment de xarxa"]);
     const buttons = [...decisionsCard.querySelectorAll("a[href^='/candidatures/']")];
     expect(buttons[0].getAttribute("href")).toBe("/candidatures/urgent?pas=decidir");
-    expect(buttons[0].querySelectorAll("[data-mark]")).toHaveLength(4);
-    expect(buttons[1].querySelectorAll("[data-mark]")).toHaveLength(0);
+    expect(buttons[0].getAttribute("data-variant")).toBe("primary");
+    expect(buttons[1].getAttribute("data-variant")).not.toBe("primary");
     expect(decisionsCard.textContent).toContain("Recomanació automàtica: Candidata");
     expect(decisionsCard.querySelector("button, a[role='button']")?.textContent ?? "").not.toContain("Candidata");
     const blockers = screen.getByText("Bloquejos i avisos").closest("section")!;

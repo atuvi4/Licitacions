@@ -22,7 +22,7 @@ interface AppTopbarProps {
 export function AppTopbar({ mobileOpen, onToggleMenu, companySwitcher, search, workCenter, user }: AppTopbarProps) {
   const [searchOpen, setSearchOpen] = useState(false);
   return (
-    <header className="relative sticky top-0 z-20 shrink-0 border-b border-border bg-canvas">
+    <header className="relative sticky top-0 z-20 shrink-0 border-b border-border bg-surface">
       <div className="flex h-topbar items-center gap-3 px-4 lg:px-6">
         <button
           type="button"
@@ -39,7 +39,7 @@ export function AppTopbar({ mobileOpen, onToggleMenu, companySwitcher, search, w
           <div
             className={cn(
               "min-w-0 flex-1 md:flex md:max-w-[420px]",
-              searchOpen ? "absolute inset-x-0 top-full flex border-b border-border bg-canvas px-4 py-2 md:static md:border-0 md:p-0" : "hidden",
+              searchOpen ? "absolute inset-x-0 top-full flex border-b border-border bg-surface px-4 py-2 md:static md:border-0 md:p-0" : "hidden",
             )}
           >
             {search}

@@ -21,7 +21,7 @@ export function AppSidebar({ mobileOpen, children, footer }: AppSidebarProps) {
       <div className="flex h-topbar shrink-0 items-center gap-2.5 px-5">
         <span
           aria-hidden
-          className="grid h-7 w-7 shrink-0 place-items-center bg-brand font-heading text-[13px] font-bold text-white"
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-control bg-brand font-heading text-[13px] font-bold text-white"
         >
           LI
         </span>
