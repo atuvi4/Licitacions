@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.ai.contract_v3 import parse_chunk_v3_result
 from app.ai.prompts.requirements_v1 import (
     EXTRACTOR_VERSION,
     PROMPT_VERSION,
@@ -32,6 +33,12 @@ from app.ai.prompts.requirements_v2 import (
     SYSTEM_PROMPT_V2,
     build_user_message_v2,
 )
+from app.ai.prompts.requirements_v3 import (
+    EXTRACTOR_VERSION_V3,
+    PROMPT_VERSION_V3,
+    SYSTEM_PROMPT_V3,
+    build_user_message_v3,
+)
 from app.ai.schemas import (
     SCHEMA_VERSION,
     ChunkExtractionOut,
@@ -41,6 +48,11 @@ from app.ai.schemas_v2 import (
     SCHEMA_VERSION_V2,
     ChunkExtractionOutV2,
     chunk_output_json_schema_v2,
+)
+from app.ai.schemas_v3 import (
+    SCHEMA_VERSION_V3,
+    ChunkExtractionOutV3,
+    chunk_output_json_schema_v3,
 )
 
 
@@ -61,7 +73,17 @@ class ExtractorProfile:
     #: escampat per la canonada.
     structured_values: bool
 
+    #: Cert si el perfil segueix l'Extraction Contract v3 (claims, suport per
+    #: cita, candidats a criteri). La canonada hi entra per una branca propia i
+    #: la de v1/v2 no es toca. Veure `app.ai.contract_v3`.
+    claims_contract: bool = False
+    #: Com es valida la resposta. `None` = `output_model.model_validate`, com
+    #: sempre. La v3 valida element a element (`parse_chunk_v3_result`).
+    parser: Callable[[Any], Any] | None = None
+
     def parse(self, payload: Any) -> Any:
+        if self.parser is not None:
+            return self.parser(payload)
         return self.output_model.model_validate(payload)
 
 
@@ -89,7 +111,30 @@ V2 = ExtractorProfile(
     structured_values=True,
 )
 
+#: **Extraction Contract v3. Intern: no es pot demanar per nom.** Existeix
+#: perque la canonada v3 es pugui provar de cap a cap amb el proveidor fals.
+#: No es a `PROFILES` a proposit: `PROFILES` es el registre que resolen els jobs,
+#: els pressupostos i el benchmark a partir d'un nom que arriba de fora. Mentre
+#: la v3 no s'hagi mesurat, nomes s'executa si el codi la passa explicitament
+#: (`analyze_tender_requirements(..., profile=V3)`).
+V3 = ExtractorProfile(
+    name="v3",
+    extractor_version=EXTRACTOR_VERSION_V3,
+    prompt_version=PROMPT_VERSION_V3,
+    schema_version=SCHEMA_VERSION_V3,
+    system_prompt=SYSTEM_PROMPT_V3,
+    build_user_message=build_user_message_v3,
+    json_schema=chunk_output_json_schema_v3,
+    output_model=ChunkExtractionOutV3,
+    structured_values=True,
+    claims_contract=True,
+    parser=parse_chunk_v3_result,
+)
+
+#: Els perfils que es poden demanar per NOM (jobs, pressupostos, benchmark).
 PROFILES: dict[str, ExtractorProfile] = {profile.name: profile for profile in (V1, V2)}
+#: Perfils que existeixen pero nomes s'executen si el codi els passa directament.
+INTERNAL_PROFILES: dict[str, ExtractorProfile] = {V3.name: V3}
 
 #: El perfil que s'executa si ningu no en demana cap altre.
 #:
@@ -114,7 +159,7 @@ BENCHMARK_PROFILE = V2
 
 def profile_for_run(extractor_version: str) -> ExtractorProfile:
     """El perfil amb que es va fer un run. Cau a v1 per als runs mes antics."""
-    for profile in PROFILES.values():
+    for profile in (*PROFILES.values(), *INTERNAL_PROFILES.values()):
         if profile.extractor_version == extractor_version:
             return profile
     return V1

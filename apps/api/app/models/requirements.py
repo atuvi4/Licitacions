@@ -386,6 +386,11 @@ class RequirementEvidence(UUIDPrimaryKeyMixin, Base):
     evidence_role: Mapped[EvidenceRole] = mapped_column(
         enum_column(EvidenceRole, "evidence_role"), nullable=False, default=EvidenceRole.PRIMARY
     )
+    #: v3: quins claims del requisit declara sostenir aquesta cita, i el
+    #: resultat de comprovar-ho (`app.ai.contract_v3.evidence_support_json`).
+    #: Nomes identificadors i codis, mai text del plec. `NULL` = fila anterior a
+    #: la v3, suport desconegut; no vol dir "no sosté res".
+    claim_support_json: Mapped[dict[str, Any] | None] = mapped_column(sa.JSON)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )
@@ -464,6 +469,11 @@ class AwardCriterion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     dedup_key: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     source_chunk_index: Mapped[int | None] = mapped_column(sa.Integer)
+    #: v3: el mecanisme que el fa participar a l'adjudicacio, la seva comprovacio
+    #: i la classe final (`app.ai.contract_v3.adjudication_basis_json`). Les
+    #: cites s'hi referencien per id, sense text. `NULL` = criteri anterior a la
+    #: v3, base desconeguda; no vol dir "sense base".
+    adjudication_basis_json: Mapped[dict[str, Any] | None] = mapped_column(sa.JSON)
 
     run: Mapped[RequirementExtractionRun] = relationship(back_populates="award_criteria")
     evidence: Mapped[list[AwardCriterionEvidence]] = relationship(

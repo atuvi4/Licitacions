@@ -1293,8 +1293,63 @@ def test_el_downgrade_no_toca_res_mes():
     assert "DELETE FROM" not in down
 
 
-def test_0038_no_existeix():
-    import pathlib
+def test_0037_no_porta_res_del_contracte_v3():
+    """S3-S10 acaba a 0037. El contracte v3 comenca a 0038, en revisions propies."""
+    up = _offline_sql("upgrade", _ISSUES)
 
-    versions = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
-    assert not list(versions.glob("0038*")), "0038 no toca a S3-S10"
+    assert "claim_support_json" not in up
+    assert "adjudication_basis_json" not in up
+
+
+# --- Extraction Contract v3 (0038, 0039) --------------------------------------
+
+_CLAIM_SUPPORT = "0037_workspace_issues:0038_evidence_claim_support"
+_CLAIM_SUPPORT_DOWN = "0038_evidence_claim_support:0037_workspace_issues"
+_ADJUDICATION = "0038_evidence_claim_support:0039_award_adjudication_basis"
+_ADJUDICATION_DOWN = "0039_award_adjudication_basis:0038_evidence_claim_support"
+
+
+@pytest.mark.parametrize(
+    ("up_range", "down_range", "table", "column"),
+    [
+        (_CLAIM_SUPPORT, _CLAIM_SUPPORT_DOWN, "requirement_evidence", "claim_support_json"),
+        (_ADJUDICATION, _ADJUDICATION_DOWN, "award_criteria", "adjudication_basis_json"),
+    ],
+)
+def test_el_contracte_v3_es_pot_aplicar_i_desfer(up_range, down_range, table, column):
+    """Una sola columna JSON nullable per revisio, sense default ni backfill.
+
+    `NULL` es "fila anterior a la v3": suport o base desconeguts. Omplir-la per
+    a les files antigues seria afirmar una comprovacio que no es va fer.
+    """
+    def domain(sql: str) -> str:
+        # La fila d'`alembic_version` l'escriu el propi Alembic a cada revisio.
+        return "\n".join(line for line in sql.splitlines() if "alembic_version" not in line)
+
+    up = domain(_offline_sql("upgrade", up_range))
+    down = domain(_offline_sql("downgrade", down_range))
+
+    added = [row for row in up.splitlines() if "ADD COLUMN" in row]
+    assert added == [f"ALTER TABLE {table} ADD COLUMN {column} JSON;"], added
+    for forbidden in ("NOT NULL", "DEFAULT", "UPDATE ", "INSERT INTO", "CREATE TABLE",
+                      "CREATE INDEX", "CHECK", "DROP "):
+        assert forbidden not in up, forbidden
+
+    dropped = [row for row in down.splitlines() if row.startswith(("ALTER TABLE", "DROP "))]
+    assert dropped == [f"ALTER TABLE {table} DROP COLUMN {column};"], dropped
+    assert "DELETE FROM" not in down
+    assert "UPDATE " not in down
+
+
+def test_0038_nomes_toca_les_cites_de_requisit():
+    up = _offline_sql("upgrade", _CLAIM_SUPPORT)
+
+    assert "award_criteria" not in up
+    assert "award_criterion_evidence" not in up
+
+
+def test_0039_nomes_toca_els_criteris():
+    up = _offline_sql("upgrade", _ADJUDICATION)
+
+    assert "requirement_evidence" not in up
+    assert "award_criterion_evidence" not in up

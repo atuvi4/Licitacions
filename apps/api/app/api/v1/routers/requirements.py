@@ -17,6 +17,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Query, status
 from sqlalchemy.orm import selectinload
 
+from app.ai.contract_v3 import award_class_of, counts_as_award_criterion
 from app.api.deps import CompanyCtx, CurrentUser, SessionDep
 from app.core.errors import EndpointMovedError, NotFoundError
 from app.models.audit import AuditAction
@@ -184,11 +185,17 @@ async def read_analysis(tender_id: uuid.UUID, session: SessionDep, user: Current
             ]
         requirement_reads.append(read)
 
+    # v3 guarda a la mateixa taula candidats, desitjables i text informatiu. La
+    # fitxa pinta `award_criteria` com a criteris que puntuen: nomes hi van els
+    # de v1/v2 i els v3 formals. La resta, a `award_candidates`.
     criteria_reads = []
+    candidate_reads = []
     for criterion in criteria:
-        read = AwardCriterionRead.model_validate(criterion)
-        read.evidence = _evidence_reads(criterion, decoration)
-        criteria_reads.append(read)
+        read = _criterion_read(criterion, decoration)
+        if counts_as_award_criterion(criterion.adjudication_basis_json):
+            criteria_reads.append(read)
+        else:
+            candidate_reads.append(read)
 
     # Obsolet: els documents han canviat des que es va fer l'analisi. Amb la
     # mateixa definicio d'entrada que l'analisi (sostre de pagines inclos).
@@ -205,6 +212,7 @@ async def read_analysis(tender_id: uuid.UUID, session: SessionDep, user: Current
         run=ExtractionRunRead.model_validate(run) if run is not None else None,
         requirements=requirement_reads,
         award_criteria=criteria_reads,
+        award_candidates=candidate_reads,
         is_stale=is_stale,
     )
 
@@ -290,6 +298,13 @@ async def review_requirement(
     return read
 
 
+def _criterion_read(criterion: AwardCriterion, decoration: dict) -> AwardCriterionRead:
+    read = AwardCriterionRead.model_validate(criterion)
+    read.award_class = award_class_of(criterion.adjudication_basis_json)
+    read.evidence = _evidence_reads(criterion, decoration)
+    return read
+
+
 @router.get(
     "/award-criteria/{criterion_id}",
     response_model=AwardCriterionRead,
@@ -304,9 +319,7 @@ async def get_award_criterion(criterion_id: uuid.UUID, session: SessionDep, _: C
     if criterion is None:
         raise NotFoundError("Criteri no trobat.")
     decoration = await _decorate_evidence(session, [criterion])
-    read = AwardCriterionRead.model_validate(criterion)
-    read.evidence = _evidence_reads(criterion, decoration)
-    return read
+    return _criterion_read(criterion, decoration)
 
 
 @router.post(
@@ -338,9 +351,7 @@ async def review_award_criterion(
     await session.refresh(criterion)
 
     decoration = await _decorate_evidence(session, [criterion])
-    read = AwardCriterionRead.model_validate(criterion)
-    read.evidence = _evidence_reads(criterion, decoration)
-    return read
+    return _criterion_read(criterion, decoration)
 
 
 __all__ = ["router", "AnalysisRunStatus"]

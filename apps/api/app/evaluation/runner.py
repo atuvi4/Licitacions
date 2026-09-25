@@ -23,6 +23,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.ai.contract_v3 import counts_as_award_criterion
 from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
 from app.ai.provider import ProviderError, StructuredLLMProvider, get_provider
 
@@ -175,6 +176,11 @@ async def load_predictions(
     ).all()
     awards: list[PredictedAward] = []
     for criterion in criteria:
+        # v3: un candidat, una caracteristica desitjable o un text informatiu
+        # no es cap prediccio de criteri. Comptar-los seria mesurar falsos
+        # positius que el producte no ensenya com a criteris.
+        if not counts_as_award_criterion(criterion.adjudication_basis_json):
+            continue
         evidence = []
         for cite in criterion.evidence:
             text = await _page_text(session, cite.page_id)

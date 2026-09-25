@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+from app.ai.contract_v3 import VALUE_SCHEMA_V3
 from app.compliance.certifications import assess_certification
 from app.compliance.economic import assess_economic_solvency
 from app.compliance.experience import assess_experience
@@ -87,6 +88,17 @@ def assess_requirement(
     revisio en comptes de comparar-se contra una base inventada.
     """
     category = requirement.category
+
+    # Extraction Contract v3: el valor son claims, i cap regla encara no els
+    # llegeix. Deixar-lo passar per la lectura lliure de la v1 voldria dir
+    # avaluar-lo sense el seu llindar. Fins que hi hagi un lector v3, revisio.
+    if getattr(requirement, "value_schema", None) == VALUE_SCHEMA_V3:
+        return needs_review(
+            RuleCode.NOT_AUTOMATABLE,
+            ExplanationCode.RULE_NOT_AUTOMATABLE,
+            category=str(category),
+            value_schema=VALUE_SCHEMA_V3,
+        )
 
     if category == RequirementCategory.ECONOMIC_SOLVENCY:
         return assess_economic_solvency(requirement, snapshot, deadline, tender)

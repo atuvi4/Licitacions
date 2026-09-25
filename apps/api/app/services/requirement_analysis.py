@@ -30,6 +30,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Protocol
 
 import sqlalchemy as sa
@@ -38,7 +39,28 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.ai.normalize_v2 import normalise_requirement
+from app.ai.contract_v3 import (
+    LEGACY_REASONS,
+    VALUE_SCHEMA_V3,
+    AwardClass,
+    MechanismCheck,
+    ParsedChunkV3,
+    RejectionItem,
+    RejectionLog,
+    RejectionReason,
+    RejectionStage,
+    RequirementSupportStatus,
+    adjudication_basis_json,
+    classify_award,
+    counts_as_award_criterion,
+    evidence_support_json,
+    record_requirement_support,
+    rejection,
+    remap_evidence_ids,
+    requirement_support,
+    requirement_value_json,
+)
+from app.ai.normalize_v2 import alternative_group_key, derive_obligation, normalise_requirement
 from app.ai.output_normalization import normalise_output
 from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
 from app.ai.provider import (
@@ -387,6 +409,22 @@ def award_dedup_key(item: AwardCriterionOut) -> str:
         str(item.evaluation_type),
         ",".join(sorted(label.strip().casefold() for label in item.lot_labels)),
     ]
+    return hashlib.sha256("␟".join(parts).encode("utf-8")).hexdigest()[:64]
+
+
+def award_dedup_key_v3(item: Any) -> str:
+    """La clau v1/v2, amb el `kind` declarat. **Nomes per a la v3.**
+
+    `award_dedup_key` no mira que es el candidat: un criteri i un text
+    informatiu amb el mateix nom, sense punts, es fusionarien, i guanyaria el
+    que arribes primer. Afegir-hi el `kind` els separa. v1/v2 no tenen `kind` i
+    continuen amb la clau de sempre; cap run antic canvia de clau.
+
+    Es el `kind` DECLARAT i no la classe final: el mateix criteri vist en dos
+    chunks que se solapen ha de continuar sent un sol criteri encara que una de
+    les cites en provi el mecanisme i l'altra no.
+    """
+    parts = [award_dedup_key(item), f"kind={item.kind}"]
     return hashlib.sha256("␟".join(parts).encode("utf-8")).hexdigest()[:64]
 
 
@@ -1022,11 +1060,20 @@ async def _copy_reused_results(
             run_id=run.id,
             review_status=_machine_review_status(original),
         )
+        new_ids: dict[str, str] = {}
         for evidence in original.evidence:
-            copy.evidence.append(_copy_columns(evidence, AwardCriterionEvidence))
+            copied = _copy_columns(evidence, AwardCriterionEvidence, id=uuid.uuid4())
+            new_ids[str(evidence.id)] = str(copied.id)
+            copy.evidence.append(copied)
+        # v3: la base d'adjudicacio cita files d'evidencia per id; les copiades
+        # en tenen un de nou. A v1/v2 la columna es NULL i aixo no fa res.
+        copy.adjudication_basis_json = remap_evidence_ids(original.adjudication_basis_json, new_ids)
         session.add(copy)
         seen_awards.add(copy.dedup_key)
-        tally.award_criteria += 1
+        # Es copien tots (res no es descarta), pero el comptador del run diu
+        # criteris: un candidat v3 no ho es. A v1/v2 sempre suma, com abans.
+        if counts_as_award_criterion(copy.adjudication_basis_json):
+            tally.award_criteria += 1
 
 
 #: Codi d'un chunk que no s'ha enviat perque un error fatal ha aturat el run.
@@ -1412,6 +1459,23 @@ def _persist_chunk(
     Cada entrada es `{item, index, stage, reason}`: el tipus d'element, la seva
     posicio a la resposta, l'etapa i un codi. Cap text del plec ni de la cita.
     """
+    if profile.claims_contract:
+        # Extraction Contract v3: branca propia. Tot el que ve a continuacio es
+        # v1/v2 i no es toca.
+        _persist_chunk_v3(
+            session=session,
+            run=run,
+            tender=tender,
+            chunk=chunk,
+            parsed=parsed,
+            lots=lots,
+            tally=tally,
+            seen_requirements=seen_requirements,
+            seen_awards=seen_awards,
+            rejections=rejections,
+        )
+        return
+
     record = rejections.append if rejections is not None else (lambda _entry: None)
 
     for index, item in enumerate(parsed.requirements):
@@ -1554,6 +1618,237 @@ def _persist_chunk(
                 )
             )
         tally.award_criteria += 1
+
+
+# --------------------------------------------------------------------------- #
+# Extraction Contract v3                                                       #
+# --------------------------------------------------------------------------- #
+
+
+def _validate_evidence_v3(
+    evidence: list[Any],
+    chunk: Chunk,
+    *,
+    log: RejectionLog,
+    item: RejectionItem,
+    index: int,
+    tally: _ChunkTally,
+) -> dict[str, ValidatedEvidence]:
+    """Valida cada cita per separat i la torna indexada pel seu id local.
+
+    Mateixa validacio que v1/v2 (`validate_evidence_detailed`), cita a cita,
+    perque la v3 ha de saber QUINA cita ha passat: el suport es declara per id.
+    """
+    kept: dict[str, ValidatedEvidence] = {}
+    for candidate in evidence:
+        validated, reasons = validate_evidence_detailed([candidate], chunk)
+        tally.evidence_rejected += len(reasons)
+        for reason in reasons:
+            log.add(rejection(
+                item, index, RejectionStage.EVIDENCE,
+                LEGACY_REASONS.get(reason) or RejectionReason(reason),
+            ))
+        if validated:
+            kept[candidate.id] = validated[0]
+    return kept
+
+
+def _dedup_view_v3(item: Any) -> Any:
+    """El requisit v3 vist amb els camps que llegeix `requirement_dedup_key`.
+
+    **La deduplicacio no canvia**: la clau es la de sempre, amb les pagines (la
+    semantica conservadora de la v1), i el "valor" son els claims. Com que els
+    claims porten ancora i certesa, dos requisits amb el mateix numero pero de
+    coses diferents no es fusionen mai.
+    """
+    return SimpleNamespace(
+        category=item.category,
+        operator=item.operator,
+        scope=item.scope,
+        lot_labels=item.lot_labels,
+        value=requirement_value_json(item),
+        title=item.title,
+        modality=item.modality,
+        alternative_group=item.alternative_group,
+        equivalence_allowed=item.equivalence_allowed,
+    )
+
+
+def _persist_chunk_v3(
+    *,
+    session: AsyncSession,
+    run: RequirementExtractionRun,
+    tender: Tender,
+    chunk: Chunk,
+    parsed: ParsedChunkV3,
+    lots: list[TenderLot],
+    tally: _ChunkTally,
+    seen_requirements: dict[str, Requirement],
+    seen_awards: set[str],
+    rejections: list[dict[str, Any]] | None,
+) -> None:
+    """Desa un chunk v3: suport per claim i base d'adjudicacio, amb rebutjos per codi.
+
+    parse_chunk_v3 -> validacio de cada cita -> requirement_support ->
+    claim_support_json -> classify_award -> adjudication_basis_json.
+
+    Res no es descarta pel suport: un claim no sostingut o un criteri sense
+    mecanisme provat es desen igualment, marcats `needs_review`, i el motiu
+    queda als rebutjos del chunk. Nomes es descarta el que la v1 ja descartava:
+    element invalid, sense cap cita valida, o duplicat.
+    """
+    log = RejectionLog()
+    for entry in parsed.schema_rejections.entries:
+        log.add(entry)
+    tally.rejected += parsed.schema_rejected
+    output = parsed.output
+
+    for index, item in zip(parsed.requirement_indexes, output.requirements, strict=True):
+        validated = _validate_evidence_v3(
+            item.evidence, chunk, log=log, item=RejectionItem.REQUIREMENT, index=index, tally=tally
+        )
+        if not validated:
+            tally.rejected += 1
+            log.add(rejection(RejectionItem.REQUIREMENT, index, RejectionStage.ITEM,
+                              RejectionReason.NO_VALID_EVIDENCE))
+            continue
+
+        key = requirement_dedup_key(_dedup_view_v3(item), item.evidence, include_pages=True)
+        if key in seen_requirements:
+            log.add(rejection(RejectionItem.REQUIREMENT, index, RejectionStage.DEDUP,
+                              RejectionReason.DUPLICATE_KEY))
+            continue
+
+        support = requirement_support(item, {eid: v.quote for eid, v in validated.items()})
+        record_requirement_support(log, index, item, support)
+
+        lot_id, lot_needs_review = resolve_lot(item.lot_labels, lots)
+        scope = item.scope
+        if lot_id is not None and scope == RequirementScope.UNKNOWN:
+            scope = RequirementScope.LOT
+        needs_review = lot_needs_review or support.status in (
+            RequirementSupportStatus.NEEDS_REVIEW,
+            RequirementSupportStatus.NOT_SUPPORTED,
+        )
+
+        requirement = Requirement(
+            run_id=run.id,
+            tender_id=tender.id,
+            tender_lot_id=lot_id,
+            category=item.category,
+            obligation=derive_obligation(item.obligation, item.modality),
+            operator=item.operator,
+            scope=scope,
+            title=item.title[:500],
+            description=item.description,
+            value_json=requirement_value_json(item),
+            value_schema=VALUE_SCHEMA_V3,
+            modality=item.modality,
+            alternative_group=alternative_group_key(
+                item.alternative_group, run_id=run.id, chunk_index=chunk.index
+            ),
+            equivalence_allowed=item.equivalence_allowed,
+            condition_note=item.condition_note or None,
+            raw_lot_labels=item.lot_labels or None,
+            confidence=item.confidence,
+            review_status=ReviewStatus.NEEDS_REVIEW if needs_review else ReviewStatus.UNREVIEWED,
+            dedup_key=key,
+            source_chunk_index=chunk.index,
+        )
+        session.add(requirement)
+        seen_requirements[key] = requirement
+        for evidence_id, cite in validated.items():
+            requirement.evidence.append(
+                RequirementEvidence(
+                    extraction_id=cite.extraction_id,
+                    page_id=cite.page_id,
+                    tender_document_id=cite.tender_document_id,
+                    page_number=cite.page_number,
+                    quote=cite.quote,
+                    char_start=cite.char_start,
+                    char_end=cite.char_end,
+                    section=cite.section,
+                    evidence_role=cite.role,
+                    claim_support_json=evidence_support_json(evidence_id, support),
+                )
+            )
+        tally.requirements += 1
+
+    for index, item in zip(parsed.award_indexes, output.award_candidates, strict=True):
+        validated = _validate_evidence_v3(
+            item.evidence, chunk, log=log, item=RejectionItem.AWARD_CANDIDATE, index=index,
+            tally=tally,
+        )
+        if not validated:
+            tally.rejected += 1
+            log.add(rejection(RejectionItem.AWARD_CANDIDATE, index, RejectionStage.ITEM,
+                              RejectionReason.NO_VALID_EVIDENCE))
+            continue
+
+        key = award_dedup_key_v3(item)
+        if key in seen_awards:
+            log.add(rejection(RejectionItem.AWARD_CANDIDATE, index, RejectionStage.DEDUP,
+                              RejectionReason.DUPLICATE_KEY))
+            continue
+        seen_awards.add(key)
+
+        decision = classify_award(item, {eid: v.quote for eid, v in validated.items()})
+        for check, _ids in decision.mechanisms.values():
+            if check != MechanismCheck.VERIFIED:
+                log.add(rejection(RejectionItem.AWARD_CANDIDATE, index, RejectionStage.CLAIM,
+                                  RejectionReason.CLAIM_NOT_SUPPORTED, detail=check.value))
+        for refs in decision.unknown_refs.values():
+            for _ref in refs:
+                log.add(rejection(RejectionItem.AWARD_CANDIDATE, index, RejectionStage.CLAIM,
+                                  RejectionReason.CLAIM_NOT_SUPPORTED, detail="unknown_ref"))
+
+        lot_id, lot_needs_review = resolve_lot(item.lot_labels, lots)
+        # L'id de cada cita es fixa aqui perque la base d'adjudicacio el cita.
+        row_ids = {evidence_id: uuid.uuid4() for evidence_id in validated}
+        criterion = AwardCriterion(
+            run_id=run.id,
+            tender_id=tender.id,
+            tender_lot_id=lot_id,
+            category=item.category,
+            name=item.name[:500],
+            description=item.description,
+            points=item.points,
+            weight_percent=item.weight_percent,
+            formula=item.formula,
+            criterion_type=item.criterion_type,
+            evaluation_type=item.evaluation_type,
+            confidence=item.confidence,
+            review_status=(
+                ReviewStatus.NEEDS_REVIEW
+                if lot_needs_review or decision.needs_review
+                else ReviewStatus.UNREVIEWED
+            ),
+            adjudication_basis_json=adjudication_basis_json(item, decision, row_ids),
+            dedup_key=key,
+            source_chunk_index=chunk.index,
+        )
+        session.add(criterion)
+        for evidence_id, cite in validated.items():
+            criterion.evidence.append(
+                AwardCriterionEvidence(
+                    id=row_ids[evidence_id],
+                    extraction_id=cite.extraction_id,
+                    page_id=cite.page_id,
+                    tender_document_id=cite.tender_document_id,
+                    page_number=cite.page_number,
+                    quote=cite.quote,
+                    char_start=cite.char_start,
+                    char_end=cite.char_end,
+                    section=cite.section,
+                    evidence_role=cite.role,
+                )
+            )
+        # La fila es desa sempre; el comptador del run nomes compta criteris.
+        if decision.award_class == AwardClass.FORMAL_AWARD_CRITERION:
+            tally.award_criteria += 1
+
+    if rejections is not None:
+        rejections.extend(log.entries)
 
 
 #: Marca de conflicte entre el que diu el plec i el que diu la metadada de PLACSP.

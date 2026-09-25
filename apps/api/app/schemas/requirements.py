@@ -138,6 +138,9 @@ class AwardCriterionRead(ORMModel):
     manual_override_json: dict[str, Any] | None = None
     reviewed_at: datetime | None = None
     created_at: datetime
+    #: Extraction Contract v3: la classe que ha decidit el backend. `None` per a
+    #: les files v1/v2, que es llegeixen com sempre.
+    award_class: str | None = None
     evidence: list[EvidenceRead] = Field(default_factory=list)
 
 
@@ -271,7 +274,12 @@ class RequirementAnalysisRead(BaseModel):
 
     run: ExtractionRunRead | None = None
     requirements: list[RequirementRead] = Field(default_factory=list)
+    #: NOMES criteris d'adjudicacio: els de v1/v2 i els v3 formals.
     award_criteria: list[AwardCriterionRead] = Field(default_factory=list)
+    #: v3: candidats a revisio, caracteristiques desitjables i text informatiu.
+    #: Es conserven, pero fora de `award_criteria`: la fitxa actual els pintaria
+    #: com a criteris que puntuen. Buit per a tota analisi v1/v2.
+    award_candidates: list[AwardCriterionRead] = Field(default_factory=list)
     #: Cert si els documents han canviat des de l'analisi vigent.
     is_stale: bool = False
 
