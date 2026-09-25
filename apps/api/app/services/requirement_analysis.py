@@ -408,10 +408,24 @@ class ValidatedEvidence:
     role: Any
 
 
+#: Motius de rebuig d'una cita. Nomes codis: mai el text de la cita.
+EVIDENCE_EXTRACTION_MISMATCH = "extraction_mismatch"
+EVIDENCE_PAGE_NOT_IN_CHUNK = "page_not_in_chunk"
+EVIDENCE_QUOTE_NOT_FOUND = "quote_not_found"
+
+
 def validate_evidence(
     candidates: list[EvidenceOut], chunk: Chunk
 ) -> tuple[list[ValidatedEvidence], int]:
-    """Conserva nomes les cites verificables. Retorna tambe quantes s'han caigut.
+    """Conserva nomes les cites verificables. Retorna tambe quantes s'han caigut."""
+    kept, reasons = validate_evidence_detailed(candidates, chunk)
+    return kept, len(reasons)
+
+
+def validate_evidence_detailed(
+    candidates: list[EvidenceOut], chunk: Chunk
+) -> tuple[list[ValidatedEvidence], list[str]]:
+    """Com `validate_evidence`, pero amb el motiu de cada cita rebutjada.
 
     Es comprova, en aquest ordre: que l'extraccio sigui la del chunk, que la
     pagina hi fos, i que el quote aparegui de veritat al text d'aquella pagina.
@@ -419,18 +433,22 @@ def validate_evidence(
     by_number = {page.page_number: page for page in chunk.pages}
     max_quote = settings.REQUIREMENTS_MAX_QUOTE_CHARS
     kept: list[ValidatedEvidence] = []
-    rejected = 0
+    reasons: list[str] = []
 
     for candidate in candidates:
+        if candidate.extraction_id != chunk.document.extraction_id:
+            # Cita un document que no se li ha ensenyat.
+            reasons.append(EVIDENCE_EXTRACTION_MISMATCH)
+            continue
         page = by_number.get(candidate.page_number)
-        if page is None or candidate.extraction_id != chunk.document.extraction_id:
-            # Cita una pagina o un document que no se li ha ensenyat.
-            rejected += 1
+        if page is None:
+            # Cita una pagina que no era al fragment.
+            reasons.append(EVIDENCE_PAGE_NOT_IN_CHUNK)
             continue
 
         match = locate_quote(page.text, candidate.quote[:max_quote])
         if match is None:
-            rejected += 1
+            reasons.append(EVIDENCE_QUOTE_NOT_FOUND)
             continue
 
         kept.append(
@@ -447,7 +465,7 @@ def validate_evidence(
             )
         )
 
-    return kept, rejected
+    return kept, reasons
 
 
 # --------------------------------------------------------------------------- #
@@ -695,6 +713,8 @@ async def analyze_tender_requirements(
     chunk_normalisations: dict[int, list[str]] = {}
     # Per index de chunk, el diagnostic sanititzat d'un error HTTP.
     chunk_provider_errors: dict[int, dict[str, Any]] = {}
+    # Per index de chunk, que s'ha descartat de la resposta i per que (codis).
+    chunk_rejections: dict[int, list[dict[str, Any]]] = {}
 
     if plan is not None:
         await _copy_reused_results(
@@ -772,6 +792,7 @@ async def analyze_tender_requirements(
         if applied:
             chunk_normalisations[chunk.index] = applied
 
+        rejections: list[dict[str, Any]] = []
         _persist_chunk(
             session=session,
             run=run,
@@ -783,7 +804,10 @@ async def analyze_tender_requirements(
             seen_requirements=seen_requirements,
             seen_awards=seen_awards,
             profile=profile,
+            rejections=rejections,
         )
+        if rejections:
+            chunk_rejections[chunk.index] = rejections[:MAX_CHUNK_REJECTIONS]
         run.chunks_completed += 1
 
     if on_progress is not None:
@@ -805,6 +829,7 @@ async def analyze_tender_requirements(
         diagnostics=chunk_diagnostics,
         normalisations=chunk_normalisations,
         provider_errors=chunk_provider_errors,
+        rejections=chunk_rejections,
         reused=plan.reused if plan is not None else None,
         reused_from_run_id=str(plan.source.id) if plan is not None else None,
         not_sent_code=CHUNK_NOT_SENT,
@@ -1361,6 +1386,13 @@ def _append_new_evidence(requirement: Requirement, validated: list[ValidatedEvid
         )
 
 
+#: Motius de rebuig d'un element sencer.
+ITEM_NO_VALID_EVIDENCE = "no_valid_evidence"
+ITEM_DUPLICATE_KEY = "duplicate_key"
+#: Quantes entrades de rebuig es desen per chunk, com a molt.
+MAX_CHUNK_REJECTIONS = 50
+
+
 def _persist_chunk(
     *,
     session: AsyncSession,
@@ -1373,13 +1405,25 @@ def _persist_chunk(
     seen_requirements: dict[str, Requirement],
     seen_awards: set[str],
     profile: ExtractorProfile,
+    rejections: list[dict[str, Any]] | None = None,
 ) -> None:
-    for item in parsed.requirements:
-        evidence, rejected = validate_evidence(item.evidence, chunk)
-        tally.evidence_rejected += rejected
+    """Desa el que ha tornat un chunk. `rejections` rep que s'ha descartat i per que.
+
+    Cada entrada es `{item, index, stage, reason}`: el tipus d'element, la seva
+    posicio a la resposta, l'etapa i un codi. Cap text del plec ni de la cita.
+    """
+    record = rejections.append if rejections is not None else (lambda _entry: None)
+
+    for index, item in enumerate(parsed.requirements):
+        evidence, reasons = validate_evidence_detailed(item.evidence, chunk)
+        tally.evidence_rejected += len(reasons)
+        for reason in reasons:
+            record({"item": "requirement", "index": index, "stage": "evidence", "reason": reason})
         if not evidence:
             # Sense cita verificable no es un requisit: nomes un candidat.
             tally.rejected += 1
+            record({"item": "requirement", "index": index, "stage": "item",
+                    "reason": ITEM_NO_VALID_EVIDENCE})
             continue
 
         key = requirement_dedup_key(
@@ -1389,6 +1433,8 @@ def _persist_chunk(
         if existing is not None:
             if not profile.structured_values:
                 # v1: solapament de chunks, el mateix requisit vist dues vegades.
+                record({"item": "requirement", "index": index, "stage": "dedup",
+                        "reason": ITEM_DUPLICATE_KEY})
                 continue
             # v2: el mateix requisit citat en una altra pagina. Les cites
             # s'acumulen en comptes de duplicar el requisit —i el seu blocador—.
@@ -1447,15 +1493,22 @@ def _persist_chunk(
             )
         tally.requirements += 1
 
-    for item in parsed.award_criteria:
-        evidence, rejected = validate_evidence(item.evidence, chunk)
-        tally.evidence_rejected += rejected
+    for index, item in enumerate(parsed.award_criteria):
+        evidence, reasons = validate_evidence_detailed(item.evidence, chunk)
+        tally.evidence_rejected += len(reasons)
+        for reason in reasons:
+            record({"item": "award_criterion", "index": index, "stage": "evidence",
+                    "reason": reason})
         if not evidence:
             tally.rejected += 1
+            record({"item": "award_criterion", "index": index, "stage": "item",
+                    "reason": ITEM_NO_VALID_EVIDENCE})
             continue
 
         key = award_dedup_key(item)
         if key in seen_awards:
+            record({"item": "award_criterion", "index": index, "stage": "dedup",
+                    "reason": ITEM_DUPLICATE_KEY})
             continue
         seen_awards.add(key)
 

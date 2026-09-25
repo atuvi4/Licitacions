@@ -235,3 +235,79 @@ def test_no_modifica_el_payload_original() -> None:
 
 def test_un_payload_que_no_es_un_objecte_es_torna_tal_qual() -> None:
     assert _normalise("[]") == ("[]", [])  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------- #
+# Chunk 3 (runs 0ae5d95e, a18fa4a6, dc83800b): llista embolcallada com a text     #
+# --------------------------------------------------------------------------- #
+
+
+def test_chunk_3_la_llista_embolcallada_amb_el_seu_nom_es_desfa():
+    """La forma provada: `string(json:object(keys:<camp>))` a les quatre llistes."""
+    payload = {
+        "requirements": json.dumps({"requirements": [_requirement()]}),
+        "award_criteria": json.dumps({"award_criteria": []}),
+        "document_notes": json.dumps({"document_notes": [{"note": "Annex V", "page_number": 7}]}),
+        "uncertainties": json.dumps({"uncertainties": []}),
+    }
+
+    data, applied = _normalise(payload)
+    parsed = ChunkExtractionOut.model_validate(data)
+
+    assert applied == [
+        "requirements:json_string_wrapped_list",
+        "award_criteria:json_string_wrapped_list",
+        "document_notes:json_string_wrapped_list",
+        "uncertainties:json_string_wrapped_list",
+    ]
+    assert parsed.requirements[0].evidence[0].quote == "volum anual de negocis"
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        {"items": []},  # una clau diferent
+        {"award_criteria": [], "extra": []},  # mes d'una clau
+        {"award_criteria": {}},  # el valor es un objecte
+        {"award_criteria": "[]"},  # el valor es text
+        {"award_criteria": None},  # el valor es nul
+        {"award_criteria": 3},  # el valor es un escalar
+        {},  # objecte buit
+    ],
+)
+def test_qualsevol_altre_embolcall_continua_rebutjat(wrapper):
+    payload = {"award_criteria": json.dumps(wrapper)}
+
+    data, applied = _normalise(payload)
+
+    assert applied == []
+    assert data["award_criteria"] == payload["award_criteria"]
+    assert ("award_criteria", "list_type") in _error_types(data)
+
+
+def test_l_embolcall_d_un_altre_camp_no_es_desfa():
+    """`requirements` amb `{"award_criteria": [...]}` no es el patro."""
+    payload = {"requirements": json.dumps({"award_criteria": [_requirement()]})}
+
+    data, applied = _normalise(payload)
+
+    assert applied == []
+    assert ("requirements", "list_type") in _error_types(data)
+
+
+def test_els_elements_desembolcallats_es_validen_igual():
+    bad = _requirement()
+    bad["nota"] = "x"
+    data, applied = _normalise({"requirements": json.dumps({"requirements": [bad]})})
+
+    assert applied == ["requirements:json_string_wrapped_list"]
+    assert ("requirements.0.nota", "extra_forbidden") in _error_types(data)
+
+
+def test_una_llista_niada_embolcallada_tambe_es_desfa():
+    requirement = _requirement()
+    requirement["evidence"] = json.dumps({"evidence": requirement["evidence"]})
+    data, applied = _normalise({"requirements": [requirement]})
+
+    assert applied == ["requirements.0.evidence:json_string_wrapped_list"]
+    ChunkExtractionOut.model_validate(data)

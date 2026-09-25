@@ -67,7 +67,7 @@ def _diagnose(payload):
         ({SECRET: [_requirement()]}, "object(keys:<key>)"),
         (json.dumps([_requirement()])[:-3], None),  # JSON tallat
         ("[{'category': 'economic_solvency'}]", None),  # cometes de Python
-        ('{"requirements": []}', None),  # JSON, pero un objecte
+        ('{"items": []}', None),  # JSON, pero un objecte amb una altra clau
         (SECRET, None),  # text lliure
         (42, "number"),
     ],
@@ -167,27 +167,24 @@ def test_la_llista_com_a_text_json_segueix_normalitzant_se():
 # --------------------------------------------------------------------------- #
 
 
-def test_chunk_3_el_text_json_que_es_un_objecte_diu_les_seves_claus():
-    """La forma observada: `string(json:object,chars:22)` a `award_criteria`.
+def test_un_embolcall_que_no_es_el_patro_provat_diu_les_seves_claus():
+    """El patro provat (`{"<camp>": [...]}`) ara es desfa; qualsevol altre no.
 
-    Amb les claus es podra saber si el model embolcalla la llista amb el nom del
-    mateix camp. Aqui NO es desfa res: continua sent `list_type`.
+    Els que no es desfan continuen sent `list_type`, i la diagnosi en diu les
+    claus: una altra clau, un valor objecte, diverses claus o una clau de text.
     """
-    wrapped = json.dumps({"award_criteria": []})
-    assert len(wrapped) == 22, "la mateixa llargada que al run real"
-
     applied, detail = _diagnose(
         {
-            "requirements": json.dumps({"requirements": [_requirement()]}),
-            "award_criteria": wrapped,
+            "requirements": json.dumps({"items": [_requirement()]}),
+            "award_criteria": json.dumps({"award_criteria": {}}),
             "document_notes": json.dumps({"notes": [], "extra": 1}),
             "uncertainties": json.dumps({SECRET: []}),
         }
     )
 
-    assert applied == [], "cap desembolcallament: encara no es un patro provat"
+    assert applied == [], "cap d'aquests es el patro provat"
     shapes = {d["path"]: d["shape"] for d in detail}
-    assert shapes["requirements"].startswith("string(json:object(keys:requirements),chars:")
+    assert shapes["requirements"].startswith("string(json:object(keys:items),chars:")
     assert shapes["award_criteria"] == "string(json:object(keys:award_criteria),chars:22)"
     assert shapes["document_notes"].startswith("string(json:object(keys:extra,notes),chars:")
     assert shapes["uncertainties"].startswith("string(json:object(keys:<key>),chars:")

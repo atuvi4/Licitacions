@@ -8,6 +8,11 @@ Existeix per dos patrons concrets observats amb un proveidor real (run
   JSON de mes. Es desfa NOMES si el camp es una llista a l'esquema i el text
   es un JSON que dona exactament una llista. Qualsevol altra cosa es deixa com
   esta i Pydantic la continua rebutjant (`schema_invalid`).
+* **Llista embolcallada amb el seu propi nom, com a text.** El model envia
+  `"requirements": "{\"requirements\": [{...}]}"`: text JSON que es un objecte
+  amb una sola clau, el nom del mateix camp, i una llista a dins. Observat al
+  chunk 3 de Palamos en tres runs seguits (`3da6147` ho va fer visible). Es
+  desfa NOMES si l'objecte te exactament aquesta clau i el valor es una llista.
 * **`extraction_id` repetit a l'arrel.** El model copia a l'arrel l'atribut del
   bloc DOCUMENT que se li ha enviat. Es treu NOMES si l'arrel no declara aquest
   camp i el valor es, caracter a caracter, un dels identificadors que el
@@ -33,6 +38,8 @@ from pydantic import BaseModel
 
 #: Regla aplicada quan una llista arriba serialitzada com a text JSON.
 RULE_JSON_STRING_LIST = "json_string_list"
+#: Regla aplicada quan la llista arriba com a text JSON `{"<camp>": [...]}`.
+RULE_JSON_STRING_WRAPPED_LIST = "json_string_wrapped_list"
 #: Regla aplicada quan l'arrel porta l'`extraction_id` del context.
 RULE_ECHOED_ROOT_EXTRACTION_ID = "echoed_root_extraction_id"
 
@@ -76,12 +83,12 @@ def _coerce_lists(
         value = result[name]
         here = f"{path}{name}"
         if isinstance(value, str):
-            decoded = _decode_list(value)
+            decoded, rule = _decode_list(value, name)
             if decoded is None:
                 continue
             value = decoded
             result[name] = value
-            applied.append(f"{here}:{RULE_JSON_STRING_LIST}")
+            applied.append(f"{here}:{rule}")
         if not isinstance(value, list):
             continue
         item_model = _list_item_model(field.annotation)
@@ -96,13 +103,32 @@ def _coerce_lists(
     return result
 
 
-def _decode_list(value: str) -> list[Any] | None:
-    """El text nomes es desfa si es JSON i dona una llista. Si no, `None`."""
+def _decode_list(value: str, field: str) -> tuple[list[Any] | None, str]:
+    """El text nomes es desfa si dona una llista. Si no, `(None, "")`.
+
+    Dues formes acceptades, i cap mes:
+
+    * `[...]`: el text JSON es directament la llista;
+    * `{"<field>": [...]}`: un objecte amb UNA sola clau, que es exactament el
+      nom del camp, i una llista com a valor.
+
+    Una clau diferent, mes d'una clau, o un valor que no sigui llista es
+    queden com estan: Pydantic els continua rebutjant.
+    """
     try:
         decoded = json.loads(value)
     except (ValueError, RecursionError):
-        return None
-    return decoded if isinstance(decoded, list) else None
+        return None, ""
+    if isinstance(decoded, list):
+        return decoded, RULE_JSON_STRING_LIST
+    if (
+        isinstance(decoded, dict)
+        and len(decoded) == 1
+        and field in decoded
+        and isinstance(decoded[field], list)
+    ):
+        return decoded[field], RULE_JSON_STRING_WRAPPED_LIST
+    return None, ""
 
 
 def _list_item_model(annotation: Any) -> type[BaseModel] | None:

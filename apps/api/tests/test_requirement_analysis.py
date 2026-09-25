@@ -1255,3 +1255,105 @@ def test_sense_fallades_el_resum_es_l_ultim_error():
     from app.services.requirement_analysis import failure_summary
 
     assert failure_summary({}, 3, None) is None
+
+
+# --------------------------------------------------------------------------- #
+# Observabilitat dels rebutjos: que s'ha descartat i per que, sense text         #
+# --------------------------------------------------------------------------- #
+
+
+class TestRebutjosPerElement:
+    """Abans nomes hi havia `requirements_rejected = 7`; ara cada rebuig te motiu."""
+
+    async def test_cada_rebuig_diu_element_etapa_i_motiu(self, session, analyzable):
+        extraction_id = analyzable["extraction"].id
+        invented = "Aquesta frase no surt enlloc del plec: 999.999 euros"
+        fake.queue_response(
+            {
+                "requirements": [
+                    requirement_payload(extraction_id),  # 0: bo
+                    requirement_payload(extraction_id, quote=invented, title="Inventat"),  # 1
+                    requirement_payload(extraction_id, page=99, title="Pagina de fora"),  # 2
+                    requirement_payload(uuid.uuid4(), title="Un altre document"),  # 3
+                    requirement_payload(extraction_id),  # 4: duplicat exacte del 0
+                ],
+                "award_criteria": [
+                    {
+                        "name": "Criteri inventat",
+                        "evidence": [
+                            {"extraction_id": str(extraction_id), "page_number": 28,
+                             "quote": invented}
+                        ],
+                    }
+                ],
+            }
+        )
+
+        tender = await tender_of(session, analyzable["document"])
+        run = (await analyze_tender_requirements(session, tender)).run
+
+        [chunk] = run.chunk_coverage["chunks"]
+        assert run.requirements_extracted == 1
+        assert chunk["rejections"] == [
+            {"item": "requirement", "index": 1, "stage": "evidence", "reason": "quote_not_found"},
+            {"item": "requirement", "index": 1, "stage": "item", "reason": "no_valid_evidence"},
+            {"item": "requirement", "index": 2, "stage": "evidence", "reason": "page_not_in_chunk"},
+            {"item": "requirement", "index": 2, "stage": "item", "reason": "no_valid_evidence"},
+            {"item": "requirement", "index": 3, "stage": "evidence",
+             "reason": "extraction_mismatch"},
+            {"item": "requirement", "index": 3, "stage": "item", "reason": "no_valid_evidence"},
+            {"item": "requirement", "index": 4, "stage": "dedup", "reason": "duplicate_key"},
+            {"item": "award_criterion", "index": 0, "stage": "evidence",
+             "reason": "quote_not_found"},
+            {"item": "award_criterion", "index": 0, "stage": "item",
+             "reason": "no_valid_evidence"},
+        ]
+        # Els comptadors de sempre, coherents amb el detall.
+        assert run.requirements_rejected == 4
+        assert run.evidence_rejected == 4
+
+    async def test_els_rebutjos_no_porten_cap_text(self, session, analyzable):
+        extraction_id = analyzable["extraction"].id
+        secret = "TEXT INVENTAT QUE NO S'HA DE DESAR ENLLOC"
+        fake.queue_response(
+            {"requirements": [requirement_payload(extraction_id, quote=secret, title=secret)]}
+        )
+
+        tender = await tender_of(session, analyzable["document"])
+        run = (await analyze_tender_requirements(session, tender)).run
+
+        coverage = json.dumps(run.chunk_coverage, ensure_ascii=False)
+        assert secret not in coverage
+        [chunk] = run.chunk_coverage["chunks"]
+        assert all(set(r) == {"item", "index", "stage", "reason"} for r in chunk["rejections"])
+
+    async def test_un_chunk_sense_rebutjos_no_en_porta_cap(self, session, analyzable):
+        extraction_id = analyzable["extraction"].id
+        fake.queue_response({"requirements": [requirement_payload(extraction_id)]})
+
+        tender = await tender_of(session, analyzable["document"])
+        run = (await analyze_tender_requirements(session, tender)).run
+
+        [chunk] = run.chunk_coverage["chunks"]
+        assert chunk["rejections"] is None
+
+    async def test_els_rebutjos_es_limiten(self, session, analyzable, monkeypatch):
+        from app.services import requirement_analysis
+
+        monkeypatch.setattr(requirement_analysis, "MAX_CHUNK_REJECTIONS", 3)
+        extraction_id = analyzable["extraction"].id
+        fake.queue_response(
+            {
+                "requirements": [
+                    requirement_payload(extraction_id, page=99, title=f"Fora {n}")
+                    for n in range(5)
+                ]
+            }
+        )
+
+        tender = await tender_of(session, analyzable["document"])
+        run = (await analyze_tender_requirements(session, tender)).run
+
+        [chunk] = run.chunk_coverage["chunks"]
+        assert len(chunk["rejections"]) == 3
+        assert run.requirements_rejected == 5, "el comptador no es retalla"
