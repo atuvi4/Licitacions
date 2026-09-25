@@ -14,6 +14,7 @@ export function requirementFixture(overrides: Partial<Requirement> = {}): Requir
     tender_lot_id: null,
     category: "technical_requirement",
     obligation: "mandatory",
+    routing: "technical_solution",
     operator: null,
     scope: "tender",
     title: "Commutadors amb doble alimentació",

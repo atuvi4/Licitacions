@@ -32,6 +32,7 @@ from app.models.workspace import BidWorkspace, WorkspaceTechnicalSolution
 from app.services import manual_requirement
 from app.workspace.checklist import applies_to_workspace_lot
 from app.workspace.relevance import requirement_fingerprint
+from app.workspace.requirement_routing import TECHNICAL_SOLUTION, route_requirement
 from app.workspace.technical_scope import (
     LOT_BOUND,
     NO_LOTS,
@@ -75,7 +76,15 @@ class TechnicalScope:
     lot_mode: str
     #: Els lots del plec que formen la candidatura. Buit si el plec no en te.
     tender_lot_ids: tuple[uuid.UUID, ...]
+    #: Els que demanen solucio tecnica (`route_requirement`) i apliquen als lots.
     requirements: tuple[Requirement, ...]
+    #: TOTS els requisits vigents que apliquen als lots, demanin solucio o no.
+    #: Es la base de l'empremta: el que es va revisar i aprovar es el plec de
+    #: la candidatura, i un canvi al DEUC o a la solvencia l'ha de moure igual.
+    #: Tambe fa que l'empremta sigui la mateixa que abans del routing: cap
+    #: revisio confirmada ni cap paquet congelat no caduca pel sol fet d'haver
+    #: afegit la regla.
+    lot_requirements: tuple[Requirement, ...] = ()
 
     @property
     def selectable_lots(self) -> bool:
@@ -94,9 +103,16 @@ class TechnicalScope:
 async def resolve(session: AsyncSession, workspace: BidWorkspace) -> TechnicalScope:
     """L'abast tecnic vigent. Cap efecte: nomes llegeix."""
     lot_mode, lot_ids = await _lots(session, workspace)
-    requirements = await _requirements(session, workspace, lot_ids, lot_mode)
+    lot_requirements = await _requirements(session, workspace, lot_ids, lot_mode)
     return TechnicalScope(
-        lot_mode=lot_mode, tender_lot_ids=lot_ids, requirements=requirements
+        lot_mode=lot_mode,
+        tender_lot_ids=lot_ids,
+        requirements=tuple(
+            requirement
+            for requirement in lot_requirements
+            if route_requirement(requirement) == TECHNICAL_SOLUTION
+        ),
+        lot_requirements=lot_requirements,
     )
 
 
@@ -135,7 +151,7 @@ async def _requirements(
     lot_ids: tuple[uuid.UUID, ...],
     lot_mode: str,
 ) -> tuple[Requirement, ...]:
-    """Els requisits VIGENTS que apliquen a aquests lots.
+    """Els requisits VIGENTS que apliquen a aquests lots (tots, sense routing).
 
     Vigents vol dir el conjunt efectiu: els de l'extraccio vigent MES els
     escrits a ma i no arxivats. Si nomes mires l'extraccio, un requisit que
@@ -153,7 +169,7 @@ async def _requirements(
     return tuple(
         requirement
         for requirement in effective.all
-        if in_scope(requirement, lot_ids=lot_ids, lot_mode=lot_mode)
+        if applies_to_lots(requirement, lot_ids=lot_ids, lot_mode=lot_mode)
     )
 
 
@@ -162,10 +178,25 @@ def in_scope(
 ) -> bool:
     """La regla, en un sol lloc.
 
-    Un requisit que no diu de quin lot es val per a tots: es la mateixa lectura
-    que ja fa `applies_to_workspace_lot` i que fa servir la checklist. Inventar
-    l'abast d'un requisit seria pitjor que aplicar-lo.
+    Dues condicions. La primera, que el requisit es treballi a Solucio tecnica
+    (`route_requirement`): el DEUC, la solvencia o un termini son requisits de
+    la candidatura, pero no demanen cap solucio tecnica i no formen part de
+    l'abast que es revisa aqui. Es continuen veient a Requisits, Compliment i
+    Dossier; nomes no se'n demana solucio.
+
+    La segona, el lot. Un requisit que no diu de quin lot es val per a tots: es
+    la mateixa lectura que ja fa `applies_to_workspace_lot` i que fa servir la
+    checklist. Inventar l'abast d'un requisit seria pitjor que aplicar-lo.
     """
+    if route_requirement(requirement) != TECHNICAL_SOLUTION:
+        return False
+    return applies_to_lots(requirement, lot_ids=lot_ids, lot_mode=lot_mode)
+
+
+def applies_to_lots(
+    requirement: Requirement, *, lot_ids: Sequence[uuid.UUID], lot_mode: str
+) -> bool:
+    """Nomes la regla de lots (C-16), sense mirar si demana solucio."""
     if lot_mode != SELECTED_LOTS:
         # Un sol lot (o cap): la regla de sempre serveix tal qual.
         return applies_to_workspace_lot(requirement, lot_ids[0] if lot_ids else None)
@@ -177,9 +208,13 @@ def in_scope(
 async def scope_fingerprint(
     session: AsyncSession, workspace: BidWorkspace, scope: TechnicalScope | None = None
 ) -> str:
-    """L'empremta de l'abast d'ara, amb la seleccio humana inclosa."""
+    """L'empremta de l'abast d'ara, amb la seleccio humana inclosa.
+
+    Es fa de `lot_requirements` (tots els del lot) i no nomes dels que demanen
+    solucio: veure `TechnicalScope.lot_requirements`.
+    """
     scope = scope or await resolve(session, workspace)
-    dins = {requirement.id for requirement in scope.requirements}
+    dins = {requirement.id for requirement in scope.lot_requirements}
 
     seleccionats = await session.scalars(
         sa.select(WorkspaceTechnicalSolution.requirement_id).where(
@@ -198,7 +233,7 @@ async def scope_fingerprint(
                     requirement.category, requirement.title, requirement.value_json
                 ),
             )
-            for requirement in scope.requirements
+            for requirement in scope.lot_requirements
         ],
         # Nomes les que assenyalen un requisit que ARA es dins de l'abast: una
         # fila que va quedar fora es historia i no ha de moure l'empremta.

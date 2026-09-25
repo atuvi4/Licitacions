@@ -13,6 +13,7 @@ import {
   joinRequirements,
   memberName,
   requirementsInScope,
+  requirementsRoutedTo,
   scopeDependsOnOffer,
   staleReasonLabel,
 } from "@/lib/technical";
@@ -214,5 +215,28 @@ describe("Etiquetes i permisos", () => {
     expect(memberName(workspace, "u2")).toBe("pere@example.org");
     expect(memberName(workspace, "u9")).toBe("Membre no disponible");
     expect(memberName(workspace, null)).toBeNull();
+  });
+});
+
+describe("requirementsRoutedTo", () => {
+  it("fa servir la destinació del servidor, no la categoria", () => {
+    const requirements = [
+      requirementFixture({ id: "a", category: "administrative_documentation", routing: "compliance_dossier" }),
+      // Categoria tècnica però el servidor diu «per revisar»: mana el servidor.
+      requirementFixture({ id: "b", category: "technical_requirement", obligation: "informative", routing: "review_routing" }),
+      requirementFixture({ id: "c", category: "technical_requirement" }),
+    ];
+    const workspace = { tender_lot_id: null };
+    expect(requirementsInScope(requirements, workspace, new Set()).map((r) => r.id)).toEqual(["c"]);
+    expect(requirementsRoutedTo(requirements, "review_routing", workspace, new Set()).map((r) => r.id)).toEqual(["b"]);
+    expect(requirementsRoutedTo(requirements, "compliance_dossier", workspace, new Set()).map((r) => r.id)).toEqual(["a"]);
+  });
+
+  it("aplica el lot igual que l'abast", () => {
+    const requirements = [
+      requirementFixture({ id: "g", routing: "work_plan", category: "deadline" }),
+      requirementFixture({ id: "l2", routing: "work_plan", category: "deadline", tender_lot_id: "lot2" }),
+    ];
+    expect(requirementsRoutedTo(requirements, "work_plan", { tender_lot_id: "lot1" }, new Set()).map((r) => r.id)).toEqual(["g"]);
   });
 });

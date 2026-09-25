@@ -63,7 +63,15 @@ async def _tender(db, *, title="Servei de manteniment integral") -> Tender:
     return tender
 
 
-async def _requirement(db, tender, *, title="Certificat ISO 9001", value=None) -> Requirement:
+async def _requirement(
+    db,
+    tender,
+    *,
+    title="Certificat ISO 9001",
+    value=None,
+    category=RequirementCategory.TECHNICAL_REQUIREMENT,
+    obligation=RequirementObligation.MANDATORY,
+) -> Requirement:
     run = await db.scalar(
         sa.select(RequirementExtractionRun).where(
             RequirementExtractionRun.tender_id == tender.id
@@ -82,11 +90,13 @@ async def _requirement(db, tender, *, title="Certificat ISO 9001", value=None) -
     )
     db.add(run)
     await db.flush()
+    # Tecnic i obligatori: es el tipus de requisit que demana solucio tecnica
+    # (`app/workspace/requirement_routing.py`).
     requirement = Requirement(
         run_id=run.id,
         tender_id=tender.id,
-        category=RequirementCategory.CERTIFICATION,
-        obligation=RequirementObligation.MANDATORY,
+        category=category,
+        obligation=obligation,
         operator=RequirementOperator.EXISTS,
         scope=RequirementScope.TENDER,
         title=title,

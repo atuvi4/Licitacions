@@ -25,6 +25,9 @@ class AnalyzeParams(_StrictParams):
     profile: str
     force: bool = False
     document_ids: list[uuid.UUID] = Field(default_factory=list)
+    #: Run parcial del qual es reaprofiten els chunks bons; nomes s'envien els
+    #: fallits. `None` = analisi normal.
+    resume_from_run_id: uuid.UUID | None = None
 
 
 class ProcessParams(_StrictParams):
@@ -51,10 +54,17 @@ def analysis_dedupe_key(
     model: str,
     document_ids: list[uuid.UUID],
     force: bool,
+    resume_from_run_id: uuid.UUID | None = None,
 ) -> str:
-    """Identitat d'una analisi. `force` i normal son sempre claus diferents."""
-    mode = "force" if force else "normal"
-    digest = _digest(fingerprint, profile, provider, model, _ids(document_ids), mode)
+    """Identitat d'una analisi. `force`, normal i represa son sempre claus diferents."""
+    if resume_from_run_id is not None:
+        mode = "resume"
+        digest = _digest(
+            fingerprint, profile, provider, model, _ids(document_ids), mode, resume_from_run_id
+        )
+    else:
+        mode = "force" if force else "normal"
+        digest = _digest(fingerprint, profile, provider, model, _ids(document_ids), mode)
     return f"analyze:{tender_id}:{mode}:{digest}"
 
 

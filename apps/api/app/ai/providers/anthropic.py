@@ -15,6 +15,7 @@ Decisions que val la pena explicitar:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from app.ai.provider import (
@@ -32,6 +33,44 @@ logger = logging.getLogger(__name__)
 
 #: Nom de la tool per la qual es forca la sortida estructurada.
 _TOOL_NAME = "record_extraction"
+
+#: Errors HTTP que no depenen del chunk sino de la configuracio, del compte o de
+#: la forma de la peticio (clau, credit, permisos, model inexistent). El SDK no
+#: els reintenta mai, i continuar amb la resta de chunks nomes repetiria el mateix
+#: error. 429, 408, 409 i 5xx NO hi son: son transitoris i els gestiona
+#: `LLM_MAX_RETRIES` com sempre.
+FATAL_HTTP_STATUSES = frozenset({400, 401, 403, 404})
+#: Llargada maxima del missatge del proveidor que es desa.
+MAX_ERROR_MESSAGE_CHARS = 300
+_KEY_PATTERN = re.compile(r"sk-ant-[A-Za-z0-9_\-]+")
+
+
+def sanitise_provider_message(message: Any) -> str | None:
+    """Una linia, sense cap clau i retallada. `None` si no n'hi ha."""
+    if message is None:
+        return None
+    text = " ".join(str(message).split())
+    text = _KEY_PATTERN.sub("[redacted]", text)
+    if settings.ANTHROPIC_API_KEY:
+        text = text.replace(settings.ANTHROPIC_API_KEY, "[redacted]")
+    return text[:MAX_ERROR_MESSAGE_CHARS] or None
+
+
+def status_error_details(exc: Any) -> dict[str, Any]:
+    """Diagnostic d'un `APIStatusError`: estat, tipus, missatge i request_id."""
+    body = getattr(exc, "body", None)
+    error = body.get("error") if isinstance(body, dict) else None
+    error = error if isinstance(error, dict) else {}
+    error_type = getattr(exc, "type", None) or error.get("type")
+    request_id = getattr(exc, "request_id", None)
+    if request_id is None and isinstance(body, dict):
+        request_id = body.get("request_id")
+    return {
+        "status": getattr(exc, "status_code", None),
+        "type": str(error_type) if error_type else None,
+        "message": sanitise_provider_message(error.get("message")),
+        "request_id": str(request_id) if request_id else None,
+    }
 
 
 class AnthropicProvider:
@@ -116,7 +155,14 @@ class AnthropicProvider:
         except anthropic.APITimeoutError as exc:
             raise ProviderTimeoutError(str(exc)) from exc
         except anthropic.APIStatusError as exc:
-            raise ProviderError(f"HTTP {exc.status_code} del proveidor.", "provider_error") from exc
+            details = status_error_details(exc)
+            label = f" ({details['type']})" if details["type"] else ""
+            raise ProviderError(
+                f"HTTP {exc.status_code} del proveidor{label}.",
+                "provider_error",
+                details=details,
+                fatal=exc.status_code in FATAL_HTTP_STATUSES,
+            ) from exc
         except anthropic.APIError as exc:
             raise ProviderError(f"{type(exc).__name__}: {exc}") from exc
 

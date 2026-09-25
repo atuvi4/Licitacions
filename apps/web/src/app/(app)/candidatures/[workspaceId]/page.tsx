@@ -9,6 +9,7 @@ import { useSession } from "@/components/SessionProvider";
 import { EconomicOfferSection } from "@/components/EconomicOfferSection";
 import { SubmissionPackageSection } from "@/components/SubmissionPackage";
 import { TechnicalSolutionSection } from "@/components/TechnicalSolutionSection";
+import { WorkPlanDeadlines } from "@/components/WorkPlanDeadlines";
 import { DecisionHistory, DecisionPanel } from "@/components/WorkspaceDecision";
 import { DossierSection } from "@/components/WorkspaceDossier";
 import { BlockerCounters, ChecklistSection, NotesSection, TasksSection } from "@/components/WorkspaceWork";
@@ -482,6 +483,7 @@ function WorkspaceView() {
             {area === "dossier" && <DossierSection workspace={data} onChange={refresh} onAdvanced={onAdvanced} />}
             {area === "pla" && (
               <>
+                <WorkPlanDeadlines workspace={data} />
                 <ChecklistSection workspace={data} onChange={refresh} />
                 <TasksSection workspace={data} onChange={refresh} />
                 <NotesSection workspace={data} onChange={refresh} />

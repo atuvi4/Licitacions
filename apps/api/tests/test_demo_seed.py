@@ -132,11 +132,11 @@ async def preparada(db, tenant_a, storage, client_a):
         title="Certificat ISO 14001 en vigor",
         value_json={"name": "ISO 14001"},
     )
-    # Informatiu a proposit: aqui interessa que existeixi i que entri a l'abast
-    # tecnic, no tornar a provar els forats del dossier.
+    # Puntuable a proposit: aqui interessa que entri a l'abast tecnic (un
+    # informatiu ja no hi entra: no demana cap solucio).
     memoria = _requirement(
         category=RequirementCategory.TECHNICAL_REQUIREMENT,
-        obligation=RequirementObligation.INFORMATIVE,
+        obligation=RequirementObligation.SCORED,
         operator=RequirementOperator.EXISTS,
         title="Memoria tecnica signada per tecnic competent",
     )

@@ -40,6 +40,8 @@ from app.core.errors import (
     NothingAnalyzableError,
     PermissionDeniedError,
     QuoteNotOpenError,
+    ResumeNotAllowedError,
+    ValidationError,
 )
 from app.jobs import requests as job_requests
 from app.jobs.queue import is_postgres, utcnow
@@ -48,7 +50,7 @@ from app.models.enums import AnalysisQuoteStatus, JobRequestStatus, WorkJobType
 from app.models.identity import Company
 from app.models.jobs import JobRequest
 from app.models.tenders import Tender
-from app.services.analysis_planning import AnalysisPreview, build_preview
+from app.services.analysis_planning import AnalysisPreview, build_preview, resume_identity
 from app.tenders.visibility import visible_to_company
 
 
@@ -128,6 +130,20 @@ def _quote_from_preview(
     )
 
 
+def is_resume_quote(quote: AnalysisQuote) -> bool:
+    """Un quote de represa: reaprofita un run i, tot i aixi, n'envia chunks.
+
+    Una reutilitzacio completa sempre te `chunks_to_send == 0`, i un quote
+    normal o `force` sense run reaprofitable no en te cap: la combinacio nomes
+    la produeix una represa. Aixi no cal cap columna nova.
+    """
+    return quote.reusable_run_id is not None and quote.chunks_to_send > 0
+
+
+def resume_run_of(quote: AnalysisQuote) -> uuid.UUID | None:
+    return quote.reusable_run_id if is_resume_quote(quote) else None
+
+
 def _quote_identity(quote: AnalysisQuote) -> tuple:
     return (
         quote.planning_version,
@@ -139,6 +155,7 @@ def _quote_identity(quote: AnalysisQuote) -> tuple:
         quote.profile,
         quote.provider,
         quote.model,
+        resume_identity(resume_run_of(quote), quote.chunks_to_send),
     )
 
 
@@ -151,6 +168,7 @@ async def _preview(
     document_ids: list[uuid.UUID] | list[str],
     profile: ExtractorProfile,
     provider_factory: Callable[[], StructuredLLMProvider],
+    resume_from_run_id: uuid.UUID | None = None,
 ) -> AnalysisPreview:
     """El volum de l'analisi, i abans de res de qui es la licitacio.
 
@@ -171,6 +189,7 @@ async def _preview(
         provider=provider_factory(),
         force=force,
         document_ids=[uuid.UUID(str(item)) for item in document_ids],
+        resume_from_run_id=resume_from_run_id,
     )
 
 
@@ -184,8 +203,15 @@ async def create_quote(
     document_ids: list[uuid.UUID] | None = None,
     profile: ExtractorProfile = DEFAULT_PROFILE,
     provider_factory: Callable[[], StructuredLLMProvider] = get_provider,
+    resume_from_run_id: uuid.UUID | None = None,
 ) -> AnalysisQuote:
-    """Calcula i desa el preview. Nomes lectures del plec; cap proveidor."""
+    """Calcula i desa el preview. Nomes lectures del plec; cap proveidor.
+
+    `resume_from_run_id`: represa d'un run parcial; el quote compta nomes els
+    chunks fallits. Una represa no es `force`.
+    """
+    if resume_from_run_id is not None and force:
+        raise ValidationError("Una represa no pot ser `force`: nomes envia els chunks fallits.")
     preview = await _preview(
         session,
         company_id=company_id,
@@ -194,6 +220,7 @@ async def create_quote(
         document_ids=document_ids or [],
         profile=profile,
         provider_factory=provider_factory,
+        resume_from_run_id=resume_from_run_id,
     )
     if preview.is_empty:
         raise NothingAnalyzableError(
@@ -278,15 +305,24 @@ async def confirm_quote(
         raise QuoteNotOpenError("Aquest preview ja no es pot confirmar.")
 
     profile = PROFILES.get(quote.profile, DEFAULT_PROFILE)
-    preview = await _preview(
-        session,
-        company_id=company_id,
-        tender_id=quote.tender_id,
-        force=quote.force,
-        document_ids=quote.document_ids,
-        profile=profile,
-        provider_factory=provider_factory,
-    )
+    resume_from = resume_run_of(quote)
+    try:
+        preview = await _preview(
+            session,
+            company_id=company_id,
+            tender_id=quote.tender_id,
+            force=quote.force,
+            document_ids=quote.document_ids,
+            profile=profile,
+            provider_factory=provider_factory,
+            resume_from_run_id=resume_from,
+        )
+    except ResumeNotAllowedError:
+        # El run ja no es pot reprendre (n'hi ha un de mes nou, han canviat els
+        # plecs...). El quote queda substituit i no es crea res.
+        quote.status = AnalysisQuoteStatus.SUPERSEDED
+        await session.commit()
+        raise
 
     if _aware(quote.expires_at) <= utcnow():
         if preview.is_empty:
@@ -352,6 +388,7 @@ async def confirm_quote(
             expected_fingerprint=quote.input_fingerprint,
             analysis_quote_id=confirmed_quote_id,
             before_commit=before_commit,
+            resume_from_run_id=resume_from,
         )
     except AnalysisInputChangedError:
         await session.rollback()
@@ -364,6 +401,7 @@ async def confirm_quote(
             document_ids=fresh.document_ids,
             profile=profile,
             provider_factory=provider_factory,
+            resume_from_run_id=resume_from,
         )
         raise PreviewChangedError(
             await _replace(

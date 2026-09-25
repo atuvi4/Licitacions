@@ -74,6 +74,13 @@ export interface SourceRefCitation {
   created_at: string;
 }
 
+/**
+ * On es treballa un requisit dins d'una candidatura. La regla la decideix el
+ * servidor (`app/workspace/requirement_routing.py`); la interfície només la
+ * llegeix i no en calcula cap.
+ */
+export type RequirementRouting = "compliance_dossier" | "technical_solution" | "work_plan" | "review_routing";
+
 export interface Requirement {
   id: string;
   /** `null` als escrits a mà: no venen de cap execució d'anàlisi. */
@@ -102,6 +109,7 @@ export interface Requirement {
   conflict_group: string | null;
   created_at: string;
   evidence: RequirementEvidence[];
+  routing: RequirementRouting;
 }
 
 export interface AwardCriterion {

@@ -1067,3 +1067,178 @@ class TestProveidorDeSimulacio:
 
         assert outcome.run.requirements_total == 6
         assert outcome.run.overall_result != EligibilityResult.UNDETERMINED
+
+
+
+# --------------------------------------------------------------------------- #
+# Enduriment despres del run real e0fc136c (Palamos 2024-3137)                   #
+# --------------------------------------------------------------------------- #
+
+
+class TestNormalitzacioEstricta:
+    """Les dues normalitzacions arriben al run; la validacio d'evidencia no canvia."""
+
+    async def test_llistes_com_a_text_json_es_persisteixen_i_queden_registrades(
+        self, session, analyzable
+    ):
+        extraction_id = analyzable["extraction"].id
+        fake.queue_response(
+            {
+                "requirements": json.dumps([requirement_payload(extraction_id)]),
+                "award_criteria": "[]",
+                "document_notes": "[]",
+                "uncertainties": "[]",
+            }
+        )
+
+        tender = await tender_of(session, analyzable["document"])
+        run = (await analyze_tender_requirements(session, tender)).run
+
+        assert run.status == AnalysisRunStatus.COMPLETED
+        assert run.requirements_extracted == 1
+        [chunk] = run.chunk_coverage["chunks"]
+        assert chunk["normalised"] == [
+            "requirements:json_string_list",
+            "award_criteria:json_string_list",
+            "document_notes:json_string_list",
+            "uncertainties:json_string_list",
+        ]
+
+    async def test_la_cita_d_una_llista_desfeta_es_continua_verificant(self, session, analyzable):
+        extraction_id = analyzable["extraction"].id
+        invented = requirement_payload(extraction_id, quote="Aquesta frase no surt al plec")
+        fake.queue_response({"requirements": json.dumps([invented])})
+
+        tender = await tender_of(session, analyzable["document"])
+        run = (await analyze_tender_requirements(session, tender)).run
+
+        assert run.requirements_extracted == 0
+        assert run.requirements_rejected == 1
+        assert await session.scalar(sa.select(sa.func.count()).select_from(Requirement)) == 0
+
+    async def test_l_extraction_id_del_context_a_l_arrel_es_treu(self, session, analyzable):
+        extraction_id = analyzable["extraction"].id
+        fake.queue_response(
+            {
+                "extraction_id": str(extraction_id),
+                "requirements": [requirement_payload(extraction_id)],
+            }
+        )
+
+        tender = await tender_of(session, analyzable["document"])
+        run = (await analyze_tender_requirements(session, tender)).run
+
+        assert run.status == AnalysisRunStatus.COMPLETED
+        assert run.requirements_extracted == 1
+        [chunk] = run.chunk_coverage["chunks"]
+        assert chunk["normalised"] == ["extraction_id:echoed_root_extraction_id"]
+
+    async def test_un_extraction_id_a_l_arrel_que_no_es_del_context_falla(
+        self, session, analyzable
+    ):
+        extraction_id = analyzable["extraction"].id
+        fake.queue_response(
+            {
+                "extraction_id": str(uuid.uuid4()),
+                "requirements": [requirement_payload(extraction_id)],
+            }
+        )
+
+        tender = await tender_of(session, analyzable["document"])
+        run = (await analyze_tender_requirements(session, tender)).run
+
+        [chunk] = run.chunk_coverage["chunks"]
+        assert run.status == AnalysisRunStatus.FAILED
+        assert chunk["error"] == "schema_invalid"
+        assert chunk["error_detail"] == [{"path": "extraction_id", "type": "extra_forbidden"}]
+        assert chunk["normalised"] is None
+
+
+class TestErrorsDelProveidor:
+    """Diagnosi sanititzada i aturada davant d'un error que es repetiria a tots."""
+
+    @pytest.fixture
+    def two_chunks(self, monkeypatch):
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "REQUIREMENTS_CHUNK_PAGES", 1)
+        monkeypatch.setattr(settings, "REQUIREMENTS_CHUNK_OVERLAP_PAGES", 0)
+
+    @staticmethod
+    def _http_error(status: int, *, fatal: bool):
+        from app.ai.provider import ProviderError
+
+        return ProviderError(
+            f"HTTP {status} del proveidor (invalid_request_error).",
+            "provider_error",
+            details={
+                "status": status,
+                "type": "invalid_request_error",
+                "message": "Your credit balance is too low to access the Anthropic API.",
+                "request_id": "req_011Test",
+            },
+            fatal=fatal,
+        )
+
+    async def test_un_error_fatal_atura_el_run_sense_enviar_la_resta(
+        self, session, analyzable, two_chunks
+    ):
+        fake.queue_response(self._http_error(400, fatal=True))
+
+        tender = await tender_of(session, analyzable["document"])
+        run = (await analyze_tender_requirements(session, tender)).run
+
+        assert len(fake.SENT_PAYLOADS) == 1, "el segon chunk no s'ha d'enviar"
+        assert run.status == AnalysisRunStatus.FAILED
+        assert (run.chunks_total, run.chunks_completed, run.chunks_failed) == (2, 0, 2)
+        first, second = run.chunk_coverage["chunks"]
+        assert first["error"] == "provider_error"
+        assert first["provider_error"] == {
+            "status": 400,
+            "type": "invalid_request_error",
+            "message": "Your credit balance is too low to access the Anthropic API.",
+            "request_id": "req_011Test",
+        }
+        assert second["error"] == "not_sent"
+        assert second["input_tokens"] is None
+        assert "not_sent: 1" in run.error_message
+        assert "provider_error: 1" in run.error_message
+
+    async def test_un_error_no_fatal_no_atura_el_run(self, session, analyzable, two_chunks):
+        extraction_id = analyzable["extraction"].id
+        fake.queue_many(
+            [
+                self._http_error(500, fatal=False),
+                {"requirements": [requirement_payload(extraction_id)]},
+            ]
+        )
+
+        tender = await tender_of(session, analyzable["document"])
+        run = (await analyze_tender_requirements(session, tender)).run
+
+        assert len(fake.SENT_PAYLOADS) == 2
+        assert run.status == AnalysisRunStatus.PARTIAL
+        first, second = run.chunk_coverage["chunks"]
+        assert first["provider_error"]["status"] == 500
+        assert second["status"] == "completed"
+
+
+def test_el_resum_d_un_run_parcial_compta_cada_motiu():
+    """El run real deia nomes `schema_invalid` i amagava 9 chunks tallats."""
+    from app.services.requirement_analysis import failure_summary
+
+    failures = {i: "output_truncated" for i in (2, 11, 12, 13, 14, 15, 16, 18, 19)}
+    failures.update({i: "schema_invalid" for i in (1, 3, 8, 20)})
+
+    summary = failure_summary(failures, 22, "schema_invalid: La sortida no compleix (4 errors).")
+
+    assert summary == (
+        "13 de 22 chunks fallits (output_truncated: 9, schema_invalid: 4). "
+        "Darrer error: schema_invalid: La sortida no compleix (4 errors)."
+    )
+
+
+def test_sense_fallades_el_resum_es_l_ultim_error():
+    from app.services.requirement_analysis import failure_summary
+
+    assert failure_summary({}, 3, None) is None

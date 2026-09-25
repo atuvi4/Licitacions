@@ -125,6 +125,15 @@ class AnalysisTooLargeError(ValidationError):
     code = "analysis_too_large"
 
 
+class ResumeNotAllowedError(ConflictError):
+    """No es pot reprendre aquest run parcial: no es exactament la mateixa analisi.
+
+    `details["reason"]` diu que no coincideix, sense cap text del plec.
+    """
+
+    code = "resume_not_allowed"
+
+
 class CompanyActiveLimitError(AppError):
     """L'empresa ja te el maxim d'analisis pendents."""
 

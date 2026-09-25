@@ -24,14 +24,27 @@ class ProviderError(Exception):
     serveix (per exemple, sense la crida a la tool). Aquells tokens es paguen
     igual: si es perdessin aqui, el cost d'un run amb chunks caiguts sortiria
     per sota del real. `None` vol dir que no hi va haver resposta (xarxa, 4xx/5xx).
+
+    `details` es el diagnostic sanititzat d'un error HTTP (estat, tipus, missatge
+    retallat i `request_id`): mai la clau ni text del plec. `fatal` vol dir que
+    el mateix error es repetiria a tots els chunks (configuracio, compte,
+    peticio mal formada): el run s'atura en lloc d'enviar-ne la resta.
     """
 
     def __init__(
-        self, message: str, code: str = "provider_error", usage: Usage | None = None
+        self,
+        message: str,
+        code: str = "provider_error",
+        usage: Usage | None = None,
+        *,
+        details: dict[str, Any] | None = None,
+        fatal: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.usage = usage
+        self.details = details
+        self.fatal = fatal
 
 
 class ProviderTimeoutError(ProviderError):

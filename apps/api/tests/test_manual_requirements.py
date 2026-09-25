@@ -807,7 +807,12 @@ async def test_a_manual_requirement_reaches_the_technical_scope(client_a, db, wo
     que sí que en necessita."""
     from app.services import technical_scope
 
-    created = await _ok(client_a, workspace_of["company"], workspace_of["tender_id"])
+    created = await _ok(
+        client_a,
+        workspace_of["company"],
+        workspace_of["tender_id"],
+        category="technical_requirement",
+    )
 
     scope = await technical_scope.resolve(db, workspace_of["workspace"])
     assert created["id"] in {str(r.id) for r in scope.requirements}
@@ -824,7 +829,12 @@ async def test_writing_a_requirement_makes_a_confirmed_scope_stale(
     await db.commit()
     assert (await technical_scope.review_state(db, workspace)).stale is False
 
-    await _ok(client_a, workspace_of["company"], workspace_of["tender_id"])
+    await _ok(
+        client_a,
+        workspace_of["company"],
+        workspace_of["tender_id"],
+        category="technical_requirement",
+    )
 
     db.expire_all()
     workspace = await db.get(BidWorkspace, workspace_of["workspace_id"])
@@ -835,7 +845,12 @@ async def test_archiving_a_requirement_also_makes_the_scope_stale(client_a, db, 
     from app.services import technical_scope
 
     workspace = workspace_of["workspace"]
-    created = await _ok(client_a, workspace_of["company"], workspace_of["tender_id"])
+    created = await _ok(
+        client_a,
+        workspace_of["company"],
+        workspace_of["tender_id"],
+        category="technical_requirement",
+    )
     await technical_scope.confirm(db, workspace, user=workspace_of["user"])
     await db.commit()
     assert (await technical_scope.review_state(db, workspace)).stale is False

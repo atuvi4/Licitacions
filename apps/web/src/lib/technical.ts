@@ -9,7 +9,7 @@
  * Res d'aquest fitxer no calcula la preparació final: els problemes els diu S6.
  */
 
-import type { Requirement } from "@/lib/requirements";
+import type { Requirement, RequirementRouting } from "@/lib/requirements";
 import { ROLE_LABELS } from "@/lib/labels";
 import type { WorkspaceDetail } from "@/lib/workspace";
 
@@ -119,6 +119,8 @@ export function whoCanEditSolutions(): string {
  * Quins requisits de l'anàlisi vigent formen part d'aquesta candidatura.
  *
  * És la mateixa regla que aplica el servidor (`technical_scope.in_scope`):
+ * - només els que el servidor encamina a Solució tècnica (`routing`); la
+ *   destinació no es calcula aquí;
  * - candidatura d'un lot: els generals i els d'aquell lot;
  * - candidatura global: els generals i els dels lots on ens presentem, que
  *   només els diu l'oferta econòmica. Sense oferta, cap lot: només els generals.
@@ -129,11 +131,27 @@ export function requirementsInScope(
   workspace: Pick<WorkspaceDetail, "tender_lot_id">,
   selectedLotIds: ReadonlySet<string>,
 ): Requirement[] {
-  return requirements.filter((requirement) => {
-    if (requirement.tender_lot_id === null) return true;
-    if (workspace.tender_lot_id !== null) return requirement.tender_lot_id === workspace.tender_lot_id;
-    return selectedLotIds.has(requirement.tender_lot_id);
-  });
+  return requirementsRoutedTo(requirements, "technical_solution", workspace, selectedLotIds);
+}
+
+/** Els requisits d'aquesta candidatura (per lot) que el servidor envia a `routing`. */
+export function requirementsRoutedTo(
+  requirements: readonly Requirement[],
+  routing: RequirementRouting,
+  workspace: Pick<WorkspaceDetail, "tender_lot_id">,
+  selectedLotIds: ReadonlySet<string>,
+): Requirement[] {
+  return requirements.filter((requirement) => requirement.routing === routing && appliesToCandidature(requirement, workspace, selectedLotIds));
+}
+
+function appliesToCandidature(
+  requirement: Requirement,
+  workspace: Pick<WorkspaceDetail, "tender_lot_id">,
+  selectedLotIds: ReadonlySet<string>,
+): boolean {
+  if (requirement.tender_lot_id === null) return true;
+  if (workspace.tender_lot_id !== null) return requirement.tender_lot_id === workspace.tender_lot_id;
+  return selectedLotIds.has(requirement.tender_lot_id);
 }
 
 /** Cert quan l'abast pot dependre de l'oferta: candidatura global i requisits de lot. */

@@ -69,6 +69,7 @@ async def create_analysis_quote(
         tender_id=tender_id,
         force=options.force,
         document_ids=options.document_ids,
+        resume_from_run_id=options.resume_from_run_id,
     )
     return AnalysisQuoteRead.model_validate(quote)
 

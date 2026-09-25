@@ -699,3 +699,73 @@ describe("Solució tècnica · cas C sense lots triats", () => {
     expect(getReadiness).toHaveBeenCalledTimes(1);
   });
 });
+
+/* ----- Destinació dels requisits (routing del servidor) -------------------- */
+
+describe("Solució tècnica · destinació dels requisits", () => {
+  function palamosLike(): Requirement[] {
+    return [
+      requirementFixture({ id: "t1", title: "Compliment de SLA de l'Annex V" }),
+      requirementFixture({ id: "a1", title: "Declaració responsable DEUC", category: "administrative_documentation", routing: "compliance_dossier" }),
+      requirementFixture({ id: "a2", title: "Capacitat d'obrar", category: "administrative_documentation", routing: "compliance_dossier" }),
+      requirementFixture({ id: "d1", title: "Lliurament del Pla d'implantació", category: "deadline", routing: "work_plan" }),
+      requirementFixture({ id: "c1", title: "Model de facturació mensual única", category: "contract_condition", routing: "review_routing" }),
+      requirementFixture({ id: "o1", title: "No divisió en lots", category: "other", obligation: "informative", routing: "review_routing" }),
+    ];
+  }
+
+  it("els administratius no surten a la taula ni demanen solució", async () => {
+    requirements = palamosLike();
+    solutions = [];
+    readiness = readinessWith(1);
+    await mount();
+
+    const table = screen.getAllByRole("table")[0];
+    expect(within(table).queryByText("Declaració responsable DEUC")).toBeNull();
+    expect(within(table).queryByText("Capacitat d'obrar")).toBeNull();
+    expect(within(table).getByText("Compliment de SLA de l'Annex V")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /Defineix una solució/ })).toHaveLength(1);
+  });
+
+  it("diu on es treballen els altres: Dossier i Pla de treball", async () => {
+    requirements = palamosLike();
+    solutions = [];
+    readiness = readinessWith(1);
+    await mount();
+
+    const note = screen.getByTestId("routed-elsewhere");
+    expect(note.textContent).toContain("2 requisits d'acreditació");
+    expect(note.textContent).toContain("1 termini");
+  });
+
+  it("condicions i «altres» es veuen pendents de classificar, sense botó de solució", async () => {
+    requirements = palamosLike();
+    solutions = [];
+    readiness = readinessWith(1);
+    await mount();
+
+    const list = screen.getByRole("list", { name: "Requisits pendents de classificar" });
+    expect(within(list).getByText("Model de facturació mensual única")).toBeTruthy();
+    expect(within(list).getByText("No divisió en lots")).toBeTruthy();
+    expect(within(list).queryByRole("button")).toBeNull();
+  });
+
+  it("el recompte de la pantalla coincideix amb el del servidor: no salta el gate", async () => {
+    requirements = palamosLike();
+    solutions = [];
+    readiness = readinessWith(1);
+    await mount();
+
+    expect(screen.queryByText(/No s'ha pogut representar l'abast tècnic/)).toBeNull();
+  });
+
+  it("una solució d'un requisit que ara no en demana es conserva, fora de l'abast", async () => {
+    requirements = palamosLike();
+    solutions = [solutionFixture({ id: "legacy", requirement_id: "a1", title: "Preparar DEUC" })];
+    readiness = readinessWith(1);
+    await mount();
+
+    expect(screen.getByText("Fora de l'abast actual")).toBeTruthy();
+    expect(screen.getByText("Preparar DEUC")).toBeTruthy();
+  });
+});

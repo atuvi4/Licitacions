@@ -220,6 +220,7 @@ async def submit_analysis_request(
     expected_fingerprint: str | None = None,
     analysis_quote_id: uuid.UUID | None = None,
     before_commit: BeforeCommit | None = None,
+    resume_from_run_id: uuid.UUID | None = None,
 ) -> Submission:
     """Demana l'analisi d'una licitacio. No crida el proveidor: nomes el construeix
     per saber-ne el nom i el model, que formen part de la identitat de la feina.
@@ -252,7 +253,9 @@ async def submit_analysis_request(
         )
 
     llm = provider_factory()
-    params = AnalyzeParams(profile=profile.name, force=force, document_ids=ids)
+    params = AnalyzeParams(
+        profile=profile.name, force=force, document_ids=ids, resume_from_run_id=resume_from_run_id
+    )
     parameters = params.model_dump(mode="json")
 
     for _ in range(_MAX_LINK_ATTEMPTS):
@@ -267,7 +270,8 @@ async def submit_analysis_request(
                 "Els plecs han canviat des del preview. Cal tornar-lo a veure."
             )
 
-        if not force:
+        # Una represa vol justament NO reaprofitar el run parcial tal com es.
+        if not force and resume_from_run_id is None:
             reusable = await find_reusable_run(
                 session, tender_id, current.fingerprint, llm, profile
             )
@@ -308,7 +312,15 @@ async def submit_analysis_request(
         force_key = analysis_dedupe_key(**identity, force=True)
         job_id: uuid.UUID | None = None
         created = False
-        if not force:
+        if resume_from_run_id is not None:
+            dedupe_key = analysis_dedupe_key(
+                **identity, force=False, resume_from_run_id=resume_from_run_id
+            )
+        elif force:
+            dedupe_key = force_key
+        else:
+            dedupe_key = analysis_dedupe_key(**identity, force=False)
+        if not force and resume_from_run_id is None:
             # Una peticio normal pot aprofitar una execucio `force` compatible.
             job_id = await _active_job(session, force_key)
         if job_id is None:
@@ -320,9 +332,7 @@ async def submit_analysis_request(
                     "status": WorkJobStatus.QUEUED,
                     "tender_id": tender_id,
                     "parameters": parameters,
-                    "dedupe_key": force_key
-                    if force
-                    else analysis_dedupe_key(**identity, force=False),
+                    "dedupe_key": dedupe_key,
                     "input_fingerprint": current.fingerprint,
                     "provider": llm.name,
                     "model": llm.model,

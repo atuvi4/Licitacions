@@ -37,6 +37,7 @@ from app.core.errors import (
     NoContentToExtractError,
     NothingAnalyzableError,
     ProcessingInProgressError,
+    ResumeNotAllowedError,
 )
 from app.jobs.params import AnalyzeParams, ProcessParams
 from app.jobs.queue import JobCompletion
@@ -188,6 +189,13 @@ async def analyze_requirements(ctx: JobContext) -> JobCompletion | None:
                 on_progress=ctx.report_progress,
                 should_continue=ctx.should_continue,
                 chunk_limit=settings.ANALYSIS_MAX_CHUNKS_PER_RUN,
+                resume_from_run_id=params.resume_from_run_id,
+            )
+        except ResumeNotAllowedError:
+            # Entre la confirmacio i l'execucio el run ha deixat de ser
+            # reprenible. No s'ha enviat res.
+            return JobCompletion.failed(
+                "resume_not_allowed", "El run parcial ja no es pot reprendre."
             )
         except AnalysisTooLargeError:
             return JobCompletion.failed(

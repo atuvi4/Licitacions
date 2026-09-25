@@ -35,8 +35,10 @@ import sqlalchemy as sa
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.ai.normalize_v2 import normalise_requirement
+from app.ai.output_normalization import normalise_output
 from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
 from app.ai.provider import (
     OutputTruncatedError,
@@ -59,6 +61,7 @@ from app.core.errors import (
     AnalysisRunReclaimedError,
     AnalysisTooLargeError,
     NothingAnalyzableError,
+    ResumeNotAllowedError,
 )
 from app.models.enums import (
     AnalysisRunStatus,
@@ -578,6 +581,7 @@ async def analyze_tender_requirements(
     on_progress: ProgressCallback | None = None,
     should_continue: ContinueCallback | None = None,
     chunk_limit: int | None = None,
+    resume_from_run_id: uuid.UUID | None = None,
 ) -> AnalysisOutcome:
     """Extreu els requisits d'una licitacio a partir dels plecs ja processats.
 
@@ -595,12 +599,18 @@ async def analyze_tender_requirements(
       plecs han canviat, s'atura amb `AnalysisInputChangedError` **abans** de
       cap crida al proveidor: no s'analitza en silenci una altra versio.
     * `on_progress(fets, total)` en reservar el run i a cada chunk.
-    * `chunk_limit`: si l'analisi te mes chunks, s'atura amb
+    * `chunk_limit`: si l'analisi ENVIARIA mes chunks, s'atura amb
       `AnalysisTooLargeError` abans de reservar el run i de cap crida. Cobreix un
-      limit abaixat mentre el job era a la cua.
+      limit abaixat mentre el job era a la cua. En una represa compten nomes els
+      chunks que s'envien, no els reaprofitats.
     * `should_continue()` abans de cada chunk. Si torna fals no s'inicia cap
       crida mes i el run **no** es tanca: queda en curs perque el reconcilii qui
       en te l'autoritat (`AnalysisInterruptedError`).
+    * `resume_from_run_id`: represa d'un run parcial (`plan_resume`). Es copien
+      els resultats dels seus chunks bons i nomes s'envien els fallits. Si no es
+      exactament la mateixa analisi, `ResumeNotAllowedError` abans de cap crida.
+      El run d'origen no es toca, tret de deixar de ser vigent com qualsevol run
+      que en substitueix un altre.
     """
     started = time.monotonic()
     llm = provider or get_provider()
@@ -622,15 +632,26 @@ async def analyze_tender_requirements(
     skipped = current_input.skipped
     fingerprint = current_input.fingerprint
 
-    if not force:
+    if not force and resume_from_run_id is None:
         reusable = await find_reusable_run(session, tender.id, fingerprint, llm, profile)
         if reusable is not None:
             return AnalysisOutcome(run=reusable, reused=True)
 
     chunks = build_chunks(documents)
-    if chunk_limit is not None and len(chunks) > chunk_limit:
+    plan: ResumePlan | None = None
+    if resume_from_run_id is not None:
+        plan = plan_resume(
+            await session.get(RequirementExtractionRun, resume_from_run_id),
+            tender_id=tender.id,
+            fingerprint=fingerprint,
+            chunks=chunks,
+            provider=llm,
+            profile=profile,
+        )
+    to_send = len(plan.send) if plan is not None else len(chunks)
+    if chunk_limit is not None and to_send > chunk_limit:
         raise AnalysisTooLargeError(
-            f"L'analisi te {len(chunks)} chunks i el maxim es {chunk_limit}."
+            f"L'analisi enviaria {to_send} chunks i el maxim es {chunk_limit}."
         )
     run = await _claim_run(
         session,
@@ -668,8 +689,27 @@ async def analyze_tender_requirements(
     # Per index de chunk, el que va costar. Inclou els chunks caiguts si el
     # proveidor va arribar a respondre: aquells tokens tambe es paguen.
     chunk_usage: dict[int, Usage] = {}
+    # Per index de chunk, les normalitzacions estrictes aplicades abans de
+    # Pydantic (`path:regla`, sense valors).
+    chunk_normalisations: dict[int, list[str]] = {}
+    # Per index de chunk, el diagnostic sanititzat d'un error HTTP.
+    chunk_provider_errors: dict[int, dict[str, Any]] = {}
+
+    if plan is not None:
+        await _copy_reused_results(
+            session,
+            run=run,
+            source=plan.source,
+            tally=tally,
+            seen_requirements=seen_requirements,
+            seen_awards=seen_awards,
+        )
+        run.chunks_completed += len(plan.reused)
 
     for position, chunk in enumerate(chunks):
+        if plan is not None and chunk.index in plan.reused:
+            # Ja es va llegir be al run d'origen: no es torna a enviar.
+            continue
         # Abans de cada chunk, i no despres: una crida que ja es en vol pot
         # acabar, pero cap de nova no comenca si el worker ja no es propietari
         # de la feina. El run queda en curs, sense tancar-lo.
@@ -683,8 +723,9 @@ async def analyze_tender_requirements(
             )
         if position and on_progress is not None:
             await on_progress(position, len(chunks))
+        applied: list[str] = []
         try:
-            result = await _run_chunk(llm, chunk, profile)
+            result = await _run_chunk(llm, chunk, profile, applied)
         except ProviderError as exc:
             tally.validation_errors += 1
             run.chunks_failed += 1
@@ -694,6 +735,10 @@ async def analyze_tender_requirements(
                 chunk_usage[chunk.index] = exc.usage
             if isinstance(exc, SchemaInvalidError) and exc.diagnostics:
                 chunk_diagnostics[chunk.index] = exc.diagnostics
+            if applied:
+                chunk_normalisations[chunk.index] = applied
+            if exc.details:
+                chunk_provider_errors[chunk.index] = exc.details
             logger.warning(
                 "requirements.chunk.failed",
                 extra={
@@ -703,10 +748,28 @@ async def analyze_tender_requirements(
                     "stop_reason": exc.usage.stop_reason if exc.usage else None,
                 },
             )
+            if exc.fatal:
+                # El mateix error es repetiria a cada chunk: no se n'envia cap mes.
+                remaining = chunks[position + 1 :]
+                for skipped_chunk in remaining:
+                    chunk_failures[skipped_chunk.index] = CHUNK_NOT_SENT
+                    run.chunks_failed += 1
+                logger.warning(
+                    "requirements.run.fail_fast",
+                    extra={
+                        "run_id": str(run.id),
+                        "chunk": chunk.index,
+                        "not_sent": len(remaining),
+                        "status": (exc.details or {}).get("status"),
+                    },
+                )
+                break
             continue
 
         parsed, usage = result
         chunk_usage[chunk.index] = usage
+        if applied:
+            chunk_normalisations[chunk.index] = applied
 
         _persist_chunk(
             session=session,
@@ -739,6 +802,11 @@ async def analyze_tender_requirements(
         failures=chunk_failures,
         usage=chunk_usage,
         diagnostics=chunk_diagnostics,
+        normalisations=chunk_normalisations,
+        provider_errors=chunk_provider_errors,
+        reused=plan.reused if plan is not None else None,
+        reused_from_run_id=str(plan.source.id) if plan is not None else None,
+        not_sent_code=CHUNK_NOT_SENT,
         pages_per_chunk=settings.REQUIREMENTS_CHUNK_PAGES,
         overlap_pages=settings.REQUIREMENTS_CHUNK_OVERLAP_PAGES,
     )
@@ -754,9 +822,209 @@ async def analyze_tender_requirements(
         output_tokens=output_tokens,
         request_ids=request_ids,
         started=started,
-        last_error=last_error,
+        last_error=failure_summary(chunk_failures, len(chunks), last_error),
+        resumed_from=plan,
     )
     return AnalysisOutcome(run=run, reused=False)
+
+
+# --------------------------------------------------------------------------- #
+# Represa d'un run parcial                                                      #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class ResumePlan:
+    """Que es reaprofita d'un run parcial i que s'ha d'enviar."""
+
+    source: RequirementExtractionRun
+    #: Per index: l'entrada de cobertura del chunk bo al run d'origen.
+    reused: dict[int, dict[str, Any]]
+    #: Indexs dels chunks que van fallar i que ara s'envien.
+    send: frozenset[int]
+
+
+def plan_resume(
+    source: RequirementExtractionRun | None,
+    *,
+    tender_id: uuid.UUID,
+    fingerprint: str,
+    chunks: list[Chunk],
+    provider: ProviderIdentity,
+    profile: ExtractorProfile,
+) -> ResumePlan:
+    """Nomes es repren si es EXACTAMENT la mateixa analisi. Pura: no escriu res.
+
+    Mateixa licitacio; mateix `input_fingerprint` (que ja inclou documents,
+    revisio d'extraccio, contingut i parser); mateixes versions d'extractor,
+    prompt i esquema; mateix proveidor i model; i el mateix pla de chunks, un a
+    un. El run ha de ser el parcial vigent: si n'hi ha un de mes nou, reprendre
+    l'antic barrejaria dues fotografies.
+    """
+
+    def refuse(reason: str, message: str) -> ResumeNotAllowedError:
+        return ResumeNotAllowedError(message, details={"reason": reason})
+
+    if source is None or source.tender_id != tender_id:
+        raise refuse("run_not_found", "No hi ha cap run d'aquesta licitacio per reprendre.")
+    if source.status != AnalysisRunStatus.PARTIAL:
+        raise refuse("run_not_partial", "Nomes es pot reprendre un run parcial.")
+    if not source.is_current:
+        raise refuse("run_not_current", "Aquest run ja no es el vigent.")
+    if source.input_fingerprint != fingerprint:
+        raise refuse("input_changed", "Els plecs han canviat des d'aquest run.")
+    if (source.extractor_version, source.prompt_version, source.schema_version) != (
+        profile.extractor_version,
+        profile.prompt_version,
+        profile.schema_version,
+    ):
+        raise refuse("profile_mismatch", "El run es va fer amb un altre perfil d'extraccio.")
+    if (source.provider, source.model) != (provider.name, provider.model):
+        raise refuse("provider_mismatch", "El run es va fer amb un altre proveidor o model.")
+
+    coverage = source.chunk_coverage if isinstance(source.chunk_coverage, dict) else {}
+    entries = coverage.get("chunks")
+    if (
+        not isinstance(entries, list)
+        or coverage.get("pages_per_chunk") != settings.REQUIREMENTS_CHUNK_PAGES
+        or coverage.get("overlap_pages") != settings.REQUIREMENTS_CHUNK_OVERLAP_PAGES
+        or len(entries) != len(chunks)
+        or source.chunks_total != len(chunks)
+    ):
+        raise refuse("chunk_plan_mismatch", "El pla de chunks no es el mateix.")
+
+    reused: dict[int, dict[str, Any]] = {}
+    send: set[int] = set()
+    by_index = {entry.get("index"): entry for entry in entries if isinstance(entry, dict)}
+    for chunk in chunks:
+        entry = by_index.get(chunk.index)
+        if (
+            entry is None
+            or str(entry.get("tender_document_id")) != str(chunk.document.tender_document_id)
+            or entry.get("pages") != [page.page_number for page in chunk.pages]
+        ):
+            raise refuse("chunk_plan_mismatch", "El pla de chunks no es el mateix.")
+        if entry.get("status") == "completed":
+            reused[chunk.index] = entry
+        else:
+            send.add(chunk.index)
+    if not send:
+        raise refuse("nothing_to_resume", "Aquest run no te cap chunk fallit.")
+    return ResumePlan(source=source, reused=reused, send=frozenset(send))
+
+
+#: Camps que NO es copien d'un resultat reaprofitat: identitat, run, dates, el
+#: vincle amb el pare (el posa la relacio) i la revisio humana (un run nou
+#: comenca sense revisar, com un run complet).
+_NOT_COPIED = frozenset(
+    {
+        "id",
+        "run_id",
+        "created_at",
+        "updated_at",
+        "review_note",
+        "reviewed_by",
+        "reviewed_at",
+        "manual_override_json",
+        "requirement_id",
+        "award_criterion_id",
+    }
+)
+
+
+def _copy_columns(source: Any, model: type, **overrides: Any) -> Any:
+    values = {
+        column.key: getattr(source, column.key)
+        for column in model.__table__.columns
+        if column.key not in _NOT_COPIED
+    }
+    values.update(overrides)
+    return model(**values)
+
+
+def _machine_review_status(source: Any) -> ReviewStatus:
+    """L'estat que va posar la maquina. Si una persona l'ha revisat, no se sap: pendent."""
+    return source.review_status if source.reviewed_at is None else ReviewStatus.UNREVIEWED
+
+
+async def _copy_reused_results(
+    session: AsyncSession,
+    *,
+    run: RequirementExtractionRun,
+    source: RequirementExtractionRun,
+    tally: _ChunkTally,
+    seen_requirements: dict[str, Requirement],
+    seen_awards: set[str],
+) -> None:
+    """Copia al run nou els requisits i criteris del run d'origen, amb les cites.
+
+    Tots venen de chunks bons (un chunk fallit no persisteix res). Es copien i
+    no es mouen: el run d'origen es queda sencer. Les claus de deduplicacio
+    entren a `seen_*`, i els chunks que ara s'envien es deduplicaran contra
+    aquests exactament igual que en un run complet.
+    """
+    requirements = (
+        await session.scalars(
+            sa.select(Requirement)
+            .options(selectinload(Requirement.evidence))
+            .where(Requirement.run_id == source.id, Requirement.archived_at.is_(None))
+            .order_by(Requirement.source_chunk_index, Requirement.created_at)
+        )
+    ).all()
+    for original in requirements:
+        copy = _copy_columns(
+            original, Requirement, run_id=run.id, review_status=_machine_review_status(original)
+        )
+        for evidence in original.evidence:
+            copy.evidence.append(_copy_columns(evidence, RequirementEvidence))
+        session.add(copy)
+        seen_requirements[copy.dedup_key] = copy
+        tally.requirements += 1
+
+    criteria = (
+        await session.scalars(
+            sa.select(AwardCriterion)
+            .options(selectinload(AwardCriterion.evidence))
+            .where(AwardCriterion.run_id == source.id)
+            .order_by(AwardCriterion.source_chunk_index, AwardCriterion.created_at)
+        )
+    ).all()
+    for original in criteria:
+        copy = _copy_columns(
+            original,
+            AwardCriterion,
+            run_id=run.id,
+            review_status=_machine_review_status(original),
+        )
+        for evidence in original.evidence:
+            copy.evidence.append(_copy_columns(evidence, AwardCriterionEvidence))
+        session.add(copy)
+        seen_awards.add(copy.dedup_key)
+        tally.award_criteria += 1
+
+
+#: Codi d'un chunk que no s'ha enviat perque un error fatal ha aturat el run.
+CHUNK_NOT_SENT = "not_sent"
+
+
+def failure_summary(
+    failures: Mapping[int, str], total: int, last_error: str | None
+) -> str | None:
+    """Que ha fallat, comptat per motiu, i l'ultim error.
+
+    Un run parcial amb 9 chunks tallats i 4 de mal formats no es pot resumir
+    amb l'ultim error: diria nomes `schema_invalid` i amagaria la causa principal.
+    """
+    if not failures:
+        return last_error
+    counts: dict[str, int] = {}
+    for code in failures.values():
+        counts[code] = counts.get(code, 0) + 1
+    by_reason = ", ".join(
+        f"{code}: {count}" for code, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    )
+    summary = f"{len(failures)} de {total} chunks fallits ({by_reason})."
+    return f"{summary} Darrer error: {last_error}" if last_error else summary
 
 
 async def _source_quality_snapshot(
@@ -937,13 +1205,21 @@ def schema_diagnostics(
 
 
 async def _run_chunk(
-    llm: StructuredLLMProvider, chunk: Chunk, profile: ExtractorProfile
+    llm: StructuredLLMProvider,
+    chunk: Chunk,
+    profile: ExtractorProfile,
+    normalisations: list[str] | None = None,
 ) -> tuple[Any, Usage]:
     """Crida el proveidor i valida la sortida contra l'esquema del perfil.
 
     Tota sortida inservible surt com a `ProviderError` amb el seu codi i l'us
     que va costar: `output_truncated`, `no_tool_call` (des del proveidor) o
     `schema_invalid` (aqui).
+
+    Abans de Pydantic passa per `normalise_output`, que nomes desfa els dos
+    patrons coneguts (llista serialitzada com a text, `extraction_id` del
+    context repetit a l'arrel). Les regles aplicades s'afegeixen a
+    `normalisations`, tambe quan despres l'esquema falla.
     """
     response = await llm.extract_structured(
         system=profile.system_prompt,
@@ -958,8 +1234,15 @@ async def _run_chunk(
         raise OutputTruncatedError(
             "La resposta ha topat amb el limit de sortida.", usage=usage
         )
+    data, applied = normalise_output(
+        response.data,
+        profile.output_model,
+        context_extraction_ids={str(chunk.document.extraction_id)},
+    )
+    if normalisations is not None:
+        normalisations.extend(applied)
     try:
-        parsed = profile.parse(response.data)
+        parsed = profile.parse(data)
     except PydanticValidationError as exc:
         diagnostics = schema_diagnostics(exc, known_schema_fields(profile.json_schema()))
         logger.warning(
@@ -1212,6 +1495,7 @@ async def _finalise_run(
     request_ids: list[str],
     started: float,
     last_error: str | None,
+    resumed_from: ResumePlan | None = None,
 ) -> None:
     """Tanca el run i decideix si passa a vigent.
 
@@ -1241,7 +1525,11 @@ async def _finalise_run(
     run.input_tokens = input_tokens or None
     run.output_tokens = output_tokens or None
     run.duration_ms = int((time.monotonic() - started) * 1000)
-    run.provider_metadata = {"request_ids": request_ids[:50]} if request_ids else None
+    metadata: dict[str, Any] = {"request_ids": request_ids[:50]} if request_ids else {}
+    if resumed_from is not None:
+        metadata["resumed_from_run_id"] = str(resumed_from.source.id)
+        metadata["reused_chunks"] = sorted(resumed_from.reused)
+    run.provider_metadata = metadata or None
     run.completed_at = datetime.now(UTC)
 
     if run.chunks_completed == 0 and run.chunks_total:

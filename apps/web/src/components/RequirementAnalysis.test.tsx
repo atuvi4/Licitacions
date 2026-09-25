@@ -87,6 +87,7 @@ function requirement(overrides: Partial<Requirement> = {}): Requirement {
     tender_lot_id: null,
     category: "certification",
     obligation: "mandatory",
+    routing: "compliance_dossier",
     operator: null,
     scope: "tender",
     title: "Certificat ISO 14001 en vigor",

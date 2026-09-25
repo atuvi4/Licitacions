@@ -59,6 +59,8 @@ class AnalysisQuoteIn(BaseModel):
 
     force: bool = False
     document_ids: list[uuid.UUID] = Field(default_factory=list)
+    #: Represa d'un run parcial: nomes s'enviaran els chunks que hi van fallar.
+    resume_from_run_id: uuid.UUID | None = None
 
 
 class QuoteDocumentRead(BaseModel):
@@ -113,6 +115,12 @@ class AnalysisQuoteRead(BaseModel):
     @property
     def pages_truncated(self) -> bool:
         return self.pages_in_plan < self.pages_total
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def resume_from_run_id(self) -> uuid.UUID | None:
+        """El run parcial que es repren, si ho es (`reusable_run_id` amb chunks a enviar)."""
+        return self.reusable_run_id if self.reusable_run_id and self.chunks_to_send > 0 else None
 
 
 class AnalysisConfirmationRead(JobSubmissionRead):

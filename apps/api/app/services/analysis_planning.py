@@ -33,6 +33,7 @@ from app.services.requirement_analysis import (
     ProviderIdentity,
     analysis_input,
     find_reusable_run,
+    plan_resume,
 )
 from app.services.requirement_chunking import build_chunks
 
@@ -134,6 +135,10 @@ class AnalysisPreview:
     chunks: int = 0
     chunks_to_send: int = 0
     reusable_run_id: uuid.UUID | None = None
+    #: Represa: el run parcial del qual es reaprofiten els chunks bons. Es desa
+    #: al quote com `reusable_run_id` amb `chunks_to_send > 0` (veure
+    #: `is_resume_quote`): una reutilitzacio completa sempre en te 0.
+    resume_from_run_id: uuid.UUID | None = None
     estimate: TokenEstimate | None = None
     max_chunks: int = 0
     allowed: bool = True
@@ -159,7 +164,13 @@ class AnalysisPreview:
             self.profile,
             self.provider,
             self.model,
+            resume_identity(self.resume_from_run_id, self.chunks_to_send),
         )
+
+
+def resume_identity(run_id: uuid.UUID | None, chunks_to_send: int) -> tuple | None:
+    """La part de la identitat que fixa una represa: de quin run i quants chunks."""
+    return (str(run_id), chunks_to_send) if run_id is not None else None
 
 
 async def build_preview(
@@ -171,8 +182,13 @@ async def build_preview(
     force: bool = False,
     document_ids: list[uuid.UUID] | None = None,
     max_chunks: int | None = None,
+    resume_from_run_id: uuid.UUID | None = None,
 ) -> AnalysisPreview:
-    """Calcula el preview d'una analisi. Nomes lectures; cap crida al proveidor."""
+    """Calcula el preview d'una analisi. Nomes lectures; cap crida al proveidor.
+
+    Amb `resume_from_run_id`, nomes compta els chunks fallits d'aquell run
+    parcial (`plan_resume`); si no es la mateixa analisi, `ResumeNotAllowedError`.
+    """
     ids = sorted({str(item) for item in document_ids or []})
     limit = settings.ANALYSIS_MAX_CHUNKS_PER_RUN if max_chunks is None else max_chunks
     current = await analysis_input(
@@ -217,14 +233,28 @@ async def build_preview(
         for document in current.documents
     ]
     preview.pages_in_plan = sum(document.page_count for document in current.documents)
-    preview.chunks = len(build_chunks(current.documents))
+    chunks = build_chunks(current.documents)
+    preview.chunks = len(chunks)
 
-    if not force:
-        reusable = await find_reusable_run(
-            session, tender_id, current.fingerprint, provider, profile
+    if resume_from_run_id is not None:
+        plan = plan_resume(
+            await session.get(RequirementExtractionRun, resume_from_run_id),
+            tender_id=tender_id,
+            fingerprint=current.fingerprint,
+            chunks=chunks,
+            provider=provider,
+            profile=profile,
         )
-        preview.reusable_run_id = reusable.id if reusable is not None else None
-    preview.chunks_to_send = 0 if preview.reusable_run_id else preview.chunks
+        preview.resume_from_run_id = plan.source.id
+        preview.reusable_run_id = plan.source.id
+        preview.chunks_to_send = len(plan.send)
+    else:
+        if not force:
+            reusable = await find_reusable_run(
+                session, tender_id, current.fingerprint, provider, profile
+            )
+            preview.reusable_run_id = reusable.id if reusable is not None else None
+        preview.chunks_to_send = 0 if preview.reusable_run_id else preview.chunks
 
     history = await usage_history(
         session,

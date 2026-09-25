@@ -31,6 +31,7 @@ from app.models.enums import (
     ReviewStatus,
 )
 from app.schemas.provenance import TenderSourceRefRead
+from app.workspace.requirement_routing import RequirementRouting, route_requirement
 
 
 class ORMModel(BaseModel):
@@ -104,6 +105,13 @@ class RequirementRead(ORMModel):
     #: llistes i no una d'unida perque son dos emmagatzematges amb garanties
     #: diferents, i `RequirementEvidence` no s'ha tocat.
     citations: list[TenderSourceRefRead] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def routing(self) -> RequirementRouting:
+        """On es treballa dins d'una candidatura. La regla viu al backend
+        (`app/workspace/requirement_routing.py`); la interficie nomes la llegeix."""
+        return route_requirement(self)
 
 
 class AwardCriterionRead(ORMModel):

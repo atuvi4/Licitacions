@@ -45,6 +45,7 @@ import {
   joinRequirements,
   memberName,
   requirementsInScope,
+  requirementsRoutedTo,
   scopeDependsOnOffer,
   staleReasonLabel,
   whoCanEditSolutions,
@@ -103,6 +104,11 @@ interface Props {
  * s'obre a dins, sota el requisit, perquè el text del plec no marxi de la vista
  * mentre s'escriu.
  *
+ * Quins requisits hi surten ho diu el servidor (`routing`): els d'acreditació
+ * es treballen a Dossier i Compliment, i els terminis al Pla de treball. Els
+ * que no tenen una destinació clara (condicions d'execució, «altres») es
+ * mostren a part, pendents de classificar, sense demanar-hi cap solució.
+ *
  * El que NO fa: deduir que un requisit necessita solució (ho decideix una
  * persona amb «Defineix una solució»), ni calcular la preparació final (la diu
  * S6 i viu al context).
@@ -138,6 +144,16 @@ export function TechnicalSolutionSection({ workspace, registerLeaveGuard }: Prop
     () => joinRequirements(inScope, analysis.data?.requirements ?? [], solutions.data ?? []),
     [inScope, analysis.data, solutions.data],
   );
+  // La resta de requisits de la candidatura, on els envia el servidor. No
+  // desapareixen: es diu on es treballen, i els dubtosos es mostren aquí.
+  const elsewhere = useMemo(() => {
+    const all = analysis.data?.requirements ?? [];
+    return {
+      compliance: requirementsRoutedTo(all, "compliance_dossier", workspace, selectedLotIds),
+      workPlan: requirementsRoutedTo(all, "work_plan", workspace, selectedLotIds),
+      review: requirementsRoutedTo(all, "review_routing", workspace, selectedLotIds),
+    };
+  }, [analysis.data, workspace, selectedLotIds]);
 
   /* ----- Fila oberta i esborrany ---------------------------------------- */
 
@@ -719,6 +735,48 @@ export function TechnicalSolutionSection({ workspace, registerLeaveGuard }: Prop
           }
         />
       </Card>
+
+      {(elsewhere.compliance.length > 0 || elsewhere.workPlan.length > 0) && (
+        <p data-testid="routed-elsewhere" className="px-1 text-caption text-muted">
+          No demanen solució tècnica:{" "}
+          {elsewhere.compliance.length > 0 && (
+            <a href="?pas=preparar&area=dossier" className={LINK}>
+              {elsewhere.compliance.length} {elsewhere.compliance.length === 1 ? "requisit d'acreditació" : "requisits d'acreditació"} (Dossier i Compliment)
+            </a>
+          )}
+          {elsewhere.compliance.length > 0 && elsewhere.workPlan.length > 0 && " · "}
+          {elsewhere.workPlan.length > 0 && (
+            <a href="?pas=preparar&area=pla" className={LINK}>
+              {elsewhere.workPlan.length} {elsewhere.workPlan.length === 1 ? "termini" : "terminis"} (Pla de treball)
+            </a>
+          )}
+          .
+        </p>
+      )}
+
+      {/* ----- Pendents de classificar ------------------------------------ */}
+      {elsewhere.review.length > 0 && (
+        <Card>
+          <CardHeader
+            title={`Pendents de classificar · ${elsewhere.review.length}`}
+            description="El plec els demana, però no és clar on es treballen (condicions d'execució, altres). No demanen una solució tècnica automàticament: si alguna en necessita, afegeix-la com a solució addicional."
+          />
+          <ul aria-label="Requisits pendents de classificar" className="divide-y divide-border">
+            {elsewhere.review.map((requirement) => {
+              const source = requirement.evidence[0];
+              return (
+                <li key={requirement.id} className="px-3.5 py-2.5">
+                  <p className="text-[13.5px] font-medium text-ink">{requirement.title}</p>
+                  <p className="text-caption text-muted">
+                    {OBLIGATION_LABELS[requirement.obligation]} · {CATEGORY_LABELS[requirement.category]}
+                    {source ? ` · ${source.document_name ?? "Plec"} · p. ${source.page_number}` : ""}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      )}
 
       {/* ----- Fora de l'abast actual -------------------------------------- */}
       {joined.outOfScope.length > 0 && (

@@ -46,6 +46,11 @@ def build_coverage(
     overlap_pages: int,
     usage: Mapping[int, Usage] | None = None,
     diagnostics: Mapping[int, list[dict[str, str]]] | None = None,
+    normalisations: Mapping[int, list[str]] | None = None,
+    provider_errors: Mapping[int, dict[str, Any]] | None = None,
+    reused: Mapping[int, Mapping[str, Any]] | None = None,
+    reused_from_run_id: str | None = None,
+    not_sent_code: str = "not_sent",
 ) -> dict[str, Any]:
     """La fotografia dels chunks d'un run, amb l'estat de cadascun.
 
@@ -58,15 +63,29 @@ def build_coverage(
 
     `diagnostics` porta, per a un `schema_invalid`, on i de quin tipus eren els
     primers errors del contracte. Nomes estructura: cap text del plec.
+
+    `normalisations` diu quines normalitzacions estrictes (`path:regla`) va
+    necessitar la sortida abans de validar, i `provider_errors` el diagnostic
+    sanititzat d'un error HTTP (estat, tipus, missatge retallat, request_id).
+
+    `origin` diu d'on surt el resultat de cada chunk: `sent` (s'ha enviat en
+    aquest run), `reused` (copiat del run parcial `reused_from_run_id`, sense
+    cap crida; els tokens queden `None` perque ja es van comptar alla) o
+    `not_sent` (un error fatal va aturar el run abans).
     """
     usage = usage or {}
     diagnostics = diagnostics or {}
+    normalisations = normalisations or {}
+    provider_errors = provider_errors or {}
+    reused = reused or {}
     return {
         "schema": COVERAGE_SCHEMA,
         "pages_per_chunk": pages_per_chunk,
         "overlap_pages": overlap_pages,
         "chunks": [
-            {
+            _reused_entry(chunk, reused[chunk.index], reused_from_run_id)
+            if chunk.index in reused
+            else {
                 "index": chunk.index,
                 "tender_document_id": chunk.document.tender_document_id,
                 "document_name": chunk.document.document_name,
@@ -74,13 +93,39 @@ def build_coverage(
                 "status": STATUS_FAILED if chunk.index in failures else STATUS_COMPLETED,
                 "error": failures.get(chunk.index),
                 "error_detail": diagnostics.get(chunk.index),
+                "normalised": normalisations.get(chunk.index),
+                "provider_error": provider_errors.get(chunk.index),
                 "input_tokens": _usage_field(usage, chunk.index, "input_tokens"),
                 "output_tokens": _usage_field(usage, chunk.index, "output_tokens"),
                 "stop_reason": _usage_field(usage, chunk.index, "stop_reason"),
                 "request_id": _usage_field(usage, chunk.index, "request_id"),
+                "origin": "not_sent" if failures.get(chunk.index) == not_sent_code else "sent",
             }
             for chunk in chunks
         ],
+    }
+
+
+def _reused_entry(
+    chunk: Chunk, source: Mapping[str, Any], reused_from_run_id: str | None
+) -> dict[str, Any]:
+    return {
+        "index": chunk.index,
+        "tender_document_id": chunk.document.tender_document_id,
+        "document_name": chunk.document.document_name,
+        "pages": [page.page_number for page in chunk.pages],
+        "status": STATUS_COMPLETED,
+        "error": None,
+        "error_detail": None,
+        "normalised": source.get("normalised"),
+        "provider_error": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "stop_reason": source.get("stop_reason"),
+        "request_id": None,
+        "origin": "reused",
+        "reused_from_run_id": reused_from_run_id,
+        "reused_request_id": source.get("request_id"),
     }
 
 

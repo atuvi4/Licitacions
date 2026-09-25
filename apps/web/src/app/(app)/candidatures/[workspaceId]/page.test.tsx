@@ -57,6 +57,7 @@ vi.mock("@/components/TechnicalSolutionSection", () => ({
     </div>
   ),
 }));
+vi.mock("@/components/WorkPlanDeadlines", () => ({ WorkPlanDeadlines: () => <div data-testid="deadlines">Terminis del plec (secció)</div> }));
 vi.mock("@/components/WorkspaceWork", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/WorkspaceWork")>();
   return {
