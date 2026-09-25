@@ -747,6 +747,8 @@ def test_nomes_el_perfil_i_la_canonada_importen_el_contracte_v3():
         "api/v1/routers/requirements.py",
         "compliance/engine.py",
         "evaluation/runner.py",
+        # Replay offline: l'API exposa l'estat dels claims i els motius.
+        "schemas/requirements.py",
         "services/requirement_analysis.py",
     ]
 

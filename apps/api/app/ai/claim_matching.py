@@ -30,16 +30,38 @@ def normalise(text: str) -> str:
     text = unicodedata.normalize("NFKD", text or "")
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = text.replace(" ", " ").replace(" ", " ").lower()
+    # Apostrof tipografic dels PDF ("d’adjudicacio") -> apostrof pla.
+    text = text.replace("’", "'").replace("‘", "'").replace("´", "'")
     return re.sub(r"[ \t\r\f\v]+", " ", text)
 
 
-#: On es talla una cita en trossos independents. `, ` i no `,`: la coma
+#: On es talla una linia en trossos independents. `, ` i no `,`: la coma
 #: decimal (`155.239,16`) no porta mai espai darrere.
-_SEGMENT_SPLIT = re.compile(r"\n+|;|•|\||, | - ")
+_SEGMENT_SPLIT = re.compile(r";|•|\||, | - ")
+#: Una linia que acaba aixi tanca una fila o una frase. Si no, el salt de linia
+#: es de maquetacio del PDF i la fila continua a la linia seguent.
+_ROW_END = re.compile(r"[\d€%.:;]\s*$")
 
 
 def segments(text: str) -> list[str]:
-    return [part.strip() for part in _SEGMENT_SPLIT.split(normalise(text)) if part.strip()]
+    """Els trossos d'una cita que es poden llegir com una sola afirmacio.
+
+    Un salt de linia nomes tanca un tros si la linia acaba en xifra, `€`, `%` o
+    puntuacio final. El PDF talla files de taula: a Palamos, "Acces a Internet
+    GPON a 600 Mbps simetrics pels equipaments" + "municipals* 26" son UNA fila.
+    Tallar-les separaria el terme del seu valor. Ajuntar linies mai no fa
+    sostenir res per casualitat: un tros amb dos valors rivals es ambigu.
+    """
+    rows: list[str] = []
+    pending = ""
+    for line in normalise(text).split("\n"):
+        pending = f"{pending} {line.strip()}".strip()
+        if pending and _ROW_END.search(pending):
+            rows.append(pending)
+            pending = ""
+    if pending:
+        rows.append(pending)
+    return [part.strip() for row in rows for part in _SEGMENT_SPLIT.split(row) if part.strip()]
 
 
 _NUMBER = re.compile(r"(?<![\w.,])(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)(?!\d)")

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -193,34 +193,13 @@ def requirement_support(
             checks[ref] = check_claim(claim, quote)
         per_evidence[evidence.id] = checks
 
-    for claim_id, claim in claims.items():
-        if claim.value is None or claim.certainty == ClaimCertainty.UNKNOWN:
-            per_claim[claim_id] = ClaimStatus.UNKNOWN
-            continue
-        statuses = [
-            status_of(checks[claim_id]) for checks in per_evidence.values() if claim_id in checks
-        ]
-        per_claim[claim_id] = (
-            max(statuses, key=_RANK.__getitem__) if statuses else ClaimStatus.NOT_SUPPORTED
-        )
-
-    values = list(per_claim.values())
-    if not values:
-        level, status = EvidenceLevel.QUOTE_VALID, RequirementSupportStatus.QUOTE_ONLY
-    else:
-        all_supported = all(v == ClaimStatus.SUPPORTED for v in values)
-        if all_supported and requirement.claims_complete == Completeness.COMPLETE:
-            level = EvidenceLevel.REQUIREMENT_SUPPORTED
-        elif ClaimStatus.SUPPORTED in values:
-            level = EvidenceLevel.CLAIM_SUPPORTED
-        else:
-            level = EvidenceLevel.QUOTE_VALID
-        if level == EvidenceLevel.REQUIREMENT_SUPPORTED:
-            status = RequirementSupportStatus.SUPPORTED
-        elif ClaimStatus.NOT_SUPPORTED in values:
-            status = RequirementSupportStatus.NOT_SUPPORTED
-        else:
-            status = RequirementSupportStatus.NEEDS_REVIEW
+    valued = {
+        claim_id: not (claim.value is None or claim.certainty == ClaimCertainty.UNKNOWN)
+        for claim_id, claim in claims.items()
+    }
+    per_claim, level, status = _aggregate(
+        valued, per_evidence.values(), requirement.claims_complete
+    )
 
     return RequirementSupport(
         per_evidence=per_evidence,
@@ -228,6 +207,120 @@ def requirement_support(
         unknown_refs=unknown_refs,
         level=level,
         status=status,
+    )
+
+
+def _aggregate(
+    valued: Mapping[str, bool],
+    per_evidence: Iterable[Mapping[str, ClaimCheck]],
+    completeness: Completeness,
+) -> tuple[dict[str, ClaimStatus], EvidenceLevel, RequirementSupportStatus]:
+    """Estat de cada claim i del requisit. L'unica regla, per escriure i per llegir.
+
+    `valued[claim_id]` es fals si el claim no te valor (desconegut).
+    """
+    checks = list(per_evidence)
+    per_claim: dict[str, ClaimStatus] = {}
+    for claim_id, has_value in valued.items():
+        if not has_value:
+            per_claim[claim_id] = ClaimStatus.UNKNOWN
+            continue
+        statuses = [status_of(c[claim_id]) for c in checks if claim_id in c]
+        per_claim[claim_id] = (
+            max(statuses, key=_RANK.__getitem__) if statuses else ClaimStatus.NOT_SUPPORTED
+        )
+
+    values = list(per_claim.values())
+    if not values:
+        return per_claim, EvidenceLevel.QUOTE_VALID, RequirementSupportStatus.QUOTE_ONLY
+    all_supported = all(v == ClaimStatus.SUPPORTED for v in values)
+    if all_supported and completeness == Completeness.COMPLETE:
+        level = EvidenceLevel.REQUIREMENT_SUPPORTED
+    elif ClaimStatus.SUPPORTED in values:
+        level = EvidenceLevel.CLAIM_SUPPORTED
+    else:
+        level = EvidenceLevel.QUOTE_VALID
+    if level == EvidenceLevel.REQUIREMENT_SUPPORTED:
+        status = RequirementSupportStatus.SUPPORTED
+    elif ClaimStatus.NOT_SUPPORTED in values:
+        status = RequirementSupportStatus.NOT_SUPPORTED
+    else:
+        status = RequirementSupportStatus.NEEDS_REVIEW
+    return per_claim, level, status
+
+
+# --------------------------------------------------------------------------- #
+# Lectura del que s'ha desat                                                   #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class StoredSupport:
+    """El suport d'un requisit v3 reconstruit a partir de les files desades."""
+
+    per_claim: dict[str, str]
+    level: str
+    status: str
+    review_reasons: list[str]
+
+
+_CLAIM_REASON = {
+    ClaimStatus.NOT_SUPPORTED: "claim_not_supported",
+    ClaimStatus.UNVERIFIED: "claim_unverified",
+    ClaimStatus.UNKNOWN: "claim_value_unknown",
+}
+_COMPLETENESS_REASON = {
+    Completeness.PARTIAL: "claims_partial",
+    Completeness.UNKNOWN: "claims_completeness_unknown",
+}
+
+
+def stored_requirement_support(
+    value_schema: str | None,
+    value_json: Mapping[str, Any] | None,
+    evidence_supports: Iterable[Mapping[str, Any] | None],
+) -> StoredSupport | None:
+    """Estat de claims, nivell i motius de revisio d'un requisit v3 desat.
+
+    `None` si no es v3 (v1/v2 o manual): cap d'aquests conceptes hi existeix, i
+    inventar-ne un estat seria afirmar una comprovacio que no es va fer. Nomes
+    llegeix codis: un codi desconegut s'ignora, i un claim sense cap cita que
+    el declari queda `not_supported`, com al pipeline.
+    """
+    if value_schema != VALUE_SCHEMA_V3 or not isinstance(value_json, Mapping):
+        return None
+    claims = [c for c in value_json.get("claims") or [] if isinstance(c, Mapping)]
+    valued = {
+        str(c.get("id")): not (c.get("value") is None or c.get("certainty") == "unknown")
+        for c in claims
+        if c.get("id")
+    }
+    known = {check.value: check for check in ClaimCheck}
+    per_evidence: list[dict[str, ClaimCheck]] = []
+    for support in evidence_supports:
+        stored = (support or {}).get("claims") if isinstance(support, Mapping) else None
+        if isinstance(stored, Mapping):
+            per_evidence.append(
+                {str(k): known[v] for k, v in stored.items() if v in known}
+            )
+    try:
+        completeness = Completeness(value_json.get("claims_complete"))
+    except ValueError:
+        completeness = Completeness.UNKNOWN
+    per_claim, level, status = _aggregate(valued, per_evidence, completeness)
+
+    reasons: list[str] = []
+    for claim_status in per_claim.values():
+        reason = _CLAIM_REASON.get(claim_status)
+        if reason and reason not in reasons:
+            reasons.append(reason)
+    if per_claim and completeness in _COMPLETENESS_REASON:
+        reasons.append(_COMPLETENESS_REASON[completeness])
+    return StoredSupport(
+        per_claim={k: v.value for k, v in per_claim.items()},
+        level=level.value,
+        status=status.value,
+        review_reasons=reasons,
     )
 
 
@@ -266,11 +359,16 @@ class AwardReason(StrEnum):
 
 # Marcadors literals, ja normalitzats (sense accents). "Es valorara" NO hi es a
 # proposit: una frase del PPT que diu que una cosa es valorara no es cap mecanisme.
-_CRITERIA_SECTION_MARKERS = (
-    "criteris d'adjudicacio", "criterios de adjudicacion", "criteris de valoracio",
-    "criterios de valoracion", "criteris avaluables", "criterios evaluables",
-    "criteris de puntuacio", "criterios de puntuacion",
+
+#: El nom de la clausula de criteris ("criteris d'adjudicacio", "criteris a
+#: tenir en compte en l'adjudicacio", "criterios de valoracion"...).
+_CRITERIA_SECTION_TITLE = re.compile(
+    r"criteri[so]s?\b.{0,40}?\badjudicaci"
+    r"|criteri[so]s?\s+(?:de\s+)?(?:valoraci|puntuaci)"
+    r"|criteris\s+avaluables|criterios\s+evaluables"
 )
+#: Una linia de titol: numerada ("21.", "21.1", "clausula 12.") o en majuscules.
+_NUMBERED_HEADING = re.compile(r"^\s*(?:clausula\s+)?\d+(?:\.\d+)*\.?\s")
 _OFFER_FORM_MARKERS = (
     "( )", "(  )", "[ ]", "☐", "□", "model d'oferta", "model de proposicio",
     "modelo de oferta", "modelo de proposicion", "sobre 2", "sobre num. 2", "sobre n. 2",
@@ -312,8 +410,26 @@ def check_mechanism(
     elif basis == AdjudicationBasis.OFFER_FORM:
         ok = any(marker in text for marker in _OFFER_FORM_MARKERS)
     else:  # CRITERIA_SECTION
-        ok = any(marker in text for marker in _CRITERIA_SECTION_MARKERS)
+        ok = _is_criteria_heading(quote)
     return MechanismCheck.VERIFIED if ok else MechanismCheck.NOT_IN_QUOTE
+
+
+def _is_criteria_heading(quote: str) -> bool:
+    """La cita conte el TITOL de la clausula de criteris, no una mencio.
+
+    "d'acord amb els criteris d'adjudicacio" apareix a clausules de procediment
+    (obertura de sobres, garanties): citar-la no prova que un criteri en formi
+    part. Nomes compta si el nom es a una linia de titol: numerada o en
+    majuscules, com "21. CRITERIS A TENIR EN COMPTE EN L'ADJUDICACIO".
+    """
+    for line in quote.splitlines():
+        text = cm.normalise(line)
+        if not _CRITERIA_SECTION_TITLE.search(text):
+            continue
+        letters = [ch for ch in line if ch.isalpha()]
+        if _NUMBERED_HEADING.match(text) or (letters and all(ch.isupper() for ch in letters)):
+            return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -674,6 +790,29 @@ def award_class_of(basis_json: dict[str, Any] | None) -> str | None:
         return None
     value = basis_json.get("award_class")
     return value if value in {c.value for c in AwardClass} else None
+
+
+def adjudication_review_reasons(basis_json: Mapping[str, Any] | None) -> list[str]:
+    """Per que un candidat v3 no es formal. Buit per a v1/v2 i per als formals.
+
+    Codis de vocabulari tancat: el motiu de la classe (`no_mechanism_verified`...)
+    i cada mecanisme declarat que no s'ha provat, com `<mecanisme>:<comprovacio>`.
+    """
+    if not isinstance(basis_json, Mapping):
+        return []
+    if basis_json.get("award_class") == AwardClass.FORMAL_AWARD_CRITERION.value:
+        return []
+    known_reasons = {r.value for r in AwardReason}
+    known_kinds = {b.value for b in AdjudicationBasis}
+    known_checks = {c.value for c in MechanismCheck} - {MechanismCheck.VERIFIED.value}
+    reasons = [r for r in basis_json.get("reasons") or [] if r in known_reasons]
+    for mechanism in basis_json.get("mechanisms") or []:
+        if not isinstance(mechanism, Mapping):
+            continue
+        kind, check = mechanism.get("kind"), mechanism.get("check")
+        if kind in known_kinds and check in known_checks:
+            reasons.append(f"{kind}:{check}")
+    return reasons
 
 
 def remap_evidence_ids(

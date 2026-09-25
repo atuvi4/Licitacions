@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Query, status
 from sqlalchemy.orm import selectinload
 
-from app.ai.contract_v3 import award_class_of, counts_as_award_criterion
+from app.ai.contract_v3 import counts_as_award_criterion
 from app.api.deps import CompanyCtx, CurrentUser, SessionDep
 from app.core.errors import EndpointMovedError, NotFoundError
 from app.models.audit import AuditAction
@@ -300,7 +300,6 @@ async def review_requirement(
 
 def _criterion_read(criterion: AwardCriterion, decoration: dict) -> AwardCriterionRead:
     read = AwardCriterionRead.model_validate(criterion)
-    read.award_class = award_class_of(criterion.adjudication_basis_json)
     read.evidence = _evidence_reads(criterion, decoration)
     return read
 

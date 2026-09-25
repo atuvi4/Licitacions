@@ -15,6 +15,12 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from app.ai.contract_v3 import (
+    StoredSupport,
+    adjudication_review_reasons,
+    award_class_of,
+    stored_requirement_support,
+)
 from app.models.enums import (
     AnalysisBasis,
     AnalysisRunStatus,
@@ -54,6 +60,9 @@ class EvidenceRead(ORMModel):
     #: no a l'extraccio vigent: la cita es immutable.
     extraction_revision: int | None = None
     document_name: str | None = None
+    #: v3: `{contract, ref, claims: {claim_id: comprovacio}}`. Nomes codis, cap
+    #: text. `None` = cita anterior a la v3 (no comprovada, que no es "no sosté").
+    claim_support_json: dict[str, Any] | None = None
 
 
 class RequirementRead(ORMModel):
@@ -113,6 +122,39 @@ class RequirementRead(ORMModel):
         (`app/workspace/requirement_routing.py`); la interficie nomes la llegeix."""
         return route_requirement(self)
 
+    def _stored_support(self) -> StoredSupport | None:
+        return stored_requirement_support(
+            self.value_schema, self.value_json, (e.claim_support_json for e in self.evidence)
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def claim_status(self) -> dict[str, str] | None:
+        """v3: estat de cada claim (`supported`, `unverified`, `not_supported`,
+        `unknown`). `None` per a v1/v2 i manuals: alla no hi ha claims."""
+        support = self._stored_support()
+        return support.per_claim if support else None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def support_level(self) -> str | None:
+        """v3: `quote_valid` < `claim_supported` < `requirement_supported`."""
+        support = self._stored_support()
+        return support.level if support else None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def support_status(self) -> str | None:
+        support = self._stored_support()
+        return support.status if support else None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def review_reasons(self) -> list[str]:
+        """v3: per que va a revisio, en codis. Buit per a v1/v2 i manuals."""
+        support = self._stored_support()
+        return support.review_reasons if support else []
+
 
 class AwardCriterionRead(ORMModel):
     id: uuid.UUID
@@ -138,10 +180,22 @@ class AwardCriterionRead(ORMModel):
     manual_override_json: dict[str, Any] | None = None
     reviewed_at: datetime | None = None
     created_at: datetime
-    #: Extraction Contract v3: la classe que ha decidit el backend. `None` per a
-    #: les files v1/v2, que es llegeixen com sempre.
-    award_class: str | None = None
+    #: v3: mecanisme, comprovacio i cites (per id) que fan formal o no el
+    #: criteri. Nomes codis. `None` per a les files v1/v2.
+    adjudication_basis_json: dict[str, Any] | None = None
     evidence: list[EvidenceRead] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def award_class(self) -> str | None:
+        """v3: la classe que ha decidit el backend. `None` per a v1/v2."""
+        return award_class_of(self.adjudication_basis_json)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def review_reasons(self) -> list[str]:
+        """v3: per que no es formal, en codis. Buit per a v1/v2 i formals."""
+        return adjudication_review_reasons(self.adjudication_basis_json)
 
 
 class ExtractionRunRead(ORMModel):
