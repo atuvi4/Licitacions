@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,7 +33,7 @@ probe = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault("v3_tender_probe", probe)  # les dataclasses ho necessiten
 _spec.loader.exec_module(probe)
 
-OK_DSN = "postgresql+asyncpg://u:p@127.0.0.1:5433/licitacions_v3_probe_palamos"
+OK_DSN = "postgresql+asyncpg://u@127.0.0.1:5433/licitacions_v3_probe_palamos"
 
 
 def _dsn(database: str, port: int | None = 5433) -> str:
@@ -591,3 +592,346 @@ async def test_el_pla_no_imprimeix_la_dsn(session, analyzable):
     rendered = probe.render_plan(plan)
 
     assert "postgresql" not in rendered and "@" not in rendered
+
+
+# --------------------------------------------------------------------------- #
+# Credencials de la base: mai a la linia d'ordres                              #
+# --------------------------------------------------------------------------- #
+
+NO_PASSWORD_DSN = "postgresql+asyncpg://postgres@127.0.0.1:5433/licitacions_v3_probe_palamos"
+WITH_PASSWORD_DSN = (
+    "postgresql+asyncpg://postgres:s3cr3t@127.0.0.1:5433/licitacions_v3_probe_palamos"
+)
+
+
+def test_una_dsn_amb_contrasenya_a_la_linia_d_ordres_es_refusa():
+    with pytest.raises(probe.ProbeError, match="PGPASSWORD"):
+        probe.resolve_database_dsn(WITH_PASSWORD_DSN, environ={}, persistent_scopes=_no_scopes)
+
+
+def test_una_dsn_sense_contrasenya_a_la_linia_d_ordres_s_accepta():
+    assert probe.resolve_database_dsn(
+        NO_PASSWORD_DSN, environ={}, persistent_scopes=_no_scopes
+    ) == NO_PASSWORD_DSN
+
+
+def test_la_dsn_de_l_entorn_del_proces_s_accepta_amb_contrasenya():
+    env = {"DATABASE_URL": WITH_PASSWORD_DSN}
+
+    assert probe.resolve_database_dsn(None, environ=env, persistent_scopes=_no_scopes) == (
+        WITH_PASSWORD_DSN
+    )
+
+
+def test_sense_dsn_enlloc_s_atura():
+    with pytest.raises(probe.ProbeError, match="DATABASE_URL"):
+        probe.resolve_database_dsn(None, environ={}, persistent_scopes=_no_scopes)
+
+
+@pytest.mark.parametrize("name", ["DATABASE_URL", "PGPASSWORD"])
+def test_credencials_persistents_de_windows_es_refusen(name):
+    def persistent(var):
+        return ["User"] if var == name else []
+
+    with pytest.raises(probe.ProbeError, match=name):
+        probe.resolve_database_dsn(
+            NO_PASSWORD_DSN, environ={}, persistent_scopes=persistent
+        )
+
+
+async def test_la_contrasenya_de_l_entorn_no_s_imprimeix_mai(monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", WITH_PASSWORD_DSN)
+    monkeypatch.setattr(probe, "_persistent_windows_scopes", _no_scopes)
+
+    class _Engine:
+        async def dispose(self):
+            return None
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError(f"could not connect to {WITH_PASSWORD_DSN} (password s3cr3t)")
+
+    monkeypatch.setattr(probe, "create_async_engine", lambda *_a, **_k: _Engine())
+    monkeypatch.setattr(probe, "_run_with_session", _boom)
+    args = probe.build_parser().parse_args(["--expediente", "2024-3137", "--plan-only"])
+
+    assert await probe.run(args) == 1
+    out = capsys.readouterr().out
+    assert "s3cr3t" not in out
+    assert "***" in out
+
+
+# --------------------------------------------------------------------------- #
+# Represa                                                                      #
+# --------------------------------------------------------------------------- #
+
+
+def test_resume_i_chunks_no_es_combinen(monkeypatch, capsys):
+    monkeypatch.setattr(probe, "create_async_engine", lambda *a, **k: pytest.fail("connecta"))
+    args = probe.build_parser().parse_args(
+        ["--database-url", NO_PASSWORD_DSN, "--expediente", "2024-3137", "--chunks", "2",
+         "--resume-from-run", str(uuid.uuid4()), "--plan-only"]
+    )
+
+    import asyncio
+
+    assert asyncio.run(probe.run(args)) == probe.EXIT_CONFIG
+    assert "no es combinen" in capsys.readouterr().out
+
+
+def test_un_uuid_mal_format_es_refusa():
+    with pytest.raises(SystemExit):
+        probe.build_parser().parse_args(
+            ["--expediente", "x", "--resume-from-run", "no-es-un-uuid", "--plan-only"]
+        )
+
+
+async def _fake_canary(session, palamos_like, responses, selected):
+    """Un canari amb el proveidor fals, amb el model configurat (com un de real)."""
+    from app.services.requirement_analysis import analyze_tender_requirements
+
+    tender = await session.get(Tender, palamos_like["document"].tender_id)
+    fake.SENT_PAYLOADS.clear()
+    return (await analyze_tender_requirements(
+        session, tender, provider=fake.FakeProvider(responses, model=settings.LLM_MODEL),
+        profile=profiles.V3, force=True, only_chunks=frozenset(selected),
+    )).run, tender
+
+
+async def test_el_pla_de_represa_d_un_canari_bo(session, palamos_like, one_page_chunks):
+    canary, tender = await _fake_canary(
+        session, palamos_like, [{"requirements": []}] * 3, {0, 2, 4}
+    )
+
+    preview = await probe.preview_resume(
+        session, tender, canary.id, provider_name="fake", model=settings.LLM_MODEL
+    )
+
+    assert (preview.reused, preview.send, preview.provider_calls) == ([0, 2, 4], [1, 3], 2)
+    assert "a enviar (2): [1, 3]" in probe.render_resume(preview)
+
+
+async def test_el_pla_de_represa_torna_a_enviar_el_triat_que_va_fallar(
+    session, palamos_like, one_page_chunks
+):
+    from app.ai.provider import SchemaInvalidError, Usage
+
+    invalid = SchemaInvalidError("x", usage=Usage(input_tokens=1, output_tokens=1))
+    canary, tender = await _fake_canary(
+        session, palamos_like, [{"requirements": []}, invalid, {"requirements": []}], {0, 2, 4}
+    )
+
+    preview = await probe.preview_resume(
+        session, tender, canary.id, provider_name="fake", model=settings.LLM_MODEL
+    )
+
+    assert (preview.reused, preview.send, preview.provider_calls) == ([0, 4], [1, 2, 3], 3)
+
+
+async def test_el_pla_de_represa_no_construeix_proveidor_ni_escriu(
+    session, palamos_like, one_page_chunks, monkeypatch
+):
+    import app.ai.provider as provider_module
+
+    canary, tender = await _fake_canary(
+        session, palamos_like, [{"requirements": []}] * 3, {0, 2, 4}
+    )
+    monkeypatch.setattr(provider_module, "get_provider", lambda *a, **k: pytest.fail("prov"))
+    before = await _counts(session)
+    fake.SENT_PAYLOADS.clear()
+
+    await probe.preview_resume(
+        session, tender, canary.id, provider_name="fake", model=settings.LLM_MODEL
+    )
+
+    assert await _counts(session) == before
+    assert fake.SENT_PAYLOADS == []
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ("missing_run", "run_not_found"),
+        ("other_model", "provider_mismatch"),
+        ("other_input", "input_changed"),
+    ],
+)
+async def test_la_represa_conserva_les_negatives_de_la_canonada(
+    session, palamos_like, one_page_chunks, monkeypatch, change, reason
+):
+    canary, tender = await _fake_canary(
+        session, palamos_like, [{"requirements": []}] * 3, {0, 2, 4}
+    )
+    run_id, model = canary.id, settings.LLM_MODEL
+    if change == "missing_run":
+        run_id = uuid.uuid4()
+    elif change == "other_model":
+        model = "un-altre-model"
+    else:
+        real = probe.analysis_input
+
+        async def changed(*args, **kwargs):
+            current = await real(*args, **kwargs)
+            return SimpleNamespace(
+                documents=current.documents, skipped=current.skipped, fingerprint="0" * 64
+            )
+
+        monkeypatch.setattr(probe, "analysis_input", changed)
+
+    with pytest.raises(probe.ProbeError, match=reason):
+        await probe.preview_resume(session, tender, run_id, provider_name="fake", model=model)
+
+
+async def test_la_represa_d_un_run_v1_es_refusa_pel_perfil(session, palamos_like, one_page_chunks):
+    from app.services.requirement_analysis import analyze_tender_requirements
+
+    tender = await session.get(Tender, palamos_like["document"].tender_id)
+    v1 = (await analyze_tender_requirements(
+        session, tender,
+        provider=fake.FakeProvider([{"requirements": []}], model=settings.LLM_MODEL),
+        force=True, only_chunks=frozenset({0}),
+    )).run
+
+    with pytest.raises(probe.ProbeError, match="profile_mismatch"):
+        await probe.preview_resume(
+            session, tender, v1.id, provider_name="fake", model=settings.LLM_MODEL
+        )
+
+
+# --------------------------------------------------------------------------- #
+# De cap a cap per la CLI: canari -> represa (proveidor fals)                  #
+# --------------------------------------------------------------------------- #
+
+
+def _cli_args(*extra):
+    return probe.build_parser().parse_args(
+        ["--database-url", NO_PASSWORD_DSN, "--expediente", "2024-3137", *extra]
+    )
+
+
+async def _cli(session_factory, args, provider, monkeypatch):
+    async def _head(_session, _url):
+        return "head"
+
+    monkeypatch.setattr(probe, "check_database", _head)
+    url = probe.validate_probe_database(NO_PASSWORD_DSN)
+    return await probe._run_with_session(
+        args, url, session_factory, provider, provider.name, provider.model, {}
+    )
+
+
+async def test_la_cli_fa_el_canari_i_la_represa_sense_reenviar_els_bons(
+    session, session_factory, palamos_like, one_page_chunks, monkeypatch, capsys
+):
+    from app.services import requirement_analysis
+
+    tender = await session.get(Tender, palamos_like["document"].tender_id)
+    tender.expediente_number = "2024-3137"
+    await session.commit()
+    calls = []
+    real = requirement_analysis.analyze_tender_requirements
+
+    async def spy(*args, **kwargs):
+        calls.append({k: kwargs.get(k) for k in ("resume_from_run_id", "only_chunks", "force")})
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(requirement_analysis, "analyze_tender_requirements", spy)
+
+    fake.SENT_PAYLOADS.clear()
+    provider = fake.FakeProvider([{"requirements": []}] * 3, model=settings.LLM_MODEL)
+    assert await _cli(session_factory, _cli_args("--chunks", "0,2,4", "--paid-run"),
+                      provider, monkeypatch) == probe.EXIT_OK
+    out = capsys.readouterr().out
+    run_id = next(line.split("=", 1)[1] for line in out.splitlines() if line.startswith("RUN_ID="))
+    # La continuacio diu les dues passes, cadascuna amb el seu mode explicit.
+    assert f"--resume-from-run {run_id} --plan-only" in out
+    assert f"--resume-from-run {run_id} --paid-run" in out
+    assert not any(
+        line.rstrip().endswith(f"--resume-from-run {run_id}") for line in out.splitlines()
+    ), "cap continuacio sense mode"
+    assert len(fake.SENT_PAYLOADS) == 3
+
+    fake.SENT_PAYLOADS.clear()
+    provider = fake.FakeProvider([{"requirements": []}] * 2, model=settings.LLM_MODEL)
+    assert await _cli(session_factory, _cli_args("--resume-from-run", run_id, "--paid-run"),
+                      provider, monkeypatch) == probe.EXIT_OK
+    out = capsys.readouterr().out
+
+    assert calls[-1] == {"resume_from_run_id": uuid.UUID(run_id), "only_chunks": None,
+                         "force": None}
+    assert len(fake.SENT_PAYLOADS) == 2, "nomes els no seleccionats"
+    assert "reaprofitats (3): [0, 2, 4]" in out
+    resumed_id = next(
+        line.split("=", 1)[1] for line in out.splitlines() if line.startswith("RUN_ID=")
+    )
+    resumed = await session.get(RequirementExtractionRun, uuid.UUID(resumed_id),
+                                populate_existing=True)
+    origins = {c["index"]: c.get("origin") for c in resumed.chunk_coverage["chunks"]}
+    assert origins == {0: "reused", 1: "sent", 2: "reused", 3: "sent", 4: "reused"}
+    assert resumed.status == AnalysisRunStatus.COMPLETED
+    assert "s3cr3t" not in out and "postgresql" not in out
+
+
+async def test_la_cli_planifica_la_represa_sense_cridar(
+    session, session_factory, palamos_like, one_page_chunks, monkeypatch, capsys
+):
+    canary, tender = await _fake_canary(
+        session, palamos_like, [{"requirements": []}] * 3, {0, 2, 4}
+    )
+    tender.expediente_number = "2024-3137"
+    await session.commit()
+    fake.SENT_PAYLOADS.clear()
+
+    provider = SimpleNamespace(name="fake", model=settings.LLM_MODEL)
+    code = await _cli(session_factory, _cli_args("--resume-from-run", str(canary.id),
+                                                 "--plan-only"), provider, monkeypatch)
+
+    assert code == probe.EXIT_OK
+    out = capsys.readouterr().out
+    assert "a enviar (2): [1, 3]" in out
+    assert "Crides maximes al proveidor: 2" in out
+    assert fake.SENT_PAYLOADS == []
+
+
+@pytest.fixture(autouse=True)
+def _no_persistent_windows_env(monkeypatch):
+    """Cap test depen del registre de la maquina: els que el proven, l'injecten."""
+    monkeypatch.setattr(probe, "_persistent_windows_scopes", _no_scopes)
+
+
+# --------------------------------------------------------------------------- #
+# El canari sempre demana --paid-run                                           #
+# --------------------------------------------------------------------------- #
+
+CANARY_ARGS = [
+    "--expediente", "2024-3137", "--expect-buyer", "Palamós",
+    "--locate", "A=technical_terms:31", "--locate", "B=technical_terms:27",
+    "--locate", "C=administrative_terms:27", "--locate", "D=administrative_terms:14",
+    "--chunks", "2,5,15",
+]
+
+
+def test_el_canari_sense_paid_run_no_executa_res(monkeypatch, capsys):
+    import app.ai.provider as provider_module
+    import app.evaluation.benchmark as benchmark
+
+    def _forbidden(*_a, **_k):
+        raise AssertionError("sense --paid-run no es construeix cap proveidor")
+
+    monkeypatch.setattr(provider_module, "get_provider", _forbidden)
+    monkeypatch.setattr(benchmark, "resolve_provider", _forbidden)
+    monkeypatch.setattr(probe, "create_async_engine", _forbidden)
+    fake.SENT_PAYLOADS.clear()
+
+    with pytest.raises(SystemExit) as exc:
+        probe.build_parser().parse_args(CANARY_ARGS)
+
+    assert exc.value.code == 2
+    assert "--paid-run" in capsys.readouterr().err
+    assert fake.SENT_PAYLOADS == []
+
+
+def test_el_canari_amb_paid_run_es_el_mode_pagat():
+    args = probe.build_parser().parse_args([*CANARY_ARGS, "--paid-run"])
+
+    assert args.paid_run is True and args.plan_only is False
+    assert args.chunks == "2,5,15"

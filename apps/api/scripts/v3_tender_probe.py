@@ -1,8 +1,14 @@
 """Primera validacio de l'Extraction Contract v3 amb un model real, sobre UNA licitacio.
 
-    python scripts/v3_tender_probe.py --database-url <dsn> --expediente 2024-3137 \\
-        --expect-buyer Palamos --locate A=technical_terms:31 --plan-only
-    python scripts/v3_tender_probe.py ... --chunks 3,15 --paid-run
+    # Credencials NOMES a la sessio: mai a la linia d'ordres ni a un .env.
+    $env:DATABASE_URL = "postgresql+asyncpg://postgres@127.0.0.1:5433/licitacions_v3_probe_x"
+    $env:PGPASSWORD   = "..."        # asyncpg el llegeix sol
+
+    python scripts/v3_tender_probe.py --expediente 2024-3137 --expect-buyer Palamos \\
+        --locate A=technical_terms:31 --plan-only
+    python scripts/v3_tender_probe.py ... --chunks 2,5,15 --paid-run        # canari
+    python scripts/v3_tender_probe.py ... --resume-from-run <RUN_ID> --plan-only
+    python scripts/v3_tender_probe.py ... --resume-from-run <RUN_ID> --paid-run
 
 Per que existeix i no es el benchmark: el gold encara no sap puntuar valors v3
 (`value_json` son claims) i Palamos no hi es. Aquest script mesura una cosa mes
@@ -115,6 +121,54 @@ def validate_probe_database(raw: str | None) -> URL:
             "(una copia d'usar i llencar)."
         )
     return url
+
+
+#: Variables de credencial que el probe llegeix. Nomes de l'entorn del proces.
+DB_ENV_VARS = ("DATABASE_URL", "PGPASSWORD")
+
+
+def resolve_database_dsn(
+    cli_value: str | None,
+    *,
+    environ: dict[str, str] | None = None,
+    persistent_scopes=None,
+) -> str:
+    """D'on surt la DSN, sense que la contrasenya passi mai per la linia d'ordres.
+
+    * `--database-url` nomes s'accepta SENSE contrasenya (quedaria a l'historial).
+      La contrasenya ve de `PGPASSWORD`, que asyncpg ja llegeix de l'entorn.
+    * Sense `--database-url`, `DATABASE_URL` de l'entorn del proces (pot portar
+      contrasenya: l'entorn de la sessio no queda a l'historial).
+    * `DATABASE_URL` i `PGPASSWORD` es refusen si son a l'entorn persistent de
+      Windows (User o Machine): nomes han de viure a la sessio.
+    """
+    environ = os.environ if environ is None else environ
+    persistent_scopes = persistent_scopes or _persistent_windows_scopes
+    for name in DB_ENV_VARS:
+        scopes = persistent_scopes(name)
+        if scopes:
+            raise ProbeError(
+                f"{name} es a l'entorn persistent de Windows ({', '.join(scopes)}). "
+                "Treu-la'n i defineix-la nomes per a la sessio."
+            )
+    if cli_value:
+        try:
+            parsed = make_url(cli_value)
+        except (ArgumentError, ValueError):
+            raise ProbeError("La DSN no es valida.") from None
+        if parsed.password:
+            raise ProbeError(
+                "--database-url no pot portar contrasenya (quedaria a l'historial). "
+                "Posa-la a PGPASSWORD o la DSN sencera a DATABASE_URL, nomes a la sessio."
+            )
+        return cli_value
+    value = environ.get("DATABASE_URL")
+    if not value:
+        raise ProbeError(
+            "Falta la base: DATABASE_URL a l'entorn de la sessio, o --database-url sense "
+            "contrasenya."
+        )
+    return value
 
 
 def alembic_head() -> str:
@@ -308,6 +362,70 @@ def minimal_cover(located: dict[str, list[int]]) -> list[int]:
             if all(set(indexes) & set(combo) for indexes in located.values()):
                 return list(combo)
     return candidates
+
+
+# --------------------------------------------------------------------------- #
+# Represa                                                                      #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(slots=True)
+class ResumePreview:
+    source_run_id: str
+    source_status: str
+    reused: list[int]
+    send: list[int]
+
+    @property
+    def provider_calls(self) -> int:
+        return len(self.send)
+
+
+async def preview_resume(
+    session: AsyncSession, tender: Tender, run_id: uuid.UUID, *, provider_name: str, model: str
+) -> ResumePreview:
+    """Que faria `--resume-from-run`, amb el MATEIX `plan_resume` de la canonada.
+
+    Nomes llegeix. Totes les comprovacions de la represa (mateixa licitacio,
+    entrada, perfil, proveidor i model, pla de chunks; run parcial i vigent) son
+    les de `plan_resume`: aqui no n'hi ha cap de propia. Si refusa, s'atura.
+    """
+    from types import SimpleNamespace
+
+    from app.core.errors import ResumeNotAllowedError
+    from app.models.requirements import RequirementExtractionRun
+    from app.services.requirement_analysis import plan_resume
+
+    current = await analysis_input(session, tender.id)
+    chunks = build_chunks(current.documents)
+    source = await session.get(RequirementExtractionRun, run_id)
+    try:
+        plan = plan_resume(
+            source,
+            tender_id=tender.id,
+            fingerprint=current.fingerprint,
+            chunks=chunks,
+            provider=SimpleNamespace(name=provider_name, model=model),
+            profile=profiles.V3,
+        )
+    except ResumeNotAllowedError as exc:
+        reason = (exc.details or {}).get("reason", "resume_refused")
+        raise ProbeError(f"La represa es refusa ({reason}): {exc}") from None
+    return ResumePreview(
+        source_run_id=str(run_id),
+        source_status=str(source.status),
+        reused=sorted(plan.reused),
+        send=sorted(plan.send),
+    )
+
+
+def render_resume(preview: ResumePreview) -> str:
+    return "\n".join([
+        f"REPRESA de {preview.source_run_id} ({preview.source_status}):",
+        f"  reaprofitats ({len(preview.reused)}): {preview.reused}",
+        f"  a enviar ({len(preview.send)}): {preview.send}",
+        f"  crides al proveidor previstes: {preview.provider_calls} (sense reintents)",
+    ])
 
 
 # --------------------------------------------------------------------------- #
@@ -536,8 +654,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Extraction Contract v3 sobre una sola licitacio, en una base "
         "d'usar i llencar.",
     )
-    parser.add_argument("--database-url", required=True,
-                        help="DSN d'una copia licitacions_v3_probe_* al port 5433")
+    parser.add_argument("--database-url", default=None,
+                        help="DSN SENSE contrasenya d'una copia licitacions_v3_probe_* al "
+                        "port 5433 (per defecte, DATABASE_URL de la sessio; la contrasenya, "
+                        "a PGPASSWORD)")
     parser.add_argument("--expediente", required=True, help="numero d'expedient EXACTE")
     parser.add_argument("--tender-id", type=uuid.UUID, default=None,
                         help="id de la licitacio, si l'expedient no es unic")
@@ -545,6 +665,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="text que ha de contenir el nom de l'organisme (comprovacio)")
     parser.add_argument("--chunks", default=None,
                         help="indexs separats per comes; per defecte, tots")
+    parser.add_argument("--resume-from-run", type=uuid.UUID, default=None,
+                        help="repren aquest run parcial: reaprofita els chunks bons i envia "
+                        "nomes la resta (no es combina amb --chunks)")
     parser.add_argument("--locate", action="append", default=[],
                         help="ETIQUETA=tipus_document:pagina per trobar-ne el chunk (repetible)")
     parser.add_argument("--provider", default=None, help="proveidor (per defecte, ENV)")
@@ -558,7 +681,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 async def run(args: argparse.Namespace) -> int:
     try:
-        url = validate_probe_database(args.database_url)
+        if args.resume_from_run is not None and args.chunks is not None:
+            raise ProbeError("--resume-from-run i --chunks no es combinen: la represa ja "
+                             "decideix que s'envia.")
+        url = validate_probe_database(resolve_database_dsn(args.database_url))
         locators = parse_locators(args.locate)
     except ProbeError as exc:
         print(f"No es pot executar: {exc}")
@@ -616,7 +742,7 @@ async def _run_with_session(
     locators: dict[str, tuple[str, int]],
 ) -> int:
     async with factory() as session:
-        if args.plan_only:
+        if args.plan_only and session.bind.dialect.name == "postgresql":
             await session.execute(sa.text("SET TRANSACTION READ ONLY"))
         try:
             revision = await check_database(session, url)
@@ -629,12 +755,23 @@ async def _run_with_session(
                 provider_name=provider_name, model=model,
                 database=url.database, alembic_revision=revision,
             )
+            resume = None
+            if args.resume_from_run is not None:
+                resume = await preview_resume(
+                    session, tender, args.resume_from_run,
+                    provider_name=provider_name, model=model,
+                )
+                plan.selected_chunks = resume.send
+                plan.selected = [c for c in plan.selected if c.index in set(resume.send)]
+                plan.max_provider_calls = resume.provider_calls
         except ProbeError as exc:
             await session.rollback()
             print(f"No es pot executar: {exc}")
             return EXIT_UNSAFE_INPUT
 
         print(render_plan(plan))
+        if resume is not None:
+            print(render_resume(resume))
         if args.plan_only:
             await session.rollback()
             print("\nNO s'ha construit ni cridat cap proveidor i no s'ha escrit res.")
@@ -642,11 +779,19 @@ async def _run_with_session(
 
         from app.services.requirement_analysis import analyze_tender_requirements
 
-        selected = frozenset(plan.selected_chunks)
-        outcome = await analyze_tender_requirements(
-            session, tender, provider=provider, profile=profiles.V3, force=True,
-            only_chunks=None if len(selected) == plan.chunks_total else selected,
-        )
+        if resume is not None:
+            # La represa de la canonada, sense cap mecanisme propi: torna a fer
+            # `plan_resume` i les seves comprovacions abans de cap crida.
+            outcome = await analyze_tender_requirements(
+                session, tender, provider=provider, profile=profiles.V3,
+                resume_from_run_id=args.resume_from_run,
+            )
+        else:
+            selected = frozenset(plan.selected_chunks)
+            outcome = await analyze_tender_requirements(
+                session, tender, provider=provider, profile=profiles.V3, force=True,
+                only_chunks=None if len(selected) == plan.chunks_total else selected,
+            )
         result = outcome.run
         rows = chunk_report(result)
         summary = {
@@ -663,6 +808,14 @@ async def _run_with_session(
             "chunks": rows,
         }
         print(json.dumps(summary, indent=2, ensure_ascii=False))
+        # L'id, sol a la seva linia, per copiar-lo a --resume-from-run.
+        print(f"\nRUN_ID={result.id}")
+        if str(result.status) == "partial":
+            # Les dues passes, cadascuna amb el seu mode explicit: primer el pla
+            # (sense cost) i nomes despres el run pagat.
+            print("Per continuar aquesta analisi:")
+            print(f"  1) previsualitzar (sense cost): --resume-from-run {result.id} --plan-only")
+            print(f"  2) executar (TE COST):          --resume-from-run {result.id} --paid-run")
         return EXIT_OK
 
 
