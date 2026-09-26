@@ -9,6 +9,8 @@
     python scripts/v3_tender_probe.py ... --chunks 2,5,15 --paid-run        # canari
     python scripts/v3_tender_probe.py ... --resume-from-run <RUN_ID> --plan-only
     python scripts/v3_tender_probe.py ... --resume-from-run <RUN_ID> --paid-run
+    # Represa selectiva: nomes aquests chunks pendents; la resta segueixen pendents.
+    python scripts/v3_tender_probe.py ... --resume-from-run <RUN_ID> --resume-chunks 15 --plan-only
 
 Per que existeix i no es el benchmark: el gold encara no sap puntuar valors v3
 (`value_json` son claims) i Palamos no hi es. Aquest script mesura una cosa mes
@@ -375,6 +377,9 @@ class ResumePreview:
     source_status: str
     reused: list[int]
     send: list[int]
+    #: Represa selectiva: els que la represa podria enviar i ara NO s'envien.
+    #: Queden pendents (`not_selected`), no fallits.
+    pending: list[int] = field(default_factory=list)
 
     @property
     def provider_calls(self) -> int:
@@ -382,7 +387,13 @@ class ResumePreview:
 
 
 async def preview_resume(
-    session: AsyncSession, tender: Tender, run_id: uuid.UUID, *, provider_name: str, model: str
+    session: AsyncSession,
+    tender: Tender,
+    run_id: uuid.UUID,
+    *,
+    provider_name: str,
+    model: str,
+    only_raw: str | None = None,
 ) -> ResumePreview:
     """Que faria `--resume-from-run`, amb el MATEIX `plan_resume` de la canonada.
 
@@ -394,7 +405,7 @@ async def preview_resume(
 
     from app.core.errors import ResumeNotAllowedError
     from app.models.requirements import RequirementExtractionRun
-    from app.services.requirement_analysis import plan_resume
+    from app.services.requirement_analysis import plan_resume, restrict_resume
 
     current = await analysis_input(session, tender.id)
     chunks = build_chunks(current.documents)
@@ -411,21 +422,37 @@ async def preview_resume(
     except ResumeNotAllowedError as exc:
         reason = (exc.details or {}).get("reason", "resume_refused")
         raise ProbeError(f"La represa es refusa ({reason}): {exc}") from None
+    send = plan.send
+    if only_raw is not None:
+        # La mateixa regla que aplicara la canonada al run pagat.
+        try:
+            wanted = frozenset(parse_chunk_selection(only_raw, chunks))
+            send = restrict_resume(plan, wanted)
+        except (ProbeError, ValueError) as exc:
+            raise ProbeError(f"--resume-chunks: {exc}") from None
     return ResumePreview(
         source_run_id=str(run_id),
         source_status=str(source.status),
         reused=sorted(plan.reused),
-        send=sorted(plan.send),
+        send=sorted(send),
+        pending=sorted(plan.send - send),
     )
 
 
 def render_resume(preview: ResumePreview) -> str:
-    return "\n".join([
+    lines = [
         f"REPRESA de {preview.source_run_id} ({preview.source_status}):",
         f"  reaprofitats ({len(preview.reused)}): {preview.reused}",
         f"  a enviar ({len(preview.send)}): {preview.send}",
-        f"  crides al proveidor previstes: {preview.provider_calls} (sense reintents)",
-    ])
+    ]
+    if preview.pending:
+        lines.append(
+            f"  pendents, no s'envien ara ({len(preview.pending)}): {preview.pending}"
+        )
+    lines.append(
+        f"  crides al proveidor previstes: {preview.provider_calls} (sense reintents)"
+    )
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -457,6 +484,7 @@ class ProbePlan:
     provider: str
     model: str
     output_token_cap: int
+    timeout_seconds: float = 0.0
     documents: list[dict[str, Any]] = field(default_factory=list)
     pages_total: int = 0
     chunks_total: int = 0
@@ -527,6 +555,7 @@ async def build_probe_plan(
         provider=provider_name,
         model=model,
         output_token_cap=settings.LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS,
+        timeout_seconds=settings.LLM_TIMEOUT_SECONDS,
         documents=[
             {"type": str(doc.document_type), "name": doc.document_name, "pages": doc.page_count}
             for doc in current.documents
@@ -567,7 +596,7 @@ def render_plan(plan: ProbePlan) -> str:
         f"Perfil {plan.profile}: {plan.extractor_version} / {plan.prompt_version} / "
         f"{plan.schema_version}",
         f"Proveidor previst: {plan.provider} · model {plan.model} · limit de sortida "
-        f"{plan.output_token_cap} tokens",
+        f"{plan.output_token_cap} tokens · temps maxim per crida {plan.timeout_seconds:g} s",
         f"Documents: {len(plan.documents)} · pagines: {plan.pages_total} · chunks: "
         f"{plan.chunks_total}",
     ]
@@ -668,6 +697,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-from-run", type=uuid.UUID, default=None,
                         help="repren aquest run parcial: reaprofita els chunks bons i envia "
                         "nomes la resta (no es combina amb --chunks)")
+    parser.add_argument("--resume-chunks", default=None,
+                        help="nomes amb --resume-from-run: envia NOMES aquests chunks "
+                        "pendents; la resta segueixen pendents. Mai un chunk ja completat")
     parser.add_argument("--locate", action="append", default=[],
                         help="ETIQUETA=tipus_document:pagina per trobar-ne el chunk (repetible)")
     parser.add_argument("--provider", default=None, help="proveidor (per defecte, ENV)")
@@ -683,7 +715,9 @@ async def run(args: argparse.Namespace) -> int:
     try:
         if args.resume_from_run is not None and args.chunks is not None:
             raise ProbeError("--resume-from-run i --chunks no es combinen: la represa ja "
-                             "decideix que s'envia.")
+                             "decideix que s'envia (per triar, --resume-chunks).")
+        if args.resume_chunks is not None and args.resume_from_run is None:
+            raise ProbeError("--resume-chunks nomes serveix amb --resume-from-run.")
         url = validate_probe_database(resolve_database_dsn(args.database_url))
         locators = parse_locators(args.locate)
     except ProbeError as exc:
@@ -759,7 +793,7 @@ async def _run_with_session(
             if args.resume_from_run is not None:
                 resume = await preview_resume(
                     session, tender, args.resume_from_run,
-                    provider_name=provider_name, model=model,
+                    provider_name=provider_name, model=model, only_raw=args.resume_chunks,
                 )
                 plan.selected_chunks = resume.send
                 plan.selected = [c for c in plan.selected if c.index in set(resume.send)]
@@ -785,6 +819,10 @@ async def _run_with_session(
             outcome = await analyze_tender_requirements(
                 session, tender, provider=provider, profile=profiles.V3,
                 resume_from_run_id=args.resume_from_run,
+                # Represa selectiva: la canonada torna a aplicar `restrict_resume`.
+                only_chunks=(
+                    frozenset(resume.send) if args.resume_chunks is not None else None
+                ),
             )
         else:
             selected = frozenset(plan.selected_chunks)

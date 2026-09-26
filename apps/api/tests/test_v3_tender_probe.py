@@ -935,3 +935,270 @@ def test_el_canari_amb_paid_run_es_el_mode_pagat():
 
     assert args.paid_run is True and args.plan_only is False
     assert args.chunks == "2,5,15"
+
+
+# --------------------------------------------------------------------------- #
+# Represa selectiva (--resume-chunks)                                          #
+# --------------------------------------------------------------------------- #
+#
+# El chunk 2 d'aquest fixture fa el paper del chunk 15 de Palamos: triat al
+# canari, tallat per `max_tokens`. Els 0 i 4 van be; 1 i 3 no es van triar.
+
+
+async def _truncated_canary(session, palamos_like):
+    from app.ai.provider import OutputTruncatedError, Usage
+
+    truncated = OutputTruncatedError(
+        "limit", usage=Usage(input_tokens=10, output_tokens=8000, stop_reason="max_tokens")
+    )
+    return await _fake_canary(
+        session, palamos_like, [{"requirements": []}, truncated, {"requirements": []}], {0, 2, 4}
+    )
+
+
+async def _preview(session, tender, run_id, only=None):
+    return await probe.preview_resume(
+        session, tender, run_id, provider_name="fake", model=settings.LLM_MODEL, only_raw=only
+    )
+
+
+async def test_la_represa_selectiva_envia_nomes_el_triat(session, palamos_like, one_page_chunks):
+    canary, tender = await _truncated_canary(session, palamos_like)
+
+    preview = await _preview(session, tender, canary.id, "2")
+
+    assert (preview.reused, preview.send, preview.pending) == ([0, 4], [2], [1, 3])
+    assert preview.provider_calls == 1
+    rendered = probe.render_resume(preview)
+    assert "a enviar (1): [2]" in rendered
+    assert "pendents, no s'envien ara (2): [1, 3]" in rendered
+
+
+@pytest.mark.parametrize("completed", ["0", "4", "2,4"])
+async def test_un_chunk_ja_completat_no_es_torna_a_demanar(
+    session, palamos_like, one_page_chunks, completed
+):
+    canary, tender = await _truncated_canary(session, palamos_like)
+
+    with pytest.raises(probe.ProbeError, match="ja completats"):
+        await _preview(session, tender, canary.id, completed)
+
+
+@pytest.mark.parametrize(("raw", "why"), [("9", "inexistents"), ("a", "enters"),
+                                         ("", "buit"), ("2,x", "enters")])
+async def test_una_seleccio_invalida_es_refusa(
+    session, palamos_like, one_page_chunks, raw, why
+):
+    canary, tender = await _truncated_canary(session, palamos_like)
+
+    with pytest.raises(probe.ProbeError, match=why):
+        await _preview(session, tender, canary.id, raw)
+
+
+async def test_els_repetits_es_normalitzen(session, palamos_like, one_page_chunks):
+    canary, tender = await _truncated_canary(session, palamos_like)
+
+    assert (await _preview(session, tender, canary.id, "2, 2,2")).send == [2]
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [("missing_run", "run_not_found"), ("other_model", "provider_mismatch"),
+     ("other_input", "input_changed")],
+)
+async def test_la_represa_selectiva_conserva_les_negatives(
+    session, palamos_like, one_page_chunks, monkeypatch, change, reason
+):
+    canary, tender = await _truncated_canary(session, palamos_like)
+    run_id, model = canary.id, settings.LLM_MODEL
+    if change == "missing_run":
+        run_id = uuid.uuid4()
+    elif change == "other_model":
+        model = "un-altre-model"
+    else:
+        real = probe.analysis_input
+
+        async def changed(*args, **kwargs):
+            current = await real(*args, **kwargs)
+            return SimpleNamespace(
+                documents=current.documents, skipped=current.skipped, fingerprint="0" * 64
+            )
+
+        monkeypatch.setattr(probe, "analysis_input", changed)
+
+    with pytest.raises(probe.ProbeError, match=reason):
+        await probe.preview_resume(
+            session, tender, run_id, provider_name="fake", model=model, only_raw="2"
+        )
+
+
+async def test_la_represa_selectiva_d_un_run_v1_es_refusa_pel_perfil(
+    session, palamos_like, one_page_chunks
+):
+    from app.services.requirement_analysis import analyze_tender_requirements
+
+    tender = await session.get(Tender, palamos_like["document"].tender_id)
+    v1 = (await analyze_tender_requirements(
+        session, tender,
+        provider=fake.FakeProvider([{"requirements": []}], model=settings.LLM_MODEL),
+        force=True, only_chunks=frozenset({0}),
+    )).run
+
+    with pytest.raises(probe.ProbeError, match="profile_mismatch"):
+        await _preview(session, tender, v1.id, "1")
+
+
+def test_resume_chunks_sense_resume_es_refusa(monkeypatch, capsys):
+    import asyncio
+
+    monkeypatch.setattr(probe, "create_async_engine", lambda *a, **k: pytest.fail("connecta"))
+    args = _cli_args("--resume-chunks", "2", "--plan-only")
+
+    assert asyncio.run(probe.run(args)) == probe.EXIT_CONFIG
+    assert "nomes serveix amb --resume-from-run" in capsys.readouterr().out
+
+
+async def test_la_canonada_refusa_reenviar_un_chunk_completat(
+    session, palamos_like, one_page_chunks
+):
+    from app.services.requirement_analysis import analyze_tender_requirements
+
+    canary, tender = await _truncated_canary(session, palamos_like)
+    runs_before = await session.scalar(
+        sa.select(sa.func.count()).select_from(RequirementExtractionRun)
+    )
+    fake.SENT_PAYLOADS.clear()
+
+    with pytest.raises(ValueError, match="ja completats"):
+        await analyze_tender_requirements(
+            session, tender, provider=fake.FakeProvider([], model=settings.LLM_MODEL),
+            profile=profiles.V3, resume_from_run_id=canary.id, only_chunks=frozenset({0, 2}),
+        )
+
+    assert fake.SENT_PAYLOADS == []
+    assert await session.scalar(
+        sa.select(sa.func.count()).select_from(RequirementExtractionRun)
+    ) == runs_before
+
+
+async def test_cadena_canari_selectiva_i_represa_normal(
+    session, palamos_like, one_page_chunks
+):
+    """El cas de Palamos: 2 bons + 1 tallat -> reintentar nomes el tallat -> la resta."""
+    from app.services.requirement_analysis import analyze_tender_requirements
+
+    canary, tender = await _truncated_canary(session, palamos_like)
+
+    fake.SENT_PAYLOADS.clear()
+    retry = (await analyze_tender_requirements(
+        session, tender,
+        provider=fake.FakeProvider([{"requirements": []}], model=settings.LLM_MODEL),
+        profile=profiles.V3, resume_from_run_id=canary.id, only_chunks=frozenset({2}),
+    )).run
+
+    assert len(fake.SENT_PAYLOADS) == 1, "nomes el chunk tallat"
+    assert retry.status == AnalysisRunStatus.PARTIAL
+    assert retry.error_code == "chunks_not_selected", "els pendents no son errors"
+    assert (retry.chunks_completed, retry.chunks_failed) == (3, 0)
+    assert retry.is_current
+    coverage = {c["index"]: (c["status"], c.get("origin"), c.get("error"))
+                for c in retry.chunk_coverage["chunks"]}
+    assert coverage == {
+        0: ("completed", "reused", None),
+        1: ("failed", "not_sent", "not_selected"),
+        2: ("completed", "sent", None),
+        3: ("failed", "not_sent", "not_selected"),
+        4: ("completed", "reused", None),
+    }
+    assert probe.canary_summary(probe.chunk_report(retry))["actual_failures"] == 0
+
+    preview = await _preview(session, tender, retry.id)
+    assert (preview.reused, preview.send) == ([0, 2, 4], [1, 3])
+
+    fake.SENT_PAYLOADS.clear()
+    full = (await analyze_tender_requirements(
+        session, tender,
+        provider=fake.FakeProvider([{"requirements": []}] * 2, model=settings.LLM_MODEL),
+        profile=profiles.V3, resume_from_run_id=retry.id,
+    )).run
+
+    assert len(fake.SENT_PAYLOADS) == 2, "mai es reenvien 0, 2 ni 4"
+    assert full.status == AnalysisRunStatus.COMPLETED
+    assert sorted(full.provider_metadata["reused_chunks"]) == [0, 2, 4]
+
+
+async def test_la_cli_fa_la_represa_selectiva(
+    session, session_factory, palamos_like, one_page_chunks, monkeypatch, capsys
+):
+    from app.services import requirement_analysis
+
+    canary, tender = await _truncated_canary(session, palamos_like)
+    tender.expediente_number = "2024-3137"
+    await session.commit()
+    calls = []
+    real = requirement_analysis.analyze_tender_requirements
+
+    async def spy(*args, **kwargs):
+        calls.append({k: kwargs.get(k) for k in ("resume_from_run_id", "only_chunks")})
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(requirement_analysis, "analyze_tender_requirements", spy)
+
+    before = await _counts(session)
+    fake.SENT_PAYLOADS.clear()
+    plan_provider = SimpleNamespace(name="fake", model=settings.LLM_MODEL)
+    assert await _cli(session_factory, _cli_args(
+        "--resume-from-run", str(canary.id), "--resume-chunks", "2", "--plan-only"),
+        plan_provider, monkeypatch) == probe.EXIT_OK
+    out = capsys.readouterr().out
+    assert "a enviar (1): [2]" in out
+    assert "Crides maximes al proveidor: 1" in out
+    assert fake.SENT_PAYLOADS == [] and calls == []
+    assert await _counts(session) == before
+
+    provider = fake.FakeProvider([{"requirements": []}], model=settings.LLM_MODEL)
+    assert await _cli(session_factory, _cli_args(
+        "--resume-from-run", str(canary.id), "--resume-chunks", "2", "--paid-run"),
+        provider, monkeypatch) == probe.EXIT_OK
+    out = capsys.readouterr().out
+
+    assert calls == [{"resume_from_run_id": canary.id, "only_chunks": frozenset({2})}]
+    assert len(fake.SENT_PAYLOADS) == 1
+    new_id = next(line.split("=", 1)[1] for line in out.splitlines()
+                  if line.startswith("RUN_ID="))
+    assert f"--resume-from-run {new_id} --plan-only" in out
+
+
+# --------------------------------------------------------------------------- #
+# Limit de sortida i temps maxim: de l'entorn del proces, sense trencar res    #
+# --------------------------------------------------------------------------- #
+
+
+def test_el_limit_i_el_temps_es_llegeixen_de_l_entorn_del_proces(monkeypatch):
+    from app.core.config import Settings
+
+    monkeypatch.setenv("LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS", "16000")
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "300")
+
+    fresh = Settings()
+
+    assert fresh.LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS == 16000
+    assert fresh.LLM_TIMEOUT_SECONDS == 300
+
+
+async def test_canviar_limit_i_temps_no_trenca_la_represa(
+    session, palamos_like, one_page_chunks, monkeypatch
+):
+    canary, tender = await _truncated_canary(session, palamos_like)
+    monkeypatch.setattr(settings, "LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS", 16000)
+    monkeypatch.setattr(settings, "LLM_TIMEOUT_SECONDS", 300.0)
+
+    preview = await _preview(session, tender, canary.id, "2")
+    plan, _ = await probe.build_probe_plan(
+        session, tender, chunks_raw=None, locators={}, provider_name="x", model="y"
+    )
+
+    assert (preview.reused, preview.send) == ([0, 4], [2])
+    rendered = probe.render_plan(plan)
+    assert "limit de sortida 16000 tokens" in rendered
+    assert "temps maxim per crida 300 s" in rendered

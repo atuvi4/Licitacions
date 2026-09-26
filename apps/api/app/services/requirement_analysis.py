@@ -673,6 +673,9 @@ async def analyze_tender_requirements(
       queden fallits amb `not_selected`: el run es parcial i ho diu, i una represa
       posterior envia nomes els que falten. `None` (per defecte) = tots. Un index
       que no existeix es refusa abans de reservar el run i de cap crida.
+      Amb `resume_from_run_id`, es una represa selectiva (`restrict_resume`): han
+      de ser chunks que la represa enviaria; un chunk ja completat al run d'origen
+      es refusa, perque no es torna a pagar mai.
     """
     started = time.monotonic()
     llm = provider or get_provider()
@@ -711,14 +714,17 @@ async def analyze_tender_requirements(
             profile=profile,
         )
     if only_chunks is not None:
-        unknown = sorted(only_chunks - {chunk.index for chunk in chunks})
-        if unknown or not only_chunks:
-            raise ValueError(f"Chunks inexistents o seleccio buida: {unknown}.")
         if plan is not None:
-            raise ValueError("`only_chunks` i `resume_from_run_id` no es combinen.")
+            # Represa selectiva: nomes un subconjunt del que la represa enviaria.
+            # Les comprovacions de `plan_resume` ja s'han fet; aixo nomes restringeix.
+            only_chunks = restrict_resume(plan, only_chunks)
+        else:
+            unknown = sorted(only_chunks - {chunk.index for chunk in chunks})
+            if unknown or not only_chunks:
+                raise ValueError(f"Chunks inexistents o seleccio buida: {unknown}.")
     to_send = (
-        len(plan.send) if plan is not None
-        else len(only_chunks) if only_chunks is not None
+        len(only_chunks) if only_chunks is not None
+        else len(plan.send) if plan is not None
         else len(chunks)
     )
     if chunk_limit is not None and to_send > chunk_limit:
@@ -997,6 +1003,26 @@ def plan_resume(
     if not send:
         raise refuse("nothing_to_resume", "Aquest run no te cap chunk fallit.")
     return ResumePlan(source=source, reused=reused, send=frozenset(send))
+
+
+def restrict_resume(plan: ResumePlan, only: frozenset[int]) -> frozenset[int]:
+    """Quins chunks de la represa s'envien ara. Pura; mateixa regla per al pla i el run.
+
+    Nomes pot triar entre els que la represa ja enviaria (`plan.send`: fallits o
+    no seleccionats). Un chunk completat al run d'origen es refusa: no es torna a
+    pagar mai. Un index fora del pla, o una seleccio buida, tambe.
+    """
+    if not only:
+        raise ValueError("Seleccio de represa buida.")
+    already = sorted(only & set(plan.reused))
+    if already:
+        raise ValueError(
+            f"Chunks ja completats al run d'origen: {already}. No es tornen a enviar."
+        )
+    unknown = sorted(only - plan.send)
+    if unknown:
+        raise ValueError(f"Chunks fora del pla de represa: {unknown}.")
+    return frozenset(only)
 
 
 #: Camps que NO es copien d'un resultat reaprofitat: identitat, run, dates, el
