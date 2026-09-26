@@ -493,6 +493,8 @@ class ProbePlan:
     located: dict[str, list[int]] = field(default_factory=dict)
     minimal_canary: list[int] | None = None
     max_provider_calls: int = 0
+    #: L'historic de tokens del mateix prompt i model: la BASE de l'estimacio.
+    history: Any = None
     provider_calls_made: int = 0
     token_estimate: dict[str, Any] = field(default_factory=dict)
 
@@ -528,18 +530,6 @@ async def build_probe_plan(
     profile = profiles.V3
 
     history = await usage_history(session, prompt_version=profile.prompt_version, model=model)
-    if history.input_per_request is None or history.output_per_request is None:
-        estimate: dict[str, Any] = {
-            "available": False,
-            "reason": f"sense historic de {profile.prompt_version} amb {model}",
-        }
-    else:
-        estimate = {
-            "available": True,
-            "basis": f"{history.requests} peticio(ns) de {profile.prompt_version}",
-            "input_tokens": round(history.input_per_request * len(selected)),
-            "output_tokens": round(history.output_per_request * len(selected)),
-        }
 
     plan = ProbePlan(
         database=database,
@@ -577,9 +567,34 @@ async def build_probe_plan(
         minimal_canary=minimal_cover(located) if located else None,
         # Sense reintents (`PAID_RUN_MAX_RETRIES = 0`): una crida per chunk.
         max_provider_calls=len(selected),
-        token_estimate=estimate,
+        token_estimate=estimate_tokens(history, len(selected), profile.prompt_version, model),
+        history=history,
     )
     return plan, chunks
+
+
+def estimate_tokens(history: Any, calls: int, prompt_version: str, model: str) -> dict[str, Any]:
+    """Tokens previstos per a `calls` crides, amb la mitjana per peticio de l'historic.
+
+    `calls` son les crides que ES FARAN (despres de la represa i de la seleccio),
+    i `history_requests` son les peticions PASSADES que fan de mostra. Son dues
+    xifres diferents i es diuen per separat: confondre-les era el defecte del
+    canari (s'estimava per als 22 chunks encara que se n'enviessin 1 o 19).
+    """
+    if history is None or history.input_per_request is None or history.output_per_request is None:
+        return {
+            "available": False,
+            "calls": calls,
+            "reason": f"sense historic de {prompt_version} amb {model}",
+        }
+    return {
+        "available": True,
+        "calls": calls,
+        "history_requests": history.requests,
+        "prompt_version": prompt_version,
+        "input_tokens": round(history.input_per_request * calls),
+        "output_tokens": round(history.output_per_request * calls),
+    }
 
 
 def _page_range(chunk: Chunk) -> str:
@@ -614,14 +629,18 @@ def render_plan(plan: ProbePlan) -> str:
         f"Crides maximes al proveidor: {plan.max_provider_calls} (sense reintents) · "
         f"crides fetes: {plan.provider_calls_made}"
     )
-    if plan.token_estimate.get("available"):
-        e = plan.token_estimate
+    e = plan.token_estimate
+    if e.get("available"):
         lines.append(
-            f"ESTIMACIO ({e['basis']}): ~{e['input_tokens']} tokens d'entrada, "
-            f"~{e['output_tokens']} de sortida."
+            f"ESTIMACIO per a {e['calls']} crida(es) prevista(es): ~{e['input_tokens']} tokens "
+            f"d'entrada, ~{e['output_tokens']} de sortida "
+            f"(base: {e['history_requests']} peticio(ns) historica(ues) de {e['prompt_version']})."
         )
     else:
-        lines.append(f"Estimacio de tokens: no disponible ({plan.token_estimate['reason']}).")
+        lines.append(
+            f"Estimacio de tokens per a {e.get('calls', 0)} crida(es): no disponible "
+            f"({e['reason']})."
+        )
     return "\n".join(lines)
 
 
@@ -644,6 +663,9 @@ def canary_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
         "not_selected": len(rows) - len(attempted),
         "schema_invalid": sum(1 for r in attempted if r["schema_invalid"]),
         "output_truncated": sum(1 for r in attempted if r["output_truncated"]),
+        "items_rejected_schema": sum(r.get("items_rejected_schema", 0) for r in attempted),
+        "claims_rejected_schema": sum(r.get("claims_rejected_schema", 0) for r in attempted),
+        "items_salvaged": sum(r.get("items_salvaged", 0) for r in attempted),
     }
 
 
@@ -652,9 +674,16 @@ def chunk_report(run: Any) -> list[dict[str, Any]]:
     rows = []
     for entry in (run.chunk_coverage or {}).get("chunks", []):
         rejections: dict[str, int] = {}
+        items_rejected = claims_rejected = 0
+        salvaged: set[Any] = set()
         for rejection in entry.get("rejections") or []:
             reason = str(rejection.get("reason"))
             rejections[reason] = rejections.get(reason, 0) + 1
+            if reason == "schema_invalid" and rejection.get("stage") == "schema":
+                items_rejected += 1
+            elif reason == "schema_invalid" and rejection.get("stage") == "claim":
+                claims_rejected += 1
+                salvaged.add((rejection.get("item"), rejection.get("index")))
         rows.append({
             "index": entry.get("index"),
             "status": entry.get("status"),
@@ -668,6 +697,9 @@ def chunk_report(run: Any) -> list[dict[str, Any]]:
             "output_tokens": entry.get("output_tokens"),
             "normalised": entry.get("normalised"),
             "rejections": rejections,
+            "items_rejected_schema": items_rejected,
+            "claims_rejected_schema": claims_rejected,
+            "items_salvaged": len(salvaged),
         })
     return rows
 
@@ -798,6 +830,9 @@ async def _run_with_session(
                 plan.selected_chunks = resume.send
                 plan.selected = [c for c in plan.selected if c.index in set(resume.send)]
                 plan.max_provider_calls = resume.provider_calls
+                plan.token_estimate = estimate_tokens(
+                    plan.history, resume.provider_calls, plan.prompt_version, model
+                )
         except ProbeError as exc:
             await session.rollback()
             print(f"No es pot executar: {exc}")

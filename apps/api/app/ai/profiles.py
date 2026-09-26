@@ -33,11 +33,11 @@ from app.ai.prompts.requirements_v2 import (
     SYSTEM_PROMPT_V2,
     build_user_message_v2,
 )
-from app.ai.prompts.requirements_v3 import (
-    EXTRACTOR_VERSION_V3,
-    PROMPT_VERSION_V3,
-    SYSTEM_PROMPT_V3,
-    build_user_message_v3,
+from app.ai.prompts.requirements_v3_1 import (
+    EXTRACTOR_VERSION_V3_1,
+    PROMPT_VERSION_V3_1,
+    SYSTEM_PROMPT_V3_1,
+    build_user_message_v3_1,
 )
 from app.ai.schemas import (
     SCHEMA_VERSION,
@@ -117,13 +117,19 @@ V2 = ExtractorProfile(
 #: els pressupostos i el benchmark a partir d'un nom que arriba de fora. Mentre
 #: la v3 no s'hagi mesurat, nomes s'executa si el codi la passa explicitament
 #: (`analyze_tender_requirements(..., profile=V3)`).
+#:
+#: Des del canari pagat de Palamos, el contracte es el **v3.1** (unitats fisiques,
+#: claims rebutjats un a un, ancores aplanades). Les tres versions pugen juntes:
+#: un run v3 (`bed24c45`, `4df81a00`) NO es pot reprendre amb aquest perfil, i
+#: `plan_resume` ho refusa (`profile_mismatch`). Aquells runs queden com a
+#: evidencia; el prompt v3 es conserva a `prompts/requirements_v3.py`.
 V3 = ExtractorProfile(
     name="v3",
-    extractor_version=EXTRACTOR_VERSION_V3,
-    prompt_version=PROMPT_VERSION_V3,
+    extractor_version=EXTRACTOR_VERSION_V3_1,
+    prompt_version=PROMPT_VERSION_V3_1,
     schema_version=SCHEMA_VERSION_V3,
-    system_prompt=SYSTEM_PROMPT_V3,
-    build_user_message=build_user_message_v3,
+    system_prompt=SYSTEM_PROMPT_V3_1,
+    build_user_message=build_user_message_v3_1,
     json_schema=chunk_output_json_schema_v3,
     output_model=ChunkExtractionOutV3,
     structured_values=True,

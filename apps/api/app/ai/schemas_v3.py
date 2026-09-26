@@ -42,8 +42,12 @@ from app.models.enums import (
     RequirementScope,
 )
 
-#: Versio del contracte. Es desaria a cada Run i formaria part de la clau de cache.
-SCHEMA_VERSION_V3 = "requirements-schema-v3"
+#: Versio del contracte. Es desa a cada Run i forma part de la clau de cache.
+#:
+#: v3.1 (replay pagat de Palamos): `quantity` amb unitats fisiques i de dades
+#: tancades, minuts i segons a les durades, i ancores de fins a 160 caracters.
+#: Un run v3 no es pot reprendre en v3.1: el contracte de sortida ha canviat.
+SCHEMA_VERSION_V3 = "requirements-schema-v3.1"
 
 #: Identificador d'un claim: tambe es la clau que tindra a `value_json`.
 CLAIM_ID_PATTERN = r"^[a-z][a-z0-9_]{0,59}$"
@@ -62,6 +66,9 @@ class ClaimKind(StrEnum):
     PERCENTAGE = "percentage"  # 10 %
     DURATION = "duration"  # 3 anys
     BANDWIDTH = "bandwidth"  # 600 Mbps
+    #: Magnitud fisica o de dades amb unitat tancada: 6,5 W, 100 g, 1,5 m,
+    #: 120 dBA, 10 GB, 2,5". Nomes es compara amb la mateixa familia d'unitats.
+    QUANTITY = "quantity"
     TEXT = "text"  # "ISO 9001"
     BOOLEAN = "boolean"  # si/no; mai comprovable literalment
 
@@ -77,20 +84,48 @@ class ClaimUnit(StrEnum):
     KBPS = "kbps"
     MBPS = "mbps"
     GBPS = "gbps"
+    # v3.1: durades curtes (minuts de trucada, temps de resposta).
+    SECONDS = "seconds"
+    MINUTES = "minutes"
+    # v3.1: `quantity`. Un conjunt TANCAT: una unitat desconeguda es refusa.
+    W = "W"
+    KW = "kW"
+    G = "g"
+    KG = "kg"
+    MM = "mm"
+    CM = "cm"
+    M = "m"
+    DBA = "dBA"
+    DB = "dB"
+    MB = "MB"
+    GB = "GB"
+    TB = "TB"
+    INCH = "inch"
 
+
+_QUANTITY_UNITS = frozenset({
+    ClaimUnit.W, ClaimUnit.KW, ClaimUnit.G, ClaimUnit.KG, ClaimUnit.MM, ClaimUnit.CM,
+    ClaimUnit.M, ClaimUnit.DBA, ClaimUnit.DB, ClaimUnit.MB, ClaimUnit.GB, ClaimUnit.TB,
+    ClaimUnit.INCH,
+})
 
 _UNITS_BY_KIND: dict[ClaimKind, frozenset[ClaimUnit]] = {
     ClaimKind.AMOUNT: frozenset({ClaimUnit.EUR}),
     ClaimKind.PERCENTAGE: frozenset({ClaimUnit.PERCENT}),
-    ClaimKind.DURATION: frozenset(
-        {ClaimUnit.HOURS, ClaimUnit.DAYS, ClaimUnit.WEEKS, ClaimUnit.MONTHS, ClaimUnit.YEARS}
-    ),
+    ClaimKind.DURATION: frozenset({
+        ClaimUnit.SECONDS, ClaimUnit.MINUTES, ClaimUnit.HOURS, ClaimUnit.DAYS,
+        ClaimUnit.WEEKS, ClaimUnit.MONTHS, ClaimUnit.YEARS,
+    }),
     ClaimKind.BANDWIDTH: frozenset({ClaimUnit.KBPS, ClaimUnit.MBPS, ClaimUnit.GBPS}),
+    ClaimKind.QUANTITY: _QUANTITY_UNITS,
 }
 _NUMERIC_KINDS = frozenset(
     {ClaimKind.COUNT, ClaimKind.AMOUNT, ClaimKind.PERCENTAGE, ClaimKind.DURATION,
-     ClaimKind.BANDWIDTH}
+     ClaimKind.BANDWIDTH, ClaimKind.QUANTITY}
 )
+#: Llargada maxima d'una ancora. Les files de taula tecnica de Palamos passen
+#: dels 80 caracters ("Routers amb connexions 3G/4G per linia Backup i ...").
+MAX_ANCHOR = 160
 
 
 class ClaimCertainty(StrEnum):
@@ -119,7 +154,7 @@ class ClaimOutV3(StrictModel):
     #: Terme LITERAL de la cita que diu de que es el valor ("GPON", "FTTH",
     #: "volum anual de negocis"). Sense ancora, un numero que coincideix per
     #: casualitat no es pot distingir d'un que sosté el claim.
-    anchor: str | None = Field(default=None, min_length=1, max_length=80)
+    anchor: str | None = Field(default=None, min_length=1, max_length=MAX_ANCHOR)
     certainty: ClaimCertainty = ClaimCertainty.STATED
 
     @model_validator(mode="after")

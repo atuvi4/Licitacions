@@ -1791,9 +1791,15 @@ def _persist_chunk_v3(
         scope = item.scope
         if lot_id is not None and scope == RequirementScope.UNKNOWN:
             scope = RequirementScope.LOT
-        needs_review = lot_needs_review or support.status in (
-            RequirementSupportStatus.NEEDS_REVIEW,
-            RequirementSupportStatus.NOT_SUPPORTED,
+        needs_review = (
+            lot_needs_review
+            # v3.1: rescatat sense algun claim invalid. Ha perdut informacio, i
+            # una persona ho ha de mirar encara que la resta estigui sostinguda.
+            or index in parsed.salvaged_requirements
+            or support.status in (
+                RequirementSupportStatus.NEEDS_REVIEW,
+                RequirementSupportStatus.NOT_SUPPORTED,
+            )
         )
 
         requirement = Requirement(

@@ -105,32 +105,44 @@ def check_claim(claim: ClaimOutV3, quote: str) -> ClaimCheck:
     if claim.kind == ClaimKind.BOOLEAN:
         return ClaimCheck.SEMANTIC_UNVERIFIED
     if claim.kind == ClaimKind.TEXT:
-        present = cm.contains_term(cm.normalise(quote), str(claim.value))
+        present = cm.contains_term(quote, str(claim.value))
         return ClaimCheck.SUPPORTED if present else ClaimCheck.SEMANTIC_UNVERIFIED
     return _check_numeric(claim, quote)
 
 
 def _check_numeric(claim: ClaimOutV3, quote: str) -> ClaimCheck:
+    """Un claim numeric contra una cita: valor amb la seva unitat, ancora, i lligam.
+
+    Lligam (v3.1): per a cada aparicio de l'ancora, es miren els valors del
+    mateix tipus del tros que l'envolta, FORA de l'ancora. Si n'hi ha, tots han
+    de ser el valor del claim. Si no n'hi ha cap, compten els de DINS de
+    l'ancora ("agenda amb mes de 500 entrades"). Un valor rival fa el lligam
+    ambigu: mai `supported`. Si l'ancora surt mes d'un cop, totes les aparicions
+    ho han de provar.
+    """
     number = float(claim.value)  # type: ignore[arg-type]
     wanted = cm.canonical(number, claim.unit)
-    per_part = [(part, cm.occurrences(part)) for part in cm.segments(quote)]
+    found = [occ for row in cm.rows(quote) for occ in cm.occurrences(row)]
 
-    typed_hit = any(
-        cm.same_value(t, wanted) for _, occs in per_part for t in cm.typed(occs, claim.kind)
-    )
-    if not typed_hit:
-        loose_hit = any(abs(o.value - number) < 0.005 for _, occs in per_part for o in occs)
-        return ClaimCheck.UNIT_NOT_IN_QUOTE if loose_hit else ClaimCheck.VALUE_NOT_IN_QUOTE
+    if not any(cm.same_value(t, wanted) for t in cm.typed(found, claim.kind)):
+        # El numero pot ser-hi sense la unitat, o dins d'una etiqueta ("800/900"):
+        # aixo es `unverified`, no `value_not_in_quote`.
+        loose = any(abs(o.value - number) < 0.005 for o in found) or number in cm.raw_numbers(
+            quote
+        )
+        return ClaimCheck.UNIT_NOT_IN_QUOTE if loose else ClaimCheck.VALUE_NOT_IN_QUOTE
     if claim.anchor is None:
         return ClaimCheck.ANCHOR_MISSING
-    if not cm.contains_term(cm.normalise(quote), claim.anchor):
+    if not cm.contains_term(quote, claim.anchor):
         return ClaimCheck.ANCHOR_NOT_IN_QUOTE
-    for part, occs in per_part:
-        if not cm.contains_term(part, claim.anchor):
-            continue
-        values = cm.typed(occs, claim.kind)
-        if values and all(cm.same_value(v, wanted) for v in values):
-            return ClaimCheck.SUPPORTED
+    verdicts = []
+    for window in cm.anchor_windows(quote, claim.anchor):
+        values = cm.typed(window.outside, claim.kind) or cm.typed(window.inside, claim.kind)
+        verdicts.append(bool(values) and all(cm.same_value(v, wanted) for v in values))
+    # Una ancora que surt mes d'un cop no discrimina: "Tarifa plana de dades" de la
+    # Tarifa 1 i de la Tarifa 2. Nomes compta si TOTES les aparicions ho proven.
+    if verdicts and (all(verdicts) if len(verdicts) > 1 else verdicts[0]):
+        return ClaimCheck.SUPPORTED
     return ClaimCheck.BINDING_AMBIGUOUS
 
 
@@ -662,10 +674,17 @@ class ParsedChunkV3:
     schema_rejections: RejectionLog
     requirement_indexes: tuple[int, ...] = ()
     award_indexes: tuple[int, ...] = ()
+    #: Elements SENCERS descartats per esquema (el que compta `requirements_rejected`).
+    items_rejected: int = 0
+    #: Claims descartats un a un dins de requisits que s'han conservat (v3.1).
+    claims_rejected: int = 0
+    #: Posicio ORIGINAL dels requisits conservats sense algun claim: van a revisio.
+    salvaged_requirements: frozenset[int] = frozenset()
 
     @property
     def schema_rejected(self) -> int:
-        return len(self.schema_rejections.entries) + self.schema_rejections.dropped
+        """Elements sencers descartats. Un claim descartat no hi compta."""
+        return self.items_rejected
 
 
 def parse_chunk_v3_result(payload: Any) -> ParsedChunkV3:
@@ -682,21 +701,91 @@ def parse_chunk_v3_result(payload: Any) -> ParsedChunkV3:
     log = RejectionLog()
     kept: dict[str, list[BaseModel]] = {}
     indexes: dict[str, list[int]] = {}
+    items_rejected = claims_rejected = 0
+    salvaged: set[int] = set()
     for key, model, item in _ITEM_LISTS:
         kept[key], indexes[key] = [], []
         for index, raw in enumerate(payload.get(key) or []):
             try:
                 kept[key].append(model.model_validate(raw))
                 indexes[key].append(index)
+                continue
             except ValidationError as exc:
-                log.add(_schema_rejection(item, index, exc, model))
+                rescued, claim_errors = (
+                    _salvage_requirement(raw, exc) if model is RequirementOutV3 else (None, [])
+                )
+                if rescued is None:
+                    items_rejected += 1
+                    log.add(_schema_rejection(item, index, exc, model))
+                    continue
+            kept[key].append(rescued)
+            indexes[key].append(index)
+            salvaged.add(index)
+            for claim_index, error_type, field_name in claim_errors:
+                claims_rejected += 1
+                log.add(rejection(
+                    item, index, RejectionStage.CLAIM, RejectionReason.SCHEMA_INVALID,
+                    claim=claim_index, detail=error_type, field_name=field_name,
+                ))
     output = ChunkExtractionOutV3.model_validate({**envelope, **kept})
     return ParsedChunkV3(
         output=output,
         schema_rejections=log,
         requirement_indexes=tuple(indexes["requirements"]),
         award_indexes=tuple(indexes["award_candidates"]),
+        items_rejected=items_rejected,
+        claims_rejected=claims_rejected,
+        salvaged_requirements=frozenset(salvaged),
     )
+
+
+def _salvage_requirement(
+    raw: Any, exc: ValidationError
+) -> tuple[RequirementOutV3 | None, list[tuple[int, str, str | None]]]:
+    """Un requisit que nomes falla per claims concrets, sense aquells claims.
+
+    Nomes si TOTS els errors son dins d'un claim (`claims[i]...`). Qualsevol
+    altre error (categoria, titol, cites, ids repetits, massa claims) descarta
+    el requisit com sempre. El requisit rescatat porta `claims_complete =
+    partial` (se sap que en falta algun) i qui el desa l'envia a revisio. Un
+    claim descartat no es converteix mai en res: simplement no hi es, i el seu
+    motiu queda als rebutjos. Retorna el requisit, o `None`, i per a cada claim
+    descartat: (posicio, tipus d'error, camp).
+    """
+    if not isinstance(raw, dict) or not isinstance(raw.get("claims"), list):
+        return None, []
+    errors = exc.errors(include_input=False, include_url=False, include_context=False)
+    bad: set[int] = set()
+    for error in errors:
+        loc = error.get("loc") or ()
+        if len(loc) >= 2 and loc[0] == "claims" and isinstance(loc[1], int):
+            bad.add(loc[1])
+        else:
+            return None, []
+    if not bad:
+        return None, []
+    claim_errors: list[tuple[int, str, str | None]] = []
+    for position in sorted(bad):
+        try:
+            ClaimOutV3.model_validate(raw["claims"][position])
+            first: dict[str, Any] = {"type": "other", "loc": ()}
+        except ValidationError as claim_exc:
+            first = claim_exc.errors(include_input=False, include_url=False,
+                                     include_context=False)[0]
+        loc = first.get("loc") or ()
+        field_name = (
+            loc[0] if loc and isinstance(loc[0], str) and loc[0] in ClaimOutV3.model_fields
+            else None
+        )
+        claim_errors.append((position, str(first.get("type", "other")), field_name))
+    remaining = [claim for n, claim in enumerate(raw["claims"]) if n not in bad]
+    try:
+        rescued = RequirementOutV3.model_validate(
+            {**raw, "claims": remaining, "claims_complete": Completeness.PARTIAL.value}
+        )
+    except ValidationError:
+        return None, []
+    return rescued, claim_errors
 
 
 def _schema_rejection(

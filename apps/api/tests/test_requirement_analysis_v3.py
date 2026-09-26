@@ -17,7 +17,7 @@ import sqlalchemy as sa
 
 from app.ai import profiles
 from app.ai.contract_v3 import VALUE_SCHEMA_V3
-from app.ai.prompts.requirements_v3 import SYSTEM_PROMPT_V3
+from app.ai.prompts.requirements_v3_1 import SYSTEM_PROMPT_V3_1 as SYSTEM_PROMPT_V3
 from app.ai.providers import fake
 from app.ai.schemas_v3 import SCHEMA_VERSION_V3
 from app.models.enums import AnalysisRunStatus, ReviewStatus
@@ -106,12 +106,12 @@ def test_v3_no_es_el_per_defecte_ni_es_pot_demanar_per_nom():
 
 
 def test_el_perfil_v3_porta_el_seu_contracte():
-    assert V3.schema_version == SCHEMA_VERSION_V3 == "requirements-schema-v3"
-    assert V3.prompt_version == "requirements-v3"
-    assert V3.extractor_version == "tender-requirements-v3"
+    assert V3.schema_version == SCHEMA_VERSION_V3 == "requirements-schema-v3.1"
+    assert V3.prompt_version == "requirements-v3.1"
+    assert V3.extractor_version == "tender-requirements-v3.1"
     assert V3.claims_contract is True
     assert not profiles.V1.claims_contract and not profiles.V2.claims_contract
-    assert profiles.profile_for_run("tender-requirements-v3") is V3
+    assert profiles.profile_for_run("tender-requirements-v3.1") is V3
 
 
 def test_els_jobs_no_poden_executar_v3():
@@ -154,7 +154,7 @@ async def test_un_requisit_sostingut_escriu_el_suport_i_el_value_schema(session,
     run = await _run_v3(session, analyzable, {"requirements": [_requirement(extraction_id)]})
 
     assert run.status == AnalysisRunStatus.COMPLETED
-    assert run.schema_version == "requirements-schema-v3"
+    assert run.schema_version == "requirements-schema-v3.1"
     assert run.requirements_extracted == 1
 
     requirement = await session.scalar(sa.select(Requirement))
@@ -368,7 +368,7 @@ async def test_un_run_v3_no_reaprofita_un_run_v1(session, analyzable):
     second = await _run_v3(session, analyzable, {"requirements": [_requirement(extraction_id)]})
 
     assert second.id != first.run.id
-    assert second.schema_version == "requirements-schema-v3"
+    assert second.schema_version == "requirements-schema-v3.1"
 
 
 async def test_la_represa_v3_reapunta_la_base_a_les_cites_copiades(

@@ -155,7 +155,7 @@ def test_el_json_schema_v3_es_serialitzable_i_estricte():
     json.dumps(schema)
     assert schema["additionalProperties"] is False
     assert "award_candidates" in schema["properties"]
-    assert SCHEMA_VERSION_V3 == "requirements-schema-v3"
+    assert SCHEMA_VERSION_V3 == "requirements-schema-v3.1"
 
 
 # --------------------------------------------------------------------------- #
@@ -605,12 +605,16 @@ def test_un_element_invalid_no_s_emporta_el_chunk():
 
     parsed, log = parse_chunk_v3(payload)
 
-    assert [r.title for r in parsed.requirements] == ["ok"]
+    # v3.1: el tercer nomes falla per UN claim; es conserva sense aquell claim.
+    assert [r.title for r in parsed.requirements] == ["ok", "dolent"]
     assert [e["reason"] for e in log.entries] == ["schema_invalid"] * 3
     assert log.entries[0] == {"item": "requirement", "index": 1, "stage": "schema",
                               "reason": "schema_invalid", "detail": "extra_forbidden"}
-    assert log.entries[1]["field"] == "claims"
+    assert log.entries[1] == {"item": "requirement", "index": 2, "stage": "claim",
+                              "reason": "schema_invalid", "claim": 0, "detail": "value_error"}
     assert log.entries[2]["item"] == "award_candidate"
+    assert parsed.requirements[1].claims == []
+    assert parsed.requirements[1].claims_complete == "partial"
     assert secret not in json.dumps(log.entries)
 
 

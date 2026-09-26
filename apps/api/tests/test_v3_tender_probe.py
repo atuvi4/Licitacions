@@ -281,8 +281,8 @@ async def test_el_pla_no_construeix_proveidor_ni_escriu(session, analyzable, mon
     assert plan.max_provider_calls == plan.chunks_total == len(chunks)
     assert plan.located == {"X": [0]}
     assert plan.minimal_canary == [0]
-    assert plan.prompt_version == "requirements-v3"
-    assert plan.schema_version == "requirements-schema-v3"
+    assert plan.prompt_version == "requirements-v3.1"
+    assert plan.schema_version == "requirements-schema-v3.1"
     assert plan.output_token_cap == settings.LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS
     assert plan.token_estimate["available"] is False
     assert "PLA v3" in probe.render_plan(plan)
@@ -460,6 +460,7 @@ async def test_tres_bons_i_dos_no_seleccionats_no_son_cap_fallada(
     assert canary == {
         "chunks_total": 5, "attempted": 3, "succeeded": 3, "actual_failures": 0,
         "not_selected": 2, "schema_invalid": 0, "output_truncated": 0,
+        "items_rejected_schema": 0, "claims_rejected_schema": 0, "items_salvaged": 0,
     }
     summary = coverage_summary(run.chunk_coverage)
     assert (summary["chunks_failed"], summary["chunks_not_selected"]) == (0, 2)
