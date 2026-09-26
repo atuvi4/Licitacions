@@ -123,6 +123,67 @@ def test_an_unknown_profile_is_refused():
 def test_the_default_profile_does_not_change():
     """Mesurar no promou. Si aixo falla, algu ha canviat el producte sense dir-ho."""
     assert DEFAULT_PROFILE is V1
+
+
+# --------------------------------------------------------------------------- #
+# Extraction Contract v3: nomes amb --experimental-v3                           #
+# --------------------------------------------------------------------------- #
+
+
+def test_sense_perfil_ni_flag_el_benchmark_mesura_v1():
+    args = benchmark.build_parser().parse_args(["--dataset", "gold-v2.1", "--plan-only"])
+
+    assert args.profile is None and args.experimental_v3 is False
+    assert benchmark.resolve_profile(args.profile, experimental_v3=args.experimental_v3) is V1
+
+
+def test_la_v3_nomes_es_mesura_amb_el_flag():
+    from app.ai.profiles import PROFILES, V3
+
+    args = benchmark.build_parser().parse_args(
+        ["--dataset", "gold-v2.1", "--experimental-v3", "--plan-only"]
+    )
+
+    assert benchmark.resolve_profile(args.profile, experimental_v3=args.experimental_v3) is V3
+    assert benchmark.resolve_profile("v3", experimental_v3=True) is V3
+    assert "v3" not in PROFILES, "el flag no afegeix la v3 als perfils que resolen els jobs"
+
+
+def test_demanar_v3_per_nom_diu_com_fer_ho():
+    with pytest.raises(benchmark.BenchmarkConfigError, match="--experimental-v3"):
+        benchmark.resolve_profile("v3")
+
+
+@pytest.mark.parametrize("other", ["v1", "V2"])
+def test_el_flag_v3_no_es_combina_amb_un_altre_perfil(other):
+    with pytest.raises(benchmark.BenchmarkConfigError, match="no es pot combinar"):
+        benchmark.resolve_profile(other, experimental_v3=True)
+
+
+async def test_el_flag_v3_no_salta_la_guarda_del_proveidor_simulat(tmp_path, capsys):
+    """Triar la v3 no relaxa res: amb un proveidor fals, tampoc no es mesura."""
+    runs = tmp_path / "runs"
+    args = benchmark.build_parser().parse_args(
+        ["--dataset", "gold-v2.1", "--experimental-v3", "--provider", "fake",
+         "--database-url", BENCHMARK_DSN, "--output", str(runs)]
+    )
+
+    assert await benchmark.run(args) == 2
+    assert "no llegeix cap plec" in capsys.readouterr().out
+    assert not runs.exists()
+
+
+async def test_el_flag_v3_sense_paid_run_no_paga(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(benchmark, "resolve_provider", lambda name, **_: _StubProvider())
+    runs = tmp_path / "runs"
+    args = benchmark.build_parser().parse_args(
+        ["--dataset", "gold-v2.1", "--experimental-v3",
+         "--database-url", BENCHMARK_DSN, "--output", str(runs)]
+    )
+
+    assert await benchmark.run(args) == benchmark.EXIT_PAID_RUN_NOT_CONFIRMED
+    assert "TE COST" in capsys.readouterr().out
+    assert not runs.exists()
     assert DEFAULT_PROFILE.extractor_version == "tender-requirements-v1"
 
 

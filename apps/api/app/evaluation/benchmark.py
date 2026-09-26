@@ -2,6 +2,7 @@
 
     python -m app.evaluation.benchmark --dataset gold-v2.1 --profile V2 --plan-only
     python -m app.evaluation.benchmark --dataset gold-v2.1 --profile V2 --paid-run
+    python -m app.evaluation.benchmark --dataset gold-v2.1 --experimental-v3 --plan-only
 
 Que aporta sobre `app.evaluation.requirements`, que segueix sent el benchmark
 d'un sol perfil:
@@ -47,7 +48,7 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError, DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.ai.profiles import PROFILES, ExtractorProfile
+from app.ai.profiles import INTERNAL_PROFILES, PROFILES, ExtractorProfile
 from app.ai.provider import ProviderNotConfiguredError, StructuredLLMProvider, get_provider
 from app.compliance.rules import RULES_VERSION
 from app.core.config import settings
@@ -95,12 +96,38 @@ class BenchmarkConfigError(RuntimeError):
 # --------------------------------------------------------------------------- #
 
 
-def resolve_profile(name: str) -> ExtractorProfile:
-    """El perfil d'extraccio demanat, escrit com s'escrigui (`V2`, `v2`)."""
-    profile = PROFILES.get((name or "").strip().lower())
+#: El perfil que es mesura si no se n'especifica cap. No es `DEFAULT_PROFILE`
+#: a proposit: si algun dia el producte canvia de perfil, el benchmark no ho ha
+#: de fer sense que ningu ho digui.
+DEFAULT_BENCHMARK_PROFILE = "v1"
+EXPERIMENTAL_V3_PROFILE = "v3"
+
+
+def resolve_profile(name: str | None, *, experimental_v3: bool = False) -> ExtractorProfile:
+    """El perfil d'extraccio demanat, escrit com s'escrigui (`V2`, `v2`).
+
+    **La v3 no es pot demanar per nom.** Nomes `--experimental-v3` la tria, i la
+    treu de `INTERNAL_PROFILES`, no de `PROFILES`: `PROFILES` es el registre que
+    resolen els jobs a partir d'un nom que arriba de fora, i la v3 no hi ha de
+    ser fins que s'hagi mesurat. Combinar el flag amb un altre `--profile` es
+    un error, no una prioritat: qui ho escriu no sap que esta mesurant.
+    """
+    requested = (name or "").strip().lower()
+    if experimental_v3:
+        if requested not in ("", EXPERIMENTAL_V3_PROFILE):
+            raise BenchmarkConfigError(
+                f"--experimental-v3 mesura el perfil v3; no es pot combinar amb --profile {name!r}."
+            )
+        return INTERNAL_PROFILES[EXPERIMENTAL_V3_PROFILE]
+    profile = PROFILES.get(requested or DEFAULT_BENCHMARK_PROFILE)
     if profile is None:
         disponibles = ", ".join(sorted(PROFILES))
-        raise BenchmarkConfigError(f"Perfil {name!r} desconegut. N'hi ha: {disponibles}.")
+        hint = (
+            " La v3 es experimental: nomes es mesura amb --experimental-v3."
+            if requested == EXPERIMENTAL_V3_PROFILE
+            else ""
+        )
+        raise BenchmarkConfigError(f"Perfil {name!r} desconegut. N'hi ha: {disponibles}.{hint}")
     return profile
 
 
@@ -270,7 +297,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dataset", default="gold-v2.1", help="identificador del gold dataset")
     parser.add_argument(
-        "--profile", default="v1", help=f"perfil d'extraccio: {', '.join(sorted(PROFILES))}"
+        "--profile",
+        default=None,
+        help=f"perfil d'extraccio: {', '.join(sorted(PROFILES))} "
+        f"(per defecte, {DEFAULT_BENCHMARK_PROFILE})",
+    )
+    parser.add_argument(
+        "--experimental-v3",
+        action="store_true",
+        help="mesura l'Extraction Contract v3, que no es cap perfil seleccionable per nom; "
+        "continua exigint --plan-only o --paid-run",
     )
     parser.add_argument("--provider", default=None, help="proveidor (per defecte, ENV)")
     parser.add_argument(
@@ -405,7 +441,7 @@ async def run(args: argparse.Namespace) -> int:
     print(describe_dataset(dataset))
 
     try:
-        profile = resolve_profile(args.profile)
+        profile = resolve_profile(args.profile, experimental_v3=args.experimental_v3)
         database = resolve_benchmark_database(
             args.database_url or settings.BENCHMARK_DATABASE_URL or None
         )
