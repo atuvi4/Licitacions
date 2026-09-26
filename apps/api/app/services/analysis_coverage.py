@@ -38,6 +38,12 @@ STATUS_FAILED = "failed"
 COVERAGE_SCHEMA = "chunk-coverage-v1"
 
 
+#: Codi d'un chunk que l'operador no va seleccionar. Mateix valor que
+#: `requirement_analysis.CHUNK_NOT_SELECTED` (aquell modul importa aquest, no a
+#: l'inreves).
+NOT_SELECTED = "not_selected"
+
+
 def build_coverage(
     chunks: Iterable[Chunk],
     *,
@@ -52,6 +58,7 @@ def build_coverage(
     reused: Mapping[int, Mapping[str, Any]] | None = None,
     reused_from_run_id: str | None = None,
     not_sent_code: str = "not_sent",
+    not_selected_code: str | None = None,
 ) -> dict[str, Any]:
     """La fotografia dels chunks d'un run, amb l'estat de cadascun.
 
@@ -105,7 +112,11 @@ def build_coverage(
                 "output_tokens": _usage_field(usage, chunk.index, "output_tokens"),
                 "stop_reason": _usage_field(usage, chunk.index, "stop_reason"),
                 "request_id": _usage_field(usage, chunk.index, "request_id"),
-                "origin": "not_sent" if failures.get(chunk.index) == not_sent_code else "sent",
+                "origin": (
+                    "not_sent"
+                    if failures.get(chunk.index) in {not_sent_code, not_selected_code}
+                    else "sent"
+                ),
             }
             for chunk in chunks
         ],
@@ -189,7 +200,11 @@ def coverage_summary(coverage: Mapping[str, Any] | None) -> dict[str, Any]:
         return {"known": False}
     chunks = coverage["chunks"]
     analyzed = [c for c in chunks if c.get("status") == STATUS_COMPLETED]
-    failed = [c for c in chunks if c.get("status") != STATUS_COMPLETED]
+    # Un chunk no seleccionat (canari d'operador) no es un error: es compta a part.
+    not_selected = [c for c in chunks if c.get("error") == NOT_SELECTED]
+    failed = [
+        c for c in chunks if c.get("status") != STATUS_COMPLETED and c.get("error") != NOT_SELECTED
+    ]
     pages = analyzed_pages(coverage) or {}
     all_pages = {
         (str(c.get("document_name")), int(p)) for c in chunks for p in (c.get("pages") or [])
@@ -200,6 +215,7 @@ def coverage_summary(coverage: Mapping[str, Any] | None) -> dict[str, Any]:
         "chunks_total": len(chunks),
         "chunks_analyzed": len(analyzed),
         "chunks_failed": len(failed),
+        "chunks_not_selected": len(not_selected),
         "pages_total": len(all_pages),
         "pages_analyzed": len(covered),
         "pages_missing": sorted(

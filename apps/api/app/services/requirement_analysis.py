@@ -112,7 +112,7 @@ from app.models.tender_documents import (
     TenderExtractionIssue,
 )
 from app.models.tenders import Tender, TenderDocument, TenderLot
-from app.services.analysis_coverage import build_coverage
+from app.services.analysis_coverage import NOT_SELECTED, build_coverage
 from app.services.evidence_validation import locate_quote
 from app.services.extraction_qa import QaStatus, combine_status
 from app.services.requirement_chunking import (
@@ -639,6 +639,7 @@ async def analyze_tender_requirements(
     should_continue: ContinueCallback | None = None,
     chunk_limit: int | None = None,
     resume_from_run_id: uuid.UUID | None = None,
+    only_chunks: frozenset[int] | None = None,
 ) -> AnalysisOutcome:
     """Extreu els requisits d'una licitacio a partir dels plecs ja processats.
 
@@ -668,6 +669,10 @@ async def analyze_tender_requirements(
       exactament la mateixa analisi, `ResumeNotAllowedError` abans de cap crida.
       El run d'origen no es toca, tret de deixar de ser vigent com qualsevol run
       que en substitueix un altre.
+    * `only_chunks`: nomes s'envien aquests indexs (canari d'operador). La resta
+      queden fallits amb `not_selected`: el run es parcial i ho diu, i una represa
+      posterior envia nomes els que falten. `None` (per defecte) = tots. Un index
+      que no existeix es refusa abans de reservar el run i de cap crida.
     """
     started = time.monotonic()
     llm = provider or get_provider()
@@ -705,7 +710,17 @@ async def analyze_tender_requirements(
             provider=llm,
             profile=profile,
         )
-    to_send = len(plan.send) if plan is not None else len(chunks)
+    if only_chunks is not None:
+        unknown = sorted(only_chunks - {chunk.index for chunk in chunks})
+        if unknown or not only_chunks:
+            raise ValueError(f"Chunks inexistents o seleccio buida: {unknown}.")
+        if plan is not None:
+            raise ValueError("`only_chunks` i `resume_from_run_id` no es combinen.")
+    to_send = (
+        len(plan.send) if plan is not None
+        else len(only_chunks) if only_chunks is not None
+        else len(chunks)
+    )
     if chunk_limit is not None and to_send > chunk_limit:
         raise AnalysisTooLargeError(
             f"L'analisi enviaria {to_send} chunks i el maxim es {chunk_limit}."
@@ -768,6 +783,12 @@ async def analyze_tender_requirements(
     for position, chunk in enumerate(chunks):
         if plan is not None and chunk.index in plan.reused:
             # Ja es va llegir be al run d'origen: no es torna a enviar.
+            continue
+        if only_chunks is not None and chunk.index not in only_chunks:
+            # No seleccionat: no s'envia, i el run ho diu en comptes de fer
+            # veure que l'ha llegit. Queda al mapa de la cobertura (una represa
+            # l'enviara), pero NO a `chunks_failed`: no es cap error del model.
+            chunk_failures[chunk.index] = CHUNK_NOT_SELECTED
             continue
         # Abans de cada chunk, i no despres: una crida que ja es en vol pot
         # acabar, pero cap de nova no comenca si el worker ja no es propietari
@@ -871,6 +892,7 @@ async def analyze_tender_requirements(
         reused=plan.reused if plan is not None else None,
         reused_from_run_id=str(plan.source.id) if plan is not None else None,
         not_sent_code=CHUNK_NOT_SENT,
+        not_selected_code=CHUNK_NOT_SELECTED,
         pages_per_chunk=settings.REQUIREMENTS_CHUNK_PAGES,
         overlap_pages=settings.REQUIREMENTS_CHUNK_OVERLAP_PAGES,
     )
@@ -1078,6 +1100,9 @@ async def _copy_reused_results(
 
 #: Codi d'un chunk que no s'ha enviat perque un error fatal ha aturat el run.
 CHUNK_NOT_SENT = "not_sent"
+#: Codi d'un chunk que l'operador no va seleccionar (`only_chunks`). No es cap
+#: error del model: simplement no es va enviar, i una represa l'enviara.
+CHUNK_NOT_SELECTED = NOT_SELECTED
 
 
 def failure_summary(
@@ -1090,13 +1115,27 @@ def failure_summary(
     """
     if not failures:
         return last_error
-    counts: dict[str, int] = {}
-    for code in failures.values():
-        counts[code] = counts.get(code, 0) + 1
-    by_reason = ", ".join(
-        f"{code}: {count}" for code, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    )
-    summary = f"{len(failures)} de {total} chunks fallits ({by_reason})."
+    # Un chunk no seleccionat (canari) no ha fallat: no es va enviar. Es diu a
+    # part, i mai no compta com a fallit.
+    omitted = sum(1 for code in failures.values() if code == CHUNK_NOT_SELECTED)
+    actual = {index: code for index, code in failures.items() if code != CHUNK_NOT_SELECTED}
+    parts: list[str] = []
+    if omitted:
+        parts.append(
+            f"{total - omitted} de {total} chunks enviats; {omitted} no seleccionats "
+            "(pendents, no son errors)."
+        )
+    if actual:
+        counts: dict[str, int] = {}
+        for code in actual.values():
+            counts[code] = counts.get(code, 0) + 1
+        by_reason = ", ".join(
+            f"{code}: {count}"
+            for code, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        of_total = total - omitted if omitted else total
+        parts.append(f"{len(actual)} de {of_total} chunks fallits ({by_reason}).")
+    summary = " ".join(parts)
     return f"{summary} Darrer error: {last_error}" if last_error else summary
 
 
@@ -1955,13 +1994,22 @@ async def _finalise_run(
     run.provider_metadata = metadata or None
     run.completed_at = datetime.now(UTC)
 
+    # Chunks que ni s'han completat ni han fallat: no seleccionats (canari).
+    # En un run normal sempre es zero, i res del que segueix no canvia.
+    omitted = run.chunks_total - run.chunks_completed - run.chunks_failed
     if run.chunks_completed == 0 and run.chunks_total:
         run.status = AnalysisRunStatus.FAILED
-        run.error_code = "all_chunks_failed"
+        run.error_code = "all_selected_chunks_failed" if omitted else "all_chunks_failed"
         run.error_message = last_error
     elif run.chunks_failed:
         run.status = AnalysisRunStatus.PARTIAL
         run.error_code = "some_chunks_failed"
+        run.error_message = last_error
+    elif omitted:
+        # Parcial de debo (no s'ha llegit tot) pero sense cap error: el que falta
+        # es el que l'operador no va seleccionar, i una represa ho enviara.
+        run.status = AnalysisRunStatus.PARTIAL
+        run.error_code = "chunks_not_selected"
         run.error_message = last_error
     else:
         run.status = AnalysisRunStatus.COMPLETED
