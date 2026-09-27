@@ -52,6 +52,7 @@ from app.models.tenders import Tender, TenderDocument
 from app.schemas.review import (
     AcceptedValue,
     CanonicalEvidence,
+    CanonicalRelation,
     CanonicalRequirement,
     CanonicalSourceRef,
     CanonicalValue,
@@ -61,6 +62,7 @@ from app.schemas.review import (
     ReviewStartResult,
 )
 from app.services.manual_requirement import effective_requirements
+from app.services.review_relations import relations_of
 from app.tenders.visibility import visible_to_company
 
 # --------------------------------------------------------------------------- #
@@ -401,6 +403,7 @@ class _ItemContext:
     corrected: set[uuid.UUID]
     citations: dict[uuid.UUID, list[TenderSourceRef]]
     citation_names: dict[uuid.UUID, str]
+    relations: dict[uuid.UUID, list[CanonicalRelation]]
 
 
 async def _item_context(
@@ -458,7 +461,12 @@ async def _item_context(
             )
         ).all()
     )
-    return _ItemContext(primary, evidence, names, corrected, citations, citation_names)
+    relations = await relations_of(
+        session, company_id=items[0].company_id, item_ids=ids
+    ) if items else {}
+    return _ItemContext(
+        primary, evidence, names, corrected, citations, citation_names, relations
+    )
 
 
 def provenance_of(item: ReviewItem, has_primary: bool, corrected: bool) -> str:
@@ -533,6 +541,7 @@ def _canonical_one(item: ReviewItem, ctx: _ItemContext) -> CanonicalRequirement:
         evidence_label = EVIDENCE_TO_CONFIRM
     provenance = provenance_of(item, requirement_id is not None, item.id in ctx.corrected)
     verification = ReviewVerification(item.verification_status)
+    related = ctx.relations.get(item.id, [])
     source_refs = (
         [CanonicalSourceRef(kind="extracted_requirement", id=requirement_id)]
         if requirement_id
@@ -558,6 +567,8 @@ def _canonical_one(item: ReviewItem, ctx: _ItemContext) -> CanonicalRequirement:
         sections=sorted({c.section for c in cited if c.section}),
         source_refs=source_refs,
         review_revision=item.revision,
+        visible_relations=[r for r in related if not r.foldable],
+        folded_relations=[r for r in related if r.foldable],
     )
 
 

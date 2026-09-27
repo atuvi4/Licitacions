@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
 from app.api.deps import CompanyCtx, SessionDep
 from app.models.enums import AuditAction
 from app.schemas.review import (
+    CanonicalRelation,
     CanonicalRequirement,
     ManualRequirementCreate,
+    RelationArchiveResult,
+    RelationCreate,
     ReviewActionRequest,
     ReviewHistoryEntry,
     ReviewOverview,
@@ -31,6 +34,7 @@ from app.schemas.review import (
 )
 from app.services import audit
 from app.services import review_actions as actions
+from app.services import review_relations as relations
 from app.services import review_view as service
 
 router = APIRouter(prefix="/tenders/{tender_id}/review", tags=["revisio"])
@@ -189,3 +193,118 @@ async def review_item_history(
     return await actions.history(
         session, company_id=ctx.company_id, tender_id=tender_id, item_id=item_id
     )
+
+
+# --------------------------------------------------------------------------- #
+# Relacions (S-R3)                                                              #
+# --------------------------------------------------------------------------- #
+
+
+async def _relation_read(session, company_id, relation_id, item_id) -> CanonicalRelation:
+    """La relacio tal com es veu des de l'element `from` de la peticio."""
+    found = await relations.relations_of(
+        session, company_id=company_id, item_ids=[item_id], include_archived=True
+    )
+    return next(r for r in found.get(item_id, []) if r.relation_id == relation_id)
+
+
+@router.post(
+    "/relations",
+    response_model=CanonicalRelation,
+    status_code=status.HTTP_201_CREATED,
+    summary="Relaciona dos elements de revisio",
+)
+async def create_review_relation(
+    tender_id: uuid.UUID, payload: RelationCreate, session: SessionDep, ctx: CompanyCtx
+):
+    """`from <relacio> to`. Mateixa empresa, mateixa licitacio, elements actius.
+
+    Un cicle de `parent_of`, `duplicate_of` o `supersedes` es 422; una relacio
+    que ja existeix, 409. No crea cap revisio ni toca cap element.
+    """
+    actions.assert_can_review(ctx.membership.role)
+    await service.load_visible_tender(session, ctx.company_id, tender_id)
+    relation = await relations.create_relation(
+        session,
+        company_id=ctx.company_id,
+        tender_id=tender_id,
+        from_item_id=payload.from_item_id,
+        to_item_id=payload.to_item_id,
+        relation_type=payload.relation_type,
+        note=payload.note,
+        actor_id=ctx.user.id,
+    )
+    await audit.record(
+        session,
+        company_id=ctx.company_id,
+        user_id=ctx.user.id,
+        action=AuditAction.CREATE,
+        entity_type="review_relation",
+        entity_id=relation.id,
+        summary=(
+            f"licitacio={tender_id} relacio={relation.id} tipus={relation.relation_type.value} "
+            f"de={relation.from_item_id} a={relation.to_item_id}"
+        ),
+    )
+    await session.commit()
+    return await _relation_read(session, ctx.company_id, relation.id, relation.from_item_id)
+
+
+@router.post(
+    "/relations/{relation_id}/archive",
+    response_model=RelationArchiveResult,
+    summary="Arxiva una relacio (sense esborrar-la)",
+)
+async def archive_review_relation(
+    tender_id: uuid.UUID, relation_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx
+):
+    """Idempotent: arxivar-la de nou torna `changed=false` i no s'audita dues vegades."""
+    actions.assert_can_review(ctx.membership.role)
+    await service.load_visible_tender(session, ctx.company_id, tender_id)
+    relation, changed = await relations.archive_relation(
+        session,
+        company_id=ctx.company_id,
+        tender_id=tender_id,
+        relation_id=relation_id,
+        actor_id=ctx.user.id,
+    )
+    if changed:
+        await audit.record(
+            session,
+            company_id=ctx.company_id,
+            user_id=ctx.user.id,
+            action=AuditAction.ARCHIVE,
+            entity_type="review_relation",
+            entity_id=relation.id,
+            summary=(
+                f"licitacio={tender_id} relacio={relation.id} "
+                f"tipus={relation.relation_type.value} arxivada"
+            ),
+        )
+    await session.commit()
+    return RelationArchiveResult(
+        changed=changed,
+        relation=await _relation_read(session, ctx.company_id, relation.id, relation.from_item_id),
+    )
+
+
+@router.get(
+    "/items/{item_id}/relations",
+    response_model=list[CanonicalRelation],
+    summary="Relacions d'un element (sortints i entrants)",
+)
+async def review_item_relations(
+    tender_id: uuid.UUID,
+    item_id: uuid.UUID,
+    session: SessionDep,
+    ctx: CompanyCtx,
+    include_archived: bool = Query(default=False),
+):
+    await service.load_visible_tender(session, ctx.company_id, tender_id)
+    await service.get_requirement(
+        session, company_id=ctx.company_id, tender_id=tender_id, item_id=item_id
+    )
+    found = await relations.relations_of(
+        session, company_id=ctx.company_id, item_ids=[item_id], include_archived=include_archived
+    )
+    return found.get(item_id, [])

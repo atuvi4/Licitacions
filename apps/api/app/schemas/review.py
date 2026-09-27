@@ -28,6 +28,7 @@ from app.models.enums import (
     RequirementModality,
     RequirementObligation,
     RequirementOperator,
+    ReviewRelationType,
     ReviewVerification,
 )
 
@@ -336,6 +337,52 @@ class CanonicalValue(BaseModel):
     status_label: str
 
 
+class RelationCreate(_TextFields):
+    """Una relacio dirigida `from -> to` entre dos elements de la MATEIXA empresa i licitacio.
+
+    Direccio (llegiu-la "from <relacio> to"):
+
+    * `duplicate_of`: `from` es un duplicat de `to` i es plegara dins seu a la
+      vista canonica. Un element es duplicat d'UN sol altre.
+    * `restatement_of`: `from` repeteix `to` en un altre lloc o document (p. ex.
+      el criteri de l'Informe repeteix el criteri original del PCAP).
+    * `parent_of`: `from` agrupa `to` (p. ex. el bloc qualitatiu de 20 punts
+      agrupa cadascuna de les 8 files puntuades). Un element te UN sol pare.
+    * `partial_match_of`: `from` coincideix en part amb `to`, pero `to` NO el
+      cobreix del tot (p. ex. M06, alta disponibilitat al nuvol, respecte de la
+      fila de dimensionament extreta de la p32).
+    * `supersedes`: `from` substitueix `to` al model acceptat.
+    * `related_to`: nomes informativa (p. ex. M21, accés directe DDI, respecte
+      de la numeracio DDI del troncal SIP: relacionats, no equivalents). Es
+      simetrica: es desa una sola vegada, en la direccio en que es crea.
+    """
+
+    from_item_id: uuid.UUID
+    to_item_id: uuid.UUID
+    relation_type: ReviewRelationType
+    note: str | None = Field(default=None, max_length=MAX_NOTE)
+
+
+class CanonicalRelation(BaseModel):
+    relation_id: uuid.UUID
+    #: `outgoing`: aquest element es el `from`; `incoming`: n'es el `to`.
+    direction: Literal["outgoing", "incoming"]
+    relation_type: str
+    relation_label: str
+    other_item_id: uuid.UUID
+    other_item_title: str | None
+    note: str | None
+    #: Una relacio `duplicate_of`: la vista canonica la podra plegar.
+    foldable: bool
+    created_at: datetime
+    archived_at: datetime | None = None
+
+
+class RelationArchiveResult(BaseModel):
+    changed: bool
+    relation: CanonicalRelation
+
+
 class CanonicalSourceRef(BaseModel):
     kind: Literal["extracted_requirement", "citation"]
     id: uuid.UUID
@@ -361,6 +408,11 @@ class CanonicalRequirement(BaseModel):
     sections: list[str]
     source_refs: list[CanonicalSourceRef]
     review_revision: int
+    #: Relacions actives que no pleguen l'element (tot tret de `duplicate_of`).
+    visible_relations: list[CanonicalRelation] = Field(default_factory=list)
+    #: Relacions `duplicate_of` actives, en qualsevol direccio. Encara NO s'amaga
+    #: cap element de la llista: aixo ho fara la vista canonica seguent.
+    folded_relations: list[CanonicalRelation] = Field(default_factory=list)
 
 
 class CountLabel(BaseModel):
