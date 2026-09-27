@@ -13,6 +13,10 @@ Existeix per dos patrons concrets observats amb un proveidor real (run
   amb una sola clau, el nom del mateix camp, i una llista a dins. Observat al
   chunk 3 de Palamos en tres runs seguits (`3da6147` ho va fer visible). Es
   desfa NOMES si l'objecte te exactament aquesta clau i el valor es una llista.
+* **Llista embolcallada amb `value`, com a text** (v3.2, runs `f7353279` i
+  `eb60ec1d`, chunks 6 i 18). El model envia `"requirements": "{\"value\": [...]}"`.
+  Es desfa NOMES si el text (dins del mateix limit de mida que l'embolcall
+  d'arrel) es un objecte amb exactament la clau `value` i una llista a dins.
 * **Sobre embolcallat a l'arrel** (v3.2, run `f7353279`). El model posa tota la
   resposta sota UNA clau (`{"extraction": {...}}`, `{"parameters": {...}}`) o
   com a text JSON sota una clau (`{"value": "{...}"}`). Es desembolcalla NOMES
@@ -49,6 +53,10 @@ from pydantic import BaseModel
 RULE_JSON_STRING_LIST = "json_string_list"
 #: Regla aplicada quan la llista arriba com a text JSON `{"<camp>": [...]}`.
 RULE_JSON_STRING_WRAPPED_LIST = "json_string_wrapped_list"
+#: Regla aplicada quan la llista arriba com a text JSON `{"value": [...]}`.
+RULE_JSON_STRING_VALUE_WRAPPED_LIST = "json_string_value_wrapped_list"
+#: L'unica clau generica d'embolcall de llista acceptada: observada, no suposada.
+_VALUE_KEY = "value"
 #: Regla aplicada quan l'arrel porta l'`extraction_id` del context.
 RULE_ECHOED_ROOT_EXTRACTION_ID = "echoed_root_extraction_id"
 #: Regla aplicada quan tot el sobre arriba dins d'un objecte d'una sola clau.
@@ -168,11 +176,16 @@ def _coerce_lists(
 def _decode_list(value: str, field: str) -> tuple[list[Any] | None, str]:
     """El text nomes es desfa si dona una llista. Si no, `(None, "")`.
 
-    Dues formes acceptades, i cap mes:
+    Tres formes acceptades, i cap mes:
 
     * `[...]`: el text JSON es directament la llista;
     * `{"<field>": [...]}`: un objecte amb UNA sola clau, que es exactament el
-      nom del camp, i una llista com a valor.
+      nom del camp, i una llista com a valor;
+    * `{"value": [...]}` (v3.2): igual, amb la clau `value`, si el text no
+      passa de `MAX_WRAPPED_JSON_CHARS`.
+
+    Una sola descodificacio: `{"value": {"value": [...]}}` o una llista com a
+    text dins de `value` no es desfan.
 
     Una clau diferent, mes d'una clau, o un valor que no sigui llista es
     queden com estan: Pydantic els continua rebutjant.
@@ -190,6 +203,14 @@ def _decode_list(value: str, field: str) -> tuple[list[Any] | None, str]:
         and isinstance(decoded[field], list)
     ):
         return decoded[field], RULE_JSON_STRING_WRAPPED_LIST
+    if (
+        len(value) <= MAX_WRAPPED_JSON_CHARS
+        and isinstance(decoded, dict)
+        and len(decoded) == 1
+        and _VALUE_KEY in decoded
+        and isinstance(decoded[_VALUE_KEY], list)
+    ):
+        return decoded[_VALUE_KEY], RULE_JSON_STRING_VALUE_WRAPPED_LIST
     return None, ""
 
 

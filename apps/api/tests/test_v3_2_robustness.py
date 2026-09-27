@@ -892,8 +892,9 @@ async def test_de_cap_a_cap_un_embolcall_no_provat_diu_la_forma_de_dins(session,
     ("12/13 amb el sobre a dins", {"extraction": EMPTY}, True),
     ("12/13 amb una llista absent", {"extraction": {"requirements": []}}, False),
     ("14 degenerat", {"<parametre-14c>": "sense res"}, False),
+    # Des de la regla `json_string_value_wrapped_list` (secció 9), aquesta forma es desfa.
     ("6 requirements com a text {value:...}",
-     {"requirements": json.dumps({"value": []}), "award_candidates": []}, False),
+     {"requirements": json.dumps({"value": []}), "award_candidates": []}, True),
 ])
 def test_repeticio_sintetica_de_les_formes_fallides(chunk, payload, recovered):
     data, applied = _normalise_and_parse(payload)
@@ -901,5 +902,117 @@ def test_repeticio_sintetica_de_les_formes_fallides(chunk, payload, recovered):
     if recovered:
         assert applied and parse_chunk_v3_result(data).output is not None, chunk
     else:
+        with pytest.raises(ValidationError):
+            parse_chunk_v3_result(data)
+
+
+# --------------------------------------------------------------------------- #
+# 9. Llista de camp embolcallada amb `value`, com a text (chunks 6 i 18)       #
+# --------------------------------------------------------------------------- #
+
+VALUE_EMPTY = json.dumps({"value": []})
+
+
+@pytest.mark.parametrize(("case", "payload", "markers"), [
+    ("A", {"requirements": VALUE_EMPTY, "award_candidates": []},
+     ["requirements:json_string_value_wrapped_list"]),
+    ("B", {"requirements": [], "award_candidates": VALUE_EMPTY},
+     ["award_candidates:json_string_value_wrapped_list"]),
+    ("C", {"requirements": VALUE_EMPTY, "award_candidates": VALUE_EMPTY},
+     ["requirements:json_string_value_wrapped_list",
+      "award_candidates:json_string_value_wrapped_list"]),
+])
+def test_una_llista_amb_value_com_a_text_es_desfa(case, payload, markers):
+    data, applied = _normalise_and_parse(payload)
+
+    assert applied == markers, case
+    parsed = parse_chunk_v3_result(data)
+    assert parsed.output.requirements == parsed.output.award_candidates == []
+
+
+@pytest.mark.parametrize(("case", "text"), [
+    ("D altra clau", json.dumps({"foo": []})),
+    ("E value objecte", json.dumps({"value": {}})),
+    ("F value text", json.dumps({"value": "text"})),
+    ("G doble value", json.dumps({"value": {"value": []}})),
+    ("H dues claus", json.dumps({"value": [], "other": []})),
+    ("value null", json.dumps({"value": None})),
+    ("llista com a text dins", json.dumps({"value": "[]"})),
+    ("prosa", "Aquesta es la llista"),
+    ("JSON trencat", '{"value": ['),
+    ("null", "null"),
+    ("escalar", "7"),
+])
+def test_quasi_embolcalls_value_no_es_toquen(case, text):
+    payload = {"requirements": text, "award_candidates": []}
+
+    data, applied = _normalise_and_parse(payload)
+
+    assert applied == [] and data == payload, case
+    with pytest.raises(ValidationError):
+        parse_chunk_v3_result(data)
+
+
+def test_un_value_massa_llarg_no_es_desfa():
+    from app.ai.output_normalization import MAX_WRAPPED_JSON_CHARS
+
+    text = json.dumps({"value": ["x" * MAX_WRAPPED_JSON_CHARS]})
+    data, applied = _normalise_and_parse({"requirements": text, "award_candidates": []})
+
+    assert applied == [] and data["requirements"] == text
+
+
+def test_i_la_llista_directa_com_a_text_segueix_igual():
+    data, applied = _normalise_and_parse({"requirements": json.dumps([REQ]),
+                                          "award_candidates": []})
+
+    assert applied == ["requirements:json_string_list"]
+    assert [r.title for r in parse_chunk_v3_result(data).output.requirements] == ["ok"]
+
+
+def test_j_l_embolcall_d_arrel_segueix_igual_i_es_combina():
+    data, applied = _normalise_and_parse(
+        {"extraction": {"requirements": [], "award_candidates": []}})
+
+    assert applied == ["root:single_object_wrapper:extraction"]
+    assert parse_chunk_v3_result(data).output.requirements == []
+
+
+def test_k_un_sobre_valid_segueix_sense_normalitzacio():
+    payload = {"requirements": [REQ], "award_candidates": [AWARD]}
+
+    assert _normalise_and_parse(payload) == (payload, [])
+
+
+def test_l_els_elements_desembolcallats_es_validen_amb_la_v3_2():
+    bad_claim = {**REQ, "claims": [{"id": "c1", "kind": "count", "value": "molts"}]}
+    text = json.dumps({"value": [REQ, {**REQ, "title": 5}, bad_claim]})
+
+    data, applied = _normalise_and_parse({"requirements": text, "award_candidates": []})
+
+    assert applied == ["requirements:json_string_value_wrapped_list"]
+    parsed = parse_chunk_v3_result(data)
+    assert [r.title for r in parsed.output.requirements] == ["ok", "ok"]
+    assert parsed.salvaged_requirements == frozenset({2})
+    assert [(e["index"], e["stage"]) for e in parsed.schema_rejections.entries] == [
+        (1, "schema"), (2, "claim")]
+
+
+# Repeticio SINTETICA de les formes desades (els valors reals no es desen).
+
+@pytest.mark.parametrize(("chunk", "payload", "reaches_parser"), [
+    ("6", {"requirements": json.dumps({"value": [REQ]}), "award_candidates": [AWARD]}, True),
+    ("18", {"requirements": json.dumps({"value": [REQ]}),
+            "award_candidates": json.dumps({"value": []})}, True),
+    ("14", {"<parametre-14c>": "sense res"}, False),
+])
+def test_repeticio_sintetica_dels_tres_chunks_pendents(chunk, payload, reaches_parser):
+    data, applied = _normalise_and_parse(payload)
+
+    if reaches_parser:
+        assert applied, chunk
+        assert parse_chunk_v3_result(data).output.requirements, chunk
+    else:
+        assert applied == []
         with pytest.raises(ValidationError):
             parse_chunk_v3_result(data)
