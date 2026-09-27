@@ -763,7 +763,7 @@ async def analyze_tender_requirements(
     chunk_failures: dict[int, str] = {}
     # Per index de chunk, diagnosi estructural d'un `schema_invalid` (path i
     # tipus dels primers errors). Sense aixo, "l'esquema no valida" no diu que.
-    chunk_diagnostics: dict[int, list[dict[str, str]]] = {}
+    chunk_diagnostics: dict[int, list[dict[str, Any]]] = {}
     # Per index de chunk, el que va costar. Inclou els chunks caiguts si el
     # proveidor va arribar a respondre: aquells tokens tambe es paguen.
     chunk_usage: dict[int, Usage] = {}
@@ -1330,7 +1330,7 @@ _IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,39}")
 
 def schema_diagnostics(
     exc: PydanticValidationError, known_fields: frozenset[str]
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """On i de quin tipus son els primers errors. Ni valors ni missatges.
 
     Del path nomes es conserven els noms de camp que declara l'esquema i els
@@ -1344,7 +1344,7 @@ def schema_diagnostics(
     llista va arribar com a text, com a objecte o buida, i no es pot decidir
     quina normalitzacio estricta caldria.
     """
-    diagnostics: list[dict[str, str]] = []
+    diagnostics: list[dict[str, Any]] = []
     for error in exc.errors(include_url=False, include_context=False, include_input=True):
         loc = tuple(error.get("loc", ()))
         segments = [
@@ -1363,6 +1363,60 @@ def schema_diagnostics(
         if len(diagnostics) == MAX_SCHEMA_DIAGNOSTICS:
             break
     return diagnostics
+
+
+#: Quantes claus d'arrel es descriuen com a molt en un `core_missing`.
+MAX_ROOT_SHAPE_FIELDS = 20
+
+
+def root_shape_diagnostic(
+    data: Any, diagnostics: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Que hi havia a l'arrel quan hi falta un camp obligatori. Nomes la forma.
+
+    Si l'error diu que falta un camp d'arrel (`missing` a un path d'un sol
+    segment) i la resposta es un objecte, es descriu cada clau d'arrel present:
+    el nom si es un identificador, si no `<text,N chars>`, i la categoria de
+    tipus del valor. Mai el valor, ni res de dins. Sense aixo, "requirements
+    missing" no diu si el model ho va posar sota una altra clau o no va dir res.
+    """
+    if not isinstance(data, Mapping):
+        return None
+    if not any(
+        d.get("type") == "missing" and "." not in str(d.get("path", "")) for d in diagnostics
+    ):
+        return None
+    fields = [
+        {"field": describe_root_key(key), "type": json_type(value)}
+        for key, value in list(data.items())[:MAX_ROOT_SHAPE_FIELDS]
+    ]
+    entry: dict[str, Any] = {"stage": "root", "reason": "core_missing", "present_fields": fields}
+    if len(data) > MAX_ROOT_SHAPE_FIELDS:
+        entry["present_fields_total"] = len(data)
+    return entry
+
+
+def describe_root_key(key: Any) -> str:
+    """El nom d'una clau d'arrel nomes si no pot ser text del plec."""
+    text = str(key)
+    return text if _IDENTIFIER.fullmatch(text) else f"<text,{len(text)} chars>"
+
+
+def json_type(value: Any) -> str:
+    """La categoria JSON d'un valor, sense mirar-ne el contingut."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int | float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, Mapping):
+        return "object"
+    return "other"
 
 
 def describe_unknown_key(key: str) -> str:
@@ -1457,6 +1511,9 @@ async def _run_chunk(
         parsed = profile.parse(data)
     except PydanticValidationError as exc:
         diagnostics = schema_diagnostics(exc, known_schema_fields(profile.json_schema()))
+        root_shape = root_shape_diagnostic(data, diagnostics)
+        if root_shape is not None:
+            diagnostics.append(root_shape)
         logger.warning(
             "requirements.chunk.schema_invalid",
             extra={"chunk": chunk.index, "errors": len(exc.errors()), "first": diagnostics},

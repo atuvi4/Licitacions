@@ -681,3 +681,73 @@ async def test_l_historic_v3_1_no_compta_per_a_la_v3_2(
 
     assert line == ("Estimacio de tokens per a 3 crida(es): no disponible "
                     f"(sense historic de requirements-v3.2 amb {settings.LLM_MODEL}).")
+
+
+# --------------------------------------------------------------------------- #
+# 7. Diagnosi de la forma d'arrel quan falta el nucli (nomes observabilitat)   #
+# --------------------------------------------------------------------------- #
+
+SECRET_TEXT = "Text literal del plec que no s'ha de desar mai"
+
+
+def _error_detail(run):
+    [chunk] = run.chunk_coverage["chunks"]
+    return chunk["status"], chunk["error"], chunk["error_detail"]
+
+
+async def test_a_sense_nucli_es_desa_la_forma_de_l_arrel_i_cap_valor(session, pcap_pages):
+    run = await _analyse(session, pcap_pages, {"summary": {"requirements": [SECRET_TEXT]}})
+
+    status, error, detail = _error_detail(run)
+    assert (status, error) == ("failed", "schema_invalid")
+    assert {"path": "requirements", "type": "missing"} in detail
+    assert {"path": "award_candidates", "type": "missing"} in detail
+    assert detail[-1] == {"stage": "root", "reason": "core_missing",
+                          "present_fields": [{"field": "summary", "type": "object"}]}
+    assert SECRET_TEXT not in json.dumps(run.chunk_coverage, ensure_ascii=False)
+    assert await session.scalar(sa.select(sa.func.count()).select_from(Requirement)) == 0
+
+
+async def test_b_una_clau_d_arrel_insegura_es_diu_nomes_per_la_llargada(session, pcap_pages):
+    unsafe = "Requisits del plec (resum)"
+    run = await _analyse(session, pcap_pages, {unsafe: [SECRET_TEXT], "notes": SECRET_TEXT,
+                                               "n": 3, "ok": True, "buit": None})
+
+    _status, _error, detail = _error_detail(run)
+    assert detail[-1]["present_fields"] == [
+        {"field": f"<text,{len(unsafe)} chars>", "type": "array"},
+        {"field": "notes", "type": "string"},
+        {"field": "n", "type": "number"},
+        {"field": "ok", "type": "boolean"},
+        {"field": "buit", "type": "null"},
+    ]
+    stored = json.dumps(run.chunk_coverage, ensure_ascii=False)
+    assert unsafe not in stored and SECRET_TEXT not in stored
+
+
+async def test_c_una_clau_extra_amb_el_nucli_segueix_igual(session, pcap_pages):
+    run = await _analyse(session, pcap_pages, {"requirements": [], "award_candidates": [],
+                                               "summary": {"text": SECRET_TEXT}})
+
+    status, error, detail = _error_detail(run)
+    assert (status, error, detail) == ("completed", None, None)
+    assert probe.chunk_report(run)[0]["root_fields_rejected_schema"] == 1
+    assert SECRET_TEXT not in json.dumps(run.chunk_coverage, ensure_ascii=False)
+
+
+async def test_d_una_resposta_valida_no_porta_cap_diagnosi(session, pcap_pages):
+    run = await _analyse(session, pcap_pages, {"requirements": [], "award_candidates": []})
+
+    assert _error_detail(run) == ("completed", None, None)
+
+
+def test_la_forma_d_arrel_nomes_surt_si_falta_un_camp_d_arrel():
+    from app.services.requirement_analysis import MAX_ROOT_SHAPE_FIELDS, root_shape_diagnostic
+
+    nested = [{"path": "requirements.0.title", "type": "missing"}]
+    assert root_shape_diagnostic({"requirements": [{}]}, nested) is None
+    assert root_shape_diagnostic([1, 2], [{"path": "$", "type": "list_type"}]) is None
+    many = {f"k{i}": i for i in range(MAX_ROOT_SHAPE_FIELDS + 5)}
+    entry = root_shape_diagnostic(many, [{"path": "requirements", "type": "missing"}])
+    assert len(entry["present_fields"]) == MAX_ROOT_SHAPE_FIELDS
+    assert entry["present_fields_total"] == MAX_ROOT_SHAPE_FIELDS + 5
