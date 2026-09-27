@@ -1863,7 +1863,13 @@ def _persist_chunk_v3(
             continue
         seen_awards.add(key)
 
-        decision = classify_award(item, {eid: v.quote for eid, v in validated.items()})
+        # La regla de taula (v3.2) mira la capcalera de la MATEIXA pagina validada.
+        page_text = {page.page_id: page.text for page in chunk.pages}
+        decision = classify_award(
+            item,
+            {eid: v.quote for eid, v in validated.items()},
+            {eid: page_text.get(str(v.page_id), "") for eid, v in validated.items()},
+        )
         for check, _ids in decision.mechanisms.values():
             if check != MechanismCheck.VERIFIED:
                 log.add(rejection(RejectionItem.AWARD_CANDIDATE, index, RejectionStage.CLAIM,

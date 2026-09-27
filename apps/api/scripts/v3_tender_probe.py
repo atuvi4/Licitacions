@@ -666,6 +666,12 @@ def canary_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
         "items_rejected_schema": sum(r.get("items_rejected_schema", 0) for r in attempted),
         "claims_rejected_schema": sum(r.get("claims_rejected_schema", 0) for r in attempted),
         "items_salvaged": sum(r.get("items_salvaged", 0) for r in attempted),
+        "root_fields_rejected_schema": sum(
+            r.get("root_fields_rejected_schema", 0) for r in attempted
+        ),
+        "auxiliary_rejected_schema": sum(
+            r.get("auxiliary_rejected_schema", 0) for r in attempted
+        ),
     }
 
 
@@ -674,12 +680,16 @@ def chunk_report(run: Any) -> list[dict[str, Any]]:
     rows = []
     for entry in (run.chunk_coverage or {}).get("chunks", []):
         rejections: dict[str, int] = {}
-        items_rejected = claims_rejected = 0
+        items_rejected = claims_rejected = root_rejected = auxiliary_rejected = 0
         salvaged: set[Any] = set()
         for rejection in entry.get("rejections") or []:
             reason = str(rejection.get("reason"))
             rejections[reason] = rejections.get(reason, 0) + 1
-            if reason == "schema_invalid" and rejection.get("stage") == "schema":
+            if reason == "schema_invalid" and rejection.get("stage") == "root":
+                root_rejected += 1
+            elif reason == "schema_invalid" and rejection.get("stage") == "auxiliary":
+                auxiliary_rejected += 1
+            elif reason == "schema_invalid" and rejection.get("stage") == "schema":
                 items_rejected += 1
             elif reason == "schema_invalid" and rejection.get("stage") == "claim":
                 claims_rejected += 1
@@ -700,6 +710,8 @@ def chunk_report(run: Any) -> list[dict[str, Any]]:
             "items_rejected_schema": items_rejected,
             "claims_rejected_schema": claims_rejected,
             "items_salvaged": len(salvaged),
+            "root_fields_rejected_schema": root_rejected,
+            "auxiliary_rejected_schema": auxiliary_rejected,
         })
     return rows
 

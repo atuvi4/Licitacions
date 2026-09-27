@@ -42,7 +42,9 @@ from app.ai.schemas_v3 import (
     ClaimOutV3,
     ClaimUnit,
     Completeness,
+    DocumentNoteOut,
     RequirementOutV3,
+    UncertaintyOut,
 )
 
 #: `Requirement.value_schema` d'un requisit v3: `value_json` son els claims.
@@ -364,7 +366,10 @@ class AwardReason(StrEnum):
     NO_MECHANISM_DECLARED = "no_mechanism_declared"
     NO_MECHANISM_VERIFIED = "no_mechanism_verified"
     #: El model diu "desitjable" o "informatiu" i una cita prova un mecanisme.
+    #: v3 i v3.1: anava a revisio. Es conserva per llegir runs antics.
     KIND_CONFLICTS_WITH_MECHANISM = "kind_conflicts_with_mechanism"
+    #: v3.2: la classe la decideix l'evidencia, no el que el model declara.
+    KIND_OVERRIDDEN_BY_EVIDENCE = "kind_overridden_by_evidence"
     DECLARED_DESIRABLE = "declared_desirable"
     DECLARED_INFORMATIVE = "declared_informative"
 
@@ -385,7 +390,84 @@ _OFFER_FORM_MARKERS = (
     "( )", "(  )", "[ ]", "☐", "□", "model d'oferta", "model de proposicio",
     "modelo de oferta", "modelo de proposicion", "sobre 2", "sobre num. 2", "sobre n. 2",
 )
+#: v3.2: el formulari SI/NO dit amb paraules ("cal assenyalar amb una X la opcio
+#: corresponent 'SI' o 'NO'"). Patrons literals sobre text aplanat; res de semblanca.
+_QUOTE_MARK = r"[\"'«»]?"
+_OFFER_FORM_PATTERNS = (
+    re.compile(r"\b(?:assenyal|marc|marqu|indiqu|indic)\w*\b.{0,60}?\bamb una "
+               + _QUOTE_MARK + r"x" + _QUOTE_MARK + r"(?!\w)"),
+    re.compile(r"\b(?:senal|marc|marqu|indiqu|indic)\w*\b.{0,60}?\bcon una "
+               + _QUOTE_MARK + r"x" + _QUOTE_MARK + r"(?!\w)"),
+    re.compile(r"[\"'«]si[\"'»]\s*(?:o|/)\s*[\"'«]no[\"'»]"),
+    re.compile(r"\(\s*\)\s*si\b"),
+)
+#: Declarat pel model, n'hi ha prou amb "SI/NO"; inferit, cal la casella o la X.
+_DECLARED_ONLY_OFFER_FORM = re.compile(r"\bsi\s*/\s*no\b")
+#: Caselles literals: les uniques marques del model d'oferta que valen per inferir.
+_CHECKBOX_MARKERS = ("( )", "(  )", "[ ]", "\u2610", "\u25a1")
 _POINTS = re.compile(r"(?<![\w.,])(\d+(?:[.,]\d+)?)\s?(?:punts|punt|puntos|punto|pts?\.?)(?!\w)")
+#: La capcalera de columna d'una taula de puntuacio: "DESCRIPCIO PUNTS".
+_SCORING_HEADER = re.compile(r"\b(?:punts|puntos|puntuacio|puntuacion|pts)\b")
+#: Una puntuacio nua al final d'una fila: "... atencio en catala 1".
+_TRAILING_SCORE = re.compile(r"(?<![\w.,/])(\d+(?:[.,]\d+)?)\s*$")
+#: Quantes linies com a molt entre la capcalera i la fila: la mateixa taula.
+_TABLE_SPAN = 30
+TABLE_HEADER_CONTEXT = "table_header_on_page"
+
+
+def _table_row_score(
+    candidate: AwardCandidateOutV3, quote: str, page_text: str | None
+) -> bool:
+    """La fila citada acaba en la puntuacio del candidat, sota una capcalera de punts.
+
+    Tot ha de ser literal i de la MATEIXA pagina validada:
+    1. el candidat declara `points`;
+    2. la cita te files que acaben en un numero nu, i TOTES acaben en aquell
+       numero (una cita amb files de puntuacions diferents es ambigua: no se sap
+       quina es la del candidat, i va a revisio);
+    3. la cita es localitza a la pagina, i a les `_TABLE_SPAN` linies que acaben
+       on acaba la cita hi ha una capcalera: una linia curta, sense xifres, que
+       comenca o acaba en "punts"/"puntuacio" ("DESCRIPCIO PUNTS").
+    Un numero nu sense capcalera no es mai una puntuacio, i la puntuacio d'una
+    altra fila no serveix: ha de ser la del final de la fila citada.
+    """
+    if candidate.points is None or not page_text:
+        return False
+    scores = []
+    for row in cm.rows(quote):
+        match = _TRAILING_SCORE.search(row)
+        if match:
+            value = cm.parse_number(match.group(1))
+            if value is not None:
+                scores.append(value)
+    if not scores or any(abs(score - candidate.points) >= 0.005 for score in scores):
+        return False
+
+    lines = [flat for flat in (cm.flatten(line) for line in page_text.split("\n")) if flat]
+    starts, offset = [], 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line) + 1
+    at = " ".join(lines).find(cm.flatten(quote))
+    if at < 0:
+        return False
+    last = at + len(cm.flatten(quote)) - 1
+    end_line = max(n for n, begin in enumerate(starts) if begin <= last)
+    return any(
+        _is_scoring_header(lines[n])
+        for n in range(end_line, max(-1, end_line - _TABLE_SPAN), -1)
+    )
+
+
+def _is_scoring_header(line: str) -> bool:
+    """"DESCRIPCIO PUNTS", "Puntuacio maxima": curta, sense xifres, amb la paraula a una punta."""
+    if len(line) > 60 or re.search(r"\d", line):
+        return False
+    words = re.findall(r"[a-z]+", line)
+    return bool(words) and (
+        _SCORING_HEADER.fullmatch(words[0]) is not None
+        or _SCORING_HEADER.fullmatch(words[-1]) is not None
+    )
 
 
 def _points_in(text: str) -> list[float]:
@@ -420,10 +502,42 @@ def check_mechanism(
         # Una taula de puntuacio te, com a minim, dues puntuacions o pesos.
         ok = len(_points_in(text)) + len(_percents_in(text)) >= 2
     elif basis == AdjudicationBasis.OFFER_FORM:
-        ok = any(marker in text for marker in _OFFER_FORM_MARKERS)
+        flat = cm.flatten(quote)
+        ok = (
+            any(marker in flat for marker in _OFFER_FORM_MARKERS)
+            or bool(_DECLARED_ONLY_OFFER_FORM.search(flat))
+            or _offer_form_instruction(quote)
+        )
     else:  # CRITERIA_SECTION
         ok = _is_criteria_heading(quote)
     return MechanismCheck.VERIFIED if ok else MechanismCheck.NOT_IN_QUOTE
+
+
+def _offer_form_instruction(quote: str) -> bool:
+    """La cita porta una casella o la instruccio de marcar SI/NO amb una X."""
+    flat = cm.flatten(quote)
+    return any(marker in flat for marker in _CHECKBOX_MARKERS) or any(
+        pattern.search(flat) for pattern in _OFFER_FORM_PATTERNS
+    )
+
+
+def _inferred_mechanism(
+    basis: AdjudicationBasis, candidate: AwardCandidateOutV3, quote: str
+) -> bool:
+    """Un mecanisme NO declarat, provat per la cita del mateix candidat. Mes estricte.
+
+    * punts: el candidat ha de dir QUANTS (`points`) i la cita ha de dir aquell
+      numero amb la unitat ("35 punts"). Uns punts qualssevol no son els seus.
+    * model d'oferta: una casella literal o la instruccio "marcar amb una X
+      SI/NO". "Sobre 2" o "model d'oferta" sols no ho proven.
+    """
+    if basis == AdjudicationBasis.POINTS:
+        return candidate.points is not None and candidate.points in _points_in(
+            cm.normalise(quote)
+        )
+    if basis == AdjudicationBasis.OFFER_FORM:
+        return _offer_form_instruction(quote)
+    return False
 
 
 def _is_criteria_heading(quote: str) -> bool:
@@ -452,23 +566,47 @@ class AwardDecision:
     reasons: list[AwardReason] = field(default_factory=list)
     #: `{evidence_id: [refs]}` declarats a `supports` que no son cap mecanisme declarat.
     unknown_refs: dict[str, list[str]] = field(default_factory=dict)
+    #: v3.2: com s'ha provat un mecanisme quan no n'hi ha prou amb la cita sola
+    #: (p. ex. `table_header_on_page`). Sense text.
+    contexts: dict[AdjudicationBasis, str] = field(default_factory=dict)
+    #: v3.2: mecanismes que el model NO va declarar pero que la seva evidencia prova.
+    inferred: frozenset[AdjudicationBasis] = frozenset()
 
     @property
     def needs_review(self) -> bool:
         return self.award_class == AwardClass.CANDIDATE_AWARD_CRITERION
 
 
+#: Mecanismes que el backend busca a l'evidencia encara que el model no els
+#: declari: nomes els que lliguen la puntuacio o la casella a la FILA citada.
+#: La clausula de criteris o una taula generica no, perque no diuen de quin item parlen.
+_INFERABLE = (AdjudicationBasis.OFFER_FORM, AdjudicationBasis.POINTS)
+
+
 def classify_award(
-    candidate: AwardCandidateOutV3, valid_quotes: Mapping[str, str]
+    candidate: AwardCandidateOutV3,
+    valid_quotes: Mapping[str, str],
+    page_texts: Mapping[str, str] | None = None,
 ) -> AwardDecision:
     """Classe final d'un candidat. Mai no el descarta: com a molt, a revisio.
 
-    Formal NOMES si almenys un mecanisme declarat queda VERIFICAT per una cita
-    valida que el declara. Ni l'origen (PCAP) ni "es valorara" no hi compten.
-    `valid_quotes` es `{evidence_id: text exacte localitzat}`.
+    v3.2: la classe la decideix l'EVIDENCIA.
+
+    * Mecanisme formal provat per una cita valida -> criteri formal, ho digui el
+      model o no. Els declarats es comproven amb les cites que els declaren; el
+      formulari d'oferta i els punts de fila tambe es busquen a les altres cites
+      valides del candidat (`inferred`).
+    * Cap mecanisme provat -> el que el model declara: criteri (a revisio),
+      desitjable o informatiu. "Es valorara" sol no prova res.
+    * Mai formal perque el model ho digui. Ni l'origen (PCAP) no hi compta.
+
+    `valid_quotes` es `{evidence_id: text exacte localitzat}`; `page_texts`,
+    opcional, `{evidence_id: text de la pagina validada}` per a la regla de taula.
     """
+    page_texts = page_texts or {}
     declared = {basis.value for basis in candidate.adjudication_basis}
     mechanisms: dict[AdjudicationBasis, tuple[MechanismCheck, list[str]]] = {}
+    contexts: dict[AdjudicationBasis, str] = {}
     unknown_refs: dict[str, list[str]] = {}
 
     for evidence in candidate.evidence:
@@ -478,6 +616,28 @@ def classify_award(
             if ref not in declared:
                 unknown_refs.setdefault(evidence.id, []).append(ref)
 
+    def evaluate(
+        basis: AdjudicationBasis, evidence_ids: list[str], *, declared: bool
+    ) -> tuple[MechanismCheck, list[str], str | None]:
+        checks = {
+            eid: check_mechanism(basis, candidate, valid_quotes[eid]) if declared
+            else (MechanismCheck.VERIFIED
+                  if _inferred_mechanism(basis, candidate, valid_quotes[eid])
+                  else MechanismCheck.NOT_IN_QUOTE)
+            for eid in evidence_ids
+        }
+        verified = [eid for eid, check in checks.items() if check == MechanismCheck.VERIFIED]
+        if verified:
+            return MechanismCheck.VERIFIED, verified, None
+        if basis in (AdjudicationBasis.POINTS, AdjudicationBasis.CRITERIA_TABLE):
+            table = [
+                eid for eid in evidence_ids
+                if _table_row_score(candidate, valid_quotes[eid], page_texts.get(eid))
+            ]
+            if table:
+                return MechanismCheck.VERIFIED, table, TABLE_HEADER_CONTEXT
+        return next(iter(checks.values())), [], None
+
     for basis in candidate.adjudication_basis:
         declaring = [
             e.id for e in candidate.evidence if basis.value in e.supports and e.id in valid_quotes
@@ -485,34 +645,43 @@ def classify_award(
         if not declaring:
             mechanisms[basis] = (MechanismCheck.NOT_EVIDENCED, [])
             continue
-        checks = {eid: check_mechanism(basis, candidate, valid_quotes[eid]) for eid in declaring}
-        verified = [eid for eid, check in checks.items() if check == MechanismCheck.VERIFIED]
-        if verified:
-            mechanisms[basis] = (MechanismCheck.VERIFIED, verified)
-        else:
-            mechanisms[basis] = (next(iter(checks.values())), [])
+        check, ids, context = evaluate(basis, declaring, declared=True)
+        mechanisms[basis] = (check, ids)
+        if context:
+            contexts[basis] = context
+
+    inferred: set[AdjudicationBasis] = set()
+    own = [e.id for e in candidate.evidence if e.id in valid_quotes]
+    for basis in _INFERABLE:
+        if basis in mechanisms or not own:
+            continue
+        check, ids, context = evaluate(basis, own, declared=False)
+        if check == MechanismCheck.VERIFIED:
+            mechanisms[basis] = (check, ids)
+            inferred.add(basis)
+            if context:
+                contexts[basis] = context
 
     any_verified = any(check == MechanismCheck.VERIFIED for check, _ in mechanisms.values())
-    if candidate.kind == AwardCandidateKind.AWARD_CRITERION:
-        if any_verified:
-            award_class, reason = AwardClass.FORMAL_AWARD_CRITERION, AwardReason.MECHANISM_VERIFIED
-        else:
-            award_class = AwardClass.CANDIDATE_AWARD_CRITERION
-            reason = (
-                AwardReason.NO_MECHANISM_VERIFIED if declared else AwardReason.NO_MECHANISM_DECLARED
-            )
-    elif any_verified:
-        # El model diu que no puntua, pero la cita prova un mecanisme: ni formal
-        # per decisio del backend, ni amagat. A revisio.
+    reasons: list[AwardReason]
+    if any_verified:
+        award_class = AwardClass.FORMAL_AWARD_CRITERION
+        reasons = [AwardReason.MECHANISM_VERIFIED]
+        if candidate.kind != AwardCandidateKind.AWARD_CRITERION:
+            reasons.append(AwardReason.KIND_OVERRIDDEN_BY_EVIDENCE)
+    elif candidate.kind == AwardCandidateKind.AWARD_CRITERION:
         award_class = AwardClass.CANDIDATE_AWARD_CRITERION
-        reason = AwardReason.KIND_CONFLICTS_WITH_MECHANISM
+        reasons = [
+            AwardReason.NO_MECHANISM_VERIFIED if declared else AwardReason.NO_MECHANISM_DECLARED
+        ]
     elif candidate.kind == AwardCandidateKind.DESIRABLE_FEATURE:
-        award_class, reason = AwardClass.TECHNICAL_DESIRABLE, AwardReason.DECLARED_DESIRABLE
+        award_class, reasons = AwardClass.TECHNICAL_DESIRABLE, [AwardReason.DECLARED_DESIRABLE]
     else:
-        award_class, reason = AwardClass.INFORMATIVE, AwardReason.DECLARED_INFORMATIVE
+        award_class, reasons = AwardClass.INFORMATIVE, [AwardReason.DECLARED_INFORMATIVE]
 
     return AwardDecision(
-        award_class=award_class, mechanisms=mechanisms, reasons=[reason], unknown_refs=unknown_refs
+        award_class=award_class, mechanisms=mechanisms, reasons=reasons,
+        unknown_refs=unknown_refs, contexts=contexts, inferred=frozenset(inferred),
     )
 
 
@@ -535,6 +704,10 @@ class RejectionReason(StrEnum):
 
 
 class RejectionStage(StrEnum):
+    #: v3.2: una clau d'arrel desconeguda, descartada.
+    ROOT = "root"
+    #: v3.2: una nota o incertesa (metadada auxiliar) descartada.
+    AUXILIARY = "auxiliary"
     SCHEMA = "schema"
     EVIDENCE = "evidence"
     ITEM = "item"
@@ -545,6 +718,9 @@ class RejectionStage(StrEnum):
 class RejectionItem(StrEnum):
     REQUIREMENT = "requirement"
     AWARD_CANDIDATE = "award_candidate"
+    ROOT = "root"
+    DOCUMENT_NOTE = "document_note"
+    UNCERTAINTY = "uncertainty"
 
 
 #: Els codis v1/v2 (fase 1) llegits amb el vocabulari v3. Les files antigues no
@@ -563,7 +739,8 @@ _DETAILS: frozenset[str] = frozenset(
     | {
         "not_declared", "unknown_ref", "missing", "extra_forbidden", "enum", "value_error",
         "string_too_long", "string_too_short", "too_long", "string_pattern_mismatch",
-        "string_type", "int_type", "float_type", "bool_type", "list_type", "dict_type",
+        "string_type", "int_type", "int_parsing", "float_type", "bool_type", "list_type",
+        "dict_type", "model_attributes_type",
         "model_type", "literal_error", "greater_than_equal", "other",
     }
 )
@@ -648,13 +825,16 @@ _ITEM_LISTS: tuple[tuple[str, type[BaseModel], RejectionItem], ...] = (
 
 
 def parse_chunk_v3(payload: Any) -> tuple[ChunkExtractionOutV3, RejectionLog]:
-    """Valida el sobre estrictament i cada element per separat.
+    """Valida el sobre i cada element per separat.
 
-    Si el sobre no es valid (no es un objecte, claus de mes, llistes que no ho
-    son), aixeca `ValidationError`: el chunk sencer es `schema_invalid`, com a
-    v1. Si nomes un element es invalid, es descarta NOMES aquell, amb un rebuig
-    `schema_invalid` que diu el tipus d'error i el camp de primer nivell. Mai el
-    valor, i mai el nom d'una clau inventada.
+    v3.2: si el sobre no es usable (no es un objecte, li falta
+    `requirements` o `award_candidates`, o no son llistes), aixeca
+    `ValidationError`: el chunk sencer es `schema_invalid`, com a v1. Les claus
+    d'arrel desconegudes i les notes/incerteses mal formades es descarten amb un
+    rebuig (`_prevalidate_envelope`). Si nomes un element es invalid, es
+    descarta NOMES aquell, amb un rebuig `schema_invalid` que diu el tipus
+    d'error i el camp de primer nivell. Mai el valor, i mai el nom d'una clau
+    inventada.
     """
     result = parse_chunk_v3_result(payload)
     return result.output, result.schema_rejections
@@ -680,6 +860,10 @@ class ParsedChunkV3:
     claims_rejected: int = 0
     #: Posicio ORIGINAL dels requisits conservats sense algun claim: van a revisio.
     salvaged_requirements: frozenset[int] = frozenset()
+    #: v3.2: claus d'arrel desconegudes descartades (mai es fan servir).
+    root_fields_rejected: int = 0
+    #: v3.2: notes i incerteses descartades (element a element o el camp sencer).
+    auxiliary_rejected: int = 0
 
     @property
     def schema_rejected(self) -> int:
@@ -689,16 +873,9 @@ class ParsedChunkV3:
 
 def parse_chunk_v3_result(payload: Any) -> ParsedChunkV3:
     """`parse_chunk_v3` en la forma que espera `ExtractorProfile.parse`."""
-    envelope = payload
-    if isinstance(payload, dict):
-        envelope = {
-            key: ([] if key in {k for k, _, _ in _ITEM_LISTS} and isinstance(value, list)
-                  else value)
-            for key, value in payload.items()
-        }
-    ChunkExtractionOutV3.model_validate(envelope)
-
     log = RejectionLog()
+    payload, root_rejected, auxiliary, auxiliary_rejected = _prevalidate_envelope(payload, log)
+    envelope = {key: [] for key, _, _ in _ITEM_LISTS}
     kept: dict[str, list[BaseModel]] = {}
     indexes: dict[str, list[int]] = {}
     items_rejected = claims_rejected = 0
@@ -727,7 +904,7 @@ def parse_chunk_v3_result(payload: Any) -> ParsedChunkV3:
                     item, index, RejectionStage.CLAIM, RejectionReason.SCHEMA_INVALID,
                     claim=claim_index, detail=error_type, field_name=field_name,
                 ))
-    output = ChunkExtractionOutV3.model_validate({**envelope, **kept})
+    output = ChunkExtractionOutV3.model_validate({**envelope, **kept, **auxiliary})
     return ParsedChunkV3(
         output=output,
         schema_rejections=log,
@@ -736,7 +913,104 @@ def parse_chunk_v3_result(payload: Any) -> ParsedChunkV3:
         items_rejected=items_rejected,
         claims_rejected=claims_rejected,
         salvaged_requirements=frozenset(salvaged),
+        root_fields_rejected=root_rejected,
+        auxiliary_rejected=auxiliary_rejected,
     )
+
+
+#: Les llistes d'extraccio: si hi son, han de ser llistes, o el chunk falla sencer.
+CORE_ROOT_FIELDS = ("requirements", "award_candidates")
+#: Metadades auxiliars: mai no fan caure l'extraccio.
+_AUXILIARY_FIELDS = (
+    ("document_notes", DocumentNoteOut, RejectionItem.DOCUMENT_NOTE),
+    ("uncertainties", UncertaintyOut, RejectionItem.UNCERTAINTY),
+)
+_KNOWN_ROOT = frozenset(CORE_ROOT_FIELDS) | {name for name, _, _ in _AUXILIARY_FIELDS}
+_ROOT_KEY_NAME = re.compile(r"[a-z][a-z0-9_]{0,39}")
+
+
+class _CoreEnvelope(BaseModel):
+    """Nomes el que fa usable una resposta: les DUES llistes d'extraccio.
+
+    Com a `ChunkExtractionOutV3`: obligatories, llistes i no nul·les. Una que
+    falti no es completa mai amb `[]`. Les claus desconegudes s'ignoren aqui
+    perque `_prevalidate_envelope` ja les descarta i les registra.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    requirements: list[Any]
+    award_candidates: list[Any]
+
+
+def _masked_key(key: Any) -> str:
+    """El nom d'una clau inventada nomes si no pot ser text del plec."""
+    text = str(key)
+    return text if _ROOT_KEY_NAME.fullmatch(text) else f"<text,{len(text)} chars>"
+
+
+def _prevalidate_envelope(
+    payload: Any, log: RejectionLog
+) -> tuple[dict[str, Any], int, dict[str, list[Any]], int]:
+    """El sobre, abans de validar cap element. v3.2.
+
+    * No es un objecte, li falta `requirements` o `award_candidates`, o alguna
+      no es una llista (tambe `null`) -> `ValidationError`: el chunk falla
+      sencer. Una llista d'extraccio absent o inservible mai no es converteix
+      en buida.
+    * Claus d'arrel desconegudes -> es descarten, cadascuna amb un rebuig
+      (`stage: root`, nom emmascarat si podria ser text). El seu contingut no es
+      fa servir mai.
+    * `document_notes` / `uncertainties` -> element a element: el que no valida
+      es descarta amb un rebuig; si el camp sencer no es una llista, es descarta
+      el camp. Mai no fan caure requisits ni criteris.
+    """
+    if not isinstance(payload, dict):
+        ChunkExtractionOutV3.model_validate(payload)  # llanca el ValidationError
+    _CoreEnvelope.model_validate(payload)
+
+    root_rejected = 0
+    for key in payload:
+        if key not in _KNOWN_ROOT:
+            root_rejected += 1
+            log.add(rejection(
+                RejectionItem.ROOT, 0, RejectionStage.ROOT, RejectionReason.SCHEMA_INVALID,
+                detail="extra_forbidden", field_name=_masked_key(key),
+            ))
+
+    auxiliary: dict[str, list[Any]] = {}
+    auxiliary_rejected = 0
+    for name, model, item in _AUXILIARY_FIELDS:
+        if name not in payload:
+            continue
+        value = payload[name]
+        if not isinstance(value, list):
+            auxiliary_rejected += 1
+            log.add(rejection(
+                item, 0, RejectionStage.AUXILIARY, RejectionReason.SCHEMA_INVALID,
+                detail="list_type", field_name=name,
+            ))
+            continue
+        kept: list[Any] = []
+        for index, element in enumerate(value):
+            try:
+                kept.append(model.model_validate(element))
+            except ValidationError as exc:
+                auxiliary_rejected += 1
+                first = exc.errors(include_input=False, include_url=False,
+                                   include_context=False)[0]
+                loc = first.get("loc") or ()
+                field_name = (
+                    loc[0] if loc and isinstance(loc[0], str) and loc[0] in model.model_fields
+                    else None
+                )
+                log.add(rejection(
+                    item, index, RejectionStage.AUXILIARY, RejectionReason.SCHEMA_INVALID,
+                    detail=str(first.get("type", "other")), field_name=field_name,
+                ))
+        auxiliary[name] = kept
+    known = {key: value for key, value in payload.items() if key in CORE_ROOT_FIELDS}
+    return known, root_rejected, auxiliary, auxiliary_rejected
 
 
 def _salvage_requirement(
@@ -847,6 +1121,8 @@ def adjudication_basis_json(
                 "evidence_ids": [
                     str(evidence_row_ids[eid]) for eid in ids if eid in evidence_row_ids
                 ],
+                **({"context": decision.contexts[basis]} if basis in decision.contexts else {}),
+                **({"inferred": True} if basis in decision.inferred else {}),
             }
             for basis, (check, ids) in decision.mechanisms.items()
         ],

@@ -155,7 +155,7 @@ def test_el_json_schema_v3_es_serialitzable_i_estricte():
     json.dumps(schema)
     assert schema["additionalProperties"] is False
     assert "award_candidates" in schema["properties"]
-    assert SCHEMA_VERSION_V3 == "requirements-schema-v3.1"
+    assert SCHEMA_VERSION_V3 == "requirements-schema-v3.2"
 
 
 # --------------------------------------------------------------------------- #
@@ -559,14 +559,16 @@ def test_desitjable_i_informatiu_no_es_descarten():
         assert _classify(_candidate(kind=kind)).award_class in set(AwardClass)
 
 
-def test_un_desitjable_amb_mecanisme_provat_va_a_revisio():
+def test_un_desitjable_amb_mecanisme_provat_es_formal_per_l_evidencia():
+    # v3.1 l'enviava a revisio; v3.2: la classe la decideix l'evidencia.
     candidate = _candidate(kind="desirable_feature", points=5.0, adjudication_basis=["points"],
                            evidence=[("e1", "5 punts", ("points",))])
 
     decision = _classify(candidate)
 
-    assert decision.award_class == AwardClass.CANDIDATE_AWARD_CRITERION
-    assert decision.reasons == [AwardReason.KIND_CONFLICTS_WITH_MECHANISM]
+    assert decision.award_class == AwardClass.FORMAL_AWARD_CRITERION
+    assert decision.reasons == [AwardReason.MECHANISM_VERIFIED,
+                                AwardReason.KIND_OVERRIDDEN_BY_EVIDENCE]
 
 
 def test_una_cita_invalida_no_prova_cap_mecanisme():
@@ -618,8 +620,8 @@ def test_un_element_invalid_no_s_emporta_el_chunk():
     assert secret not in json.dumps(log.entries)
 
 
-@pytest.mark.parametrize("payload", [[], "text", {"requirements": [], "inventat": []},
-                                     {"requirements": "no-llista"}])
+# v3.2: una clau d'arrel inventada ja no fa caure el chunk (test_v3_2_robustness).
+@pytest.mark.parametrize("payload", [[], "text", {}, {"requirements": "no-llista"}])
 def test_un_sobre_invalid_fa_invalid_el_chunk(payload):
     with pytest.raises(ValidationError):
         parse_chunk_v3(payload)

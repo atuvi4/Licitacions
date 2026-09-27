@@ -33,11 +33,11 @@ from app.ai.prompts.requirements_v2 import (
     SYSTEM_PROMPT_V2,
     build_user_message_v2,
 )
-from app.ai.prompts.requirements_v3_1 import (
-    EXTRACTOR_VERSION_V3_1,
-    PROMPT_VERSION_V3_1,
-    SYSTEM_PROMPT_V3_1,
-    build_user_message_v3_1,
+from app.ai.prompts.requirements_v3_2 import (
+    EXTRACTOR_VERSION_V3_2,
+    PROMPT_VERSION_V3_2,
+    SYSTEM_PROMPT_V3_2,
+    build_user_message_v3_2,
 )
 from app.ai.schemas import (
     SCHEMA_VERSION,
@@ -123,13 +123,18 @@ V2 = ExtractorProfile(
 #: un run v3 (`bed24c45`, `4df81a00`) NO es pot reprendre amb aquest perfil, i
 #: `plan_resume` ho refusa (`profile_mismatch`). Aquells runs queden com a
 #: evidencia; el prompt v3 es conserva a `prompts/requirements_v3.py`.
+#:
+#: Des del canari v3.1 (`4087ac26`), el contracte es el **v3.2** (sobre robust,
+#: metadades auxiliars element a element, classe d'adjudicacio per evidencia).
+#: Tampoc no es repren cap run v3 ni v3.1; el prompt v3.1 es conserva a
+#: `prompts/requirements_v3_1.py`.
 V3 = ExtractorProfile(
     name="v3",
-    extractor_version=EXTRACTOR_VERSION_V3_1,
-    prompt_version=PROMPT_VERSION_V3_1,
+    extractor_version=EXTRACTOR_VERSION_V3_2,
+    prompt_version=PROMPT_VERSION_V3_2,
     schema_version=SCHEMA_VERSION_V3,
-    system_prompt=SYSTEM_PROMPT_V3_1,
-    build_user_message=build_user_message_v3_1,
+    system_prompt=SYSTEM_PROMPT_V3_2,
+    build_user_message=build_user_message_v3_2,
     json_schema=chunk_output_json_schema_v3,
     output_model=ChunkExtractionOutV3,
     structured_values=True,

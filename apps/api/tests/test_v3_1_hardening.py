@@ -234,7 +234,7 @@ def _req(claims, evidence=None, **extra):
 
 
 def test_el_requisit_es_conserva_sense_el_claim_invalid():
-    payload = {"requirements": [_req([
+    payload = {"award_candidates": [], "requirements": [_req([
         {"id": "pes_max", "kind": "quantity", "value": 100, "unit": "g",
          "anchor": "Pes inferior a"},
         {"id": "cable", "kind": "quantity", "value": 1.5, "unit": "metres"},  # unitat invalida
@@ -255,7 +255,7 @@ def test_el_requisit_es_conserva_sense_el_claim_invalid():
 
 
 def test_el_claim_descartat_mai_no_queda_sostingut():
-    payload = {"requirements": [_req([
+    payload = {"award_candidates": [], "requirements": [_req([
         {"id": "pes_max", "kind": "quantity", "value": 100, "unit": "g",
          "anchor": "Pes inferior a"},
         {"id": "cable", "kind": "quantity", "value": "1,5 m", "unit": "m"},
@@ -283,7 +283,7 @@ def test_el_claim_descartat_mai_no_queda_sostingut():
 def test_si_l_error_no_es_d_un_claim_concret_es_descarta_com_abans(broken):
     base = _req([{"id": "cable", "kind": "quantity", "value": 1.5, "unit": "metres"}])
 
-    parsed = parse_chunk_v3_result({"requirements": [{**base, **broken}]})
+    parsed = parse_chunk_v3_result({"award_candidates": [], "requirements": [{**base, **broken}]})
 
     assert parsed.output.requirements == []
     assert parsed.items_rejected == 1
@@ -291,7 +291,7 @@ def test_si_l_error_no_es_d_un_claim_concret_es_descarta_com_abans(broken):
 
 
 def test_sense_cap_claim_valid_queda_nomes_la_cita_i_va_a_revisio():
-    parsed = parse_chunk_v3_result({"requirements": [_req([
+    parsed = parse_chunk_v3_result({"award_candidates": [], "requirements": [_req([
         {"id": "cable", "kind": "quantity", "value": 1.5, "unit": "metres"},
     ])]})
 
@@ -301,7 +301,7 @@ def test_sense_cap_claim_valid_queda_nomes_la_cita_i_va_a_revisio():
 
 
 def test_un_requisit_valid_no_canvia():
-    parsed = parse_chunk_v3_result({"requirements": [_req([
+    parsed = parse_chunk_v3_result({"award_candidates": [], "requirements": [_req([
         {"id": "pes_max", "kind": "quantity", "value": 100, "unit": "g",
          "anchor": "Pes inferior a"},
     ])]})
@@ -382,7 +382,7 @@ def _ev(x, eid, page, quote, supports):
 def _synthetic_candidates(x):
     """SINTETIC: forma de resposta de model escrita a ma. Cada requisit tecnic porta
     UN claim invalid, que a la v3 s'hauria endut el requisit sencer."""
-    return {"requirements": [
+    return {"award_candidates": [], "requirements": [
         {"category": "technical_requirement", "title": "Prestacions IP dels terminals",
          "claims_complete": "complete",
          "claims": [
@@ -452,7 +452,7 @@ async def test_els_requisits_tecnics_de_palamos_ja_no_desapareixen(session, pala
 
     run = (await analyze_tender_requirements(session, tender, profile=profiles.V3)).run
 
-    assert run.extractor_version == "tender-requirements-v3.1"
+    assert run.extractor_version == "tender-requirements-v3.2"
     assert run.requirements_extracted == 6
     assert run.requirements_rejected == 0, "cap requisit sencer perdut"
     requirements = {r.title: r for r in (await session.scalars(sa.select(Requirement))).all()}
@@ -503,7 +503,7 @@ async def test_l_estimacio_multiplica_per_les_crides_previstes(
         "limit", usage=Usage(input_tokens=100, output_tokens=50, stop_reason="max_tokens")
     )
     canary, tender = await probe_tests._fake_canary(
-        session, palamos_like, [{"requirements": []}, truncated, {"requirements": []}], {0, 2, 4}
+        session, palamos_like, [probe_tests.EMPTY_V3, truncated, probe_tests.EMPTY_V3], {0, 2, 4}
     )
     tender.expediente_number = "2024-3137"
     await session.commit()
@@ -525,14 +525,14 @@ async def test_l_estimacio_multiplica_per_les_crides_previstes(
     assert selective.startswith("ESTIMACIO per a 1 crida(es) prevista(es): ~100 tokens")
     assert normal.startswith("ESTIMACIO per a 3 crida(es) prevista(es): ~300 tokens")
     for line in (fresh, selective, normal):
-        assert "(base: 3 peticio(ns) historica(ues) de requirements-v3.1)" in line
+        assert "(base: 3 peticio(ns) historica(ues) de requirements-v3.2)" in line
 
 
 def test_sense_historic_l_estimacio_ho_diu_amb_les_crides():
-    estimate = probe.estimate_tokens(None, 19, "requirements-v3.1", "m")
+    estimate = probe.estimate_tokens(None, 19, "requirements-v3.2", "m")
 
     assert estimate == {"available": False, "calls": 19,
-                        "reason": "sense historic de requirements-v3.1 amb m"}
+                        "reason": "sense historic de requirements-v3.2 amb m"}
 
 
 # --------------------------------------------------------------------------- #
@@ -543,9 +543,11 @@ def test_sense_historic_l_estimacio_ho_diu_amb_les_crides():
 def test_les_tres_versions_pugen_juntes_i_la_v3_es_conserva():
     from app.ai.prompts import requirements_v3, requirements_v3_1
 
+    # v3.2 ha pujat les tres versions; els prompts v3 i v3.1 es conserven.
     assert (profiles.V3.extractor_version, profiles.V3.prompt_version,
             profiles.V3.schema_version) == (
-        "tender-requirements-v3.1", "requirements-v3.1", "requirements-schema-v3.1")
+        "tender-requirements-v3.2", "requirements-v3.2", "requirements-schema-v3.2")
+    assert requirements_v3_1.PROMPT_VERSION_V3_1 == "requirements-v3.1"
     assert requirements_v3.PROMPT_VERSION_V3 == "requirements-v3"
     assert requirements_v3.SYSTEM_PROMPT_V3 != requirements_v3_1.SYSTEM_PROMPT_V3_1
     assert "quantity" in requirements_v3_1.SYSTEM_PROMPT_V3_1
@@ -554,7 +556,7 @@ def test_les_tres_versions_pugen_juntes_i_la_v3_es_conserva():
 
 async def test_un_run_v3_no_es_pot_reprendre_en_v3_1(session, palamos_like, one_page_chunks):
     canary, tender = await probe_tests._fake_canary(
-        session, palamos_like, [{"requirements": []}] * 3, {0, 2, 4}
+        session, palamos_like, [probe_tests.EMPTY_V3] * 3, {0, 2, 4}
     )
     # Com els runs pagats bed24c45 i 4df81a00: versions v3.
     canary.extractor_version = "tender-requirements-v3"

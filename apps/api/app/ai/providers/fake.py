@@ -92,8 +92,10 @@ class FakeProvider:
 
         source = self._own if self._own is not None else _QUEUE
         if not source:
-            # Sense res encuat, un chunk no troba res. Es el cas neutre.
-            return StructuredResult(data={"requirements": []}, model=self._model)
+            # Sense res encuat, un chunk no troba res. Es el cas neutre: les
+            # llistes que l'esquema fa obligatories (v3.2), buides.
+            empty = {key: [] for key in json_schema.get("required", [])}
+            return StructuredResult(data=empty or {"requirements": []}, model=self._model)
 
         item = source.popleft()
         if isinstance(item, BaseException):

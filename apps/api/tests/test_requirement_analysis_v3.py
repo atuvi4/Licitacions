@@ -17,7 +17,7 @@ import sqlalchemy as sa
 
 from app.ai import profiles
 from app.ai.contract_v3 import VALUE_SCHEMA_V3
-from app.ai.prompts.requirements_v3_1 import SYSTEM_PROMPT_V3_1 as SYSTEM_PROMPT_V3
+from app.ai.prompts.requirements_v3_2 import SYSTEM_PROMPT_V3_2 as SYSTEM_PROMPT_V3
 from app.ai.providers import fake
 from app.ai.schemas_v3 import SCHEMA_VERSION_V3
 from app.models.enums import AnalysisRunStatus, ReviewStatus
@@ -106,12 +106,12 @@ def test_v3_no_es_el_per_defecte_ni_es_pot_demanar_per_nom():
 
 
 def test_el_perfil_v3_porta_el_seu_contracte():
-    assert V3.schema_version == SCHEMA_VERSION_V3 == "requirements-schema-v3.1"
-    assert V3.prompt_version == "requirements-v3.1"
-    assert V3.extractor_version == "tender-requirements-v3.1"
+    assert V3.schema_version == SCHEMA_VERSION_V3 == "requirements-schema-v3.2"
+    assert V3.prompt_version == "requirements-v3.2"
+    assert V3.extractor_version == "tender-requirements-v3.2"
     assert V3.claims_contract is True
     assert not profiles.V1.claims_contract and not profiles.V2.claims_contract
-    assert profiles.profile_for_run("tender-requirements-v3.1") is V3
+    assert profiles.profile_for_run("tender-requirements-v3.2") is V3
 
 
 def test_els_jobs_no_poden_executar_v3():
@@ -136,7 +136,7 @@ def test_el_prompt_v3_ensenya_el_contracte():
 
 async def test_la_crida_v3_envia_el_prompt_i_l_esquema_v3(session, analyzable):
     fake.SENT_PAYLOADS.clear()
-    await _run_v3(session, analyzable, {"requirements": []})
+    await _run_v3(session, analyzable, {"requirements": [], "award_candidates": []})
 
     [sent] = fake.SENT_PAYLOADS
     assert sent["system"] == SYSTEM_PROMPT_V3
@@ -151,10 +151,11 @@ async def test_la_crida_v3_envia_el_prompt_i_l_esquema_v3(session, analyzable):
 
 async def test_un_requisit_sostingut_escriu_el_suport_i_el_value_schema(session, analyzable):
     extraction_id = analyzable["extraction"].id
-    run = await _run_v3(session, analyzable, {"requirements": [_requirement(extraction_id)]})
+    run = await _run_v3(session, analyzable, {"award_candidates": [],
+                                              "requirements": [_requirement(extraction_id)]})
 
     assert run.status == AnalysisRunStatus.COMPLETED
-    assert run.schema_version == "requirements-schema-v3.1"
+    assert run.schema_version == "requirements-schema-v3.2"
     assert run.requirements_extracted == 1
 
     requirement = await session.scalar(sa.select(Requirement))
@@ -181,7 +182,7 @@ async def test_un_claim_no_sostingut_no_es_descarta_i_va_a_revisio(session, anal
          "anchor": "volumen anual de negocios"},
         {"id": "exercicis", "kind": "count", "value": 3, "anchor": "ejercicios"},
     ]
-    run = await _run_v3(session, analyzable, {"requirements": [_requirement(
+    run = await _run_v3(session, analyzable, {"award_candidates": [], "requirements": [_requirement(
         extraction_id, claims=claims,
         evidence=[_evidence(extraction_id, supports=["volum_minim", "exercicis"])],
     )]})
@@ -203,7 +204,7 @@ async def test_un_claim_no_sostingut_no_es_descarta_i_va_a_revisio(session, anal
 
 async def test_claims_parcials_van_a_revisio(session, analyzable):
     extraction_id = analyzable["extraction"].id
-    await _run_v3(session, analyzable, {"requirements": [
+    await _run_v3(session, analyzable, {"award_candidates": [], "requirements": [
         _requirement(extraction_id, claims_complete="partial")
     ]})
 
@@ -214,7 +215,7 @@ async def test_claims_parcials_van_a_revisio(session, analyzable):
 async def test_rebutjos_v3_amb_el_vocabulari_v3(session, analyzable):
     extraction_id = analyzable["extraction"].id
     secret = "Frase inventada que no surt al plec 999.999 euros"
-    run = await _run_v3(session, analyzable, {"requirements": [
+    run = await _run_v3(session, analyzable, {"award_candidates": [], "requirements": [
         _requirement(extraction_id),  # 0: bo
         _requirement(extraction_id, title="x", inventat=secret),  # 1: esquema
         _requirement(extraction_id, title="Inventat",
@@ -254,7 +255,7 @@ async def test_rebutjos_v3_amb_el_vocabulari_v3(session, analyzable):
 async def test_candidats_classificats_sense_descartar_cap(session, analyzable):
     extraction_id = analyzable["extraction"].id
     memoria = "Memoria tecnica: hasta 35 puntos"
-    run = await _run_v3(session, analyzable, {"award_candidates": [
+    run = await _run_v3(session, analyzable, {"requirements": [], "award_candidates": [
         _candidate(extraction_id),  # formal: punts citats
         _candidate(extraction_id, name="Memoria", adjudication_basis=[], points=None,
                    evidence=[_evidence(extraction_id, page=28, quote=memoria)]),
@@ -282,7 +283,8 @@ async def test_candidats_classificats_sense_descartar_cap(session, analyzable):
 
 async def test_la_base_d_adjudicacio_cita_la_fila_d_evidencia(session, analyzable):
     extraction_id = analyzable["extraction"].id
-    await _run_v3(session, analyzable, {"award_candidates": [_candidate(extraction_id)]})
+    await _run_v3(session, analyzable, {"requirements": [],
+                                        "award_candidates": [_candidate(extraction_id)]})
 
     criterion = await session.scalar(sa.select(AwardCriterion))
     [evidence] = (await session.scalars(sa.select(AwardCriterionEvidence))).all()
@@ -299,7 +301,7 @@ async def test_la_base_d_adjudicacio_cita_la_fila_d_evidencia(session, analyzabl
 
 async def test_un_mecanisme_no_provat_queda_registrat(session, analyzable):
     extraction_id = analyzable["extraction"].id
-    run = await _run_v3(session, analyzable, {"award_candidates": [
+    run = await _run_v3(session, analyzable, {"requirements": [], "award_candidates": [
         _candidate(extraction_id, points=80),  # la cita diu 45
     ]})
 
@@ -361,14 +363,16 @@ async def test_la_v1_no_escriu_res_de_la_v3(session, analyzable):
 
 async def test_un_run_v3_no_reaprofita_un_run_v1(session, analyzable):
     extraction_id = analyzable["extraction"].id
-    fake.queue_response({"requirements": [requirement_payload(extraction_id)]})
+    fake.queue_response({"award_candidates": [],
+                         "requirements": [requirement_payload(extraction_id)]})
     tender = await tender_of(session, analyzable["document"])
     first = await analyze_tender_requirements(session, tender)
 
-    second = await _run_v3(session, analyzable, {"requirements": [_requirement(extraction_id)]})
+    second = await _run_v3(session, analyzable, {"award_candidates": [],
+                                                 "requirements": [_requirement(extraction_id)]})
 
     assert second.id != first.run.id
-    assert second.schema_version == "requirements-schema-v3.1"
+    assert second.schema_version == "requirements-schema-v3.2"
 
 
 async def test_la_represa_v3_reapunta_la_base_a_les_cites_copiades(
@@ -384,7 +388,7 @@ async def test_la_represa_v3_reapunta_la_base_a_les_cites_copiades(
     tender = await tender_of(session, analyzable["document"])
 
     fake.queue_response(SchemaInvalidError("x", usage=Usage(input_tokens=1, output_tokens=1)))
-    fake.queue_response({"award_candidates": [_candidate(extraction_id)]})
+    fake.queue_response({"requirements": [], "award_candidates": [_candidate(extraction_id)]})
     source = (
         await analyze_tender_requirements(
             session, tender, provider=fake.FakeProvider(), profile=V3
@@ -392,7 +396,7 @@ async def test_la_represa_v3_reapunta_la_base_a_les_cites_copiades(
     ).run
     assert (source.status, source.chunks_completed) == (AnalysisRunStatus.PARTIAL, 1)
 
-    fake.queue_response({"requirements": [_requirement(extraction_id)]})
+    fake.queue_response({"award_candidates": [], "requirements": [_requirement(extraction_id)]})
     resumed = (
         await analyze_tender_requirements(
             session, tender, provider=fake.FakeProvider(), profile=V3,
@@ -426,7 +430,7 @@ async def test_la_represa_v3_reapunta_la_base_a_les_cites_copiades(
 
 
 def _three_candidates(extraction_id):
-    return {"award_candidates": [
+    return {"requirements": [], "award_candidates": [
         _candidate(extraction_id),  # formal
         _candidate(extraction_id, name="Memoria", adjudication_basis=[], points=None,
                    evidence=[_evidence(extraction_id, page=28,
@@ -501,7 +505,8 @@ async def test_el_motor_de_compliment_no_avalua_un_valor_v3(session, analyzable)
     from app.models.enums import AssessmentResult
 
     extraction_id = analyzable["extraction"].id
-    await _run_v3(session, analyzable, {"requirements": [_requirement(extraction_id)]})
+    await _run_v3(session, analyzable, {"award_candidates": [],
+                                        "requirements": [_requirement(extraction_id)]})
     requirement = await session.scalar(sa.select(Requirement))
 
     outcome = assess_requirement(requirement, ProfileSnapshot(company_id=uuid.uuid4()))
@@ -521,7 +526,7 @@ async def test_un_criteri_i_un_text_informatiu_amb_el_mateix_nom_no_es_fusionen(
     extraction_id = analyzable["extraction"].id
     same = {"name": "Criterios de adjudicacion", "adjudication_basis": [], "points": None,
             "evidence": [_evidence(extraction_id, page=28, quote="Criterios de adjudicacion")]}
-    run = await _run_v3(session, analyzable, {"award_candidates": [
+    run = await _run_v3(session, analyzable, {"requirements": [], "award_candidates": [
         _candidate(extraction_id, kind="informative", **same),
         _candidate(extraction_id, kind="award_criterion", **same),
     ]})
@@ -539,7 +544,7 @@ async def test_un_criteri_i_un_text_informatiu_amb_el_mateix_nom_no_es_fusionen(
 
 async def test_el_mateix_candidat_repetit_si_que_es_fusiona(session, analyzable):
     extraction_id = analyzable["extraction"].id
-    run = await _run_v3(session, analyzable, {"award_candidates": [
+    run = await _run_v3(session, analyzable, {"requirements": [], "award_candidates": [
         _candidate(extraction_id), _candidate(extraction_id),
     ]})
 

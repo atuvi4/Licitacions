@@ -47,7 +47,7 @@ from app.models.enums import (
 #: v3.1 (replay pagat de Palamos): `quantity` amb unitats fisiques i de dades
 #: tancades, minuts i segons a les durades, i ancores de fins a 160 caracters.
 #: Un run v3 no es pot reprendre en v3.1: el contracte de sortida ha canviat.
-SCHEMA_VERSION_V3 = "requirements-schema-v3.1"
+SCHEMA_VERSION_V3 = "requirements-schema-v3.2"
 
 #: Identificador d'un claim: tambe es la clau que tindra a `value_json`.
 CLAIM_ID_PATTERN = r"^[a-z][a-z0-9_]{0,59}$"
@@ -298,10 +298,15 @@ class AwardCandidateOutV3(StrictModel):
 
 
 class ChunkExtractionOutV3(StrictModel):
-    """El que el model retorna per a UN chunk, a la v3."""
+    """El que el model retorna per a UN chunk, a la v3.
 
-    requirements: list[RequirementOutV3] = Field(default_factory=list)
-    award_candidates: list[AwardCandidateOutV3] = Field(default_factory=list)
+    v3.2: les dues llistes d'extraccio son OBLIGATORIES (buides si no hi ha res).
+    Una resposta sense alguna d'elles no diu "no hi ha res": no es una resposta
+    del contracte, i el chunk falla. Les notes i incerteses son opcionals.
+    """
+
+    requirements: list[RequirementOutV3]
+    award_candidates: list[AwardCandidateOutV3]
     document_notes: list[DocumentNoteOut] = Field(default_factory=list)
     uncertainties: list[UncertaintyOut] = Field(default_factory=list)
 
