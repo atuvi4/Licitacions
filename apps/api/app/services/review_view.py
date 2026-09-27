@@ -263,6 +263,7 @@ async def start_review(
     company_id: uuid.UUID,
     tender_id: uuid.UUID,
     actor_id: uuid.UUID | None,
+    provenance: dict[str, str] | None = None,
 ) -> ReviewStartResult:
     """Crea els elements que falten per als requisits EXTRETS vigents. Idempotent.
 
@@ -318,7 +319,11 @@ async def start_review(
                 action=ReviewAction.CREATE,
                 verification_status_after=status,
                 accepted_json_after=accepted,
-                payload_json={"source": "extraction", "run_id": str(requirement.run_id)},
+                payload_json={
+                    "source": "extraction",
+                    "run_id": str(requirement.run_id),
+                    **(provenance or {}),
+                },
                 actor_id=actor_id,
             )
         )

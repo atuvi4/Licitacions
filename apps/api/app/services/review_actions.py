@@ -174,10 +174,13 @@ async def apply_review_action(
     action: str,
     payload: dict[str, Any],
     user: User | None = None,
+    provenance: dict[str, str] | None = None,
 ) -> ReviewItem:
     """Aplica una accio i n'afegeix la revisio. No fa commit.
 
     `user` nomes cal per a `link_source`: la cita nova en guarda l'autor.
+    `provenance` (opcional) son identificadors segurs que s'afegeixen a la
+    carrega de la revisio (p. ex. el lot d'importacio); mai text del plec.
     """
     item = await _locked_item(session, company_id, tender_id, item_id)
     if item.revision != expected_revision:
@@ -218,6 +221,7 @@ async def apply_review_action(
         raise ValidationError("Accio desconeguda.")
 
     changes.update(_status_change(before, after))
+    changes.update(provenance or {})
     revision_no = item.revision + 1
     accepted_json = accepted.model_dump(mode="json")
     session.add(
@@ -354,6 +358,7 @@ async def create_manual_requirement(
     tender_id: uuid.UUID,
     user: User,
     data: ManualRequirementCreate,
+    provenance: dict[str, str] | None = None,
 ) -> ReviewItem:
     """Un requisit afegit pel revisor, NOMES per a aquesta empresa. No fa commit.
 
@@ -408,7 +413,11 @@ async def create_manual_requirement(
             verification_status_after=status,
             accepted_json_after=accepted_json,
             note=data.note,
-            payload_json={"source": "manual_review", "citations": len(data.citations)},
+            payload_json={
+                "source": "manual_review",
+                "citations": len(data.citations),
+                **(provenance or {}),
+            },
             actor_id=user.id,
         )
     )

@@ -16,7 +16,17 @@ from pathlib import Path
 import pytest
 import sqlalchemy as sa
 
-from app.models.requirements import Requirement
+from app.core.security import verify_password
+from app.models.audit import AuditLog
+from app.models.identity import Company, CompanyMembership, User
+from app.models.provenance import TenderSourceRef
+from app.models.requirements import (
+    AwardCriterion,
+    AwardCriterionEvidence,
+    Requirement,
+    RequirementEvidence,
+    RequirementExtractionRun,
+)
 from app.models.review import ReviewItem, ReviewItemRelation, ReviewItemRevision, ReviewItemSource
 from tests import test_review_actions as actions_tests
 from tests.test_requirement_analysis import PAGE_27
@@ -47,9 +57,10 @@ def _annex_rows(quote=QUOTE, page="27"):
             status, related = "MANUAL_ALREADY_REPRESENTED", ORDINARY
         elif manual_id == "M21":
             related = LATENCY
+        numeric = importer.MANUAL_VALUES.get(manual_id, ("", []))[0]
         rows.append({
             "manual_id": manual_id, "page": page, "section": f"8.{n}", "title": f"T{n}",
-            "requirement": "r", "numeric_value_unit": "", "status": status,
+            "requirement": "r", "numeric_value_unit": numeric, "status": status,
             "related_automated_requirement": related, "evidence_quote": quote,
             "review_note": "", "mandatory": "yes", "material": "no",
         })
@@ -293,12 +304,20 @@ async def test_una_contrapart_que_no_existeix_falla_tancada(session, palamos_lik
     assert {p.manual_id: p.mapping_status for p in plan}["M06"] == "unresolved_none"
 
 
-async def test_el_mode_d_escriptura_no_esta_habilitat(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", GOOD)
+async def test_escriure_tambe_refusa_una_base_protegida_sense_connectar(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://postgres@127.0.0.1:5433/licitacions_v3_probe_palamos")
     args = importer.build_parser().parse_args(
-        ["--annex", str(tmp_path / "a.csv"), "--out-dir", str(tmp_path), "--write"])
+        ["--annex", str(_write(tmp_path / "a.csv", _annex_rows())), "--out-dir", str(tmp_path),
+         "--write"])
 
     assert await importer.run(args) == 2
+
+
+def test_sense_la_bandera_no_s_escriu():
+    args = importer.build_parser().parse_args(["--annex", "a.csv", "--out-dir", "o"])
+    assert args.write is False
 
 
 async def test_la_cli_refusa_una_base_protegida_sense_connectar(tmp_path, monkeypatch, capsys):
@@ -310,3 +329,219 @@ async def test_la_cli_refusa_una_base_protegida_sense_connectar(tmp_path, monkey
     assert await importer.run(args) == 2
     assert "protegida" in capsys.readouterr().out
     assert not (tmp_path / "palamos_review_import_plan.csv").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Escriptura (dades sintetiques; la base de test es d'usar i llencar)          #
+# --------------------------------------------------------------------------- #
+
+
+async def _raw_extraction(session):
+    snapshot = {}
+    for model in (Requirement, RequirementEvidence, AwardCriterion, AwardCriterionEvidence,
+                  RequirementExtractionRun):
+        table = model.__table__
+        snapshot[table.name] = [dict(r) for r in (await session.execute(
+            sa.select(table).order_by(table.c.id))).mappings()]
+    return snapshot
+
+
+async def _import(session, palamos_like, rows=None, tenant=None):
+    rows = rows or _annex_rows()
+    tid = palamos_like["tender_id"]
+    run_id = await _run_id(session, tid)
+    plan = await importer.build_plan(session, rows, tender_id=tid, run_id=run_id,
+                                     document_name="PCAP.pdf")
+    tenant = tenant or await importer.ensure_qa_tenant(session)
+    await session.commit()
+    results = await importer.execute_import(
+        session, plan=plan, rows=rows, tenant=tenant, tender_id=tid, run_id=run_id,
+        batch_id=uuid.uuid4(), annex_name="annex.csv", annex_sha256="0" * 64)
+    await session.commit()
+    return tenant, plan, results
+
+
+async def _counts(session):
+    return {model.__tablename__: await session.scalar(
+        sa.select(sa.func.count()).select_from(model))
+        for model in (ReviewItem, ReviewItemSource, ReviewItemRevision, ReviewItemRelation,
+                      TenderSourceRef)}
+
+
+EMPTY_COUNTS = {name: 0 for name in (
+    "review_items", "review_item_sources", "review_item_revisions",
+    "review_item_relations", "tender_source_refs")}
+
+
+async def test_la_importacio_completa_te_la_forma_esperada(session, palamos_like):
+    tid = palamos_like["tender_id"]
+    before = await _raw_extraction(session)
+    rows_before = await session.scalar(sa.select(sa.func.count()).select_from(Requirement))
+    m09_source = palamos_like["rows"][ORDINARY]
+    m09_status = m09_source.review_status.value
+
+    tenant, _plan_rows, results = await _import(session, palamos_like)
+
+    counts = await _counts(session)
+    assert counts == {"review_items": 3 + 43, "review_item_sources": 3 + 43 + 1,
+                      "review_item_revisions": 3 + 43 + 1, "review_item_relations": 6,
+                      "tender_source_refs": 44}
+    checks = await importer.verify_import(session, tenant.company.id, tid, results, None)
+    assert checks["canonical_requirements"] == 3 + 43
+    assert checks["provenance"] == {"automated": 3, "manual": 43}
+    assert checks["manual_all_unreviewed"] and checks["manual_all_manual"]
+    assert checks["relations"] == {"partial_match_of": 5, "related_to": 1}
+    assert checks["M15"]["values"] == [(64, "trucades")]
+    assert checks["M06"]["relations"][0][:2] == ("partial_match_of", "Cobert parcialment per")
+    assert checks["M21"]["relations"][0][:2] == ("related_to", "Relacionat amb")
+    m09 = checks["M09"]
+    assert m09["provenance"] == "automated"
+    assert [label for _page, label in m09["evidence"]][-1] == "Citat manualment"
+    assert len(m09["evidence"]) == 2
+    item_m09 = await session.scalar(sa.select(ReviewItem).join(
+        ReviewItemSource, ReviewItemSource.item_id == ReviewItem.id).where(
+        ReviewItemSource.requirement_id == m09_source.id))
+    actions = (await session.scalars(sa.select(ReviewItemRevision.action).where(
+        ReviewItemRevision.item_id == item_m09.id).order_by(ReviewItemRevision.revision_no)
+    )).all()
+    assert [a.value for a in actions] == ["create", "link_source"]
+    assert item_m09.verification_status.value == m09_status
+    assert await session.scalar(sa.select(sa.func.count()).select_from(ReviewItem).where(
+        ReviewItem.verification_status == "verified")) == 0
+    assert await session.scalar(
+        sa.select(sa.func.count()).select_from(Requirement)) == rows_before
+    session.expire_all()
+    assert await _raw_extraction(session) == before
+    payloads = [r.payload_json for r in (await session.scalars(sa.select(ReviewItemRevision)
+                .where(ReviewItemRevision.action == "create"))).all()]
+    manual = [p for p in payloads if p.get("manual_id")]
+    assert len(manual) == 43
+    assert {p["package"] for p in manual} == {"palamos_final_review"}
+    assert len({p["import_batch_id"] for p in payloads}) == 1
+
+
+async def test_una_fallada_a_la_fila_n_ho_desfa_tot(session, palamos_like, monkeypatch):
+    from app.services import review_actions
+
+    original = review_actions.create_manual_requirement
+    calls = {"n": 0}
+
+    async def failing(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 10:
+            raise RuntimeError("fallada simulada a la fila 10")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(review_actions, "create_manual_requirement", failing)
+    tid = palamos_like["tender_id"]
+    run_id = await _run_id(session, tid)
+    rows = _annex_rows()
+    plan = await importer.build_plan(session, rows, tender_id=tid, run_id=run_id,
+                                     document_name="PCAP.pdf")
+    tenant = await importer.ensure_qa_tenant(session)
+    await session.commit()
+    before = await _raw_extraction(session)
+
+    with pytest.raises(RuntimeError, match="fila 10"):
+        await importer.execute_import(
+            session, plan=plan, rows=rows, tenant=tenant, tender_id=tid, run_id=run_id,
+            batch_id=uuid.uuid4(), annex_name="annex.csv", annex_sha256="0" * 64)
+    await session.rollback()
+
+    assert await _counts(session) == EMPTY_COUNTS
+    assert await session.scalar(sa.select(sa.func.count()).select_from(AuditLog).where(
+        AuditLog.summary.contains("lot="))) == 0
+    assert await _raw_extraction(session) == before
+
+
+async def test_una_segona_importacio_no_escriu_res(session, palamos_like):
+    tenant, plan, _results = await _import(session, palamos_like)
+    counts = await _counts(session)
+    tid = palamos_like["tender_id"]
+    expected_ids = {p.manual_id for p in plan if p.planned_action.startswith("create")}
+
+    assert await importer.import_status(session, tenant.company.id, tid,
+                                        expected_manual_ids=expected_ids,
+                                        expected_items=3 + 43) == "complete"
+    with pytest.raises(importer.AlreadyImportedError):
+        await importer.execute_import(
+            session, plan=plan, rows=_annex_rows(), tenant=tenant, tender_id=tid,
+            run_id=await _run_id(session, tid), batch_id=uuid.uuid4(),
+            annex_name="annex.csv", annex_sha256="0" * 64)
+    await session.rollback()
+    assert await _counts(session) == counts
+
+
+async def test_un_estat_de_revisio_desconegut_atura(session, palamos_like):
+    from app.services import review_view
+
+    tid = palamos_like["tender_id"]
+    tenant = await importer.ensure_qa_tenant(session)
+    await review_view.start_review(session, company_id=tenant.company.id, tender_id=tid,
+                                   actor_id=tenant.actor.id)
+    await session.commit()
+    counts = await _counts(session)
+
+    with pytest.raises(importer.ImportGuardError, match="no es la importacio"):
+        await _import(session, palamos_like, tenant=tenant)
+    await session.rollback()
+    assert await _counts(session) == counts
+
+
+async def test_nomes_l_empresa_qa_pot_rebre_la_importacio(session, palamos_like, tenant_a):
+    user, company = tenant_a
+    membership = await session.scalar(sa.select(CompanyMembership).where(
+        CompanyMembership.company_id == company.id))
+    fake = importer.QaTenant(company, user, membership, created=False)
+
+    with pytest.raises(importer.ImportGuardError, match="empresa QA"):
+        await _import(session, palamos_like, tenant=fake)
+    await session.rollback()
+    assert (await _counts(session))["review_items"] == 0
+
+
+async def test_l_empresa_i_l_actor_qa_son_idempotents_i_sense_acces(session):
+    first = await importer.ensure_qa_tenant(session)
+    await session.commit()
+    second = await importer.ensure_qa_tenant(session)
+
+    assert (first.created, second.created) == (True, False)
+    assert (first.company.id, first.actor.id) == (second.company.id, second.actor.id)
+    assert first.membership.role.value == "technical"
+    assert first.actor.is_active is False and first.actor.is_superuser is False
+    assert not verify_password("qualsevol", first.actor.hashed_password)
+    assert await session.scalar(sa.select(sa.func.count()).select_from(Company).where(
+        Company.legal_name == importer.QA_COMPANY_NAME)) == 1
+
+
+async def test_una_identitat_qa_en_conflicte_atura(session):
+    session.add(User(email=importer.QA_ACTOR_EMAIL, hashed_password="x", is_active=True))
+    await session.commit()
+
+    with pytest.raises(importer.ImportGuardError, match="ambigua"):
+        await importer.ensure_qa_tenant(session)
+
+
+def test_els_valors_de_l_annex_es_mapegen_sense_interpretar():
+    rows = {r["manual_id"]: r for r in _annex_rows()}
+    assert importer.manual_values(rows["M15"])[0]["value"] == 64
+    assert [v["value"] for v in importer.manual_values(rows["M43"])] == [200, 25]
+    assert importer.manual_values(rows["M01"]) == []
+    changed = dict(rows["M15"], numeric_value_unit="65 trucades")
+    with pytest.raises(importer.ImportGuardError, match="ha canviat"):
+        importer.manual_values(changed)
+    unmapped = dict(rows["M02"], numeric_value_unit="10 GB")
+    with pytest.raises(importer.ImportGuardError, match="sense mapatge"):
+        importer.manual_values(unmapped)
+
+
+async def test_els_invariants_d_escriptura(session, palamos_like):
+    plan = await _plan(session, palamos_like, _annex_rows())
+    summary = importer.summarise(plan, automated_requirements=214)
+    importer.assert_write_invariants(plan, summary, expected_automated=214)
+
+    for key, value in (("manual_creates", 42), ("relations", {"partial_match_of": 5}),
+                       ("citations_resolved", 43), ("automated_requirements", 213)):
+        broken = dict(summary, **{key: value})
+        with pytest.raises(importer.ImportGuardError):
+            importer.assert_write_invariants(plan, broken, expected_automated=214)
