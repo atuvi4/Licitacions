@@ -146,7 +146,7 @@ async def apply_review_action(
     session: SessionDep,
     ctx: CompanyCtx,
 ):
-    """Confirmar, corregir, descartar, parcial, nota o canvi d'estat.
+    """Confirmar, corregir, descartar, parcial, nota, canvi d'estat o afegir evidencia.
 
     `expected_revision` ha de ser la revisio vigent; si no, 409 amb la vigent a
     `details.current_revision` perque el client torni a carregar.
@@ -162,6 +162,7 @@ async def apply_review_action(
         expected_revision=payload.expected_revision,
         action=payload.action,
         payload=payload.payload,
+        user=ctx.user,
     )
     await audit.record(
         session,

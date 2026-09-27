@@ -41,14 +41,17 @@ from app.models.enums import (
     ReviewOriginHint,
     ReviewSourceRole,
     ReviewVerification,
+    SourceRefKind,
 )
 from app.models.identity import User
+from app.models.provenance import TenderSourceRef
 from app.models.review import ReviewItem, ReviewItemRevision, ReviewItemSource
 from app.schemas.review import (
     ConfirmPayload,
     CorrectPayload,
     DocumentFileCitation,
     ExtractedPageCitation,
+    LinkSourcePayload,
     ManualRequirementCreate,
     NotePayload,
     ReasonPayload,
@@ -69,7 +72,7 @@ ACTION_LABELS = {
     ReviewAction.NOTE: "Nota",
     ReviewAction.SET_STATUS: "Canvi d'estat",
     ReviewAction.SET_AWARD_ROLE: "Canvi de paper",
-    ReviewAction.LINK_SOURCE: "Font enllacada",
+    ReviewAction.LINK_SOURCE: "Evidència afegida",
     ReviewAction.ARCHIVE: "Arxivat",
 }
 _SNAPSHOT_FIELDS = ("title", "description", "category", "obligation", "modality")
@@ -170,8 +173,12 @@ async def apply_review_action(
     expected_revision: int,
     action: str,
     payload: dict[str, Any],
+    user: User | None = None,
 ) -> ReviewItem:
-    """Aplica una accio i n'afegeix la revisio. No fa commit."""
+    """Aplica una accio i n'afegeix la revisio. No fa commit.
+
+    `user` nomes cal per a `link_source`: la cita nova en guarda l'autor.
+    """
     item = await _locked_item(session, company_id, tender_id, item_id)
     if item.revision != expected_revision:
         raise StaleRevisionError(
@@ -203,6 +210,10 @@ async def apply_review_action(
     elif action == ReviewAction.SET_STATUS:
         parsed = _parse(SetStatusPayload, payload)
         after, note = parsed.status, parsed.note
+    elif action == ReviewAction.LINK_SOURCE:
+        parsed = _parse(LinkSourcePayload, payload)
+        changes = await _link_extra_evidence(session, item, tender_id, user, parsed.citation)
+        after, note = before, parsed.note
     else:  # pragma: no cover - l'esquema de la peticio ja ho limita
         raise ValidationError("Accio desconeguda.")
 
@@ -239,8 +250,80 @@ async def apply_review_action(
     return item
 
 
+class SourceAlreadyLinkedError(ConflictError):
+    """Aquesta mateixa cita ja es evidencia de l'element."""
+
+    code = "review_source_already_linked"
+
+
+def _same(column: Any, value: Any) -> Any:
+    return column.is_(None) if value is None else column == value
+
+
+async def _link_extra_evidence(
+    session: AsyncSession,
+    item: ReviewItem,
+    tender_id: uuid.UUID,
+    user: User | None,
+    citation: Any,
+) -> dict[str, Any]:
+    """Crea la cita i l'enllaca com a evidencia addicional. Torna nomes identificadors.
+
+    La mateixa ancora (mateixa pagina i posicions, o mateix fitxer i lloc) ja
+    enllacada a l'element es 409: no s'hi crea cap cita ni cap enllac nous.
+    """
+    if isinstance(citation, ExtractedPageCitation):
+        anchor = sa.and_(
+            TenderSourceRef.ref_kind == SourceRefKind.EXTRACTED_PAGE,
+            TenderSourceRef.extraction_id == citation.extraction_id,
+            TenderSourceRef.page_id == citation.page_id,
+            _same(TenderSourceRef.char_start, citation.char_start),
+            _same(TenderSourceRef.char_end, citation.char_end),
+        )
+    else:
+        anchor = sa.and_(
+            TenderSourceRef.ref_kind == SourceRefKind.DOCUMENT_FILE,
+            TenderSourceRef.tender_document_file_id == citation.file_id,
+            _same(TenderSourceRef.location_label, citation.location_label),
+            _same(TenderSourceRef.quote, citation.quote),
+        )
+    existing = await session.scalar(
+        sa.select(TenderSourceRef.id)
+        .join(ReviewItemSource, ReviewItemSource.source_ref_id == TenderSourceRef.id)
+        .where(
+            ReviewItemSource.item_id == item.id,
+            ReviewItemSource.unlinked_at.is_(None),
+            anchor,
+        )
+    )
+    if existing is not None:
+        raise SourceAlreadyLinkedError(
+            "Aquesta cita ja es evidencia d'aquest element.",
+            details={"source_ref_id": str(existing)},
+        )
+    ref = await _citation_ref(session, tender_id, user, citation)
+    session.add(
+        ReviewItemSource(
+            item_id=item.id,
+            company_id=item.company_id,
+            source_ref_id=ref.id,
+            link_role=ReviewSourceRole.EXTRA_EVIDENCE,
+            created_by=user.id if user else None,
+        )
+    )
+    return {
+        "source_ref_id": str(ref.id),
+        "ref_kind": ref.ref_kind.value,
+        "extraction_id": str(ref.extraction_id) if ref.extraction_id else None,
+        "page_id": str(ref.page_id) if ref.page_id else None,
+        "page_number": ref.page_number,
+        "file_id": str(ref.tender_document_file_id) if ref.tender_document_file_id else None,
+        "location_label": ref.location_label,
+    }
+
+
 async def _citation_ref(
-    session: AsyncSession, tender_id: uuid.UUID, user: User, citation: Any
+    session: AsyncSession, tender_id: uuid.UUID, user: User | None, citation: Any
 ):
     if isinstance(citation, ExtractedPageCitation):
         return await source_refs.create_extracted_page_ref(

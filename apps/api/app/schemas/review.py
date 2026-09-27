@@ -232,7 +232,9 @@ class ManualRequirementCreate(_TextFields):
         return self
 
 
-ReviewActionName = Literal["confirm", "correct", "reject", "mark_partial", "note", "set_status"]
+ReviewActionName = Literal[
+    "confirm", "correct", "reject", "mark_partial", "note", "set_status", "link_source"
+]
 
 
 class ReviewActionRequest(BaseModel):
@@ -300,6 +302,18 @@ class NotePayload(_TextFields):
         if not value.strip():
             raise ValueError("cal una nota")
         return value.strip()
+
+
+class LinkSourcePayload(_TextFields):
+    """Afegeix una cita com a evidencia addicional. No verifica ni corregeix res.
+
+    La cita es crea al servidor: d'una pagina, el text citat surt de les
+    posicions sobre el text desat; mai no s'accepta una cita del client com a
+    autoritativa.
+    """
+
+    citation: Citation
+    note: str | None = Field(default=None, max_length=MAX_NOTE)
 
 
 class SetStatusPayload(_TextFields):
