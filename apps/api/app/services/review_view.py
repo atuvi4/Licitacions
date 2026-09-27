@@ -44,6 +44,7 @@ from app.models.enums import (
     ReviewStatus,
     ReviewVerification,
 )
+from app.models.provenance import TenderSourceRef
 from app.models.requirements import Requirement, RequirementEvidence
 from app.models.review import ReviewItem, ReviewItemRevision, ReviewItemSource
 from app.models.tender_documents import TenderDocumentExtraction, TenderDocumentFile
@@ -74,16 +75,21 @@ VERIFICATION_LABELS = {
     ReviewVerification.NEEDS_REVIEW: "Cal revisar",
 }
 PROVENANCE_AUTOMATED = "automated"
+PROVENANCE_MANUAL = "manual"
+PROVENANCE_CORRECTED = "automated_corrected"
+PROVENANCE_ORDER = (PROVENANCE_AUTOMATED, PROVENANCE_CORRECTED, PROVENANCE_MANUAL)
 PROVENANCE_LABELS = {
     PROVENANCE_AUTOMATED: "Extret automàticament",
-    "manual": "Afegit manualment",
-    "automated_corrected": "Extret i corregit",
+    PROVENANCE_MANUAL: "Afegit manualment",
+    PROVENANCE_CORRECTED: "Extret i corregit",
 }
 VALUE_SOURCE_LABELS = {"document": "Del document", "reviewer": "Afirmat pel revisor"}
 
 EVIDENCE_CONFIRMED = "Confirmat al document"
 EVIDENCE_NO_VALUES = "Al document, sense valors"
 EVIDENCE_TO_CONFIRM = "Al document, valor per confirmar"
+EVIDENCE_CITED = "Citat manualment"
+EVIDENCE_NONE = "Sense cita"
 
 CATEGORY_LABELS = {
     "deadline": "Termini",
@@ -385,92 +391,186 @@ async def _document_names(
     return names
 
 
-async def _canonical(
+@dataclass(frozen=True)
+class _ItemContext:
+    """Tot el que cal per llegir un lot d'elements, carregat d'una vegada."""
+
+    primary: dict[uuid.UUID, uuid.UUID]
+    evidence: dict[uuid.UUID, list[RequirementEvidence]]
+    names: dict[uuid.UUID, str]
+    corrected: set[uuid.UUID]
+    citations: dict[uuid.UUID, list[TenderSourceRef]]
+    citation_names: dict[uuid.UUID, str]
+
+
+async def _item_context(
     session: AsyncSession, tender_id: uuid.UUID, items: list[ReviewItem]
-) -> list[CanonicalRequirement]:
-    if not items:
-        return []
-    sources = await session.execute(
-        sa.select(ReviewItemSource.item_id, ReviewItemSource.requirement_id).where(
-            ReviewItemSource.item_id.in_([i.id for i in items]),
-            ReviewItemSource.link_role == ReviewSourceRole.PRIMARY,
-            ReviewItemSource.unlinked_at.is_(None),
-            ReviewItemSource.requirement_id.is_not(None),
+) -> _ItemContext:
+    ids = [i.id for i in items]
+    sources = (
+        await session.execute(
+            sa.select(
+                ReviewItemSource.item_id,
+                ReviewItemSource.requirement_id,
+                ReviewItemSource.source_ref_id,
+                ReviewItemSource.link_role,
+            ).where(ReviewItemSource.item_id.in_(ids), ReviewItemSource.unlinked_at.is_(None))
         )
-    )
-    primary = {item_id: requirement_id for item_id, requirement_id in sources}
+    ).all()
+    primary = {
+        item_id: requirement_id
+        for item_id, requirement_id, _ref, role in sources
+        if role == ReviewSourceRole.PRIMARY and requirement_id is not None
+    }
+    ref_links = [(item_id, ref) for item_id, _req, ref, _role in sources if ref is not None]
+    refs: dict[uuid.UUID, TenderSourceRef] = {}
+    if ref_links:
+        rows = await session.scalars(
+            sa.select(TenderSourceRef).where(
+                TenderSourceRef.id.in_([ref for _item, ref in ref_links])
+            )
+        )
+        refs = {ref.id: ref for ref in rows.all()}
+    citations: dict[uuid.UUID, list[TenderSourceRef]] = defaultdict(list)
+    for item_id, ref_id in ref_links:
+        if ref_id in refs:
+            citations[item_id].append(refs[ref_id])
+    document_ids = {r.tender_document_id for r in refs.values() if r.tender_document_id}
+    citation_names: dict[uuid.UUID, str] = {}
+    if document_ids:
+        named = await session.execute(
+            sa.select(TenderDocument.id, TenderDocument.name).where(
+                TenderDocument.id.in_(document_ids)
+            )
+        )
+        citation_names = {doc_id: name for doc_id, name in named.all()}
     evidence = await _evidence_by_requirement(session, primary.values())
     names = await _document_names(
         session, tender_id, (e.extraction_id for rows in evidence.values() for e in rows)
     )
+    corrected = set(
+        (
+            await session.scalars(
+                sa.select(ReviewItemRevision.item_id).where(
+                    ReviewItemRevision.item_id.in_(ids),
+                    ReviewItemRevision.action == ReviewAction.CORRECT,
+                )
+            )
+        ).all()
+    )
+    return _ItemContext(primary, evidence, names, corrected, citations, citation_names)
 
-    result: list[CanonicalRequirement] = []
-    for item in items:
-        snapshot = RequirementSnapshot.model_validate(item.accepted_json)
-        requirement_id = primary.get(item.id)
-        rows = evidence.get(requirement_id, []) if requirement_id else []
-        checks = _checks_per_claim(rows)
-        values = [
-            CanonicalValue(
-                key=value.key,
-                operator=value.operator,
-                value=value.value,
-                unit_label=value.unit_label,
-                source_label=VALUE_SOURCE_LABELS[value.source],
-                status_label=_value_status(checks.get(value.key, []))
+
+def provenance_of(item: ReviewItem, has_primary: bool, corrected: bool) -> str:
+    """Derivada, mai desada: d'on surt i si el revisor l'ha corregit.
+
+    * `manual`: l'ha afegit el revisor i no te cap requisit extret al darrere.
+    * `automated`: te un requisit extret com a font primaria i cap correccio.
+    * `automated_corrected`: te font extreta i almenys una correccio. Una
+      correccio que no canvia res es refusa, aixi que n'hi ha prou que existeixi.
+    """
+    if has_primary:
+        return PROVENANCE_CORRECTED if corrected else PROVENANCE_AUTOMATED
+    return PROVENANCE_MANUAL
+
+
+def _canonical_one(item: ReviewItem, ctx: _ItemContext) -> CanonicalRequirement:
+    snapshot = RequirementSnapshot.model_validate(item.accepted_json)
+    requirement_id = ctx.primary.get(item.id)
+    rows = ctx.evidence.get(requirement_id, []) if requirement_id else []
+    checks = _checks_per_claim(rows)
+    values = [
+        CanonicalValue(
+            key=value.key,
+            operator=value.operator,
+            value=value.value,
+            unit_label=value.unit_label,
+            source_label=VALUE_SOURCE_LABELS[value.source],
+            status_label=(
+                _value_status(checks.get(value.key, []))
                 if value.source == "document"
-                else "Afirmat pel revisor",
-            )
-            for value in snapshot.values
-        ]
-        if not values:
-            evidence_label = EVIDENCE_NO_VALUES
-        elif all(v.status_label == EVIDENCE_CONFIRMED for v in values):
-            evidence_label = EVIDENCE_CONFIRMED
-        else:
-            evidence_label = EVIDENCE_TO_CONFIRM
-        cited = [
-            CanonicalEvidence(
-                document=names.get(row.extraction_id),
-                page=row.page_number,
-                section=row.section,
-                quote=row.quote,
-                status_label=_evidence_status(row),
-            )
-            for row in rows
-        ]
-        verification = ReviewVerification(item.verification_status)
-        result.append(
-            CanonicalRequirement(
-                canonical_id=item.id,
-                title=snapshot.title,
-                description=snapshot.description,
-                category=snapshot.category,
-                category_label=CATEGORY_LABELS.get(snapshot.category, "Altres"),
-                obligation_label=obligation_label(snapshot.obligation, snapshot.modality),
-                provenance=PROVENANCE_AUTOMATED,
-                provenance_label=PROVENANCE_LABELS[PROVENANCE_AUTOMATED],
-                verification_status=verification.value,
-                verification_label=VERIFICATION_LABELS[verification],
-                needs_review=verification == ReviewVerification.NEEDS_REVIEW,
-                values=values,
-                evidence_label=evidence_label,
-                evidence=cited,
-                documents=sorted({c.document for c in cited if c.document}),
-                pages=sorted({c.page for c in cited}),
-                sections=sorted({c.section for c in cited if c.section}),
-                source_refs=(
-                    [CanonicalSourceRef(kind="extracted_requirement", id=requirement_id)]
-                    if requirement_id
-                    else []
-                ),
-                review_revision=item.revision,
-            )
+                else VALUE_SOURCE_LABELS["reviewer"]
+            ),
         )
-    return result
+        for value in snapshot.values
+    ]
+    cited = [
+        CanonicalEvidence(
+            document=ctx.names.get(row.extraction_id),
+            page=row.page_number,
+            section=row.section,
+            quote=row.quote,
+            status_label=_evidence_status(row),
+        )
+        for row in rows
+    ]
+    refs = ctx.citations.get(item.id, [])
+    cited += [
+        CanonicalEvidence(
+            document=(
+                ctx.citation_names.get(ref.tender_document_id)
+                if ref.tender_document_id
+                else None
+            ),
+            page=ref.page_number,
+            section=ref.location_label,
+            quote=ref.quote,
+            status_label=EVIDENCE_CITED,
+        )
+        for ref in refs
+    ]
+    document_values = [v for v in snapshot.values if v.source == "document"]
+    document_labels = [
+        _value_status(checks.get(v.key, [])) for v in document_values
+    ]
+    if requirement_id is None:
+        evidence_label = EVIDENCE_CITED if refs else EVIDENCE_NONE
+    elif not document_values:
+        evidence_label = EVIDENCE_NO_VALUES
+    elif all(label == EVIDENCE_CONFIRMED for label in document_labels):
+        evidence_label = EVIDENCE_CONFIRMED
+    else:
+        evidence_label = EVIDENCE_TO_CONFIRM
+    provenance = provenance_of(item, requirement_id is not None, item.id in ctx.corrected)
+    verification = ReviewVerification(item.verification_status)
+    source_refs = (
+        [CanonicalSourceRef(kind="extracted_requirement", id=requirement_id)]
+        if requirement_id
+        else []
+    ) + [CanonicalSourceRef(kind="citation", id=ref.id) for ref in refs]
+    return CanonicalRequirement(
+        canonical_id=item.id,
+        title=snapshot.title,
+        description=snapshot.description,
+        category=snapshot.category.value,
+        category_label=CATEGORY_LABELS.get(snapshot.category.value, "Altres"),
+        obligation_label=obligation_label(snapshot.obligation.value, snapshot.modality.value),
+        provenance=provenance,
+        provenance_label=PROVENANCE_LABELS[provenance],
+        verification_status=verification.value,
+        verification_label=VERIFICATION_LABELS[verification],
+        needs_review=verification == ReviewVerification.NEEDS_REVIEW,
+        values=values,
+        evidence_label=evidence_label,
+        evidence=cited,
+        documents=sorted({c.document for c in cited if c.document}),
+        pages=sorted({c.page for c in cited if c.page is not None}),
+        sections=sorted({c.section for c in cited if c.section}),
+        source_refs=source_refs,
+        review_revision=item.revision,
+    )
 
 
-def _requirement_items(company_id: uuid.UUID, tender_id: uuid.UUID) -> sa.Select:
+async def canonical_items(
+    session: AsyncSession, tender_id: uuid.UUID, items: list[ReviewItem]
+) -> list[CanonicalRequirement]:
+    if not items:
+        return []
+    ctx = await _item_context(session, tender_id, items)
+    return [_canonical_one(item, ctx) for item in items]
+
+
+def requirement_items(company_id: uuid.UUID, tender_id: uuid.UUID) -> sa.Select:
     return sa.select(ReviewItem).where(
         ReviewItem.company_id == company_id,
         ReviewItem.tender_id == tender_id,
@@ -485,13 +585,13 @@ async def list_requirements(
     items = list(
         (
             await session.scalars(
-                _requirement_items(company_id, tender_id).order_by(
+                requirement_items(company_id, tender_id).order_by(
                     ReviewItem.created_at, ReviewItem.id
                 )
             )
         ).all()
     )
-    return await _canonical(session, tender_id, items)
+    return await canonical_items(session, tender_id, items)
 
 
 async def get_requirement(
@@ -503,23 +603,29 @@ async def get_requirement(
 ) -> CanonicalRequirement:
     """Un element d'AQUESTA empresa. El d'una altra empresa dona 404, no 403."""
     item = await session.scalar(
-        _requirement_items(company_id, tender_id).where(ReviewItem.id == item_id)
+        requirement_items(company_id, tender_id).where(ReviewItem.id == item_id)
     )
     if item is None:
         raise NotFoundError("Element de revisio no trobat.")
-    [canonical] = await _canonical(session, tender_id, [item])
+    [canonical] = await canonical_items(session, tender_id, [item])
     return canonical
 
 
 async def overview(
     session: AsyncSession, *, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> ReviewOverview:
-    items = list((await session.scalars(_requirement_items(company_id, tender_id))).all())
+    items = list((await session.scalars(requirement_items(company_id, tender_id))).all())
     effective = await effective_requirements(session, tender_id)
     present = await _active_primary_requirement_ids(
         session, company_id, (r.id for r in effective.extracted)
     )
     by_status = Counter(ReviewVerification(i.verification_status) for i in items)
+    by_provenance: Counter[str] = Counter()
+    if items:
+        ctx = await _item_context(session, tender_id, items)
+        by_provenance.update(
+            provenance_of(i, i.id in ctx.primary, i.id in ctx.corrected) for i in items
+        )
     return ReviewOverview(
         tender_id=tender_id,
         review_started=bool(items),
@@ -532,7 +638,8 @@ async def overview(
             for status in ReviewVerification
         ],
         provenance_counts=[
-            CountLabel(code=PROVENANCE_AUTOMATED,
-                       label=PROVENANCE_LABELS[PROVENANCE_AUTOMATED], count=len(items)),
+            CountLabel(code=code, label=PROVENANCE_LABELS[code], count=by_provenance[code])
+            for code in PROVENANCE_ORDER
+            if by_provenance[code] or code == PROVENANCE_AUTOMATED
         ],
     )
