@@ -1353,3 +1353,51 @@ def test_0039_nomes_toca_els_criteris():
 
     assert "requirement_evidence" not in up
     assert "award_criterion_evidence" not in up
+
+
+_REVIEW_TABLES = (
+    "review_items", "review_item_sources", "review_item_revisions", "review_item_relations",
+)
+
+
+def test_la_capa_de_revisio_es_pot_aplicar_i_desfer():
+    """0039 -> 0040 -> 0039: quatre taules noves i res mes; el downgrade ho treu tot."""
+    up = _offline_sql("upgrade", "0039_award_adjudication_basis:0040_review_layer")
+    down = _offline_sql("downgrade", "0040_review_layer:0039_award_adjudication_basis")
+
+    for table in _REVIEW_TABLES:
+        assert f"CREATE TABLE {table}" in up
+        assert f"DROP TABLE {table}" in down
+    created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
+    dropped = set(re.findall(r"DROP INDEX (\w+)", down))
+    assert created and created == dropped
+    # Cap taula d'extraccio no es toca.
+    for table in ("requirements", "requirement_evidence", "award_criteria",
+                  "award_criterion_evidence", "requirement_extraction_runs"):
+        assert f"ALTER TABLE {table}" not in up
+        assert f"DROP TABLE {table}" not in down
+    # L'historial nomes d'afegir, a PostgreSQL, i el downgrade el treu.
+    assert "CREATE TRIGGER review_item_revisions_append_only" in up
+    assert "DROP TRIGGER IF EXISTS review_item_revisions_append_only" in down
+    assert "DROP FUNCTION IF EXISTS review_item_revisions_append_only()" in down
+
+
+def test_els_enums_i_les_regles_de_revisio_els_imposa_la_base():
+    up = _offline_sql("upgrade", "0039_award_adjudication_basis:0040_review_layer")
+
+    for name in (
+        "ck_review_items_kind_valid", "ck_review_items_verification_valid",
+        "ck_review_items_award_role_valid", "ck_review_items_origin_hint_valid",
+        "ck_review_item_sources_exactly_one_source", "ck_review_item_sources_link_role_valid",
+        "ck_review_item_sources_source_ref_is_extra_evidence",
+        "ck_review_item_revisions_action_valid",
+        "ck_review_item_revisions_verification_after_valid",
+        "ck_review_item_relations_relation_type_valid", "ck_review_item_relations_not_self",
+    ):
+        assert name in up, name
+    assert "uq_review_item_sources_company_requirement" in up
+    assert "WHERE requirement_id IS NOT NULL AND link_role = 'primary'" in up
+    # Una font amb historial no s'esborra sola, i la tenancy la lliga la clau composta.
+    assert "REFERENCES requirements (id) ON DELETE NO ACTION" in up
+    assert "REFERENCES review_items (id, company_id) ON DELETE CASCADE" in up
+    assert "REFERENCES review_items (id, company_id, tender_id) ON DELETE CASCADE" in up

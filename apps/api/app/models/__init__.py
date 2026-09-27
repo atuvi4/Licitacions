@@ -38,6 +38,12 @@ from app.models.requirements import (
     RequirementEvidence,
     RequirementExtractionRun,
 )
+from app.models.review import (
+    ReviewItem,
+    ReviewItemRelation,
+    ReviewItemRevision,
+    ReviewItemSource,
+)
 from app.models.solution_option_dimensions import WorkspaceSolutionOptionDimension
 from app.models.solution_options import WorkspaceSolutionOption
 from app.models.sources import IngestionRun, Source, SourceRecord
@@ -72,6 +78,10 @@ from app.models.workspace import (
 )
 
 __all__ = [
+    "ReviewItem",
+    "ReviewItemRelation",
+    "ReviewItemRevision",
+    "ReviewItemSource",
     "AnalysisQuote",
     "AssessmentEvidence",
     "AuditLog",

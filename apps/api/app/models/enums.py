@@ -1113,3 +1113,84 @@ class IssueStatus(StrEnum):
     RESOLVED = "resolved"
     #: Es tanca perque ja no es pertinent.
     DISMISSED = "dismissed"
+
+
+# --------------------------------------------------------------------------- #
+# Capa de revisio (S-R1): estat de revisio PER EMPRESA, separat de l'extraccio. #
+# --------------------------------------------------------------------------- #
+
+
+class ReviewItemKind(StrEnum):
+    """Que es un element canonic de revisio."""
+
+    REQUIREMENT = "requirement"
+    AWARD_CRITERION = "award_criterion"
+
+
+class ReviewVerification(StrEnum):
+    """Que en diu el revisor. Independent de la provinenca (qui l'ha escrit).
+
+    `PARTIAL` no es `NEEDS_REVIEW`: parcial vol dir que s'ha revisat i nomes una
+    part es correcta o esta coberta; cal revisar vol dir que ningu no ho ha fet
+    encara i hi ha motius per fer-ho.
+    """
+
+    UNREVIEWED = "unreviewed"
+    VERIFIED = "verified"
+    PARTIAL = "partial"
+    REJECTED = "rejected"
+    NEEDS_REVIEW = "needs_review"
+
+
+class ReviewAwardRole(StrEnum):
+    """Paper d'un criteri a l'estructura de puntuacio canonica."""
+
+    #: Puntua i compta al total.
+    SCORED = "scored"
+    #: Total d'un bloc que es la suma dels seus fills: no es compta dues vegades.
+    PARENT_TOTAL = "parent_total"
+    #: El mateix bloc vist des del model d'oferta (caselles SI/NO).
+    OFFER_FORM_VIEW = "offer_form_view"
+    NOT_SCORED = "not_scored"
+    DESIRABLE = "desirable"
+
+
+class ReviewOriginHint(StrEnum):
+    """D'on ve l'element canonic. La provinenca visible es deriva de les fonts."""
+
+    EXTRACTION = "extraction"
+    MANUAL_REVIEW = "manual_review"
+
+
+class ReviewSourceRole(StrEnum):
+    """Com participa una fila font en un element canonic."""
+
+    PRIMARY = "primary"
+    ABSORBED_DUPLICATE = "absorbed_duplicate"
+    EXTRA_EVIDENCE = "extra_evidence"
+
+
+class ReviewAction(StrEnum):
+    """Una entrada de l'historial. Nomes s'hi afegeix: mai no es modifica."""
+
+    CREATE = "create"
+    CONFIRM = "confirm"
+    CORRECT = "correct"
+    REJECT = "reject"
+    MARK_PARTIAL = "mark_partial"
+    NOTE = "note"
+    SET_STATUS = "set_status"
+    SET_AWARD_ROLE = "set_award_role"
+    LINK_SOURCE = "link_source"
+    ARCHIVE = "archive"
+
+
+class ReviewRelationType(StrEnum):
+    """Relacio dirigida `from -> to` entre dos elements canonics."""
+
+    DUPLICATE_OF = "duplicate_of"
+    RESTATEMENT_OF = "restatement_of"
+    PARENT_OF = "parent_of"
+    PARTIAL_MATCH_OF = "partial_match_of"
+    SUPERSEDES = "supersedes"
+    RELATED_TO = "related_to"

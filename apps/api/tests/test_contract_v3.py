@@ -756,6 +756,9 @@ def test_nomes_el_perfil_i_la_canonada_importen_el_contracte_v3():
         # Replay offline: l'API exposa l'estat dels claims i els motius.
         "schemas/requirements.py",
         "services/requirement_analysis.py",
+        # S-R1: la revisio canonica llegeix el suport desat dels claims (nomes lectura)
+        # per refer el senyal de revisio quan una revisio LEGACY l'ha sobreescrit.
+        "services/review_view.py",
     ]
 
 

@@ -259,6 +259,9 @@ async def get_requirement(requirement_id: uuid.UUID, session: SessionDep, _: Cur
     return read
 
 
+# LEGACY (S-R1): escriu la revisio a la fila d'extraccio, que es GLOBAL i
+# compartida entre empreses. Es conserva per compatibilitat; la revisio nova
+# es per empresa i viu a `/companies/{company_id}/tenders/{tender_id}/review`.
 @router.post(
     "/requirements/{requirement_id}/review",
     response_model=RequirementRead,
@@ -321,6 +324,9 @@ async def get_award_criterion(criterion_id: uuid.UUID, session: SessionDep, _: C
     return _criterion_read(criterion, decoration)
 
 
+# LEGACY (S-R1): escriu la revisio a la fila d'extraccio, que es GLOBAL i
+# compartida entre empreses. Es conserva per compatibilitat; la revisio nova
+# es per empresa i viu a `/companies/{company_id}/tenders/{tender_id}/review`.
 @router.post(
     "/award-criteria/{criterion_id}/review",
     response_model=AwardCriterionRead,

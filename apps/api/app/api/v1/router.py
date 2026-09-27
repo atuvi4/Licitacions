@@ -28,6 +28,7 @@ from app.api.v1.routers import (
     projects,
     readiness,
     requirements,
+    review,
     solution_options,
     submission,
     technical_solutions,
@@ -71,6 +72,8 @@ company_scoped.include_router(submission.router)
 company_scoped.include_router(job_requests.router)
 # Previews d'analisi: el volum abans de fer despesa.
 company_scoped.include_router(analysis_quotes.router)
+# Revisio canonica per empresa (S-R1). No fa servir els endpoints LEGACY de revisio.
+company_scoped.include_router(review.router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
