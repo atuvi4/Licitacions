@@ -1393,6 +1393,15 @@ def root_shape_diagnostic(
     entry: dict[str, Any] = {"stage": "root", "reason": "core_missing", "present_fields": fields}
     if len(data) > MAX_ROOT_SHAPE_FIELDS:
         entry["present_fields_total"] = len(data)
+    # Un embolcall d'una sola clau que no s'ha pogut desembolcallar: la forma
+    # del primer nivell de dins (noms segurs i tipus), per saber-ne el per que.
+    if len(data) == 1:
+        [inner] = data.values()
+        if isinstance(inner, Mapping):
+            entry["inner_fields"] = [
+                {"field": describe_root_key(key), "type": json_type(value)}
+                for key, value in list(inner.items())[:MAX_ROOT_SHAPE_FIELDS]
+            ]
     return entry
 
 
@@ -1482,10 +1491,11 @@ async def _run_chunk(
     que va costar: `output_truncated`, `no_tool_call` (des del proveidor) o
     `schema_invalid` (aqui).
 
-    Abans de Pydantic passa per `normalise_output`, que nomes desfa els dos
-    patrons coneguts (llista serialitzada com a text, `extraction_id` del
-    context repetit a l'arrel). Les regles aplicades s'afegeixen a
-    `normalisations`, tambe quan despres l'esquema falla.
+    Abans de Pydantic passa per `normalise_output`, que nomes desfa els
+    patrons coneguts: llista serialitzada com a text, `extraction_id` del
+    context repetit a l'arrel i (v3.2) un sobre embolcallat sota una sola clau
+    quan el de dins porta tots els camps obligatoris. Les regles aplicades
+    s'afegeixen a `normalisations`, tambe quan despres l'esquema falla.
     """
     response = await llm.extract_structured(
         system=profile.system_prompt,

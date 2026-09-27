@@ -703,7 +703,8 @@ async def test_a_sense_nucli_es_desa_la_forma_de_l_arrel_i_cap_valor(session, pc
     assert {"path": "requirements", "type": "missing"} in detail
     assert {"path": "award_candidates", "type": "missing"} in detail
     assert detail[-1] == {"stage": "root", "reason": "core_missing",
-                          "present_fields": [{"field": "summary", "type": "object"}]}
+                          "present_fields": [{"field": "summary", "type": "object"}],
+                          "inner_fields": [{"field": "requirements", "type": "array"}]}
     assert SECRET_TEXT not in json.dumps(run.chunk_coverage, ensure_ascii=False)
     assert await session.scalar(sa.select(sa.func.count()).select_from(Requirement)) == 0
 
@@ -751,3 +752,154 @@ def test_la_forma_d_arrel_nomes_surt_si_falta_un_camp_d_arrel():
     entry = root_shape_diagnostic(many, [{"path": "requirements", "type": "missing"}])
     assert len(entry["present_fields"]) == MAX_ROOT_SHAPE_FIELDS
     assert entry["present_fields_total"] == MAX_ROOT_SHAPE_FIELDS + 5
+
+
+# --------------------------------------------------------------------------- #
+# 8. Sobre embolcallat a l'arrel: nomes si el de dins es provadament el sobre  #
+# --------------------------------------------------------------------------- #
+
+EMPTY = {"requirements": [], "award_candidates": []}
+
+
+def _normalise_and_parse(payload):
+    from app.ai.output_normalization import normalise_output
+    from app.ai.schemas_v3 import ChunkExtractionOutV3
+
+    data, applied = normalise_output(payload, ChunkExtractionOutV3, context_extraction_ids=set())
+    return data, applied
+
+
+@pytest.mark.parametrize(("case", "payload", "marker"), [
+    ("A", {"extraction": EMPTY}, "root:single_object_wrapper:extraction"),
+    ("B", {"parameters": EMPTY}, "root:single_object_wrapper:parameters"),
+    ("C", {"value": json.dumps(EMPTY)}, "root:json_string_object_wrapper:value"),
+    ("clau insegura", {"Resposta completa": EMPTY}, "root:single_object_wrapper:<text,17 chars>"),
+])
+def test_un_sobre_embolcallat_i_provat_es_desembolcalla(case, payload, marker):
+    data, applied = _normalise_and_parse(payload)
+
+    assert applied == [marker], case
+    parsed = parse_chunk_v3_result(data)
+    assert parsed.output.requirements == parsed.output.award_candidates == []
+    assert parsed.root_fields_rejected == 0
+
+
+@pytest.mark.parametrize(("case", "payload"), [
+    ("D falta award_candidates", {"extraction": {"requirements": []}}),
+    ("E requirements objecte", {"extraction": {"requirements": {}, "award_candidates": []}}),
+    ("E award_candidates text", {"extraction": {"requirements": [], "award_candidates": "[]"}}),
+    ("F dues claus", {"extraction": EMPTY, "notes": []}),
+    ("G doble embolcall", {"outer": {"extraction": EMPTY}}),
+    ("H prosa", {"value": "Aquesta es la resposta en prosa"}),
+    ("H llista", {"value": json.dumps([EMPTY])}),
+    ("H escalar", {"value": "5"}),
+    ("H JSON trencat", {"value": '{"requirements": [], "award_candidates": ['}),
+    ("H doble text", {"value": json.dumps(json.dumps(EMPTY))}),
+    ("clau que es un camp", {"requirements": EMPTY}),
+    ("valor null", {"extraction": None}),
+])
+def test_un_embolcall_no_provat_no_es_toca_i_el_chunk_cau(case, payload):
+    data, applied = _normalise_and_parse(payload)
+
+    assert applied == [], case
+    assert data == payload
+    with pytest.raises(ValidationError):
+        parse_chunk_v3_result(data)
+
+
+def test_un_text_massa_llarg_no_es_desa():
+    from app.ai.output_normalization import MAX_WRAPPED_JSON_CHARS
+
+    huge = json.dumps({**EMPTY, "document_notes": [{"note": "x" * MAX_WRAPPED_JSON_CHARS}]})
+    data, applied = _normalise_and_parse({"value": huge})
+
+    assert applied == [] and data == {"value": huge}
+
+
+def test_i_un_sobre_valid_no_canvia():
+    payload = {"requirements": [REQ], "award_candidates": [AWARD]}
+
+    data, applied = _normalise_and_parse(payload)
+
+    assert applied == [] and data == payload
+
+
+def test_j_la_llista_com_a_text_amb_el_seu_nom_segueix_igual():
+    payload = {"requirements": json.dumps({"requirements": [REQ]}), "award_candidates": []}
+
+    data, applied = _normalise_and_parse(payload)
+
+    assert applied == ["requirements:json_string_wrapped_list"]
+    assert [r.title for r in parse_chunk_v3_result(data).output.requirements] == ["ok"]
+
+
+def test_k_una_clau_extra_amb_el_nucli_segueix_igual():
+    data, applied = _normalise_and_parse({**EMPTY, "resum": {"a": 1}})
+
+    assert applied == []
+    assert parse_chunk_v3_result(data).root_fields_rejected == 1
+
+
+def test_l_dins_l_embolcall_la_validacio_v3_2_es_la_mateixa():
+    bad = {**REQ, "title": 5}
+    data, applied = _normalise_and_parse(
+        {"extraction": {"requirements": [REQ, bad], "award_candidates": [AWARD], "inventat": 1}}
+    )
+
+    assert applied == ["root:single_object_wrapper:extraction"]
+    parsed = parse_chunk_v3_result(data)
+    assert [r.title for r in parsed.output.requirements] == ["ok"]
+    assert parsed.root_fields_rejected == 1
+    assert [(e["item"], e["index"], e["stage"]) for e in parsed.schema_rejections.entries] == [
+        ("root", 0, "root"), ("requirement", 1, "schema")]
+
+
+async def test_de_cap_a_cap_un_embolcall_provat_es_desa_i_ho_diu(session, pcap_pages):
+    x = pcap_pages["extraction_id"]
+    run = await _analyse(session, pcap_pages, {"extraction": {
+        "requirements": [{"category": "other", "title": "Requisit dins l'embolcall",
+                          "evidence": [_ev(x, "e1", 15, ROW_TARIFA_1)]}],
+        "award_candidates": []}})
+
+    [chunk] = run.chunk_coverage["chunks"]
+    assert (chunk["status"], chunk["normalised"]) == (
+        "completed", ["root:single_object_wrapper:extraction"])
+    titles = [r.title for r in (await session.scalars(sa.select(Requirement))).all()]
+    assert titles == ["Requisit dins l'embolcall"]
+
+
+async def test_de_cap_a_cap_un_embolcall_no_provat_diu_la_forma_de_dins(session, pcap_pages):
+    run = await _analyse(session, pcap_pages, {"extraction": {"requisits": [SECRET_TEXT],
+                                                              "resum": SECRET_TEXT}})
+
+    status, error, detail = _error_detail(run)
+    assert (status, error) == ("failed", "schema_invalid")
+    assert detail[-1] == {
+        "stage": "root", "reason": "core_missing",
+        "present_fields": [{"field": "extraction", "type": "object"}],
+        "inner_fields": [{"field": "requisits", "type": "array"},
+                         {"field": "resum", "type": "string"}],
+    }
+    assert SECRET_TEXT not in json.dumps(run.chunk_coverage, ensure_ascii=False)
+
+
+# Repeticio SINTETICA de les formes desades del run f7353279. Els payloads reals
+# no es desen: aixo nomes mostra que faria cada regla amb cada FORMA possible.
+
+@pytest.mark.parametrize(("chunk", "payload", "recovered"), [
+    ("10 amb el sobre a dins", {"parameters": EMPTY}, True),
+    ("10 sense el sobre a dins", {"parameters": {"input": EMPTY}}, False),
+    ("12/13 amb el sobre a dins", {"extraction": EMPTY}, True),
+    ("12/13 amb una llista absent", {"extraction": {"requirements": []}}, False),
+    ("14 degenerat", {"<parametre-14c>": "sense res"}, False),
+    ("6 requirements com a text {value:...}",
+     {"requirements": json.dumps({"value": []}), "award_candidates": []}, False),
+])
+def test_repeticio_sintetica_de_les_formes_fallides(chunk, payload, recovered):
+    data, applied = _normalise_and_parse(payload)
+
+    if recovered:
+        assert applied and parse_chunk_v3_result(data).output is not None, chunk
+    else:
+        with pytest.raises(ValidationError):
+            parse_chunk_v3_result(data)

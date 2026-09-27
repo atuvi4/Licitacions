@@ -13,6 +13,14 @@ Existeix per dos patrons concrets observats amb un proveidor real (run
   amb una sola clau, el nom del mateix camp, i una llista a dins. Observat al
   chunk 3 de Palamos en tres runs seguits (`3da6147` ho va fer visible). Es
   desfa NOMES si l'objecte te exactament aquesta clau i el valor es una llista.
+* **Sobre embolcallat a l'arrel** (v3.2, run `f7353279`). El model posa tota la
+  resposta sota UNA clau (`{"extraction": {...}}`, `{"parameters": {...}}`) o
+  com a text JSON sota una clau (`{"value": "{...}"}`). Es desembolcalla NOMES
+  si el contracte te camps obligatoris, l'arrel te exactament una clau que no
+  es cap camp del contracte, i el de dins es un objecte que porta TOTS els
+  camps obligatoris, cadascun del tipus llista que declara el model. La prova
+  surt de l'estructura de dins, mai del nom de l'embolcall. Una sola capa: un
+  segon embolcall no porta els camps obligatoris i no es toca.
 * **`extraction_id` repetit a l'arrel.** El model copia a l'arrel l'atribut del
   bloc DOCUMENT que se li ha enviat. Es treu NOMES si l'arrel no declara aquest
   camp i el valor es, caracter a caracter, un dels identificadors que el
@@ -31,6 +39,7 @@ al `chunk_coverage` perque despres es pugui saber que un chunk va necessitar-la.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Collection
 from typing import Any, get_args, get_origin
 
@@ -42,8 +51,16 @@ RULE_JSON_STRING_LIST = "json_string_list"
 RULE_JSON_STRING_WRAPPED_LIST = "json_string_wrapped_list"
 #: Regla aplicada quan l'arrel porta l'`extraction_id` del context.
 RULE_ECHOED_ROOT_EXTRACTION_ID = "echoed_root_extraction_id"
+#: Regla aplicada quan tot el sobre arriba dins d'un objecte d'una sola clau.
+RULE_SINGLE_OBJECT_WRAPPER = "single_object_wrapper"
+#: Regla aplicada quan tot el sobre arriba com a text JSON sota una sola clau.
+RULE_JSON_STRING_OBJECT_WRAPPER = "json_string_object_wrapper"
+#: Mida maxima d'un text JSON que es desa per desembolcallar el sobre. La
+#: sortida del model te un limit de 20.000 tokens: aixo en sobra molt.
+MAX_WRAPPED_JSON_CHARS = 1_000_000
 
 _ROOT_EXTRACTION_ID = "extraction_id"
+_SAFE_KEY = re.compile(r"[a-z][a-z0-9_]{0,39}")
 
 
 def normalise_output(
@@ -60,6 +77,7 @@ def normalise_output(
     if not isinstance(payload, dict):
         return payload, []
     applied: list[str] = []
+    payload = _unwrap_root(payload, model, applied)
     result = _coerce_lists(payload, model, path="", applied=applied)
 
     if (
@@ -71,6 +89,50 @@ def normalise_output(
         del result[_ROOT_EXTRACTION_ID]
         applied.append(f"{_ROOT_EXTRACTION_ID}:{RULE_ECHOED_ROOT_EXTRACTION_ID}")
     return result, applied
+
+
+def _unwrap_root(
+    payload: dict[str, Any], model: type[BaseModel], applied: list[str]
+) -> dict[str, Any]:
+    """Treu UNA capa d'embolcall d'arrel si el de dins es, provadament, el sobre.
+
+    Nomes si el contracte te camps obligatoris (v3.2: `requirements` i
+    `award_candidates`); si no, no hi ha res que provi que el de dins es el sobre.
+    Si qualsevol condicio falla, el payload es torna tal qual i Pydantic el
+    rebutja com sempre.
+    """
+    required = [name for name, field in model.model_fields.items() if field.is_required()]
+    if not required or len(payload) != 1:
+        return payload
+    [(key, value)] = payload.items()
+    if key in model.model_fields:
+        return payload
+    rule = RULE_SINGLE_OBJECT_WRAPPER
+    if isinstance(value, str):
+        if len(value) > MAX_WRAPPED_JSON_CHARS:
+            return payload
+        try:
+            value = json.loads(value)
+        except (ValueError, RecursionError):
+            return payload
+        rule = RULE_JSON_STRING_OBJECT_WRAPPER
+    if not isinstance(value, dict):
+        return payload
+    for name in required:
+        if name not in value:
+            return payload
+        if get_origin(model.model_fields[name].annotation) is list and not isinstance(
+            value[name], list
+        ):
+            return payload
+    applied.append(f"root:{rule}:{_safe_key(key)}")
+    return dict(value)
+
+
+def _safe_key(key: Any) -> str:
+    """El nom de la clau nomes si no pot ser text del plec."""
+    text = str(key)
+    return text if _SAFE_KEY.fullmatch(text) else f"<text,{len(text)} chars>"
 
 
 def _coerce_lists(
