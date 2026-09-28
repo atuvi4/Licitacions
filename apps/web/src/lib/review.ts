@@ -1,4 +1,6 @@
 import type { Level } from "@/components/ui/StatusPill";
+import { ApiError, api } from "@/lib/api";
+import { ROLE_LABELS } from "@/lib/labels";
 
 /**
  * Revisió canònica per empresa (API `/companies/{c}/tenders/{t}/review`).
@@ -419,4 +421,78 @@ export function checkItemNames(view: AwardCriteriaView, check: AwardCheck): stri
     row.restatements.forEach(remember);
   }
   return check.item_ids.map((id) => names.get(id)).filter((name): name is string => Boolean(name));
+}
+
+// --------------------------------------------------------------------------- //
+// Accions de revisió                                                            //
+// --------------------------------------------------------------------------- //
+
+/** `REQUIREMENT_EDIT_ROLES` del backend: qui pot revisar. El backend continua manant. */
+export const REVIEW_EDIT_ROLES = ["owner", "admin", "bid_manager", "technical"] as const;
+
+export function canReview(role: string | null | undefined): boolean {
+  return !!role && (REVIEW_EDIT_ROLES as readonly string[]).includes(role);
+}
+
+export function whoCanReview(): string {
+  const labels = REVIEW_EDIT_ROLES.map((role) => ROLE_LABELS[role]);
+  return `qui té el rol de ${labels.slice(0, -1).join(", ")} o ${labels[labels.length - 1]}`;
+}
+
+export type ReviewActionName = "confirm" | "mark_partial" | "reject" | "note";
+
+/** Només el text que l'usuari escriu: cap altre camp de la càrrega. */
+export function actionPayload(action: ReviewActionName, text: string): Record<string, string> {
+  if (action === "reject") return { reason: text };
+  if (action === "mark_partial" || action === "note") return { note: text };
+  return {};
+}
+
+/** Envia una acció amb la revisió que es veu a la pantalla. Torna l'element tal com queda. */
+export function submitReviewAction(
+  companyId: string,
+  tenderId: string,
+  item: CanonicalRequirement,
+  action: ReviewActionName,
+  text = "",
+): Promise<CanonicalRequirement> {
+  return api.post<CanonicalRequirement>(reviewPath(companyId, tenderId, `/items/${item.canonical_id}/actions`), {
+    action,
+    expected_revision: item.review_revision,
+    payload: actionPayload(action, text.trim()),
+  });
+}
+
+export type ActionFailure =
+  | { kind: "conflict"; message: string }
+  | { kind: "forbidden"; message: string }
+  | { kind: "gone"; message: string }
+  | { kind: "invalid"; message: string }
+  | { kind: "retry"; message: string };
+
+export const CONFLICT_MESSAGE =
+  "Aquest requisit ha canviat des que l'has obert. Ara veus la versió actual: revisa-la abans de tornar-ho a enviar.";
+
+/** Cada error amb una frase; mai JSON, codis ni traces. */
+export function actionFailure(caught: unknown): ActionFailure {
+  const status = caught instanceof ApiError ? caught.status : undefined;
+  if (status === 409) return { kind: "conflict", message: CONFLICT_MESSAGE };
+  if (status === 403) return { kind: "forbidden", message: "No tens permisos per modificar aquesta revisió." };
+  if (status === 404) return { kind: "gone", message: "L'element ja no està disponible." };
+  if (status === 422 && caught instanceof ApiError) {
+    // El missatge del backend ja és una frase en català i segura de mostrar.
+    return { kind: "invalid", message: caught.message || "Revisa el text i torna-ho a provar." };
+  }
+  return { kind: "retry", message: "No s'ha pogut desar. Torna-ho a provar d'aquí a un moment." };
+}
+
+export interface ReviewHistoryEntry {
+  revision_no: number;
+  action: string;
+  action_label: string;
+  status_after: string;
+  status_label: string;
+  note: string | null;
+  actor_id: string | null;
+  created_at: string;
 }

@@ -2,6 +2,8 @@
 
 import { useCallback, useMemo, useState } from "react";
 
+import { ReviewActions } from "@/components/review/ReviewActions";
+import { ReviewHistory } from "@/components/review/ReviewHistory";
 import { Button, Card, CardHeader, Drawer, Field, Input, Select, StatusPill } from "@/components/ui";
 import {
   type CanonicalRequirement,
@@ -108,11 +110,27 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
+/** El que cal per revisar des del detall. Sense això, el detall és només de lectura. */
+export interface ReviewContext {
+  companyId: string;
+  tenderId: string;
+  /** Rol amb permís de revisió (el backend continua manant). */
+  canWrite: boolean;
+  currentUserId: string | null;
+  onUpdated: (item: CanonicalRequirement, statusMayChange: boolean) => void;
+  /** Torna a llegir un element (després d'un 409). */
+  onStale: (itemId: string) => Promise<void>;
+  /** L'element ja no hi és (404): cal refer la llista. */
+  onGone: (itemId: string) => Promise<void>;
+}
+
 function RequirementDetail({
   item,
+  review,
   onOpenRelated,
 }: {
   item: CanonicalRequirement;
+  review?: ReviewContext;
   onOpenRelated: (id: string) => void;
 }) {
   const relations = [...item.visible_relations, ...item.folded_relations];
@@ -120,12 +138,27 @@ function RequirementDetail({
     <div className="space-y-5 px-4 py-4">
       {item.description && <p className="text-body leading-relaxed text-ink">{item.description}</p>}
 
+      {review && (
+        <ReviewActions
+          item={item}
+          companyId={review.companyId}
+          tenderId={review.tenderId}
+          canWrite={review.canWrite}
+          onUpdated={review.onUpdated}
+          onStale={() => review.onStale(item.canonical_id)}
+          onGone={() => review.onGone(item.canonical_id)}
+        />
+      )}
+
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
         <Fact label="Categoria">{item.category_label}</Fact>
         <Fact label="Obligació">{item.obligation_label}</Fact>
-        <Fact label="Estat">
-          <VerificationBadge item={item} labelled />
-        </Fact>
+        {/* Amb la secció «Revisió», l'estat ja hi és al capdamunt: no es repeteix. */}
+        {!review && (
+          <Fact label="Estat">
+            <VerificationBadge item={item} labelled />
+          </Fact>
+        )}
         <Fact label="Origen">
           <ProvenanceBadge item={item} labelled />
         </Fact>
@@ -203,16 +236,28 @@ function RequirementDetail({
           </ul>
         </section>
       )}
+
+      {review && (
+        <ReviewHistory
+          key={item.canonical_id}
+          companyId={review.companyId}
+          tenderId={review.tenderId}
+          itemId={item.canonical_id}
+          revision={item.review_revision}
+          currentUserId={review.currentUserId}
+        />
+      )}
     </div>
   );
 }
 
 /**
  * Requisits canònics d'aquesta empresa: llista filtrable (estat, origen,
- * obligació, categoria i text, tot al client) i detall en un calaix.
- * Només lectura.
+ * obligació, categoria i text, tot al client) i detall en un calaix. Amb
+ * `review`, el detall porta les accions de revisió; els filtres es mantenen
+ * quan un element canvia, i si deixa de coincidir-hi, surt de la llista.
  */
-export function RequirementReviewList({ items }: { items: CanonicalRequirement[] }) {
+export function RequirementReviewList({ items, review }: { items: CanonicalRequirement[]; review?: ReviewContext }) {
   const [filters, setFilters] = useState<RequirementFilters>(NO_FILTERS);
   const [openId, setOpenId] = useState<string | null>(null);
   const available = useMemo(() => filterOptions(items), [items]);
@@ -258,7 +303,7 @@ export function RequirementReviewList({ items }: { items: CanonicalRequirement[]
         </ul>
       )}
       <Drawer open={open !== null} title={open?.title ?? ""} onClose={close}>
-        {open && <RequirementDetail item={open} onOpenRelated={(id) => items.some((item) => item.canonical_id === id) && setOpenId(id)} />}
+        {open && <RequirementDetail item={open} review={review} onOpenRelated={(id) => items.some((item) => item.canonical_id === id) && setOpenId(id)} />}
       </Drawer>
     </Card>
   );

@@ -3,13 +3,15 @@
 import { ArrowLeft, ClipboardList } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useCallback, useMemo } from "react";
 
 import { AwardCriteriaPanel } from "@/components/review/AwardCriteriaPanel";
-import { RequirementReviewList } from "@/components/review/RequirementReviewList";
+import { type ReviewContext, RequirementReviewList } from "@/components/review/RequirementReviewList";
 import { useSession } from "@/components/SessionProvider";
 import { Button, Card, EmptyState, ErrorState, LinkButton, LoadingRows, PageHeader, PageSkeleton } from "@/components/ui";
+import { api } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
-import { type AwardCriteriaView, type CanonicalRequirement, type ReviewOverview, reviewPath } from "@/lib/review";
+import { type AwardCriteriaView, type CanonicalRequirement, type ReviewOverview, canReview, reviewPath } from "@/lib/review";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
@@ -26,11 +28,12 @@ function Stat({ label, value, note }: { label: string; value: string; note?: str
 /**
  * Revisió de la licitació (primera pantalla de producte): el que AQUESTA
  * empresa té acceptat de la licitació, llegit de la capa de revisió canònica.
- * Només lectura: aquesta pantalla no inicia la revisió ni aplica cap acció.
+ * No inicia la revisió. Des del detall d'un requisit, qui té permís hi pot
+ * aplicar accions; la resposta del servidor és l'única que canvia la pantalla.
  */
 export default function TenderReviewPage() {
   const { tenderId } = useParams<{ tenderId: string }>();
-  const { companyId } = useSession();
+  const { companyId, membership, user } = useSession();
   const back = `/licitacions/${tenderId}?tab=requisits`;
 
   const tender = useResource<{ title: string }>(`/tenders/${tenderId}`);
@@ -42,6 +45,40 @@ export default function TenderReviewPage() {
   const scoring = useResource<AwardCriteriaView>(
     companyId && started ? reviewPath(companyId, tenderId, "/award-criteria?view=scoring") : null,
   );
+
+  // Tot el que canvia després d'una acció surt del servidor: mai es compta a mà.
+  const { data: list, setData: setList, reload: reloadList } = requirements;
+  const { reload: reloadOverview } = overview;
+  const replace = useCallback(
+    (updated: CanonicalRequirement) =>
+      setList((list ?? []).map((item) => (item.canonical_id === updated.canonical_id ? updated : item))),
+    [list, setList],
+  );
+  const review = useMemo<ReviewContext | undefined>(() => {
+    if (!companyId) return undefined;
+    return {
+      companyId,
+      tenderId,
+      canWrite: canReview(membership?.role),
+      currentUserId: user?.id ?? null,
+      onUpdated: (item, statusMayChange) => {
+        replace(item);
+        if (statusMayChange) void reloadOverview();
+      },
+      onStale: async (itemId) => {
+        // La versió actual, tal com és ara: pot haver canviat l'estat.
+        try {
+          replace(await api.get<CanonicalRequirement>(reviewPath(companyId, tenderId, `/requirements/${itemId}`)));
+        } catch {
+          await reloadList();
+        }
+        await reloadOverview();
+      },
+      onGone: async () => {
+        await Promise.all([reloadList(), reloadOverview()]);
+      },
+    };
+  }, [companyId, tenderId, membership?.role, user?.id, replace, reloadList, reloadOverview]);
 
   const title = "Revisió de la licitació";
   const description = tender.data?.title;
@@ -144,7 +181,7 @@ export default function TenderReviewPage() {
               />
             </Card>
           )}
-          {requirements.data && <RequirementReviewList items={requirements.data} />}
+          {requirements.data && <RequirementReviewList items={requirements.data} review={review} />}
         </div>
       </div>
     </div>
