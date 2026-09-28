@@ -90,6 +90,21 @@ def test_el_mateix_text_en_un_altre_document_es_una_reiteracio():
     assert classify(PCAP, INFORME_AGAIN) is PairKind.RESTATEMENT
 
 
+def test_el_ppt_tambe_es_document_vinculant():
+    """Els tipus vinculants són valors reals de l'enum (PCAP i PPT), no noms escrits a mà."""
+    from app.models.enums import TenderDocumentType
+    from app.services.review_duplicates import BINDING_DOCUMENT_TYPES
+
+    assert BINDING_DOCUMENT_TYPES == {
+        TenderDocumentType.ADMINISTRATIVE_TERMS.value,
+        TenderDocumentType.TECHNICAL_TERMS.value,
+    }
+    ppt = Candidate(
+        uuid.uuid4(), 9, (EvidenceSpan(uuid.uuid4(), "technical_terms", 22, 0, 10, None, CLAUSE),)
+    )
+    assert canonical([INFORME, ppt]).item_id == ppt.item_id
+
+
 def test_obligacions_diferents_no_es_relacionen():
     other = Candidate(
         uuid.uuid4(),

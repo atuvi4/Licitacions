@@ -24,8 +24,13 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-#: Documents que obliguen (els plecs). Un informe o un annex els pot repetir, no substituir.
-BINDING_DOCUMENT_TYPES = frozenset({"administrative_terms", "technical_specifications"})
+from app.models.enums import TenderDocumentType
+
+#: Documents que obliguen (els plecs: PCAP i PPT). Un informe o un annex els pot repetir,
+#: no substituir. Surt de l'enum: un nom escrit a mà ja va fallar una vegada.
+BINDING_DOCUMENT_TYPES = frozenset(
+    {TenderDocumentType.ADMINISTRATIVE_TERMS.value, TenderDocumentType.TECHNICAL_TERMS.value}
+)
 
 _QUOTES = str.maketrans({"’": "'", "‘": "'", "´": "'", "“": '"', "”": '"', "«": '"', "»": '"'})
 
