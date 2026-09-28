@@ -3,16 +3,19 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { CorrectionEditor } from "@/components/review/CorrectionEditor";
+import { CitationPreview, EvidencePicker } from "@/components/review/EvidencePicker";
 import { Button, ResultNotice, StatusPill, Textarea } from "@/components/ui";
 import {
   type ActionFailure,
   type CanonicalRequirement,
   type ReviewActionName,
   actionFailure,
+  submitLinkSource,
   submitReviewAction,
   verificationLevel,
   whoCanReview,
 } from "@/lib/review";
+import { type CitationDraft, citationPayload } from "@/lib/evidence";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
@@ -92,6 +95,10 @@ export function ReviewActions({
 }: ReviewActionsProps) {
   const [form, setForm] = useState<keyof typeof FORMS | null>(null);
   const [editing, setEditing] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const [chosen, setChosen] = useState<CitationDraft | null>(null);
+  const [linkPending, setLinkPending] = useState(false);
+  const [linkProblem, setLinkProblem] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [pending, setPending] = useState<ReviewActionName | null>(null);
@@ -105,6 +112,9 @@ export function ReviewActions({
   useEffect(() => {
     setForm(null);
     setEditing(false);
+    setLinking(false);
+    setChosen(null);
+    setLinkProblem(null);
     setText("");
     setFieldError(null);
     setFailure(null);
@@ -181,6 +191,51 @@ export function ReviewActions({
     }
   }
 
+  function closeLinking() {
+    setLinking(false);
+    setChosen(null);
+    setLinkProblem(null);
+    setReturnTo("link");
+  }
+
+  async function attach() {
+    if (!chosen || linkPending) return;
+    setLinkPending(true);
+    setLinkProblem(null);
+    setDone(null);
+    try {
+      // Sempre amb la revisió que es veu ara: després d'un 409 cal tornar-ho a prémer.
+      const updated = await submitLinkSource(companyId, tenderId, item, citationPayload(chosen));
+      setLinking(false);
+      setChosen(null);
+      setDone("Evidència afegida.");
+      onUpdated(updated, false);
+    } catch (caught) {
+      const problem = actionFailure(caught);
+      if (problem.kind === "conflict") {
+        await onStale();
+        setLinkProblem(
+          "Aquest requisit ha canviat des que l'has obert. La cita triada es conserva: revisa la versió actual i torna-la a afegir si encara cal.",
+        );
+      } else if (problem.kind === "gone") {
+        setLinkProblem(problem.message);
+        await onGone();
+      } else {
+        setLinkProblem(problem.message);
+      }
+    } finally {
+      setLinkPending(false);
+    }
+  }
+
+  function onLinkKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      event.nativeEvent.stopImmediatePropagation();
+      closeLinking();
+    }
+  }
+
   const busy = pending !== null;
   const active = form ? FORMS[form] : null;
 
@@ -228,7 +283,41 @@ export function ReviewActions({
             />
           )}
 
-          {!active && !editing && (
+          {linking && (
+            <div role="group" aria-labelledby="revisio-evidencia-titol" className="mt-2.5 space-y-2" onKeyDown={onLinkKeyDown}>
+              <p id="revisio-evidencia-titol" className="text-body font-semibold text-ink">
+                Afegir evidència
+              </p>
+              <p className="text-[13px] leading-5 text-muted">
+                Una cita més del plec per a aquest requisit. No el verifica ni en canvia el contingut.
+              </p>
+              {!chosen ? (
+                <EvidencePicker companyId={companyId} tenderId={tenderId} onChoose={setChosen} onCancel={closeLinking} />
+              ) : (
+                <>
+                  <CitationPreview draft={chosen} />
+                  {linkProblem && (
+                    <p role="alert" className="border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
+                      {linkProblem}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="primary" loading={linkPending} disabled={linkPending} onClick={() => void attach()}>
+                      Afegeix l&apos;evidència
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={linkPending} onClick={() => setChosen(null)}>
+                      Canvia la cita
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={linkPending} onClick={closeLinking}>
+                      Cancel·la
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {!active && !editing && !linking && (
             <div className="mt-2.5 flex flex-wrap gap-2" role="group" aria-label="Accions de revisió">
               <Button size="sm" variant="primary" loading={pending === "confirm"} disabled={busy} onClick={() => void run("confirm")}>
                 Confirmar
@@ -257,6 +346,19 @@ export function ReviewActions({
                 }}
               >
                 Corregir
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy}
+                data-opener="link"
+                onClick={() => {
+                  setDone(null);
+                  setFailure(null);
+                  setLinking(true);
+                }}
+              >
+                Afegir evidència
               </Button>
               <Button
                 size="sm"

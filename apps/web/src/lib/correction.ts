@@ -480,3 +480,23 @@ export function correctionSummary(changes: Record<string, unknown> | undefined):
   if (removed) parts.push(`${removed} ${removed === 1 ? "valor tret" : "valors trets"}`);
   return parts.length ? parts.join(" · ") : null;
 }
+
+// --------------------------------------------------------------------------- //
+// Requisit manual nou                                                           //
+// --------------------------------------------------------------------------- //
+
+/** El punt de partida d'un requisit manual: sense categoria triada, obligatori i sense valors. */
+export const EMPTY_REQUIREMENT: EditableRequirement = {
+  title: "",
+  description: null,
+  category: "",
+  obligation: "mandatory",
+  modality: "mandatory",
+  values: [],
+};
+
+/** Una fila del formulari tal com l'accepta l'API (`ReviewerValueInput`). */
+export function reviewerValue(row: DraftValue): ReviewerValuePayload {
+  const value = scalarOf(row);
+  return { key: row.key, operator: row.operator || null, value: value === undefined ? null : value, unit_label: row.unit.trim() || null };
+}

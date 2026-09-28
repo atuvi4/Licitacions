@@ -2,9 +2,10 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import { ManualRequirementEditor } from "@/components/review/ManualRequirementEditor";
 import { ReviewActions } from "@/components/review/ReviewActions";
 import { ReviewHistory } from "@/components/review/ReviewHistory";
-import { Button, Card, CardHeader, Drawer, Field, Input, Select, StatusPill } from "@/components/ui";
+import { Button, Card, CardHeader, Drawer, Field, Input, ResultNotice, Select, StatusPill } from "@/components/ui";
 import {
   type CanonicalRequirement,
   type FilterOption,
@@ -133,6 +134,8 @@ export interface ReviewContext {
   onStale: (itemId: string) => Promise<CanonicalRequirement | null>;
   /** L'element ja no hi és (404): cal refer la llista. */
   onGone: (itemId: string) => Promise<void>;
+  /** Un requisit manual nou: es tornen a llegir la llista i el resum. */
+  onCreated: (item: CanonicalRequirement) => Promise<void>;
 }
 
 function RequirementDetail({
@@ -275,6 +278,8 @@ export function RequirementReviewList({ items, review }: { items: CanonicalRequi
   const [filters, setFilters] = useState<RequirementFilters>(NO_FILTERS);
   const [openId, setOpenId] = useState<string | null>(null);
   const [showDuplicates, setShowDuplicates] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [created, setCreated] = useState<string | null>(null);
   // Els duplicats d'extracció es pleguen per defecte; el detall i l'auditoria els conserven.
   const folded = useMemo(() => items.filter((item) => duplicateOf(item)), [items]);
   const listed = useMemo(
@@ -304,6 +309,10 @@ export function RequirementReviewList({ items, review }: { items: CanonicalRequi
     if (guard.current?.()) return;
     setOpenId(null);
   }, []);
+  const closeCreate = useCallback(() => {
+    if (guard.current?.()) return;
+    setCreating(false);
+  }, []);
   const openRelated = (id: string) => {
     if (guard.current?.()) return;
     if (items.some((item) => item.canonical_id === id)) setOpenId(id);
@@ -322,13 +331,30 @@ export function RequirementReviewList({ items, review }: { items: CanonicalRequi
             : "")
         }
         action={
-          folded.length > 0 ? (
-            <Button size="sm" variant="ghost" aria-pressed={showDuplicates} onClick={() => setShowDuplicates((value) => !value)}>
-              {showDuplicates ? "Amaga els duplicats" : `Mostra també els duplicats (${folded.length})`}
-            </Button>
+          folded.length > 0 || review?.canWrite ? (
+            <div className="flex flex-wrap gap-2">
+              {folded.length > 0 && (
+                <Button size="sm" variant="ghost" aria-pressed={showDuplicates} onClick={() => setShowDuplicates((value) => !value)}>
+                  {showDuplicates ? "Amaga els duplicats" : `Mostra també els duplicats (${folded.length})`}
+                </Button>
+              )}
+              {review?.canWrite && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setCreated(null);
+                    setCreating(true);
+                  }}
+                >
+                  Afegir requisit
+                </Button>
+              )}
+            </div>
           ) : undefined
         }
       />
+      {created && <ResultNotice message={created} tone="success" onDismiss={() => setCreated(null)} />}
       <form
         role="search"
         aria-label="Filtra els requisits"
@@ -366,6 +392,24 @@ export function RequirementReviewList({ items, review }: { items: CanonicalRequi
           <RequirementDetail item={open} review={review} onOpenRelated={openRelated} registerCloseGuard={registerCloseGuard} />
         )}
       </Drawer>
+      {review?.canWrite && (
+        <Drawer open={creating} title="Afegir requisit" onClose={closeCreate} wide>
+          {creating && (
+            <ManualRequirementEditor
+              companyId={review.companyId}
+              tenderId={review.tenderId}
+              registerCloseGuard={registerCloseGuard}
+              onClose={() => setCreating(false)}
+              onCreated={async (item) => {
+                registerCloseGuard(null);
+                setCreating(false);
+                setCreated(`S'ha afegit «${item.title}». Queda pendent de revisar.`);
+                await review.onCreated(item);
+              }}
+            />
+          )}
+        </Drawer>
+      )}
     </Card>
   );
 }

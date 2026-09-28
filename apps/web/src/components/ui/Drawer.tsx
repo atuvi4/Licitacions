@@ -12,6 +12,8 @@ export interface DrawerProps {
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  /** Més ample, per a formularis que ensenyen text de pàgina. */
+  wide?: boolean;
 }
 
 const FOCUSABLE =
@@ -25,7 +27,7 @@ const FOCUSABLE =
  * és imprescindible: el focus queda atrapat a dins i torna al control que l'ha
  * obert. Sense això, tabular se'n va a la pàgina de sota, que segueix visible.
  */
-export function Drawer({ open, title, description, onClose, children, footer }: DrawerProps) {
+export function Drawer({ open, title, description, onClose, children, footer, wide = false }: DrawerProps) {
   const panel = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
 
@@ -82,7 +84,8 @@ export function Drawer({ open, title, description, onClose, children, footer }: 
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "animate-fade-in relative z-10 flex h-full w-full max-w-[26rem] flex-col",
+          "animate-fade-in relative z-10 flex h-full w-full flex-col",
+          wide ? "max-w-[40rem]" : "max-w-[26rem]",
           "border-l border-border-strong bg-canvas shadow-dialog",
         )}
       >

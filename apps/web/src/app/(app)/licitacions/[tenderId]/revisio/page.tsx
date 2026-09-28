@@ -80,6 +80,10 @@ export default function TenderReviewPage() {
       onGone: async () => {
         await Promise.all([reloadList(), reloadOverview()]);
       },
+      // Mai «257 → 258» a mà: la llista i el resum es tornen a llegir del servidor.
+      onCreated: async () => {
+        await Promise.all([reloadList(), reloadOverview()]);
+      },
     };
   }, [companyId, tenderId, membership?.role, user?.id, replace, reloadList, reloadOverview]);
 

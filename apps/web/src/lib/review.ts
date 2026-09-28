@@ -458,6 +458,29 @@ export function whoCanReview(): string {
 
 export type ReviewActionName = "confirm" | "mark_partial" | "reject" | "note";
 
+/** Afegeix una cita com a evidència addicional. Només posicions: el servidor treu el text. */
+export function submitLinkSource(
+  companyId: string,
+  tenderId: string,
+  item: CanonicalRequirement,
+  citation: Record<string, unknown>,
+): Promise<CanonicalRequirement> {
+  return api.post<CanonicalRequirement>(reviewPath(companyId, tenderId, `/items/${item.canonical_id}/actions`), {
+    action: "link_source",
+    expected_revision: item.review_revision,
+    payload: { citation },
+  });
+}
+
+/** Un requisit manual NOMÉS d'aquesta empresa (mai a la taula global de requisits). */
+export function createManualRequirement(
+  companyId: string,
+  tenderId: string,
+  body: Record<string, unknown>,
+): Promise<CanonicalRequirement> {
+  return api.post<CanonicalRequirement>(reviewPath(companyId, tenderId, "/requirements"), body);
+}
+
 /** Una correcció: la càrrega ja és diferencial (`lib/correction.ts`). */
 export function submitCorrection(
   companyId: string,
@@ -497,6 +520,7 @@ export function submitReviewAction(
 
 export type ActionFailure =
   | { kind: "conflict"; message: string }
+  | { kind: "duplicate"; message: string }
   | { kind: "forbidden"; message: string }
   | { kind: "gone"; message: string }
   | { kind: "invalid"; message: string }
@@ -508,6 +532,10 @@ export const CONFLICT_MESSAGE =
 /** Cada error amb una frase; mai JSON, codis ni traces. */
 export function actionFailure(caught: unknown): ActionFailure {
   const status = caught instanceof ApiError ? caught.status : undefined;
+  // La mateixa cita ja enllaçada també és un 409, però no és cap conflicte de revisió.
+  if (status === 409 && caught instanceof ApiError && caught.code === "review_source_already_linked") {
+    return { kind: "duplicate", message: "Aquesta evidència ja està vinculada al requisit." };
+  }
   if (status === 409) return { kind: "conflict", message: CONFLICT_MESSAGE };
   if (status === 403) return { kind: "forbidden", message: "No tens permisos per modificar aquesta revisió." };
   if (status === 404) return { kind: "gone", message: "L'element ja no està disponible." };
