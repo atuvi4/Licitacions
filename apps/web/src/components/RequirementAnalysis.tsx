@@ -56,7 +56,6 @@ import {
 import type { AwardCriterion, Requirement, RequirementAnalysis, RequirementEvidence, ReviewStatus } from "@/lib/requirements";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
-const LINK = "text-[13px] text-brand-strong hover:text-accent-800 disabled:cursor-default disabled:text-muted";
 
 function evidenceHref(tenderId: string, evidence: RequirementEvidence): string | null {
   return evidence.tender_document_id
@@ -92,48 +91,27 @@ function Evidence({ tenderId, evidence }: { tenderId: string; evidence: Requirem
   );
 }
 
-function ReviewControls({
-  current,
-  onReview,
-  busy,
-}: {
-  current: ReviewStatus;
-  onReview: (status: ReviewStatus) => void;
-  busy: boolean;
-}) {
-  const options: ReviewStatus[] = ["verified", "needs_review", "rejected"];
+/**
+ * Nomes lectura. Aquesta vista ja no revisa: els botons antics escrivien
+ * l'estat directament al requisit extret, compartit per totes les empreses,
+ * saltant-se la revisio de l'empresa. La revisio es fa a `/revisio`.
+ */
+function ReviewStatusPill({ current }: { current: ReviewStatus }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-      <StatusPill level={REVIEW_LEVEL[current]} size="sm">
-        {REVIEW_LABELS[current]}
-      </StatusPill>
-      {options.map((status) => (
-        <button
-          key={status}
-          type="button"
-          disabled={busy || current === status}
-          onClick={() => onReview(status)}
-          className={`${LINK} min-h-11 md:min-h-0`}
-        >
-          {REVIEW_LABELS[status]}
-        </button>
-      ))}
-    </div>
+    <StatusPill level={REVIEW_LEVEL[current]} size="sm">
+      {REVIEW_LABELS[current]}
+    </StatusPill>
   );
 }
 
 function RequirementRow({
   tenderId,
   requirement,
-  onReview,
-  busy,
   onEdit,
   onArchive,
 }: {
   tenderId: string;
   requirement: Requirement;
-  onReview: (id: string, status: ReviewStatus) => void;
-  busy: boolean;
   /** Només als escrits a mà. Un d'extret no s'edita: seria reescriure la
    * sortida d'una execució concreta, i llavors la run ja no diria què va
    * produir. Per als extrets hi ha la revisió, que ja hi era. */
@@ -197,7 +175,7 @@ function RequirementRow({
           )}
         </div>
         <div className="shrink-0 md:max-w-[40%]">
-          <ReviewControls current={requirement.review_status} busy={busy} onReview={(status) => onReview(requirement.id, status)} />
+          <ReviewStatusPill current={requirement.review_status} />
         </div>
       </div>
     </li>
@@ -251,7 +229,6 @@ export function RequirementAnalysisSection({
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [jobFailure, setJobFailure] = useState<JobRequest | null>(null);
-  const [reviewing, setReviewing] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   // Cap anàlisi es demana sense haver-ne vist el volum: primer el preview.
   const [quote, setQuote] = useState<AnalysisQuote | null>(null);
@@ -317,19 +294,6 @@ export function RequirementAnalysisSection({
       }
     } finally {
       setSubmitting(false);
-    }
-  }
-
-  async function review(id: string, status: ReviewStatus) {
-    setReviewing(id);
-    setActionError(null);
-    try {
-      await api.post(`/requirements/${id}/review`, { review_status: status });
-      await onReload();
-    } catch (caught) {
-      setActionError(caught instanceof Error ? caught.message : "No s'ha pogut desar la revisió.");
-    } finally {
-      setReviewing(null);
     }
   }
 
@@ -588,7 +552,15 @@ export function RequirementAnalysisSection({
           <CardHeader
             title={`Requisits (${requirements.length})`}
             description="Proposats per l'anàlisi amb cita i pàgina. Extret no vol dir acreditat: el compliment es compara a sota."
+            action={
+              <LinkButton href={`/licitacions/${tenderId}/revisio`} variant="primary" size="sm">
+                Obre la revisió
+              </LinkButton>
+            }
           />
+          <p className="border-b border-border px-4 py-2 text-caption text-muted sm:px-5">
+            La revisió es gestiona des de la vista de revisió de la licitació.
+          </p>
           <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5" role="group" aria-label="Filtres de requisits">
             {FILTERS.map((item) => {
               const pressed = filter === item.key;
@@ -622,8 +594,6 @@ export function RequirementAnalysisSection({
                       key={requirement.id}
                       tenderId={tenderId}
                       requirement={requirement}
-                      busy={reviewing === requirement.id}
-                      onReview={review}
                       onEdit={
                         canWrite
                           ? (item) => {

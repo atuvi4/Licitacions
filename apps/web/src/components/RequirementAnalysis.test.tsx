@@ -198,15 +198,50 @@ describe("RequirementAnalysisSection", () => {
     expect(screen.getByText("Sublímit per víctima de 150.000 €")).toBeTruthy();
   });
 
-  it("revisar un requisit fa el POST de sempre i recarrega", async () => {
-    post.mockResolvedValue({});
+  it("els requisits es llegeixen, pero aqui ja no es revisen: cap boto d'estat", async () => {
     renderSection(analysis());
     await flush();
-    const row = screen.getByText("Certificat ISO 14001 en vigor").closest("li")!;
-    fireEvent.click([...row.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Verificat")!);
+
+    for (const title of ["Certificat ISO 14001 en vigor", "Sublímit per víctima de 150.000 €", "Memòria tècnica"]) {
+      const row = screen.getByText(title).closest("li")!;
+      const labels = [...row.querySelectorAll("button")].map((b) => b.textContent?.trim());
+      for (const legacy of ["Verificat", "Cal revisar", "Per revisar", "Descartat", "Revisat"]) {
+        expect(labels).not.toContain(legacy);
+      }
+    }
+    // L'estat que va deixar l'anàlisi es continua veient, nomes com a pastilla.
+    const r2 = screen.getByText("Sublímit per víctima de 150.000 €").closest("li")!;
+    expect(r2.querySelector("[data-level]")).not.toBeNull();
+    expect(screen.getByText("La revisió es gestiona des de la vista de revisió de la licitació.")).toBeTruthy();
+  });
+
+  it("la revisio porta a la vista canonica /revisio", async () => {
+    renderSection(analysis());
     await flush();
-    expect(post).toHaveBeenCalledWith("/requirements/r1/review", { review_status: "verified" });
-    expect(reload).toHaveBeenCalled();
+
+    const link = screen.getByRole("link", { name: "Obre la revisió" });
+    expect(link.getAttribute("href")).toBe("/licitacions/t1/revisio");
+  });
+
+  it("res de la llista no pot fer el POST antic de revisio", async () => {
+    post.mockImplementation(async (path: string) => {
+      if (/^\/(requirements|award-criteria)\/[^/]+\/review$/.test(path)) {
+        throw new Error(`POST antic de revisio cridat: ${path}`);
+      }
+      return {};
+    });
+    renderSection(analysis(), { editable: true });
+    await flush();
+
+    const list = screen.getByText("Certificat ISO 14001 en vigor").closest("ul")!.parentElement!.parentElement!;
+    for (const button of [...list.querySelectorAll("li button")]) {
+      fireEvent.click(button);
+      await flush();
+    }
+    fireEvent.click(screen.getByRole("link", { name: "Obre la revisió" }));
+    await flush();
+
+    expect(post.mock.calls.filter(([path]) => /\/review$/.test(String(path)))).toEqual([]);
   });
 
   it("anàlisi parcial: mai «a punt», i els documents omesos pel nom; simulació: mai «a punt»", async () => {
