@@ -77,6 +77,7 @@ ACTION_LABELS = {
     ReviewAction.SET_AWARD_ROLE: "Canvi de paper",
     ReviewAction.LINK_SOURCE: "Evidència afegida",
     ReviewAction.ARCHIVE: "Arxivat",
+    ReviewAction.RECONCILE: "Reconciliat amb la nova extracció",
 }
 _SNAPSHOT_FIELDS = ("title", "description", "category", "obligation", "modality")
 

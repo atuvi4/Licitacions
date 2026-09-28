@@ -1401,3 +1401,26 @@ def test_els_enums_i_les_regles_de_revisio_els_imposa_la_base():
     assert "REFERENCES requirements (id) ON DELETE NO ACTION" in up
     assert "REFERENCES review_items (id, company_id) ON DELETE CASCADE" in up
     assert "REFERENCES review_items (id, company_id, tender_id) ON DELETE CASCADE" in up
+
+
+def test_la_reconciliacio_es_pot_aplicar_i_desfer():
+    """0040 -> 0041 -> 0040: taula nova, CHECK d'accions ampliat i tornat enrere.
+
+    El downgrade es refusa (a la base, abans de tocar res) si hi ha revisions
+    `reconcile`: el CHECK antic no les admet i esborrar-les seria perdre historial.
+    """
+    up = _offline_sql("upgrade", "0040_review_layer:0041_review_reconciliation")
+    down = _offline_sql("downgrade", "0041_review_reconciliation:0040_review_layer")
+
+    assert "CREATE TABLE review_reconciliations" in up
+    assert "uq_review_reconciliations_target UNIQUE (company_id, tender_id, target_run_id)" in up
+    new_check = up.split("ADD CONSTRAINT ck_review_item_revisions_action_valid")[1]
+    assert "'reconcile'" in new_check.split(";")[0]
+    created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
+    assert created == set(re.findall(r"DROP INDEX (\w+)", down))
+    assert "DROP TABLE review_reconciliations" in down
+    refusal = down.index("RAISE EXCEPTION")
+    assert refusal < down.index("DROP CONSTRAINT ck_review_item_revisions_action_valid")
+    old_check = down.split("ADD CONSTRAINT ck_review_item_revisions_action_valid")[1]
+    assert "'reconcile'" not in old_check.split(";")[0]
+    assert "DELETE" not in down.upper().replace("ON DELETE", "")

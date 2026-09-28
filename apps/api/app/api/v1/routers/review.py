@@ -39,11 +39,16 @@ from app.schemas.review import (
     ReviewOverview,
     ReviewStartResult,
 )
-from app.schemas.review_reconciliation import ReconciliationPreview
+from app.schemas.review_reconciliation import (
+    ReconciliationApply,
+    ReconciliationApplyResult,
+    ReconciliationPreview,
+)
 from app.services import audit
 from app.services import review_actions as actions
 from app.services import review_awards as awards
 from app.services import review_reconciliation as reconciliation
+from app.services import review_reconciliation_apply as reconciliation_apply
 from app.services import review_relations as relations
 from app.services import review_view as service
 
@@ -93,6 +98,33 @@ async def review_reconciliation(tender_id: uuid.UUID, session: SessionDep, ctx: 
     """
     await service.load_visible_tender(session, ctx.company_id, tender_id)
     return await reconciliation.preview(session, company_id=ctx.company_id, tender_id=tender_id)
+
+
+@router.post(
+    "/reconciliation/apply",
+    response_model=ReconciliationApplyResult,
+    summary="Aplica les coincidencies exactes de la reconciliacio",
+)
+async def apply_reconciliation(
+    tender_id: uuid.UUID, payload: ReconciliationApply, session: SessionDep, ctx: CompanyCtx
+):
+    """Nomes `exact_auto`, i nomes si el pla es exactament el que el client ha vist.
+
+    El servidor torna a calcular les correspondencies sota lock; si res no
+    coincideix, 409 `reconciliation_plan_stale` sense cap escriptura.
+    """
+    actions.assert_can_review(ctx.membership.role)
+    await service.load_visible_tender(session, ctx.company_id, tender_id)
+    result = await reconciliation_apply.apply_exact(
+        session,
+        company_id=ctx.company_id,
+        tender_id=tender_id,
+        target_run_id=payload.target_run_id,
+        plan_hash=payload.plan_hash,
+        actor_id=ctx.user.id,
+    )
+    await session.commit()
+    return result
 
 
 @router.get(

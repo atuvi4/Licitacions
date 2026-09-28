@@ -65,8 +65,9 @@ from app.schemas.review import (
 from app.services.manual_requirement import effective_requirements
 from app.services.review_relations import relations_of
 from app.services.review_runs import (
-    ensure_reconciled,
+    ensure_section_reconciled,
     needs_reconciliation,
+    open_reconciliation,
     represented_award_run_ids,
     represented_requirement_run_ids,
 )
@@ -280,8 +281,8 @@ async def start_review(
     """
     effective = await effective_requirements(session, tender_id)
     # Guarda de rerun: abans de cap escriptura, amb la MATEIXA run que es materialitza.
-    ensure_reconciled(
-        await represented_requirement_run_ids(session, company_id, tender_id),
+    await ensure_section_reconciled(
+        session, company_id, tender_id, ReviewItemKind.REQUIREMENT,
         effective.run.id if effective.run is not None else None,
     )
     extracted = list(effective.extracted)
@@ -666,6 +667,7 @@ async def overview(
     current = effective.run.id if effective.run is not None else None
     requirement_runs = await represented_requirement_run_ids(session, company_id, tender_id)
     award_runs = await represented_award_run_ids(session, company_id, tender_id)
+    reconciliation = await open_reconciliation(session, company_id, tender_id, current)
     return ReviewOverview(
         tender_id=tender_id,
         review_started=bool(items),
@@ -683,9 +685,11 @@ async def overview(
             if by_provenance[code] or code == PROVENANCE_AUTOMATED
         ],
         reconciliation_required=(
-            needs_reconciliation(requirement_runs, current)
+            reconciliation is not None
+            or needs_reconciliation(requirement_runs, current)
             or needs_reconciliation(award_runs, current)
         ),
+        reconciliation_state=reconciliation.state.value if reconciliation else None,
         current_run_id=current,
         represented_requirement_run_ids=sorted(requirement_runs, key=str),
         represented_award_run_ids=sorted(award_runs, key=str),

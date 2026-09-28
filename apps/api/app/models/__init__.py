@@ -43,6 +43,7 @@ from app.models.review import (
     ReviewItemRelation,
     ReviewItemRevision,
     ReviewItemSource,
+    ReviewReconciliation,
 )
 from app.models.solution_option_dimensions import WorkspaceSolutionOptionDimension
 from app.models.solution_options import WorkspaceSolutionOption
@@ -82,6 +83,7 @@ __all__ = [
     "ReviewItemRelation",
     "ReviewItemRevision",
     "ReviewItemSource",
+    "ReviewReconciliation",
     "AnalysisQuote",
     "AssessmentEvidence",
     "AuditLog",

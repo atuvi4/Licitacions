@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 ReconciliationState = Literal[
     "no_current_run",
@@ -19,6 +19,7 @@ ReconciliationState = Literal[
     "up_to_date",
     "new_extraction_available",
     "mixed_source_runs",
+    "reconciliation_in_progress",
 ]
 MatchClass = Literal["exact_auto", "review_candidate", "ambiguous", "new", "removed"]
 
@@ -210,6 +211,8 @@ class _Section(BaseModel):
     #: Files de la run vigent d'aquesta seccio.
     current_source_count: int
     counts: MatchCounts
+    #: Elements que una reconciliacio ja ha portat a la run vigent.
+    already_applied_count: int = 0
 
 
 class RequirementSection(_Section):
@@ -235,6 +238,18 @@ class AwardSection(_Section):
     new: list[AwardNew] = []
 
 
+class ReconciliationSummary(BaseModel):
+    """La reconciliacio desada d'aquesta empresa cap a la run vigent."""
+
+    reconciliation_id: uuid.UUID
+    state: str
+    state_label: str
+    target_run_id: uuid.UUID
+    #: El pla acceptat la darrera vegada que es va aplicar res.
+    applied_plan_hash: str
+    exact_applied_count: int
+
+
 class ReconciliationPreview(BaseModel):
     tender_id: uuid.UUID
     state: ReconciliationState
@@ -244,3 +259,36 @@ class ReconciliationPreview(BaseModel):
     plan_hash: str | None
     requirements: RequirementSection
     awards: AwardSection
+    reconciliation: ReconciliationSummary | None = None
+
+
+class ReconciliationApply(BaseModel):
+    """Nomes el pla que el client ha vist. Les correspondencies les decideix el servidor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_run_id: uuid.UUID
+    plan_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    #: En aquesta fase nomes es poden aplicar les coincidencies exactes.
+    mode: Literal["exact_auto"] = "exact_auto"
+
+
+class RemainingWork(BaseModel):
+    review_candidate: int
+    ambiguous: int
+    new: int
+    removed: int
+
+
+class ReconciliationApplyResult(BaseModel):
+    reconciliation_id: uuid.UUID
+    state: str
+    state_label: str
+    #: Cert nomes si aquesta crida ha reenllaçat alguna font.
+    changed: bool
+    exact_applied_count: int
+    total_exact_applied: int
+    target_run_id: uuid.UUID
+    applied_plan_hash: str
+    remaining_requirements: RemainingWork
+    remaining_awards: RemainingWork

@@ -526,6 +526,8 @@ class ReviewOverview(BaseModel):
     current_run_id: uuid.UUID | None = None
     represented_requirement_run_ids: list[uuid.UUID] = Field(default_factory=list)
     represented_award_run_ids: list[uuid.UUID] = Field(default_factory=list)
+    #: Estat de la reconciliacio oberta cap a la run vigent, si n'hi ha.
+    reconciliation_state: str | None = None
 
 
 class ReviewStartResult(BaseModel):
@@ -612,6 +614,9 @@ class AwardCriteriaView(BaseModel):
     scored_count: int
     total_points: float
     checks: list[AwardCheck]
+    #: L'estructura es d'una run anterior (o d'una reconciliacio no acabada):
+    #: no descriu l'extraccio vigent. No es recalcula ni s'esborra res.
+    reconciliation_pending: bool = False
 
 
 class AwardStartResult(BaseModel):

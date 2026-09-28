@@ -39,6 +39,7 @@ from app.models.enums import (
     ReviewAwardRole,
     ReviewItemKind,
     ReviewOriginHint,
+    ReviewReconciliationState,
     ReviewRelationType,
     ReviewSourceRole,
     ReviewVerification,
@@ -329,6 +330,64 @@ DROP_APPEND_ONLY_TRIGGER = (
     "DROP TRIGGER IF EXISTS review_item_revisions_append_only ON review_item_revisions"
 )
 DROP_APPEND_ONLY_FUNCTION = "DROP FUNCTION IF EXISTS review_item_revisions_append_only()"
+
+class ReviewReconciliation(UUIDPrimaryKeyMixin, Base):
+    """Portar la revisio d'UNA empresa a una run d'extraccio nova (S-R9).
+
+    Un sol objecte per (empresa, licitacio, run desti): no se'n crea un altre
+    perque el pla canvii. Desa la base d'origen (les runs que representava la
+    revisio quan es va crear), perque despres d'aplicar les coincidencies
+    exactes les fonts actives ja barregen runs i no se'n pot deduir.
+
+    Nomes una reconciliacio NO completada amb run desti = run vigent explica
+    fonts de dues runs; qualsevol altra barreja continua sent un error.
+    """
+
+    __tablename__ = "review_reconciliations"
+    __table_args__ = (
+        sa.CheckConstraint(in_values("state", ReviewReconciliationState), name="state_valid"),
+        sa.CheckConstraint("exact_applied_count >= 0", name="exact_applied_count_positive"),
+        sa.UniqueConstraint(
+            "company_id", "tender_id", "target_run_id", name="uq_review_reconciliations_target"
+        ),
+        sa.Index("ix_review_reconciliations_scope", "company_id", "tender_id", "state"),
+    )
+
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+    tender_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False
+    )
+    #: NO ACTION com les fonts: una run amb reconciliacio no desapareix sola.
+    target_run_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey("requirement_extraction_runs.id", ondelete="NO ACTION"),
+        nullable=False,
+    )
+    #: Base d'origen per seccio: ids de run (text) que representava la revisio.
+    requirement_source_run_ids: Mapped[list[str]] = mapped_column(JSONDocument, nullable=False)
+    award_source_run_ids: Mapped[list[str]] = mapped_column(JSONDocument, nullable=False)
+    state: Mapped[ReviewReconciliationState] = mapped_column(
+        enum_column(ReviewReconciliationState, "review_reconciliation_state"), nullable=False
+    )
+    #: El pla que es va acceptar la darrera vegada que s'hi va aplicar res.
+    #: El pla vigent (la feina que queda) es torna a calcular a cada lectura.
+    applied_plan_hash: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    exact_applied_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
 
 # La migracio 0040 crea el mateix; aixo cobreix les bases creades des dels
 # models (`metadata.create_all`, el gate PostgreSQL dels tests).

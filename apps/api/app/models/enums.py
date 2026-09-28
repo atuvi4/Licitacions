@@ -1183,6 +1183,19 @@ class ReviewAction(StrEnum):
     SET_AWARD_ROLE = "set_award_role"
     LINK_SOURCE = "link_source"
     ARCHIVE = "archive"
+    #: La font primaria passa a la fila equivalent d'una run nova (S-R9).
+    RECONCILE = "reconcile"
+
+
+class ReviewReconciliationState(StrEnum):
+    """Cicle de vida d'una reconciliacio d'una empresa cap a una run nova."""
+
+    #: Nomes dins de la transaccio d'aplicacio; mai no queda desat aixi.
+    IN_PROGRESS = "in_progress"
+    #: S'han aplicat les coincidencies exactes; queda feina per a una persona.
+    NEEDS_REVIEW = "needs_review"
+    #: No queda res i totes les fonts extretes apunten a la run desti.
+    COMPLETED = "completed"
 
 
 class ReviewRelationType(StrEnum):

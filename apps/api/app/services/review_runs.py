@@ -8,6 +8,11 @@ ja revisat. Fins que hi hagi reconciliacio, `start` ho refusa amb un 409.
 Nomes llegeix. La run vigent es la mateixa de sempre (`current_run_for`).
 Requisits i criteris es calculen per separat; els elements manuals (sense font
 extreta) no representen cap run.
+
+**Reconciliacio oberta (S-R9).** Mentre una reconciliacio NO completada cap a la
+run vigent tingui base d'origen en una seccio, aquella seccio continua
+bloquejada encara que totes les fonts ja apuntin a la run nova: pot quedar-hi
+feina (files noves, retirades) que `start` no ha de resoldre pel seu compte.
 """
 
 from __future__ import annotations
@@ -19,9 +24,9 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
-from app.models.enums import ReviewItemKind, ReviewSourceRole
+from app.models.enums import ReviewItemKind, ReviewReconciliationState, ReviewSourceRole
 from app.models.requirements import AwardCriterion, Requirement
-from app.models.review import ReviewItem, ReviewItemSource
+from app.models.review import ReviewItem, ReviewItemSource, ReviewReconciliation
 from app.services.requirement_analysis import current_run_for
 
 RECONCILIATION_MESSAGE = (
@@ -110,14 +115,76 @@ def needs_reconciliation(represented: Iterable[uuid.UUID], current: uuid.UUID | 
     return runs != {current}
 
 
-def ensure_reconciled(represented: Iterable[uuid.UUID], current: uuid.UUID | None) -> None:
-    """Llança el 409 abans de cap escriptura. Els detalls son nomes ids."""
+def ensure_reconciled(
+    represented: Iterable[uuid.UUID],
+    current: uuid.UUID | None,
+    *,
+    open_reconciliation_id: uuid.UUID | None = None,
+) -> None:
+    """Llança el 409 abans de cap escriptura. Els detalls son nomes ids.
+
+    `open_reconciliation_id`: la seccio forma part d'una reconciliacio encara
+    no completada; es bloqueja encara que les fonts ja siguin de la run vigent.
+    """
     runs = set(represented)
-    if needs_reconciliation(runs, current):
-        raise ReconciliationRequiredError(
-            RECONCILIATION_MESSAGE,
-            details={
-                "current_run_id": str(current) if current is not None else None,
-                "represented_run_ids": sorted(str(r) for r in runs),
-            },
+    if open_reconciliation_id is not None or needs_reconciliation(runs, current):
+        details = {
+            "current_run_id": str(current) if current is not None else None,
+            "represented_run_ids": sorted(str(r) for r in runs),
+        }
+        if open_reconciliation_id is not None:
+            details["reconciliation_id"] = str(open_reconciliation_id)
+        raise ReconciliationRequiredError(RECONCILIATION_MESSAGE, details=details)
+
+
+async def open_reconciliation(
+    session: AsyncSession,
+    company_id: uuid.UUID,
+    tender_id: uuid.UUID,
+    current: uuid.UUID | None,
+) -> ReviewReconciliation | None:
+    """La reconciliacio NO completada d'aquesta empresa cap a la run VIGENT.
+
+    Una reconciliacio cap a una run que ja no es la vigent no explica res: si
+    les fonts barregen runs, l'estat torna a ser un error (es tanca).
+    """
+    if current is None:
+        return None
+    return await session.scalar(
+        sa.select(ReviewReconciliation).where(
+            ReviewReconciliation.company_id == company_id,
+            ReviewReconciliation.tender_id == tender_id,
+            ReviewReconciliation.target_run_id == current,
+            ReviewReconciliation.state != ReviewReconciliationState.COMPLETED,
         )
+    )
+
+
+def section_baseline(
+    reconciliation: ReviewReconciliation | None, kind: ReviewItemKind
+) -> set[uuid.UUID]:
+    """Les runs d'origen desades d'una seccio (buit si la seccio no hi participa)."""
+    if reconciliation is None:
+        return set()
+    raw = (
+        reconciliation.requirement_source_run_ids
+        if kind == ReviewItemKind.REQUIREMENT
+        else reconciliation.award_source_run_ids
+    )
+    return {uuid.UUID(str(value)) for value in raw or []}
+
+
+async def ensure_section_reconciled(
+    session: AsyncSession,
+    company_id: uuid.UUID,
+    tender_id: uuid.UUID,
+    kind: ReviewItemKind,
+    current: uuid.UUID | None,
+) -> None:
+    """La guarda de `start` d'una seccio: rerun sense reconciliar o reconciliacio oberta."""
+    represented = await _represented(session, company_id, tender_id, kind)
+    reconciliation = await open_reconciliation(session, company_id, tender_id, current)
+    pending = reconciliation is not None and bool(section_baseline(reconciliation, kind))
+    ensure_reconciled(
+        represented, current, open_reconciliation_id=reconciliation.id if pending else None
+    )

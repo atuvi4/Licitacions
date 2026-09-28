@@ -62,7 +62,14 @@ from app.schemas.review import (
     CanonicalAwardCriterion,
     CanonicalEvidence,
 )
-from app.services.review_runs import current_run_id, ensure_reconciled, represented_award_run_ids
+from app.services.review_runs import (
+    current_run_id,
+    ensure_section_reconciled,
+    needs_reconciliation,
+    open_reconciliation,
+    represented_award_run_ids,
+    section_baseline,
+)
 from app.services.review_view import (
     EVIDENCE_CITED,
     PROVENANCE_LABELS,
@@ -229,7 +236,9 @@ async def start_award_review(
     """
     run_id = await current_run_id(session, tender_id)
     # Guarda de rerun: independent de la dels requisits, abans de cap escriptura.
-    ensure_reconciled(await represented_award_run_ids(session, company_id, tender_id), run_id)
+    await ensure_section_reconciled(
+        session, company_id, tender_id, ReviewItemKind.AWARD_CRITERION, run_id
+    )
     criteria = await _criteria_of_run(session, run_id)
     present = await _present_criterion_ids(session, company_id, (c.id for c in criteria))
     missing = [c for c in criteria if c.id not in present]
@@ -633,7 +642,21 @@ async def list_award_criteria(
         scored_count=len(scored),
         total_points=sum(structure.snapshots[i].points or 0 for i in scored),
         checks=consistency_checks(structure),
+        reconciliation_pending=await award_reconciliation_pending(session, company_id, tender_id),
     )
+
+
+async def award_reconciliation_pending(
+    session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
+) -> bool:
+    """Cert si l'estructura de puntuacio no representa (encara) la run vigent."""
+    current = await current_run_id(session, tender_id)
+    if needs_reconciliation(
+        await represented_award_run_ids(session, company_id, tender_id), current
+    ):
+        return True
+    reconciliation = await open_reconciliation(session, company_id, tender_id, current)
+    return bool(section_baseline(reconciliation, ReviewItemKind.AWARD_CRITERION))
 
 
 async def get_award_criterion(

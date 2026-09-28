@@ -59,11 +59,18 @@ from app.models.enums import (
     ReviewAction,
     ReviewAwardRole,
     ReviewItemKind,
+    ReviewReconciliationState,
     ReviewSourceRole,
     ReviewVerification,
 )
 from app.models.requirements import AwardCriterion, Requirement, RequirementExtractionRun
-from app.models.review import ReviewItem, ReviewItemRelation, ReviewItemRevision, ReviewItemSource
+from app.models.review import (
+    ReviewItem,
+    ReviewItemRelation,
+    ReviewItemRevision,
+    ReviewItemSource,
+    ReviewReconciliation,
+)
 from app.schemas.review import AcceptedValue, AwardSnapshot, RequirementSnapshot
 from app.schemas.review_reconciliation import (
     AwardAcceptedDiff,
@@ -78,6 +85,7 @@ from app.schemas.review_reconciliation import (
     HumanState,
     MatchCounts,
     ReconciliationPreview,
+    ReconciliationSummary,
     RequirementAcceptedDiff,
     RequirementAmbiguity,
     RequirementMatch,
@@ -116,6 +124,9 @@ NOT_STARTED = "not_started"
 UP_TO_DATE = "up_to_date"
 NEW_EXTRACTION = "new_extraction_available"
 MIXED = "mixed_source_runs"
+#: Una reconciliacio oberta cap a la run vigent explica que les fonts barregin
+#: la base d'origen i la run desti. Qualsevol altra barreja continua sent MIXED.
+IN_PROGRESS = "reconciliation_in_progress"
 
 STATE_LABELS = {
     NO_CURRENT_RUN: "Encara no hi ha cap extracció vigent",
@@ -123,6 +134,7 @@ STATE_LABELS = {
     UP_TO_DATE: "Al dia amb l'extracció vigent",
     NEW_EXTRACTION: "Hi ha una extracció nova",
     MIXED: "La revisió barreja extraccions diferents",
+    IN_PROGRESS: "Reconciliació en curs",
 }
 EXACT_AUTO = "exact_auto"
 REVIEW_CANDIDATE = "review_candidate"
@@ -280,8 +292,20 @@ class Plan:
         )
 
 
-def classify(olds: Sequence[Old], news: Sequence[Source], *, exact_allowed: bool) -> Plan:
-    """Pura i determinista. Cap desempat arbitrari."""
+def classify(
+    olds: Sequence[Old],
+    news: Sequence[Source],
+    *,
+    exact_allowed: bool,
+    claimed: Sequence[Source] = (),
+) -> Plan:
+    """Pura i determinista. Cap desempat arbitrari.
+
+    `claimed`: files de la run desti que ja son la font primaria d'un element
+    (reconciliacio en curs). No s'aparellen de nou, pero un element vell que hi
+    toca per ancoratge queda `ambiguous` (`candidate_already_matched`), igual
+    que abans d'aplicar: aplicar no canvia la classificacio de la resta.
+    """
     plan = Plan()
     used_old: set[uuid.UUID] = set()
     used_new: set[uuid.UUID] = set()
@@ -305,13 +329,16 @@ def classify(olds: Sequence[Old], news: Sequence[Source], *, exact_allowed: bool
 
     rest_old = [o for o in olds if o.item_id not in used_old]
     rest_new = [n for n in news if n.id not in used_new]
-    taken = {n.id: n for n in news if n.id in used_new}
+    taken = {n.id: n for n in news if n.id in used_new} | {n.id: n for n in claimed}
     free_by_anchor: dict[str, list[Source]] = defaultdict(list)
     taken_by_anchor: dict[str, list[Source]] = defaultdict(list)
     for new in news:
         target = taken_by_anchor if new.id in used_new else free_by_anchor
         for anchor in new.anchors:
             target[anchor].append(new)
+    for new in claimed:
+        for anchor in new.anchors:
+            taken_by_anchor[anchor].append(new)
 
     parent: dict[tuple[str, uuid.UUID], tuple[str, uuid.UUID]] = {}
 
@@ -390,10 +417,18 @@ def compatible_runs(old: RequirementExtractionRun, new: RequirementExtractionRun
 
 @dataclass
 class _Loaded:
-    """Una seccio carregada: elements vells amb la seva fila, files vigents."""
+    """Una seccio carregada.
+
+    `rows`: font primaria activa de CADA element (item_id -> fila).
+    `old_rows`: els que encara apunten fora de la run desti (per reconciliar).
+    `claimed_rows`: els que ja apunten a la run desti (reconciliacio en curs).
+    `new_rows`: files de la run desti que cap element no te com a font.
+    """
 
     items: dict[uuid.UUID, ReviewItem]
-    old_rows: dict[uuid.UUID, Any]  # item_id -> fila extreta vella
+    rows: dict[uuid.UUID, Any]
+    old_rows: dict[uuid.UUID, Any]
+    claimed_rows: dict[uuid.UUID, Any]
     new_rows: list[Any]
     exact_allowed: bool
 
@@ -412,14 +447,19 @@ async def _load(
         )
     ).all()
     items = {item.id: item for item, _row in links}
-    old_rows = {item.id: source for item, source in links}
-    new_rows = list(
-        (
+    rows = {item.id: source for item, source in links}
+    old_rows = {i: r for i, r in rows.items() if r.run_id != current.id}
+    claimed_rows = {i: r for i, r in rows.items() if r.run_id == current.id}
+    claimed_ids = {r.id for r in claimed_rows.values()}
+    new_rows = [
+        r
+        for r in (
             await session.scalars(
                 sa.select(row).where(row.run_id == current.id).order_by(row.created_at, row.id)
             )
         ).all()
-    )
+        if r.id not in claimed_ids
+    ]
     old_run_ids = {r.run_id for r in old_rows.values()}
     runs = {
         r.id: r
@@ -432,7 +472,7 @@ async def _load(
         ).all()
     }
     exact_allowed = len(runs) == 1 and all(compatible_runs(r, current) for r in runs.values())
-    return _Loaded(items, old_rows, new_rows, exact_allowed)
+    return _Loaded(items, rows, old_rows, claimed_rows, new_rows, exact_allowed)
 
 
 async def _human_states(
@@ -625,21 +665,22 @@ async def _requirements_section(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID,
     state: str, represented: set[uuid.UUID], current: RequirementExtractionRun | None,
 ) -> _Built:
-    base = {"state": state, "represented": sorted(map(str, represented))}
     counts_only = await _section_counts(
         session, company_id, tender_id, ReviewItemKind.REQUIREMENT, current)
-    if state != NEW_EXTRACTION or current is None:
+    if state not in (NEW_EXTRACTION, IN_PROGRESS) or current is None:
         return _Built(RequirementSection(
             state=state, state_label=STATE_LABELS[state],
             represented_run_ids=sorted(represented, key=str), counts=MatchCounts(),
-            **counts_only), base)
+            **counts_only), _base(state, represented))
 
     loaded = await _load(session, company_id, tender_id, ReviewItemKind.REQUIREMENT, current)
     built_old = {i: _requirement_source_of(r) for i, r in loaded.old_rows.items()}
     built_new = {r.id: (r, *_requirement_source_of(r)) for r in loaded.new_rows}
     olds = [Old(item_id=i, source=b[0]) for i, b in built_old.items()]
     plan = classify(olds, [b[1] for b in built_new.values()],
-                    exact_allowed=loaded.exact_allowed)
+                    exact_allowed=loaded.exact_allowed,
+                    claimed=[_requirement_source_of(r)[0] for r in loaded.claimed_rows.values()])
+    state = _settled(state, plan, represented, current)
     names = await _document_names(session, tender_id, (
         e.extraction_id
         for rows in (*loaded.old_rows.values(), *loaded.new_rows) for e in rows.evidence))
@@ -688,8 +729,9 @@ async def _requirements_section(
     section = RequirementSection(
         state=state, state_label=STATE_LABELS[state],
         represented_run_ids=sorted(represented, key=str), counts=plan.counts(),
+        already_applied_count=len(loaded.claimed_rows),
         matches=matches, ambiguous=ambiguous, removed=removed, new=new, **counts_only)
-    return _Built(section, {**base, **_plan_part(loaded, plan, plan_pairs)})
+    return _Built(section, {**_base(state, represented), **_plan_part(loaded, plan, plan_pairs)})
 
 
 # --------------------------------------------------------------------------- #
@@ -766,7 +808,6 @@ async def _awards_section(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID,
     state: str, represented: set[uuid.UUID], current: RequirementExtractionRun | None,
 ) -> _Built:
-    base = {"state": state, "represented": sorted(map(str, represented))}
     counts_only = await _section_counts(
         session, company_id, tender_id, ReviewItemKind.AWARD_CRITERION, current)
     scoring = None
@@ -776,20 +817,24 @@ async def _awards_section(
         scoring = AwardScoring(
             scored_count=len(scored),
             total_points=sum(structure.snapshots[i].points or 0 for i in scored),
-            scoring_reconciliation_pending=state in (NEW_EXTRACTION, MIXED),
+            scoring_reconciliation_pending=state in (NEW_EXTRACTION, MIXED, IN_PROGRESS),
         )
-    if state != NEW_EXTRACTION or current is None:
+    if state not in (NEW_EXTRACTION, IN_PROGRESS) or current is None:
         return _Built(AwardSection(
             state=state, state_label=STATE_LABELS[state],
             represented_run_ids=sorted(represented, key=str), counts=MatchCounts(),
-            scoring=scoring, **counts_only), base)
+            scoring=scoring, **counts_only), _base(state, represented))
 
     loaded = await _load(session, company_id, tender_id, ReviewItemKind.AWARD_CRITERION, current)
     built_old = {i: _award_source_of(c) for i, c in loaded.old_rows.items()}
     built_new = {c.id: (c, *_award_source_of(c)) for c in loaded.new_rows}
     olds = [Old(item_id=i, source=b[0]) for i, b in built_old.items()]
     plan = classify(olds, [b[1] for b in built_new.values()],
-                    exact_allowed=loaded.exact_allowed)
+                    exact_allowed=loaded.exact_allowed,
+                    claimed=[_award_source_of(c)[0] for c in loaded.claimed_rows.values()])
+    state = _settled(state, plan, represented, current)
+    if scoring is not None:
+        scoring.scoring_reconciliation_pending = state != UP_TO_DATE
     names = await _document_names(session, tender_id, (
         e.extraction_id
         for rows in (*loaded.old_rows.values(), *loaded.new_rows) for e in rows.evidence))
@@ -839,8 +884,9 @@ async def _awards_section(
         ],
         new=[AwardNew(match_label=MATCH_LABELS[NEW], source=new_summary(n.id))
              for n in plan.new],
+        already_applied_count=len(loaded.claimed_rows),
         **counts_only)
-    return _Built(section, {**base, **_plan_part(loaded, plan, plan_pairs)})
+    return _Built(section, {**_base(state, represented), **_plan_part(loaded, plan, plan_pairs)})
 
 
 # --------------------------------------------------------------------------- #
@@ -864,12 +910,31 @@ async def _section_counts(
             "current_source_count": int(current_count or 0)}
 
 
+def _base(state: str, represented: set[uuid.UUID]) -> dict[str, Any]:
+    return {"state": state, "represented": sorted(map(str, represented))}
+
+
+def _settled(
+    state: str, plan: Plan, represented: set[uuid.UUID], current: RequirementExtractionRun
+) -> str:
+    """Una seccio en curs sense cap feina i amb totes les fonts a la run desti: al dia."""
+    if state == IN_PROGRESS and represented == {current.id} and not any(
+        plan.counts().model_dump().values()
+    ):
+        return UP_TO_DATE
+    return state
+
+
 def _plan_part(loaded: _Loaded, plan: Plan, pairs: list[list[Any]]) -> dict[str, Any]:
-    """Tot el que, si canvia, deixa el pla desfasat. Sense marques de temps."""
+    """Tot el que, si canvia, deixa el pla desfasat. Sense marques de temps.
+
+    `items` inclou TOTS els elements extrets (tambe els ja reenllaçats): la seva
+    revisio i la seva font primaria activa.
+    """
     return {
         "exact_allowed": loaded.exact_allowed,
         "items": sorted(
-            [str(i), item.revision, str(loaded.old_rows[i].id)]
+            [str(i), item.revision, str(loaded.rows[i].id)]
             for i, item in loaded.items.items()
         ),
         "pairs": sorted(pairs, key=lambda p: json.dumps(p, sort_keys=True, default=str)),
@@ -884,7 +949,21 @@ def _plan_part(loaded: _Loaded, plan: Plan, pairs: list[list[Any]]) -> dict[str,
     }
 
 
-def section_state(represented: set[uuid.UUID], current: uuid.UUID | None) -> str:
+def section_state(
+    represented: set[uuid.UUID],
+    current: uuid.UUID | None,
+    baseline: set[uuid.UUID] | None = None,
+) -> str:
+    """Estat d'una seccio. `baseline`: runs d'origen desades d'una reconciliacio
+    oberta cap a `current`. Nomes aquesta explica fonts de mes d'una run, i nomes
+    si totes son de la base o de la desti; qualsevol altra barreja es MIXED."""
+    if (
+        baseline
+        and current is not None
+        and represented
+        and represented <= baseline | {current}
+    ):
+        return IN_PROGRESS
     if len(represented) > 1:
         return MIXED
     if current is None:
@@ -900,7 +979,7 @@ def overall_state(sections: Iterable[str], current: uuid.UUID | None) -> str:
         return MIXED
     if current is None:
         return NO_CURRENT_RUN
-    for state in (NEW_EXTRACTION, UP_TO_DATE):
+    for state in (IN_PROGRESS, NEW_EXTRACTION, UP_TO_DATE):
         if state in states:
             return state
     return NOT_STARTED
@@ -915,15 +994,21 @@ async def preview(
     requirement_runs = await review_runs.represented_requirement_run_ids(
         session, company_id, tender_id)
     award_runs = await review_runs.represented_award_run_ids(session, company_id, tender_id)
-    requirement_state = section_state(requirement_runs, current_id)
-    award_state = section_state(award_runs, current_id)
+    reconciliation = await review_runs.open_reconciliation(
+        session, company_id, tender_id, current_id)
+    requirement_state = section_state(
+        requirement_runs, current_id,
+        review_runs.section_baseline(reconciliation, ReviewItemKind.REQUIREMENT))
+    award_state = section_state(
+        award_runs, current_id,
+        review_runs.section_baseline(reconciliation, ReviewItemKind.AWARD_CRITERION))
     requirements = await _requirements_section(
         session, company_id, tender_id, requirement_state, requirement_runs, current)
     awards = await _awards_section(
         session, company_id, tender_id, award_state, award_runs, current)
-    state = overall_state((requirement_state, award_state), current_id)
+    state = overall_state((requirements.section.state, awards.section.state), current_id)
     plan_hash = None
-    if state == NEW_EXTRACTION:
+    if state in (NEW_EXTRACTION, IN_PROGRESS):
         plan_hash = _digest({
             "company_id": str(company_id),
             "tender_id": str(tender_id),
@@ -939,4 +1024,41 @@ async def preview(
         plan_hash=plan_hash,
         requirements=requirements.section,
         awards=awards.section,
+        reconciliation=await reconciliation_summary(session, company_id, tender_id, current_id),
+    )
+
+
+RECONCILIATION_STATE_LABELS = {
+    ReviewReconciliationState.IN_PROGRESS: "En curs",
+    ReviewReconciliationState.NEEDS_REVIEW: "Cal revisar",
+    ReviewReconciliationState.COMPLETED: "Completada",
+}
+
+
+async def reconciliation_summary(
+    session: AsyncSession,
+    company_id: uuid.UUID,
+    tender_id: uuid.UUID,
+    current_id: uuid.UUID | None,
+) -> ReconciliationSummary | None:
+    """La reconciliacio d'aquesta empresa cap a la run vigent, sigui quin sigui l'estat."""
+    if current_id is None:
+        return None
+    row = await session.scalar(
+        sa.select(ReviewReconciliation).where(
+            ReviewReconciliation.company_id == company_id,
+            ReviewReconciliation.tender_id == tender_id,
+            ReviewReconciliation.target_run_id == current_id,
+        )
+    )
+    if row is None:
+        return None
+    state = ReviewReconciliationState(row.state)
+    return ReconciliationSummary(
+        reconciliation_id=row.id,
+        state=state.value,
+        state_label=RECONCILIATION_STATE_LABELS[state],
+        target_run_id=row.target_run_id,
+        applied_plan_hash=row.applied_plan_hash,
+        exact_applied_count=row.exact_applied_count,
     )
