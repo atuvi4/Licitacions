@@ -84,6 +84,10 @@ export default function TenderReviewPage() {
       onCreated: async () => {
         await Promise.all([reloadList(), reloadOverview()]);
       },
+      // Les relacions no canvien cap recompte del resum: només cal la llista.
+      onRelationsChanged: async () => {
+        await reloadList();
+      },
     };
   }, [companyId, tenderId, membership?.role, user?.id, replace, reloadList, reloadOverview]);
 

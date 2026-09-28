@@ -11,7 +11,12 @@ import {
   type FilterOption,
   NO_FILTERS,
   type RequirementFilters,
+  archiveRelation,
+  type CanonicalRelation,
   duplicateOf,
+  partialMatchOf,
+  relatedTo,
+  relationFailure,
   restatementOf,
   filterOptions,
   filterRequirements,
@@ -72,6 +77,8 @@ function RequirementRow({ item, onOpen }: { item: CanonicalRequirement; onOpen: 
   const values = item.values.map(formatValue);
   const duplicate = duplicateOf(item);
   const restated = duplicate ? undefined : restatementOf(item);
+  const partial = duplicate || restated ? undefined : partialMatchOf(item);
+  const related = duplicate || restated || partial ? undefined : relatedTo(item);
   return (
     <li>
       <button
@@ -97,11 +104,15 @@ function RequirementRow({ item, onOpen }: { item: CanonicalRequirement; onOpen: 
             </>
           )}
         </span>
-        {(duplicate || restated) && (
+        {(duplicate || restated || partial || related) && (
           <span className="mt-1 block text-caption text-muted">
             {duplicate
               ? `Duplicat de «${duplicate.other_item_title ?? "un altre requisit"}»`
-              : `Repeteix «${restated?.other_item_title ?? "un altre requisit"}»`}
+              : restated
+                ? `Repeteix «${restated.other_item_title ?? "un altre requisit"}»`
+                : partial
+                  ? `Cobert parcialment per «${partial.other_item_title ?? "un altre requisit"}»`
+                  : `Relacionat amb «${related?.other_item_title ?? "un altre requisit"}»`}
           </span>
         )}
         <span className="mt-1.5 flex flex-wrap gap-1.5">
@@ -136,16 +147,111 @@ export interface ReviewContext {
   onGone: (itemId: string) => Promise<void>;
   /** Un requisit manual nou: es tornen a llegir la llista i el resum. */
   onCreated: (item: CanonicalRequirement) => Promise<void>;
+  /** Una relació creada o treta: es torna a llegir la llista (les relacions hi viuen). */
+  onRelationsChanged: () => Promise<void>;
+}
+
+/**
+ * Les relacions d'un requisit: etiqueta, l'altre requisit (s'hi pot anar) i la
+ * nota. Qui pot revisar també les pot treure: arxiu tou, confirmat abans.
+ */
+function RelationList({
+  relations,
+  review,
+  onOpenRelated,
+}: {
+  relations: CanonicalRelation[];
+  review?: ReviewContext;
+  onOpenRelated: (id: string) => void;
+}) {
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<{ tone: "ok" | "problem"; text: string } | null>(null);
+
+  async function remove(relationId: string) {
+    if (!review || pending) return;
+    setPending(true);
+    setMessage(null);
+    try {
+      const result = await archiveRelation(review.companyId, review.tenderId, relationId);
+      setConfirming(null);
+      setMessage({ tone: "ok", text: result.changed ? "Relació treta." : "Aquesta relació ja estava treta." });
+      await review.onRelationsChanged();
+    } catch (caught) {
+      setMessage({ tone: "problem", text: relationFailure(caught) });
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (relations.length === 0 && !message) return null;
+
+  return (
+    <section aria-labelledby="detall-relacions">
+      <h3 id="detall-relacions" className={KICKER}>
+        Relacions
+      </h3>
+      {message && (
+        <p
+          role={message.tone === "problem" ? "alert" : "status"}
+          className={message.tone === "problem" ? "mt-1.5 text-[13px] text-danger" : "mt-1.5 text-[13px] text-success"}
+        >
+          {message.text}
+        </p>
+      )}
+      <ul className="mt-1.5 space-y-2">
+        {relations.map((relation) => (
+          <li key={`${relation.relation_id}-${relation.direction}`} className="text-body">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <span className="text-muted">{relation.relation_label}: </span>
+                <button
+                  type="button"
+                  className="text-left text-brand-strong underline decoration-1 underline-offset-2 hover:text-accent-800"
+                  onClick={() => onOpenRelated(relation.other_item_id)}
+                >
+                  {relation.other_item_title ?? "Element sense títol"}
+                </button>
+                {relation.note && <p className="text-caption text-muted">{relation.note}</p>}
+              </div>
+              {review?.canWrite && confirming !== relation.relation_id && (
+                <Button size="sm" variant="ghost" disabled={pending} onClick={() => setConfirming(relation.relation_id)}>
+                  Treure relació
+                </Button>
+              )}
+            </div>
+            {confirming === relation.relation_id && (
+              <div role="group" aria-label="Confirmar que es treu la relació" className="mt-1.5 space-y-1.5 border border-border-strong px-2.5 py-2">
+                <p className="text-[13px] leading-5 text-ink">
+                  Es treu només aquesta relació. El requisit i el seu historial no s&apos;eliminaran.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="secondary" loading={pending} disabled={pending} onClick={() => void remove(relation.relation_id)}>
+                    Treu la relació
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={pending} onClick={() => setConfirming(null)}>
+                    Cancel·la
+                  </Button>
+                </div>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 function RequirementDetail({
   item,
   review,
+  candidates,
   onOpenRelated,
   registerCloseGuard,
 }: {
   item: CanonicalRequirement;
   review?: ReviewContext;
+  candidates: CanonicalRequirement[];
   onOpenRelated: (id: string) => void;
   registerCloseGuard: (guard: (() => boolean) | null) => void;
 }) {
@@ -164,6 +270,8 @@ function RequirementDetail({
           onStale={() => review.onStale(item.canonical_id)}
           onGone={() => review.onGone(item.canonical_id)}
           registerCloseGuard={registerCloseGuard}
+          candidates={candidates}
+          onRelationsChanged={review.onRelationsChanged}
         />
       )}
 
@@ -231,28 +339,8 @@ function RequirementDetail({
         )}
       </section>
 
-      {relations.length > 0 && (
-        <section aria-labelledby="detall-relacions">
-          <h3 id="detall-relacions" className={KICKER}>
-            Relacions
-          </h3>
-          <ul className="mt-1.5 space-y-2">
-            {relations.map((relation) => (
-              <li key={`${relation.relation_id}-${relation.direction}`} className="text-body">
-                <span className="text-muted">{relation.relation_label}: </span>
-                <button
-                  type="button"
-                  className="text-left text-brand-strong underline decoration-1 underline-offset-2 hover:text-accent-800"
-                  onClick={() => onOpenRelated(relation.other_item_id)}
-                >
-                  {relation.other_item_title ?? "Element sense títol"}
-                </button>
-                {relation.note && <p className="text-caption text-muted">{relation.note}</p>}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {/* Sempre muntat: si es treu l'última relació, el missatge de confirmació ha de seguir-hi. */}
+      <RelationList relations={relations} review={review} onOpenRelated={onOpenRelated} />
 
       {review && (
         <ReviewHistory
@@ -389,7 +477,13 @@ export function RequirementReviewList({ items, review }: { items: CanonicalRequi
       )}
       <Drawer open={open !== null} title={open?.title ?? ""} onClose={close}>
         {open && (
-          <RequirementDetail item={open} review={review} onOpenRelated={openRelated} registerCloseGuard={registerCloseGuard} />
+          <RequirementDetail
+            item={open}
+            review={review}
+            candidates={items}
+            onOpenRelated={openRelated}
+            registerCloseGuard={registerCloseGuard}
+          />
         )}
       </Drawer>
       {review?.canWrite && (

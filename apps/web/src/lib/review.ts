@@ -320,6 +320,16 @@ export function restatementOf(item: CanonicalRequirement): CanonicalRelation | u
   return item.visible_relations.find((r) => r.direction === "outgoing" && r.relation_type === "restatement_of");
 }
 
+/** Aquest requisit està cobert parcialment per un altre (relació sortint). */
+export function partialMatchOf(item: CanonicalRequirement): CanonicalRelation | undefined {
+  return item.visible_relations.find((r) => r.direction === "outgoing" && r.relation_type === "partial_match_of");
+}
+
+/** `related_to` és simètrica: val en qualsevol dels dos sentits, i cap no és el «principal». */
+export function relatedTo(item: CanonicalRequirement): CanonicalRelation | undefined {
+  return item.visible_relations.find((r) => r.relation_type === "related_to");
+}
+
 export function filterRequirements(items: CanonicalRequirement[], filters: RequirementFilters): CanonicalRequirement[] {
   const words = normalise(filters.text).split(/\s+/).filter(Boolean);
   return items.filter(
@@ -557,4 +567,72 @@ export interface ReviewHistoryEntry {
   created_at: string;
   /** Resum de l'acció (camps tocats, estat abans/després). Mai s'ensenya cru. */
   changes?: Record<string, unknown>;
+}
+
+// --------------------------------------------------------------------------- //
+// Relacions entre requisits                                                     //
+// --------------------------------------------------------------------------- //
+
+/** Els quatre tipus que exposa la interfície (ni `parent_of` ni `supersedes`). */
+export type RequirementRelationType = "duplicate_of" | "restatement_of" | "partial_match_of" | "related_to";
+
+export const RELATION_TYPES: Array<{
+  value: RequirementRelationType;
+  label: string;
+  help: string;
+  /** La frase de direcció: «{aquest} … «{l'altre}»». */
+  sentence: (current: string, target: string) => string;
+}> = [
+  {
+    value: "duplicate_of",
+    label: "Duplicat de",
+    help: "És la mateixa obligació extreta més d'una vegada. Es plegarà dins de l'altre a la llista.",
+    sentence: (current, target) => `«${current}» és un duplicat de «${target}».`,
+  },
+  {
+    value: "restatement_of",
+    label: "També apareix com",
+    help: "El plec expressa aquesta mateixa obligació en un altre lloc. Tots dos continuen a la llista.",
+    sentence: (current, target) => `«${current}» repeteix «${target}», dit en un altre lloc del plec.`,
+  },
+  {
+    value: "partial_match_of",
+    label: "Cobert parcialment per",
+    help: "Els dos requisits se solapen, però cap no substitueix completament l'altre.",
+    sentence: (current, target) => `«${current}» està cobert parcialment per «${target}».`,
+  },
+  {
+    value: "related_to",
+    label: "Relacionat amb",
+    help: "Hi ha relació entre els requisits, però no són equivalents.",
+    sentence: (current, target) => `«${current}» està relacionat amb «${target}», sense ser equivalents.`,
+  },
+];
+
+/** Crea una relació dirigida `from → to`. No toca cap element ni cap revisió. */
+export function createRelation(
+  companyId: string,
+  tenderId: string,
+  body: { from_item_id: string; to_item_id: string; relation_type: RequirementRelationType; note: string | null },
+): Promise<CanonicalRelation> {
+  return api.post<CanonicalRelation>(reviewPath(companyId, tenderId, "/relations"), body);
+}
+
+/** Arxiu tou i idempotent: mai no s'esborra res. */
+export function archiveRelation(
+  companyId: string,
+  tenderId: string,
+  relationId: string,
+): Promise<{ changed: boolean; relation: CanonicalRelation }> {
+  return api.post(reviewPath(companyId, tenderId, `/relations/${relationId}/archive`), {});
+}
+
+/** Errors d'una relació, amb una frase cadascun. El 422 del backend ja és català i segur. */
+export function relationFailure(caught: unknown): string {
+  const status = caught instanceof ApiError ? caught.status : undefined;
+  if (status === 409) return "Aquesta relació ja existeix (potser en el sentit contrari): la tens a la llista de relacions.";
+  if (status === 403) return "No tens permisos per modificar aquesta revisió.";
+  if (status === 404) return "Un dels requisits ja no està disponible.";
+  if (status === 422 && caught instanceof ApiError) return caught.message || "Aquesta relació no és vàlida.";
+  return "No s'ha pogut desar. Torna-ho a provar d'aquí a un moment.";
 }

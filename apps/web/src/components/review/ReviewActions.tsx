@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { CorrectionEditor } from "@/components/review/CorrectionEditor";
 import { CitationPreview, EvidencePicker } from "@/components/review/EvidencePicker";
+import { RelationEditor } from "@/components/review/RelationEditor";
 import { Button, ResultNotice, StatusPill, Textarea } from "@/components/ui";
 import {
   type ActionFailure,
@@ -74,6 +75,10 @@ export interface ReviewActionsProps {
   onGone: () => Promise<void>;
   /** L'editor de correccions pot aturar el tancament del calaix si hi ha canvis. */
   registerCloseGuard?: (guard: (() => boolean) | null) => void;
+  /** Requisits entre els quals es pot triar l'altre extrem d'una relació. */
+  candidates?: CanonicalRequirement[];
+  /** Les relacions viuen a la llista: després de crear-ne una, es torna a llegir. */
+  onRelationsChanged?: () => Promise<void>;
 }
 
 /**
@@ -92,10 +97,13 @@ export function ReviewActions({
   onStale,
   onGone,
   registerCloseGuard,
+  candidates = [],
+  onRelationsChanged,
 }: ReviewActionsProps) {
   const [form, setForm] = useState<keyof typeof FORMS | null>(null);
   const [editing, setEditing] = useState(false);
   const [linking, setLinking] = useState(false);
+  const [relating, setRelating] = useState(false);
   const [chosen, setChosen] = useState<CitationDraft | null>(null);
   const [linkPending, setLinkPending] = useState(false);
   const [linkProblem, setLinkProblem] = useState<string | null>(null);
@@ -113,6 +121,7 @@ export function ReviewActions({
     setForm(null);
     setEditing(false);
     setLinking(false);
+    setRelating(false);
     setChosen(null);
     setLinkProblem(null);
     setText("");
@@ -317,7 +326,29 @@ export function ReviewActions({
             </div>
           )}
 
-          {!active && !editing && !linking && (
+          {relating && (
+            <RelationEditor
+              item={item}
+              candidates={candidates}
+              companyId={companyId}
+              tenderId={tenderId}
+              onClose={() => {
+                setRelating(false);
+                setReturnTo("relate");
+              }}
+              onRefresh={async () => {
+                await onRelationsChanged?.();
+              }}
+              onSaved={async (message) => {
+                setRelating(false);
+                setReturnTo("relate");
+                setDone(message);
+                await onRelationsChanged?.();
+              }}
+            />
+          )}
+
+          {!active && !editing && !linking && !relating && (
             <div className="mt-2.5 flex flex-wrap gap-2" role="group" aria-label="Accions de revisió">
               <Button size="sm" variant="primary" loading={pending === "confirm"} disabled={busy} onClick={() => void run("confirm")}>
                 Confirmar
@@ -360,6 +391,21 @@ export function ReviewActions({
               >
                 Afegir evidència
               </Button>
+              {onRelationsChanged && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy}
+                  data-opener="relate"
+                  onClick={() => {
+                    setDone(null);
+                    setFailure(null);
+                    setRelating(true);
+                  }}
+                >
+                  Relacionar
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="ghost"

@@ -201,7 +201,7 @@ describe("Revisió de la licitació", () => {
     expect(provenance).not.toBe(status);
     // Manual no vol dir dubtós: el mateix to neutre que l'extret.
     expect(provenance.dataset.level).toBe("neutral");
-    const automated = screen.getByRole("button", { name: /Troncal SIP - numeració múltiple DDI\/DID/ });
+    const automated = screen.getByRole("button", { name: /^Troncal SIP - numeració múltiple DDI\/DID/ });
     expect((within(automated).getByText("Extret automàticament").closest("[data-level]") as HTMLElement).dataset.level).toBe("neutral");
     // No depèn del color: cada insígnia porta el seu rètol per als lectors de pantalla.
     expect(within(m15).getByText("Origen:")).toBeTruthy();
@@ -253,7 +253,7 @@ describe("Revisió de la licitació", () => {
     expect(within(detail).queryByText(/Duplicat/)).toBeNull();
     // Cada un és a la llista pel seu compte: res plegat.
     const list = screen.getByRole("list", { name: "Requisits" });
-    expect(within(list).getByRole("button", { name: /Troncal SIP - numeració múltiple DDI\/DID/ })).toBeTruthy();
+    expect(within(list).getByRole("button", { name: /^Troncal SIP - numeració múltiple DDI\/DID/ })).toBeTruthy();
     expect(within(list).getByRole("button", { name: /Accés directe a extensió \(DDI\)/ })).toBeTruthy();
   });
 
