@@ -39,9 +39,11 @@ from app.schemas.review import (
     ReviewOverview,
     ReviewStartResult,
 )
+from app.schemas.review_reconciliation import ReconciliationPreview
 from app.services import audit
 from app.services import review_actions as actions
 from app.services import review_awards as awards
+from app.services import review_reconciliation as reconciliation
 from app.services import review_relations as relations
 from app.services import review_view as service
 
@@ -76,6 +78,21 @@ async def start_review(tender_id: uuid.UUID, session: SessionDep, ctx: CompanyCt
 async def review_overview(tender_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
     await service.load_visible_tender(session, ctx.company_id, tender_id)
     return await service.overview(session, company_id=ctx.company_id, tender_id=tender_id)
+
+
+@router.get(
+    "/reconciliation",
+    response_model=ReconciliationPreview,
+    summary="Previsualitza la reconciliacio amb l'extraccio vigent",
+)
+async def review_reconciliation(tender_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
+    """Nomes lectura: que caldria fer si la revisio representa una run anterior.
+
+    No reenllaça, no materialitza i no audita res. `start` continua bloquejat
+    fins que hi hagi una reconciliacio aplicada.
+    """
+    await service.load_visible_tender(session, ctx.company_id, tender_id)
+    return await reconciliation.preview(session, company_id=ctx.company_id, tender_id=tender_id)
 
 
 @router.get(

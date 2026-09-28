@@ -40,13 +40,24 @@ async def current_run_id(session: AsyncSession, tender_id: uuid.UUID) -> uuid.UU
     return run.id if run is not None else None
 
 
-def _represented(
-    company_id: uuid.UUID, tender_id: uuid.UUID, kind: ReviewItemKind, source_column, row
+#: Per tipus d'element: la columna de la font i la taula extreta on apunta.
+_SOURCES = {
+    ReviewItemKind.REQUIREMENT: (ReviewItemSource.requirement_id, Requirement),
+    ReviewItemKind.AWARD_CRITERION: (ReviewItemSource.award_criterion_id, AwardCriterion),
+}
+
+
+def active_primary_links(
+    company_id: uuid.UUID, tender_id: uuid.UUID, kind: ReviewItemKind, *columns
 ) -> sa.Select:
-    """Runs de les fonts PRIMARIES actives dels elements actius d'aquesta empresa."""
+    """Elements actius d'aquesta empresa amb la seva font PRIMARIA extreta activa.
+
+    L'unica definicio de "font canonica vella": la fan servir la guarda de
+    `start` i la previsualitzacio de reconciliacio. Els manuals no hi surten.
+    """
+    source_column, row = _SOURCES[kind]
     return (
-        sa.select(row.run_id)
-        .distinct()
+        sa.select(*columns)
         .select_from(ReviewItem)
         .join(ReviewItemSource, ReviewItemSource.item_id == ReviewItem.id)
         .join(row, row.id == source_column)
@@ -63,30 +74,25 @@ def _represented(
     )
 
 
+async def _represented(
+    session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID, kind: ReviewItemKind
+) -> set[uuid.UUID]:
+    """Runs de les fonts PRIMARIES actives dels elements actius d'aquesta empresa."""
+    _column, row = _SOURCES[kind]
+    query = active_primary_links(company_id, tender_id, kind, row.run_id).distinct()
+    return {run_id for run_id in (await session.scalars(query)).all() if run_id is not None}
+
+
 async def represented_requirement_run_ids(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> set[uuid.UUID]:
-    query = _represented(
-        company_id,
-        tender_id,
-        ReviewItemKind.REQUIREMENT,
-        ReviewItemSource.requirement_id,
-        Requirement,
-    )
-    return {run_id for run_id in (await session.scalars(query)).all() if run_id is not None}
+    return await _represented(session, company_id, tender_id, ReviewItemKind.REQUIREMENT)
 
 
 async def represented_award_run_ids(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> set[uuid.UUID]:
-    query = _represented(
-        company_id,
-        tender_id,
-        ReviewItemKind.AWARD_CRITERION,
-        ReviewItemSource.award_criterion_id,
-        AwardCriterion,
-    )
-    return {run_id for run_id in (await session.scalars(query)).all() if run_id is not None}
+    return await _represented(session, company_id, tender_id, ReviewItemKind.AWARD_CRITERION)
 
 
 def needs_reconciliation(represented: Iterable[uuid.UUID], current: uuid.UUID | None) -> bool:
