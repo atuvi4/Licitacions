@@ -837,6 +837,17 @@ function TenderDetail() {
         // redissenya): si es fan més amples que un telèfon, es desplacen aquí
         // dins i no eixamplen la pàgina.
         <div className="min-w-0 space-y-4 overflow-x-auto">
+          <Card>
+            <CardHeader
+              title="Revisió de la licitació"
+              description="Requisits i criteris d'adjudicació tal com els revisa la vostra empresa: què puntua, què cal revisar i d'on surt cada cosa."
+              action={
+                <LinkButton href={`/licitacions/${tenderId}/revisio`} variant="primary" size="sm">
+                  Obre la revisió
+                </LinkButton>
+              }
+            />
+          </Card>
           <RequirementAnalysisSection
             tenderId={tenderId}
             companyId={companyId}
