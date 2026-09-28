@@ -306,6 +306,20 @@ function haystack(item: CanonicalRequirement): string {
   );
 }
 
+/**
+ * Un duplicat d'extracció (`duplicate_of` sortint) es plega dins del seu
+ * canònic a la llista per defecte: és la mateixa frase del plec llegida dues
+ * vegades. Una reiteració (`restatement_of`) NO es plega: el plec ho diu de debò
+ * en un altre lloc, i es mostra com a tal.
+ */
+export function duplicateOf(item: CanonicalRequirement): CanonicalRelation | undefined {
+  return item.folded_relations.find((r) => r.direction === "outgoing" && r.relation_type === "duplicate_of");
+}
+
+export function restatementOf(item: CanonicalRequirement): CanonicalRelation | undefined {
+  return item.visible_relations.find((r) => r.direction === "outgoing" && r.relation_type === "restatement_of");
+}
+
 export function filterRequirements(items: CanonicalRequirement[], filters: RequirementFilters): CanonicalRequirement[] {
   const words = normalise(filters.text).split(/\s+/).filter(Boolean);
   return items.filter(

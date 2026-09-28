@@ -10,6 +10,8 @@ import {
   type FilterOption,
   NO_FILTERS,
   type RequirementFilters,
+  duplicateOf,
+  restatementOf,
   filterOptions,
   filterRequirements,
   formatValue,
@@ -67,6 +69,8 @@ function FilterSelect({
 function RequirementRow({ item, onOpen }: { item: CanonicalRequirement; onOpen: () => void }) {
   const where = whereLine(item.documents, item.pages);
   const values = item.values.map(formatValue);
+  const duplicate = duplicateOf(item);
+  const restated = duplicate ? undefined : restatementOf(item);
   return (
     <li>
       <button
@@ -92,6 +96,13 @@ function RequirementRow({ item, onOpen }: { item: CanonicalRequirement; onOpen: 
             </>
           )}
         </span>
+        {(duplicate || restated) && (
+          <span className="mt-1 block text-caption text-muted">
+            {duplicate
+              ? `Duplicat de «${duplicate.other_item_title ?? "un altre requisit"}»`
+              : `Repeteix «${restated?.other_item_title ?? "un altre requisit"}»`}
+          </span>
+        )}
         <span className="mt-1.5 flex flex-wrap gap-1.5">
           <VerificationBadge item={item} />
           <ProvenanceBadge item={item} />
@@ -263,19 +274,26 @@ function RequirementDetail({
 export function RequirementReviewList({ items, review }: { items: CanonicalRequirement[]; review?: ReviewContext }) {
   const [filters, setFilters] = useState<RequirementFilters>(NO_FILTERS);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  // Els duplicats d'extracció es pleguen per defecte; el detall i l'auditoria els conserven.
+  const folded = useMemo(() => items.filter((item) => duplicateOf(item)), [items]);
+  const listed = useMemo(
+    () => (showDuplicates ? items : items.filter((item) => !duplicateOf(item))),
+    [items, showDuplicates],
+  );
   // Si una correcció deixa un filtre actiu sense cap element, l'opció no pot
   // desaparèixer: el desplegable diria «Tots» mentre la llista continua filtrada.
   const seen = useRef<Record<string, string>>({});
   const available = useMemo(() => {
-    const found = filterOptions(items);
+    const found = filterOptions(listed);
     for (const list of Object.values(found)) for (const option of list) seen.current[option.value] = option.label;
     return found;
-  }, [items]);
+  }, [listed]);
   const keep = (options: FilterOption[], value: string): FilterOption[] =>
     !value || options.some((option) => option.value === value)
       ? options
       : [...options, { value, label: seen.current[value] ?? "Filtre actual", count: 0 }];
-  const shown = useMemo(() => filterRequirements(items, filters), [items, filters]);
+  const shown = useMemo(() => filterRequirements(listed, filters), [listed, filters]);
   const open = items.find((item) => item.canonical_id === openId) ?? null;
   // Un editor amb canvis sense desar pot aturar el tancament (i el canvi d'element).
   const guard = useRef<(() => boolean) | null>(null);
@@ -295,7 +313,22 @@ export function RequirementReviewList({ items, review }: { items: CanonicalRequi
 
   return (
     <Card>
-      <CardHeader title="Requisits" description={`Mostrant ${shown.length} de ${items.length}`} />
+      <CardHeader
+        title="Requisits"
+        description={
+          `Mostrant ${shown.length} de ${items.length}` +
+          (folded.length && !showDuplicates
+            ? ` · ${folded.length} ${folded.length === 1 ? "duplicat plegat" : "duplicats plegats"}`
+            : "")
+        }
+        action={
+          folded.length > 0 ? (
+            <Button size="sm" variant="ghost" aria-pressed={showDuplicates} onClick={() => setShowDuplicates((value) => !value)}>
+              {showDuplicates ? "Amaga els duplicats" : `Mostra també els duplicats (${folded.length})`}
+            </Button>
+          ) : undefined
+        }
+      />
       <form
         role="search"
         aria-label="Filtra els requisits"
