@@ -18,6 +18,7 @@
 
 import { DECISION_ROLES } from "@/lib/labels";
 import type { DocumentAnalysisStatus, TenderDocumentFileSummary } from "@/lib/tenders";
+import { browserUuid } from "@/lib/uuid";
 
 /** Qui pot obrir un expedient a mà. Els mateixos que decideixen. */
 export function canImportTender(role: string | null | undefined): boolean {
@@ -35,7 +36,7 @@ export interface WizardTokens {
 }
 
 export function newTokens(): WizardTokens {
-  return { tender: crypto.randomUUID(), buyer: crypto.randomUUID() };
+  return { tender: browserUuid(), buyer: browserUuid() };
 }
 
 export interface Step1Form {

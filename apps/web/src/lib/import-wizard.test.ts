@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   EMPTY_STEP1,
@@ -166,5 +166,21 @@ describe("mida", () => {
     expect(fileSize(2048)).toBe("2 kB");
     expect(fileSize(3 * 1024 * 1024)).toBe("3.0 MB");
     expect(fileSize(null)).toBe("—");
+  });
+});
+
+describe("tokens per HTTP a la xarxa local", () => {
+  it("sense randomUUID (context no segur) continuen sent UUID v4 diferents", () => {
+    const real = globalThis.crypto;
+    vi.stubGlobal("crypto", { getRandomValues: real.getRandomValues.bind(real) });
+    try {
+      const value = newTokens();
+      const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+      expect(value.tender).toMatch(v4);
+      expect(value.buyer).toMatch(v4);
+      expect(value.tender).not.toBe(value.buyer);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

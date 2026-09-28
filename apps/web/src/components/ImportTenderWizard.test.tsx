@@ -391,3 +391,26 @@ describe("tipus de document", () => {
     expect(screen.getByText(/Plec administratiu/)).toBeTruthy();
   });
 });
+
+/* ----- HTTP a la xarxa local ----------------------------------------------- */
+
+describe("sense crypto.randomUUID (HTTP amb la IP de la xarxa local)", () => {
+  it("l'assistent s'obre, crea la licitació amb un token v4 i posa fitxers en espera", async () => {
+    const real = globalThis.crypto;
+    vi.stubGlobal("crypto", { getRandomValues: real.getRandomValues.bind(real) });
+    try {
+      await open();
+      await fillTitleAndContinue();
+
+      const body = post.mock.calls[0][1] as Record<string, unknown>;
+      expect(body.client_token).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      await pickFiles(["PCAP.pdf", "application/pdf"], ["PPT.pdf", "application/pdf"]);
+      expect(screen.getByLabelText("Tipus de PCAP.pdf")).toBeTruthy();
+      expect(screen.getByLabelText("Tipus de PPT.pdf")).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

@@ -26,6 +26,7 @@ import {
   type WizardTokens,
 } from "@/lib/import-wizard";
 import type { BuyerSummary, TenderDetail, TenderDocumentFileSummary } from "@/lib/tenders";
+import { browserUuid } from "@/lib/uuid";
 
 interface CreateResult {
   created: boolean;
@@ -179,7 +180,7 @@ export function ImportTenderWizard({
     setRows((current) => [
       ...current,
       ...Array.from(files).map((file) => ({
-        key: `${file.name}-${file.size}-${crypto.randomUUID()}`,
+        key: `${file.name}-${file.size}-${browserUuid()}`,
         name: file.name,
         size: file.size,
         file,
