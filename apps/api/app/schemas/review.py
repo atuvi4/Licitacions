@@ -520,6 +520,12 @@ class ReviewOverview(BaseModel):
     needs_review_count: int
     verification_counts: list[CountLabel]
     provenance_counts: list[CountLabel]
+    #: La revisio representa una altra run (o mes d'una) que la vigent: `start`
+    #: refusa materialitzar fins que es reconciliï. Nomes ids, cap recompte.
+    reconciliation_required: bool = False
+    current_run_id: uuid.UUID | None = None
+    represented_requirement_run_ids: list[uuid.UUID] = Field(default_factory=list)
+    represented_award_run_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class ReviewStartResult(BaseModel):

@@ -49,11 +49,7 @@ from app.models.enums import (
     ReviewVerification,
 )
 from app.models.provenance import TenderSourceRef
-from app.models.requirements import (
-    AwardCriterion,
-    AwardCriterionEvidence,
-    RequirementExtractionRun,
-)
+from app.models.requirements import AwardCriterion, AwardCriterionEvidence
 from app.models.review import ReviewItem, ReviewItemRelation, ReviewItemRevision, ReviewItemSource
 from app.models.tenders import TenderDocument
 from app.schemas.review import (
@@ -66,6 +62,7 @@ from app.schemas.review import (
     CanonicalAwardCriterion,
     CanonicalEvidence,
 )
+from app.services.review_runs import current_run_id, ensure_reconciled, represented_award_run_ids
 from app.services.review_view import (
     EVIDENCE_CITED,
     PROVENANCE_LABELS,
@@ -179,12 +176,12 @@ async def current_award_criteria(
     session: AsyncSession, tender_id: uuid.UUID
 ) -> list[AwardCriterion]:
     """Els criteris persistits de la run VIGENT. Els de runs velles no hi entren."""
-    run_id = await session.scalar(
-        sa.select(RequirementExtractionRun.id).where(
-            RequirementExtractionRun.tender_id == tender_id,
-            RequirementExtractionRun.is_current.is_(True),
-        )
-    )
+    return await _criteria_of_run(session, await current_run_id(session, tender_id))
+
+
+async def _criteria_of_run(
+    session: AsyncSession, run_id: uuid.UUID | None
+) -> list[AwardCriterion]:
     if run_id is None:
         return []
     return list(
@@ -230,7 +227,10 @@ async def start_award_review(
 
     Neixen SENSE paper: el paper el decideix el revisor, no s'endevina.
     """
-    criteria = await current_award_criteria(session, tender_id)
+    run_id = await current_run_id(session, tender_id)
+    # Guarda de rerun: independent de la dels requisits, abans de cap escriptura.
+    ensure_reconciled(await represented_award_run_ids(session, company_id, tender_id), run_id)
+    criteria = await _criteria_of_run(session, run_id)
     present = await _present_criterion_ids(session, company_id, (c.id for c in criteria))
     missing = [c for c in criteria if c.id not in present]
 

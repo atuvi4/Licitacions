@@ -64,6 +64,12 @@ from app.schemas.review import (
 )
 from app.services.manual_requirement import effective_requirements
 from app.services.review_relations import relations_of
+from app.services.review_runs import (
+    ensure_reconciled,
+    needs_reconciliation,
+    represented_award_run_ids,
+    represented_requirement_run_ids,
+)
 from app.tenders.visibility import visible_to_company
 
 # --------------------------------------------------------------------------- #
@@ -273,6 +279,11 @@ async def start_review(
     comptar: el resultat final es el mateix que una sola crida.
     """
     effective = await effective_requirements(session, tender_id)
+    # Guarda de rerun: abans de cap escriptura, amb la MATEIXA run que es materialitza.
+    ensure_reconciled(
+        await represented_requirement_run_ids(session, company_id, tender_id),
+        effective.run.id if effective.run is not None else None,
+    )
     extracted = list(effective.extracted)
     present = await _active_primary_requirement_ids(
         session, company_id, (r.id for r in extracted)
@@ -652,6 +663,9 @@ async def overview(
         by_provenance.update(
             provenance_of(i, i.id in ctx.primary, i.id in ctx.corrected) for i in items
         )
+    current = effective.run.id if effective.run is not None else None
+    requirement_runs = await represented_requirement_run_ids(session, company_id, tender_id)
+    award_runs = await represented_award_run_ids(session, company_id, tender_id)
     return ReviewOverview(
         tender_id=tender_id,
         review_started=bool(items),
@@ -668,4 +682,11 @@ async def overview(
             for code in PROVENANCE_ORDER
             if by_provenance[code] or code == PROVENANCE_AUTOMATED
         ],
+        reconciliation_required=(
+            needs_reconciliation(requirement_runs, current)
+            or needs_reconciliation(award_runs, current)
+        ),
+        current_run_id=current,
+        represented_requirement_run_ids=sorted(requirement_runs, key=str),
+        represented_award_run_ids=sorted(award_runs, key=str),
     )
