@@ -228,6 +228,9 @@ describe("Revisió de la licitació", () => {
     expect(within(detail).getByText("«mínim de 64 trucades simultànies»")).toBeTruthy();
     expect(within(detail).getByText("Requisit tècnic")).toBeTruthy();
     expect(within(detail).getByText("Obligatori")).toBeTruthy();
+    // Al detall el rètol ja és visible: el lector de pantalla no el repeteix.
+    expect(within(detail).queryByText("Estat:")).toBeNull();
+    expect(within(detail).queryByText("Origen:")).toBeNull();
   });
 
   it("M06 i M21: parcial i relacionat, sense semblar duplicats", async () => {
@@ -268,6 +271,8 @@ describe("Revisió de la licitació", () => {
     expect(within(evidence).getByText("p. 31")).toBeTruthy();
     expect(within(evidence).getByText("p. 22")).toBeTruthy();
     expect(within(evidence).getByText("§ 8.1.1.4")).toBeTruthy();
+    // Els salts de línia del PDF no trenquen la cita.
+    expect(within(evidence).getByText("«connectivitat a nivell 2 amb el datacenter»")).toBeTruthy();
     expect(within(evidence).getByText("Citat manualment")).toBeTruthy();
     expect(within(evidence).getByText("Al document, sense valors")).toBeTruthy();
     expect(within(detail).getByText("2")).toBeTruthy(); // revisió

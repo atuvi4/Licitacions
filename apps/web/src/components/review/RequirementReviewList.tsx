@@ -17,20 +17,23 @@ import {
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
-/** Origen i estat van separats i amb rètol: «Afegit manualment» no vol dir «dubtós». */
-function ProvenanceBadge({ item }: { item: CanonicalRequirement }) {
+/**
+ * Origen i estat van separats i amb rètol: «Afegit manualment» no vol dir «dubtós».
+ * `labelled`: ja hi ha un rètol visible al costat (el detall), no cal repetir-lo.
+ */
+function ProvenanceBadge({ item, labelled = false }: { item: CanonicalRequirement; labelled?: boolean }) {
   return (
     <StatusPill level="neutral" size="sm" outline>
-      <span className="sr-only">Origen: </span>
+      {!labelled && <span className="sr-only">Origen: </span>}
       {item.provenance_label}
     </StatusPill>
   );
 }
 
-function VerificationBadge({ item }: { item: CanonicalRequirement }) {
+function VerificationBadge({ item, labelled = false }: { item: CanonicalRequirement; labelled?: boolean }) {
   return (
     <StatusPill level={verificationLevel(item.verification_status)} size="sm">
-      <span className="sr-only">Estat: </span>
+      {!labelled && <span className="sr-only">Estat: </span>}
       {item.verification_label}
     </StatusPill>
   );
@@ -121,10 +124,10 @@ function RequirementDetail({
         <Fact label="Categoria">{item.category_label}</Fact>
         <Fact label="Obligació">{item.obligation_label}</Fact>
         <Fact label="Estat">
-          <VerificationBadge item={item} />
+          <VerificationBadge item={item} labelled />
         </Fact>
         <Fact label="Origen">
-          <ProvenanceBadge item={item} />
+          <ProvenanceBadge item={item} labelled />
         </Fact>
         <Fact label="Revisió">{item.review_revision}</Fact>
       </dl>
@@ -167,8 +170,9 @@ function RequirementDetail({
                   </StatusPill>
                 </p>
                 {evidence.quote && (
-                  <blockquote className="mt-1 text-[13px] leading-relaxed whitespace-pre-line text-ink italic">
-                    «{evidence.quote}»
+                  // Els salts de línia són els del PDF, no del text: es refà el paràgraf.
+                  <blockquote className="mt-1 text-[13px] leading-relaxed text-ink italic">
+                    «{evidence.quote.replace(/\s+/g, " ").trim()}»
                   </blockquote>
                 )}
               </li>
@@ -224,10 +228,12 @@ export function RequirementReviewList({ items }: { items: CanonicalRequirement[]
       <form
         role="search"
         aria-label="Filtra els requisits"
-        className="grid gap-3 border-b border-border px-3.5 py-3 sm:grid-cols-2 xl:grid-cols-5"
+        // La cerca ocupa tota la fila i els quatre filtres van de dos en dos: amb
+        // cinc columnes, les opcions («Pendent de revisar (201)») quedaven tallades.
+        className="grid gap-3 border-b border-border px-3.5 py-3 sm:grid-cols-2"
         onSubmit={(event) => event.preventDefault()}
       >
-        <Field label="Cerca" className="min-w-0 sm:col-span-2 xl:col-span-1">
+        <Field label="Cerca" className="min-w-0 sm:col-span-2">
           <Input type="search" value={filters.text} onChange={(event) => set("text")(event.target.value)} placeholder="Títol, descripció o valor" />
         </Field>
         <FilterSelect label="Estat" value={filters.verification} options={available.verification} onChange={set("verification")} />

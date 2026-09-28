@@ -13,6 +13,7 @@ import {
   scoringBlocks,
   shortDocument,
   structureSections,
+  unitLabel,
   whereLine,
 } from "./review";
 
@@ -22,6 +23,16 @@ describe("format de la revisió", () => {
     expect(formatValue(m15.values[0])).toBe("≥ 64 trucades");
     expect(formatValue({ ...m15.values[0], operator: "gte", value: 450000, unit_label: "EUR" })).toBe("≥ 450.000 EUR");
     expect(formatValue({ ...m15.values[0], operator: "exists", value: true, unit_label: null })).toBe("Sí");
+  });
+
+  it("tradueix les unitats tancades de l'extracció i deixa les del revisor", () => {
+    const base = reviewRequirements[0].values[0];
+    expect(formatValue({ ...base, operator: "lte", value: 10, unit_label: "percent" })).toBe("≤ 10 %");
+    expect(formatValue({ ...base, operator: null, value: 8, unit_label: "hours" })).toBe("8 hores");
+    expect(formatValue({ ...base, operator: null, value: 1, unit_label: "days" })).toBe("1 dia");
+    expect(formatValue({ ...base, operator: "gte", value: 600, unit_label: "mbps" })).toBe("≥ 600 Mbps");
+    expect(formatValue({ ...base, operator: ">=", value: 720, unit_label: "p" })).toBe("≥ 720 p");
+    expect(unitLabel("usuaris", 200)).toBe("usuaris");
   });
 
   it("escurça el document i diu la pàgina", () => {
@@ -84,7 +95,10 @@ describe("criteris d'adjudicació", () => {
       ["not_scored", 7],
       ["desirable", 2],
     ]);
-    expect(sections.filter((section) => section.counts).flatMap((section) => section.rows)).toHaveLength(9);
+    const counting = sections.filter((section) => section.counts).flatMap((section) => section.rows);
+    expect(counting).toHaveLength(9);
+    // El preu primer i després de més a menys, com a la vista de puntuació.
+    expect(counting.map((row) => row.points)).toEqual([80, 5, 4, 3, 2, 2, 2, 1, 1]);
     expect(sections.reduce((sum, section) => sum + section.rows.length, 0)).toBe(23);
   });
 

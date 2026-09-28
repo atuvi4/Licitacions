@@ -9,7 +9,7 @@ import { RequirementReviewList } from "@/components/review/RequirementReviewList
 import { useSession } from "@/components/SessionProvider";
 import { Button, Card, EmptyState, ErrorState, LinkButton, LoadingRows, PageHeader, PageSkeleton } from "@/components/ui";
 import { useResource } from "@/lib/hooks";
-import { type AwardCriteriaView, type CanonicalRequirement, type ReviewOverview, formatPoints, reviewPath } from "@/lib/review";
+import { type AwardCriteriaView, type CanonicalRequirement, type ReviewOverview, reviewPath } from "@/lib/review";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
@@ -115,11 +115,7 @@ export default function TenderReviewPage() {
           <Stat label="Requisits" value={String(data.total_requirements)} />
           <Stat label="Cal revisar" value={String(data.needs_review_count)} />
           <Stat label="Criteris puntuats" value={award ? String(award.scored_count) : "…"} />
-          <Stat
-            label="Puntuació"
-            value={award ? String(award.total_points) : "…"}
-            note={award ? formatPoints(award.total_points) : undefined}
-          />
+          <Stat label="Puntuació" value={award ? String(award.total_points) : "…"} note={award ? "punts en total" : undefined} />
         </dl>
       </section>
 

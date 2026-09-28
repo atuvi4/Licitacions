@@ -161,7 +161,8 @@ export const reviewRequirements: CanonicalRequirement[] = [
     title: "Connectivitat a nivell 2 amb el datacenter pels equipaments municipals",
     description: "Requeriment que els equipaments municipals tinguin connectivitat a nivell 2 amb el datacenter.",
     evidence: [
-      { document: PPT, page: 31, section: null, quote: "connectivitat a nivell 2 amb el datacenter", status_label: "Al document, sense valors" },
+      // Amb el salt de línia del PDF, com arriba de l'extracció.
+      { document: PPT, page: 31, section: null, quote: "connectivitat a nivell 2\namb el datacenter", status_label: "Al document, sense valors" },
       manualCitation(22, "8.1.1.4", "hauran de disposar de connectivitat a nivell 2"),
     ],
     pages: [22, 31],

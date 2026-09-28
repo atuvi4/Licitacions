@@ -160,10 +160,38 @@ function scalar(value: CanonicalValue["value"]): string {
   return value;
 }
 
-/** «≥ 64 trucades», «Sí», «720 p». Mai la clau interna del valor. */
+/**
+ * Les unitats tancades de l'extracció arriben com a codi (`percent`, `hours`...).
+ * Les que el revisor escriu (`trucades`, `p`) ja són text i passen tal qual.
+ */
+const UNIT_LABELS: Record<string, [singular: string, plural: string]> = {
+  percent: ["%", "%"],
+  seconds: ["segon", "segons"],
+  minutes: ["minut", "minuts"],
+  hours: ["hora", "hores"],
+  days: ["dia", "dies"],
+  weeks: ["setmana", "setmanes"],
+  months: ["mes", "mesos"],
+  years: ["any", "anys"],
+  kbps: ["kbps", "kbps"],
+  mbps: ["Mbps", "Mbps"],
+  gbps: ["Gbps", "Gbps"],
+  inch: ["polzada", "polzades"],
+};
+
+export function unitLabel(unit: string | null, value: CanonicalValue["value"]): string | null {
+  if (!unit) return null;
+  const known = UNIT_LABELS[unit];
+  if (!known) return unit;
+  return value === 1 ? known[0] : known[1];
+}
+
+/** «≥ 64 trucades», «≤ 10 %», «8 hores», «Sí». Mai la clau interna del valor. */
 export function formatValue(value: CanonicalValue): string {
   const symbol = value.operator ? OPERATOR_SYMBOL[value.operator] : undefined;
-  const parts = [symbol, scalar(value.value), value.unit_label].filter((part): part is string => Boolean(part));
+  const parts = [symbol, scalar(value.value), unitLabel(value.unit_label, value.value)].filter(
+    (part): part is string => Boolean(part),
+  );
   return parts.join(" ");
 }
 
@@ -367,6 +395,11 @@ export function structureSections(view: AwardCriteriaView): StructureSection[] {
     const key = sectionOf(row);
     byKey.set(key, [...(byKey.get(key) ?? []), row]);
   }
+  // Els que compten, en el mateix ordre que la vista de puntuació: primer els
+  // que no pengen de cap bloc (el preu), després de més a menys punts.
+  byKey.get("counts")?.sort(
+    (a, b) => Number(Boolean(a.parent)) - Number(Boolean(b.parent)) || (b.points ?? 0) - (a.points ?? 0),
+  );
   return SECTIONS.map((section) => ({ ...section, rows: byKey.get(section.key) ?? [] })).filter(
     (section) => section.rows.length > 0,
   );
