@@ -1,5 +1,6 @@
 import type { Level } from "@/components/ui/StatusPill";
 import { ApiError, api } from "@/lib/api";
+import type { EditableRequirement } from "@/lib/correction";
 import { ROLE_LABELS } from "@/lib/labels";
 
 /**
@@ -78,6 +79,8 @@ export interface CanonicalRequirement {
   review_revision: number;
   visible_relations: CanonicalRelation[];
   folded_relations: CanonicalRelation[];
+  /** Només per a l'editor de correccions: codis estables, mai text de pantalla. */
+  editable: EditableRequirement;
 }
 
 export interface AwardItemRef {
@@ -441,6 +444,21 @@ export function whoCanReview(): string {
 
 export type ReviewActionName = "confirm" | "mark_partial" | "reject" | "note";
 
+/** Una correcció: la càrrega ja és diferencial (`lib/correction.ts`). */
+export function submitCorrection(
+  companyId: string,
+  tenderId: string,
+  itemId: string,
+  expectedRevision: number,
+  payload: Record<string, unknown>,
+): Promise<CanonicalRequirement> {
+  return api.post<CanonicalRequirement>(reviewPath(companyId, tenderId, `/items/${itemId}/actions`), {
+    action: "correct",
+    expected_revision: expectedRevision,
+    payload,
+  });
+}
+
 /** Només el text que l'usuari escriu: cap altre camp de la càrrega. */
 export function actionPayload(action: ReviewActionName, text: string): Record<string, string> {
   if (action === "reject") return { reason: text };
@@ -495,4 +513,6 @@ export interface ReviewHistoryEntry {
   note: string | null;
   actor_id: string | null;
   created_at: string;
+  /** Resum de l'acció (camps tocats, estat abans/després). Mai s'ensenya cru. */
+  changes?: Record<string, unknown>;
 }

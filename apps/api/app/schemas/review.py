@@ -459,6 +459,23 @@ class CanonicalSourceRef(BaseModel):
     id: uuid.UUID
 
 
+class EditableRequirement(BaseModel):
+    """La instantania acceptada, tal com la necessita l'editor de correccions.
+
+    NOMES transport: porta els codis estables (`category`, `obligation`,
+    `modality`, `source`, operador) perque el client pugui construir un
+    `CorrectPayload` sense endevinar-los a partir d'etiquetes. La interficie no
+    els ha d'ensenyar mai com a text: per a aixo hi ha els camps `*_label`.
+    """
+
+    title: str
+    description: str | None
+    category: str
+    obligation: str
+    modality: str
+    values: list[AcceptedValue]
+
+
 class CanonicalRequirement(BaseModel):
     canonical_id: uuid.UUID
     title: str
@@ -484,6 +501,8 @@ class CanonicalRequirement(BaseModel):
     #: Relacions `duplicate_of` actives, en qualsevol direccio. Encara NO s'amaga
     #: cap element de la llista: aixo ho fara la vista canonica seguent.
     folded_relations: list[CanonicalRelation] = Field(default_factory=list)
+    #: Per a l'editor de correccions: la instantania acceptada amb codis estables.
+    editable: EditableRequirement
 
 
 class CountLabel(BaseModel):

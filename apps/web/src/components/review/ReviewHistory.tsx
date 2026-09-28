@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { correctionSummary } from "@/lib/correction";
 import { useResource } from "@/lib/hooks";
 import { type ReviewHistoryEntry, reviewPath } from "@/lib/review";
 import { formatDateTime } from "@/lib/tenders";
@@ -68,6 +69,9 @@ export function ReviewHistory({
                     {currentUserId && entry.actor_id === currentUserId ? " · tu" : ""}
                   </span>
                 </p>
+                {entry.action === "correct" && correctionSummary(entry.changes) && (
+                  <p className="mt-0.5 text-caption text-muted">Canvis: {correctionSummary(entry.changes)}</p>
+                )}
                 {entry.note && <p className="mt-0.5 text-[13px] leading-5 text-ink">{entry.note}</p>}
               </li>
             ))}

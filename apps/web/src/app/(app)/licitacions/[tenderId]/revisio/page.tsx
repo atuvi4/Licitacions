@@ -67,12 +67,15 @@ export default function TenderReviewPage() {
       },
       onStale: async (itemId) => {
         // La versió actual, tal com és ara: pot haver canviat l'estat.
+        let current: CanonicalRequirement | null = null;
         try {
-          replace(await api.get<CanonicalRequirement>(reviewPath(companyId, tenderId, `/requirements/${itemId}`)));
+          current = await api.get<CanonicalRequirement>(reviewPath(companyId, tenderId, `/requirements/${itemId}`));
+          replace(current);
         } catch {
           await reloadList();
         }
         await reloadOverview();
+        return current;
       },
       onGone: async () => {
         await Promise.all([reloadList(), reloadOverview()]);

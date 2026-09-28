@@ -1,3 +1,4 @@
+import type { EditableRequirement } from "@/lib/correction";
 import type {
   AwardCriteriaView,
   AwardItemRef,
@@ -36,8 +37,26 @@ export const reviewOverview: ReviewOverview = {
   ],
 };
 
-function requirement(overrides: Partial<CanonicalRequirement> & Pick<CanonicalRequirement, "canonical_id" | "title">): CanonicalRequirement {
+/** `editable` com el construeix l'API: els mateixos camps, amb codis. */
+function editableOf(item: Omit<CanonicalRequirement, "editable">): EditableRequirement {
   return {
+    title: item.title,
+    description: item.description,
+    category: item.category,
+    obligation: item.obligation_label === "Informatiu" ? "informative" : "mandatory",
+    modality: item.obligation_label === "Condicional" ? "conditional" : "mandatory",
+    values: item.values.map((value) => ({
+      key: value.key,
+      operator: value.operator,
+      value: value.value,
+      unit_label: value.unit_label,
+      source: value.source_label === "Afirmat pel revisor" ? "reviewer" : "document",
+    })),
+  };
+}
+
+function requirement(overrides: Partial<CanonicalRequirement> & Pick<CanonicalRequirement, "canonical_id" | "title">): CanonicalRequirement {
+  const item = {
     description: null,
     category: "technical_requirement",
     category_label: "Requisit tècnic",
@@ -58,6 +77,7 @@ function requirement(overrides: Partial<CanonicalRequirement> & Pick<CanonicalRe
     folded_relations: [],
     ...overrides,
   };
+  return { ...item, editable: overrides.editable ?? editableOf(item) };
 }
 
 const manual = {

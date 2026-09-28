@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { ReviewActions } from "@/components/review/ReviewActions";
 import { ReviewHistory } from "@/components/review/ReviewHistory";
@@ -118,8 +118,8 @@ export interface ReviewContext {
   canWrite: boolean;
   currentUserId: string | null;
   onUpdated: (item: CanonicalRequirement, statusMayChange: boolean) => void;
-  /** Torna a llegir un element (després d'un 409). */
-  onStale: (itemId: string) => Promise<void>;
+  /** Torna a llegir un element (després d'un 409) i el torna, o `null` si ja no hi és. */
+  onStale: (itemId: string) => Promise<CanonicalRequirement | null>;
   /** L'element ja no hi és (404): cal refer la llista. */
   onGone: (itemId: string) => Promise<void>;
 }
@@ -128,10 +128,12 @@ function RequirementDetail({
   item,
   review,
   onOpenRelated,
+  registerCloseGuard,
 }: {
   item: CanonicalRequirement;
   review?: ReviewContext;
   onOpenRelated: (id: string) => void;
+  registerCloseGuard: (guard: (() => boolean) | null) => void;
 }) {
   const relations = [...item.visible_relations, ...item.folded_relations];
   return (
@@ -147,6 +149,7 @@ function RequirementDetail({
           onUpdated={review.onUpdated}
           onStale={() => review.onStale(item.canonical_id)}
           onGone={() => review.onGone(item.canonical_id)}
+          registerCloseGuard={registerCloseGuard}
         />
       )}
 
@@ -260,10 +263,33 @@ function RequirementDetail({
 export function RequirementReviewList({ items, review }: { items: CanonicalRequirement[]; review?: ReviewContext }) {
   const [filters, setFilters] = useState<RequirementFilters>(NO_FILTERS);
   const [openId, setOpenId] = useState<string | null>(null);
-  const available = useMemo(() => filterOptions(items), [items]);
+  // Si una correcció deixa un filtre actiu sense cap element, l'opció no pot
+  // desaparèixer: el desplegable diria «Tots» mentre la llista continua filtrada.
+  const seen = useRef<Record<string, string>>({});
+  const available = useMemo(() => {
+    const found = filterOptions(items);
+    for (const list of Object.values(found)) for (const option of list) seen.current[option.value] = option.label;
+    return found;
+  }, [items]);
+  const keep = (options: FilterOption[], value: string): FilterOption[] =>
+    !value || options.some((option) => option.value === value)
+      ? options
+      : [...options, { value, label: seen.current[value] ?? "Filtre actual", count: 0 }];
   const shown = useMemo(() => filterRequirements(items, filters), [items, filters]);
   const open = items.find((item) => item.canonical_id === openId) ?? null;
-  const close = useCallback(() => setOpenId(null), []);
+  // Un editor amb canvis sense desar pot aturar el tancament (i el canvi d'element).
+  const guard = useRef<(() => boolean) | null>(null);
+  const registerCloseGuard = useCallback((next: (() => boolean) | null) => {
+    guard.current = next;
+  }, []);
+  const close = useCallback(() => {
+    if (guard.current?.()) return;
+    setOpenId(null);
+  }, []);
+  const openRelated = (id: string) => {
+    if (guard.current?.()) return;
+    if (items.some((item) => item.canonical_id === id)) setOpenId(id);
+  };
   const set = (key: keyof RequirementFilters) => (value: string) => setFilters((current) => ({ ...current, [key]: value }));
   const filtered = JSON.stringify(filters) !== JSON.stringify(NO_FILTERS);
 
@@ -281,10 +307,10 @@ export function RequirementReviewList({ items, review }: { items: CanonicalRequi
         <Field label="Cerca" className="min-w-0 sm:col-span-2">
           <Input type="search" value={filters.text} onChange={(event) => set("text")(event.target.value)} placeholder="Títol, descripció o valor" />
         </Field>
-        <FilterSelect label="Estat" value={filters.verification} options={available.verification} onChange={set("verification")} />
-        <FilterSelect label="Origen" value={filters.provenance} options={available.provenance} onChange={set("provenance")} />
-        <FilterSelect label="Obligació" value={filters.obligation} options={available.obligation} onChange={set("obligation")} />
-        <FilterSelect label="Categoria" value={filters.category} options={available.category} onChange={set("category")} />
+        <FilterSelect label="Estat" value={filters.verification} options={keep(available.verification, filters.verification)} onChange={set("verification")} />
+        <FilterSelect label="Origen" value={filters.provenance} options={keep(available.provenance, filters.provenance)} onChange={set("provenance")} />
+        <FilterSelect label="Obligació" value={filters.obligation} options={keep(available.obligation, filters.obligation)} onChange={set("obligation")} />
+        <FilterSelect label="Categoria" value={filters.category} options={keep(available.category, filters.category)} onChange={set("category")} />
       </form>
       {shown.length === 0 ? (
         <div className="flex flex-wrap items-center justify-between gap-3 px-3.5 py-6">
@@ -303,7 +329,9 @@ export function RequirementReviewList({ items, review }: { items: CanonicalRequi
         </ul>
       )}
       <Drawer open={open !== null} title={open?.title ?? ""} onClose={close}>
-        {open && <RequirementDetail item={open} review={review} onOpenRelated={(id) => items.some((item) => item.canonical_id === id) && setOpenId(id)} />}
+        {open && (
+          <RequirementDetail item={open} review={review} onOpenRelated={openRelated} registerCloseGuard={registerCloseGuard} />
+        )}
       </Drawer>
     </Card>
   );

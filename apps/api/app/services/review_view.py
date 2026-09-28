@@ -57,6 +57,7 @@ from app.schemas.review import (
     CanonicalSourceRef,
     CanonicalValue,
     CountLabel,
+    EditableRequirement,
     RequirementSnapshot,
     ReviewOverview,
     ReviewStartResult,
@@ -574,6 +575,15 @@ def _canonical_one(item: ReviewItem, ctx: _ItemContext) -> CanonicalRequirement:
         review_revision=item.revision,
         visible_relations=[r for r in related if not r.foldable],
         folded_relations=[r for r in related if r.foldable],
+        # La mateixa instantania acceptada, amb codis: nomes per a l'editor.
+        editable=EditableRequirement(
+            title=snapshot.title,
+            description=snapshot.description,
+            category=snapshot.category.value,
+            obligation=snapshot.obligation.value,
+            modality=snapshot.modality.value,
+            values=snapshot.values,
+        ),
     )
 
 

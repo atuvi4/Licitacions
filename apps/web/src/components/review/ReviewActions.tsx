@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
+import { CorrectionEditor } from "@/components/review/CorrectionEditor";
 import { Button, ResultNotice, StatusPill, Textarea } from "@/components/ui";
 import {
   type ActionFailure,
@@ -64,10 +65,12 @@ export interface ReviewActionsProps {
   canWrite: boolean;
   /** L'element tal com l'ha tornat el servidor; `statusMayChange` diu si cal refer el resum. */
   onUpdated: (item: CanonicalRequirement, statusMayChange: boolean) => void;
-  /** Després d'un 409: torna a llegir l'element canònic. */
-  onStale: () => Promise<void>;
+  /** Després d'un 409: torna a llegir l'element canònic i el torna. */
+  onStale: () => Promise<CanonicalRequirement | null>;
   /** Després d'un 404: l'element ja no hi és. */
   onGone: () => Promise<void>;
+  /** L'editor de correccions pot aturar el tancament del calaix si hi ha canvis. */
+  registerCloseGuard?: (guard: (() => boolean) | null) => void;
 }
 
 /**
@@ -77,8 +80,18 @@ export interface ReviewActionsProps {
  * abans que respongui el servidor, i un 409 no es reintenta: es mostra la
  * versió actual i l'usuari decideix.
  */
-export function ReviewActions({ item, companyId, tenderId, canWrite, onUpdated, onStale, onGone }: ReviewActionsProps) {
+export function ReviewActions({
+  item,
+  companyId,
+  tenderId,
+  canWrite,
+  onUpdated,
+  onStale,
+  onGone,
+  registerCloseGuard,
+}: ReviewActionsProps) {
   const [form, setForm] = useState<keyof typeof FORMS | null>(null);
+  const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [pending, setPending] = useState<ReviewActionName | null>(null);
@@ -91,6 +104,7 @@ export function ReviewActions({ item, companyId, tenderId, canWrite, onUpdated, 
   // Un altre requisit al calaix: res del formulari anterior hi pot quedar.
   useEffect(() => {
     setForm(null);
+    setEditing(false);
     setText("");
     setFieldError(null);
     setFailure(null);
@@ -194,7 +208,27 @@ export function ReviewActions({ item, companyId, tenderId, canWrite, onUpdated, 
         </p>
       ) : (
         <>
-          {!active && (
+          {editing && (
+            <CorrectionEditor
+              item={item}
+              companyId={companyId}
+              tenderId={tenderId}
+              registerCloseGuard={registerCloseGuard}
+              fetchCurrent={onStale}
+              onSaved={(updated) => {
+                setEditing(false);
+                setReturnTo("correct");
+                setDone("Correcció desada.");
+                onUpdated(updated, true);
+              }}
+              onClose={() => {
+                setEditing(false);
+                setReturnTo("correct");
+              }}
+            />
+          )}
+
+          {!active && !editing && (
             <div className="mt-2.5 flex flex-wrap gap-2" role="group" aria-label="Accions de revisió">
               <Button size="sm" variant="primary" loading={pending === "confirm"} disabled={busy} onClick={() => void run("confirm")}>
                 Confirmar
@@ -211,6 +245,19 @@ export function ReviewActions({ item, companyId, tenderId, canWrite, onUpdated, 
                   {FORMS[name].opener}
                 </Button>
               ))}
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy}
+                data-opener="correct"
+                onClick={() => {
+                  setDone(null);
+                  setFailure(null);
+                  setEditing(true);
+                }}
+              >
+                Corregir
+              </Button>
               <Button
                 size="sm"
                 variant="ghost"

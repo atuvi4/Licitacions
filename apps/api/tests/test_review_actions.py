@@ -626,3 +626,84 @@ async def test_pg_despres_de_les_accions_l_historial_continua_sent_nomes_d_afegi
     await session.rollback()
     assert await session.scalar(
         sa.select(sa.func.count()).select_from(ReviewItemRevision)) == count
+
+
+# --------------------------------------------------------------------------- #
+# `editable`: la instantania acceptada per a l'editor de correccions           #
+# --------------------------------------------------------------------------- #
+
+
+async def test_editable_es_la_instantania_acceptada_amb_codis(session, palamos_like, tenant_a,
+                                                             client_a):
+    _, company = tenant_a
+    tid = palamos_like["tender_id"]
+    await _started(client_a, company, tid)
+    item = await _item_of(session, company, palamos_like["rows"][INSURANCE])
+    accepted = dict(item.accepted_json)
+
+    body = (await client_a.get(_url(company, tid, f"/requirements/{item.id}"))).json()
+
+    expected = {k: v for k, v in accepted.items() if k != "needs_review_from_extraction"}
+    assert body["editable"] == expected
+    assert body["editable"]["obligation"] == "informative"
+    assert body["editable"]["modality"] == "informational"
+    assert body["editable"]["values"] == [{
+        "key": "import_minim", "operator": None, "value": 500000, "unit_label": "EUR",
+        "source": "document"}]
+    # Les etiquetes de la interficie no canvien: `editable` nomes transporta.
+    assert (body["obligation_label"], body["category_label"]) == ("Informatiu", "Assegurança")
+    assert body["values"][0]["source_label"] == "Del document"
+
+
+async def test_editable_fa_la_volta_d_una_correccio_diferencial(session, palamos_like, tenant_a,
+                                                               client_a):
+    """El client edita a partir d'`editable` i nomes envia el que canvia."""
+    _, company = tenant_a
+    tid = palamos_like["tender_id"]
+    await _started(client_a, company, tid)
+    item = await _item_of(session, company, palamos_like["rows"][ORDINARY])
+    before = await _raw_extraction(session)
+    body = (await client_a.get(_url(company, tid, f"/requirements/{item.id}"))).json()
+    editable = body["editable"]
+    [existing] = editable["values"]
+
+    corrected = await _act(client_a, company, tid, item.id, "correct", body["review_revision"], {
+        "modality": "conditional",
+        "values": [{"key": "reviewer_value_1", "operator": "<", "value": 70, "unit_label": "ms"}],
+        "verification_status": "unreviewed",
+    })
+
+    assert corrected.status_code == 200, corrected.text
+    after = corrected.json()
+    assert after["editable"]["modality"] == "conditional"
+    assert after["editable"]["obligation"] == editable["obligation"]
+    # El valor del document que no s'ha tocat continua sent del document.
+    assert after["editable"]["values"] == [
+        existing,
+        {"key": "reviewer_value_1", "operator": "<", "value": 70, "unit_label": "ms",
+         "source": "reviewer"},
+    ]
+    assert [v["source_label"] for v in after["values"]] == ["Del document", "Afirmat pel revisor"]
+    assert (after["verification_status"], after["provenance"]) == ("unreviewed",
+                                                                   "automated_corrected")
+    assert after["obligation_label"] == "Condicional"
+    session.expire_all()
+    assert await _raw_extraction(session) == before
+
+
+async def test_editable_d_una_empresa_no_es_veu_des_d_una_altra(session, palamos_like, tenant_a,
+                                                               tenant_b, client_a, client_b):
+    (_, company_a), (_, company_b) = tenant_a, tenant_b
+    tid = palamos_like["tender_id"]
+    await _started(client_a, company_a, tid)
+    await _started(client_b, company_b, tid)
+    item_a = await _item_of(session, company_a, palamos_like["rows"][ORDINARY])
+    item_b = await _item_of(session, company_b, palamos_like["rows"][ORDINARY])
+
+    await _act(client_a, company_a, tid, item_a.id, "correct", 1,
+               {"title": "Titol corregit per A", "verification_status": "unreviewed"})
+
+    assert (await client_b.get(_url(company_b, tid, f"/requirements/{item_a.id}"))).status_code \
+        == 404
+    own_b = (await client_b.get(_url(company_b, tid, f"/requirements/{item_b.id}"))).json()
+    assert own_b["editable"]["title"] == ORDINARY
