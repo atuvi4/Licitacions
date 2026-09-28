@@ -605,16 +605,21 @@ async def import_status(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID,
     *, expected_manual_ids: set[str], expected_items: int,
 ) -> str:
-    """`none` (res), `complete` (importacio feta) o `unknown` (estat que no es el nostre)."""
+    """`none` (res), `complete` (importacio feta) o `unknown` (estat que no es el nostre).
+
+    Nomes mira REQUISITS: l'estructura de criteris d'adjudicacio que s'hi afegeixi
+    despres (`apply_palamos_award_review`) no fa semblar incompleta la importacio.
+    """
+    from app.models.enums import ReviewItemKind
     from app.models.review import ReviewItem, ReviewItemRelation, ReviewItemRevision
 
-    items = await session.scalar(sa.select(sa.func.count()).select_from(ReviewItem).where(
-        ReviewItem.company_id == company_id, ReviewItem.tender_id == tender_id))
+    scope = (ReviewItem.company_id == company_id, ReviewItem.tender_id == tender_id,
+             ReviewItem.kind == ReviewItemKind.REQUIREMENT)
+    items = await session.scalar(sa.select(sa.func.count()).select_from(ReviewItem).where(*scope))
     if not items:
         return "none"
     revisions = (await session.scalars(sa.select(ReviewItemRevision).join(
-        ReviewItem, ReviewItem.id == ReviewItemRevision.item_id).where(
-        ReviewItem.company_id == company_id, ReviewItem.tender_id == tender_id))).all()
+        ReviewItem, ReviewItem.id == ReviewItemRevision.item_id).where(*scope))).all()
     created = {
         (r.payload_json or {}).get("manual_id")
         for r in revisions
@@ -626,9 +631,8 @@ async def import_status(
         for r in revisions
     )
     relations = await session.scalar(sa.select(sa.func.count()).select_from(
-        ReviewItemRelation).where(
-        ReviewItemRelation.company_id == company_id, ReviewItemRelation.tender_id == tender_id,
-        ReviewItemRelation.archived_at.is_(None)))
+        ReviewItemRelation).join(ReviewItem, ReviewItem.id == ReviewItemRelation.from_item_id)
+        .where(*scope, ReviewItemRelation.archived_at.is_(None)))
     if (items == expected_items and created == expected_manual_ids and linked
             and relations == sum(EXPECTED_RELATIONS.values())):
         return "complete"

@@ -16,12 +16,19 @@ instantanies ni text del plec.
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Query, status
 
 from app.api.deps import CompanyCtx, SessionDep
-from app.models.enums import AuditAction
+from app.core.errors import NotFoundError
+from app.models.enums import AuditAction, ReviewItemKind
+from app.models.review import ReviewItem
 from app.schemas.review import (
+    AwardCriteriaView,
+    AwardStartResult,
+    CanonicalAwardCriterion,
     CanonicalRelation,
     CanonicalRequirement,
     ManualRequirementCreate,
@@ -34,6 +41,7 @@ from app.schemas.review import (
 )
 from app.services import audit
 from app.services import review_actions as actions
+from app.services import review_awards as awards
 from app.services import review_relations as relations
 from app.services import review_view as service
 
@@ -134,9 +142,24 @@ async def get_review_requirement(
     )
 
 
+async def _owned_kind(session, company_id, tender_id, item_id) -> ReviewItemKind:
+    """El tipus d'un element actiu d'AQUESTA empresa i licitacio; si no, 404."""
+    kind = await session.scalar(
+        sa.select(ReviewItem.kind).where(
+            ReviewItem.id == item_id,
+            ReviewItem.company_id == company_id,
+            ReviewItem.tender_id == tender_id,
+            ReviewItem.archived_at.is_(None),
+        )
+    )
+    if kind is None:
+        raise NotFoundError("Element de revisio no trobat.")
+    return ReviewItemKind(kind)
+
+
 @router.post(
     "/items/{item_id}/actions",
-    response_model=CanonicalRequirement,
+    response_model=CanonicalRequirement | CanonicalAwardCriterion,
     summary="Aplica una accio de revisio",
 )
 async def apply_review_action(
@@ -146,10 +169,12 @@ async def apply_review_action(
     session: SessionDep,
     ctx: CompanyCtx,
 ):
-    """Confirmar, corregir, descartar, parcial, nota, canvi d'estat o afegir evidencia.
+    """Confirmar, corregir, descartar, parcial, nota, canvi d'estat, evidencia o paper.
 
     `expected_revision` ha de ser la revisio vigent; si no, 409 amb la vigent a
-    `details.current_revision` perque el client torni a carregar.
+    `details.current_revision` perque el client torni a carregar. `set_award_role`
+    nomes val per a criteris d'adjudicacio; `correct`, nomes per a requisits.
+    Torna l'element amb la forma del seu tipus.
     """
     actions.assert_can_review(ctx.membership.role)
     await service.load_visible_tender(session, ctx.company_id, tender_id)
@@ -174,9 +199,14 @@ async def apply_review_action(
         summary=(
             f"licitacio={tender_id} element={item.id} accio={payload.action} "
             f"revisio={item.revision} estat={item.verification_status.value}"
+            + (f" paper={item.award_role.value}" if item.award_role else "")
         ),
     )
     await session.commit()
+    if item.kind == ReviewItemKind.AWARD_CRITERION:
+        return await awards.get_award_criterion(
+            session, company_id=ctx.company_id, tender_id=tender_id, item_id=item_id
+        )
     return await service.get_requirement(
         session, company_id=ctx.company_id, tender_id=tender_id, item_id=item_id
     )
@@ -302,10 +332,73 @@ async def review_item_relations(
     include_archived: bool = Query(default=False),
 ):
     await service.load_visible_tender(session, ctx.company_id, tender_id)
-    await service.get_requirement(
-        session, company_id=ctx.company_id, tender_id=tender_id, item_id=item_id
-    )
+    await _owned_kind(session, ctx.company_id, tender_id, item_id)
     found = await relations.relations_of(
         session, company_id=ctx.company_id, item_ids=[item_id], include_archived=include_archived
     )
     return found.get(item_id, [])
+
+
+# --------------------------------------------------------------------------- #
+# Criteris d'adjudicacio (S-R4)                                                 #
+# --------------------------------------------------------------------------- #
+
+
+@router.post(
+    "/award-criteria/start",
+    response_model=AwardStartResult,
+    summary="Materialitza els criteris d'adjudicacio",
+)
+async def start_award_review(tender_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
+    """Un element per criteri persistit de la run vigent. Idempotent; neixen sense paper."""
+    actions.assert_can_review(ctx.membership.role)
+    await service.load_visible_tender(session, ctx.company_id, tender_id)
+    result = await awards.start_award_review(
+        session, company_id=ctx.company_id, tender_id=tender_id, actor_id=ctx.user.id
+    )
+    await audit.record(
+        session,
+        company_id=ctx.company_id,
+        user_id=ctx.user.id,
+        action=AuditAction.CREATE,
+        entity_type="review",
+        entity_id=tender_id,
+        summary=f"licitacio={tender_id} inici_revisio_criteris elements_creats={result.created}",
+    )
+    await session.commit()
+    return result
+
+
+@router.get(
+    "/award-criteria",
+    response_model=AwardCriteriaView,
+    summary="Criteris d'adjudicacio canonics d'aquesta empresa",
+)
+async def list_award_criteria(
+    tender_id: uuid.UUID,
+    session: SessionDep,
+    ctx: CompanyCtx,
+    view: Literal["scoring", "all"] = Query(default="scoring"),
+):
+    """`scoring`: nomes els que puntuen i no estan plegats. `all`: totes les files.
+
+    Els avisos (`checks`) no reescriuen cap punt.
+    """
+    await service.load_visible_tender(session, ctx.company_id, tender_id)
+    return await awards.list_award_criteria(
+        session, company_id=ctx.company_id, tender_id=tender_id, view=view
+    )
+
+
+@router.get(
+    "/award-criteria/{item_id}",
+    response_model=CanonicalAwardCriterion,
+    summary="Un criteri d'adjudicacio canonic",
+)
+async def get_award_criterion(
+    tender_id: uuid.UUID, item_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx
+):
+    await service.load_visible_tender(session, ctx.company_id, tender_id)
+    return await awards.get_award_criterion(
+        session, company_id=ctx.company_id, tender_id=tender_id, item_id=item_id
+    )

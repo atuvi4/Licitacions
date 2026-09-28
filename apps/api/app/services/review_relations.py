@@ -20,7 +20,10 @@ esta fent sobre un d'ells sense haver-la tocat.
 * un element te UN sol pare (`parent_of` entrant), perque puntuar-lo dues
   vegades inflaria el total;
 * `related_to` es simetrica: A-B i B-A son la mateixa relacio i es desa una
-  sola vegada.
+  sola vegada;
+* entre criteris d'adjudicacio, `restatement_of` i `duplicate_of` PLEGUEN el
+  criteri a la vista de puntuacio: cadascun es plega dins d'un sol altre i
+  sense cicles (`review_awards`). Entre requisits no canvia res.
 
 A PostgreSQL, les escriptures de relacions d'una licitacio es serialitzen amb un
 lock d'assessorament de transaccio: dues peticions simultanies no poden tancar
@@ -37,7 +40,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
-from app.models.enums import ReviewRelationType
+from app.models.enums import ReviewItemKind, ReviewRelationType
 from app.models.review import ReviewItem, ReviewItemRelation
 from app.schemas.review import CanonicalRelation
 
@@ -46,6 +49,10 @@ ACYCLIC = frozenset(
     {ReviewRelationType.PARENT_OF, ReviewRelationType.DUPLICATE_OF, ReviewRelationType.SUPERSEDES}
 )
 SYMMETRIC = frozenset({ReviewRelationType.RELATED_TO})
+#: Entre criteris d'adjudicacio, aquests pleguen el `from` dins del `to` a la
+#: vista de puntuacio: un sol desti per criteri i cap cicle, combinats. Entre
+#: requisits `restatement_of` continua sent informativa i admet cicles.
+AWARD_FOLDING = (ReviewRelationType.DUPLICATE_OF, ReviewRelationType.RESTATEMENT_OF)
 #: Etiqueta vista des del `from` (sortint) i des del `to` (entrant).
 LABELS: dict[ReviewRelationType, tuple[str, str]] = {
     ReviewRelationType.DUPLICATE_OF: ("Duplicat de", "Té un duplicat"),
@@ -176,6 +183,19 @@ async def create_relation(
         raise ValidationError("Aquest element ja es duplicat d'un altre.")
     if relation_type == ReviewRelationType.PARENT_OF and any(b == to_item_id for _a, b in edges):
         raise ValidationError("Aquest element ja forma part d'un altre.")
+    if source.kind == ReviewItemKind.AWARD_CRITERION and relation_type in AWARD_FOLDING:
+        # Un criteri plegat no puntua per separat: s'ha de plegar dins d'UN sol
+        # altre, i la cadena no pot tornar a ell (el total seria indecidible).
+        folding: list[tuple[uuid.UUID, uuid.UUID]] = []
+        for kind in AWARD_FOLDING:
+            folding += await _active_edges(session, company_id, tender_id, kind)
+        if any(a == from_item_id for a, _b in folding):
+            raise ValidationError("Aquest criteri ja es plega dins d'un altre.")
+        if _reaches(folding, to_item_id, from_item_id):
+            raise ValidationError(
+                "Aquesta relacio tancaria un cicle.",
+                details={"relation_type": relation_type.value},
+            )
     if relation_type in ACYCLIC and _reaches(edges, to_item_id, from_item_id):
         raise ValidationError(
             "Aquesta relacio tancaria un cicle.", details={"relation_type": relation_type.value}
@@ -258,7 +278,11 @@ async def relations_of(
                 ReviewItem.id.in_(other_ids), ReviewItem.company_id == company_id
             )
         )
-        titles = {item_id: (accepted or {}).get("title") for item_id, accepted in rows.all()}
+        # Un requisit te `title`; un criteri d'adjudicacio, `name`.
+        titles = {
+            item_id: (accepted or {}).get("title") or (accepted or {}).get("name")
+            for item_id, accepted in rows.all()
+        }
 
     wanted = set(item_ids)
     result: dict[uuid.UUID, list[CanonicalRelation]] = defaultdict(list)

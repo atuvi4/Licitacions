@@ -37,6 +37,7 @@ from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError,
 from app.models.enums import (
     MembershipRole,
     ReviewAction,
+    ReviewAwardRole,
     ReviewItemKind,
     ReviewOriginHint,
     ReviewSourceRole,
@@ -47,6 +48,7 @@ from app.models.identity import User
 from app.models.provenance import TenderSourceRef
 from app.models.review import ReviewItem, ReviewItemRevision, ReviewItemSource
 from app.schemas.review import (
+    AwardSnapshot,
     ConfirmPayload,
     CorrectPayload,
     DocumentFileCitation,
@@ -57,11 +59,12 @@ from app.schemas.review import (
     ReasonPayload,
     RequirementSnapshot,
     ReviewHistoryEntry,
+    SetAwardRolePayload,
     SetStatusPayload,
 )
 from app.services import source_refs
 from app.services.manual_requirement import REQUIREMENT_EDIT_ROLES
-from app.services.review_view import VERIFICATION_LABELS, requirement_items
+from app.services.review_view import VERIFICATION_LABELS
 
 ACTION_LABELS = {
     ReviewAction.CREATE: "Creat",
@@ -113,9 +116,15 @@ def _parse(model: type[BaseModel], payload: dict[str, Any]) -> Any:
 async def _locked_item(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID, item_id: uuid.UUID
 ) -> ReviewItem:
+    """L'element actiu d'aquesta empresa i licitacio, de qualsevol tipus, bloquejat."""
     item = await session.scalar(
-        requirement_items(company_id, tender_id)
-        .where(ReviewItem.id == item_id)
+        sa.select(ReviewItem)
+        .where(
+            ReviewItem.id == item_id,
+            ReviewItem.company_id == company_id,
+            ReviewItem.tender_id == tender_id,
+            ReviewItem.archived_at.is_(None),
+        )
         .with_for_update()
         .execution_options(populate_existing=True)
     )
@@ -188,11 +197,19 @@ async def apply_review_action(
             "Algu altre ha revisat aquest element. Torna'l a carregar.",
             details={"current_revision": item.revision, "expected_revision": expected_revision},
         )
-    current = RequirementSnapshot.model_validate(item.accepted_json)
+    is_award = item.kind == ReviewItemKind.AWARD_CRITERION
+    current: Any = (AwardSnapshot if is_award else RequirementSnapshot).model_validate(
+        item.accepted_json
+    )
     before = ReviewVerification(item.verification_status)
     accepted = current
     note: str | None
     changes: dict[str, Any] = {}
+    if action == ReviewAction.SET_AWARD_ROLE and not is_award:
+        raise ValidationError("Nomes un criteri d'adjudicacio te paper de puntuacio.")
+    if action == ReviewAction.CORRECT and is_award:
+        # Els punts i la formula no es reescriuen en aquesta fase: s'assenyalen.
+        raise ValidationError("Un criteri d'adjudicacio no es pot corregir encara.")
 
     if action == ReviewAction.CONFIRM:
         parsed = _parse(ConfirmPayload, payload)
@@ -216,6 +233,18 @@ async def apply_review_action(
     elif action == ReviewAction.LINK_SOURCE:
         parsed = _parse(LinkSourcePayload, payload)
         changes = await _link_extra_evidence(session, item, tender_id, user, parsed.citation)
+        after, note = before, parsed.note
+    elif action == ReviewAction.SET_AWARD_ROLE:
+        parsed = _parse(SetAwardRolePayload, payload)
+        role_before = ReviewAwardRole(item.award_role) if item.award_role else None
+        if role_before == parsed.role:
+            raise ValidationError("El criteri ja te aquest paper.")
+        changes = {
+            "role_before": role_before.value if role_before else None,
+            "role_after": parsed.role.value,
+        }
+        # Assignar un paper no verifica el criteri: l'estat no es mou.
+        item.award_role = parsed.role
         after, note = before, parsed.note
     else:  # pragma: no cover - l'esquema de la peticio ja ho limita
         raise ValidationError("Accio desconeguda.")

@@ -28,6 +28,7 @@ from app.models.enums import (
     RequirementModality,
     RequirementObligation,
     RequirementOperator,
+    ReviewAwardRole,
     ReviewRelationType,
     ReviewVerification,
 )
@@ -135,6 +136,54 @@ class RequirementSnapshot(BaseModel):
         return self
 
 
+class AwardMechanism(BaseModel):
+    """Un mecanisme de puntuacio declarat i la seva comprovacio. Codis INTERNS."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(max_length=40)
+    check: str = Field(max_length=40)
+
+
+class AwardSnapshot(BaseModel):
+    """El criteri d'adjudicacio tal com l'accepta l'empresa.
+
+    Els codis de l'extraccio (`declared_kind`, `award_class`, `mechanisms`) es
+    desen per poder-ho auditar, pero NO surten a la lectura normal: alla nomes hi
+    ha etiquetes. `formula_status` nomes val `verified` si una cita valida prova
+    la formula; tenir-ne el text no n'hi ha prou.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=MAX_TITLE)
+    description: str | None = Field(default=None, max_length=MAX_DESCRIPTION)
+    points: float | None = None
+    weight_percent: float | None = None
+    criterion_type: str = Field(max_length=40)
+    evaluation_type: str = Field(max_length=40)
+    declared_kind: str | None = Field(default=None, max_length=40)
+    award_class: str | None = Field(default=None, max_length=40)
+    mechanisms: list[AwardMechanism] = Field(default_factory=list, max_length=MAX_VALUES)
+    mechanism_status: Literal["verified", "not_verified", "none"]
+    formula: str | None = Field(default=None, max_length=MAX_DESCRIPTION)
+    formula_status: Literal["verified", "not_evidence_verified"] | None = None
+    needs_review_from_extraction: bool
+
+    @field_validator("points", "weight_percent")
+    @classmethod
+    def _finite(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("ha de ser un numero finit")
+        return value
+
+    @model_validator(mode="after")
+    def _formula_state(self) -> AwardSnapshot:
+        if (self.formula is None) != (self.formula_status is None):
+            raise ValueError("una formula porta estat, i nomes una formula en porta")
+        return self
+
+
 # --------------------------------------------------------------------------- #
 # Entrades del revisor                                                          #
 # --------------------------------------------------------------------------- #
@@ -233,7 +282,8 @@ class ManualRequirementCreate(_TextFields):
 
 
 ReviewActionName = Literal[
-    "confirm", "correct", "reject", "mark_partial", "note", "set_status", "link_source"
+    "confirm", "correct", "reject", "mark_partial", "note", "set_status", "link_source",
+    "set_award_role",
 ]
 
 
@@ -313,6 +363,13 @@ class LinkSourcePayload(_TextFields):
     """
 
     citation: Citation
+    note: str | None = Field(default=None, max_length=MAX_NOTE)
+
+
+class SetAwardRolePayload(_TextFields):
+    """Paper del criteri a l'estructura de puntuacio. No el verifica ni en toca els punts."""
+
+    role: ReviewAwardRole
     note: str | None = Field(default=None, max_length=MAX_NOTE)
 
 
@@ -464,3 +521,76 @@ class ReviewHistoryEntry(BaseModel):
     note: str | None
     actor_id: uuid.UUID | None
     created_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# Criteris d'adjudicacio canonics                                              #
+# --------------------------------------------------------------------------- #
+
+
+class AwardItemRef(BaseModel):
+    """Un altre criteri canonic, pel nom (pare, fill, reiteracio...)."""
+
+    canonical_id: uuid.UUID
+    name: str
+    points: float | None
+    documents: list[str] = Field(default_factory=list)
+    pages: list[int] = Field(default_factory=list)
+
+
+class CanonicalAwardCriterion(BaseModel):
+    """Un criteri tal com el llegeix la interficie. Cap codi d'extraccio."""
+
+    canonical_id: uuid.UUID
+    name: str
+    description: str | None
+    points: float | None
+    #: `null` mentre ningu no li ha assignat paper.
+    role: str | None
+    role_label: str
+    #: Compta al total de puntuacio: paper `scored` i no plegat dins d'un altre.
+    counts_in_total: bool
+    parent: AwardItemRef | None
+    children: list[AwardItemRef] = Field(default_factory=list)
+    #: Si aquest criteri en repeteix un altre, el canonic on es plega.
+    folded_into: AwardItemRef | None = None
+    #: Els criteris que repeteixen aquest (Informe, model d'oferta...).
+    restatements: list[AwardItemRef] = Field(default_factory=list)
+    mechanism_status: Literal["verified", "not_verified", "none"]
+    mechanism_label: str
+    formula: str | None
+    formula_status: Literal["verified", "not_evidence_verified"] | None
+    formula_label: str | None
+    provenance: str
+    provenance_label: str
+    verification_status: str
+    verification_label: str
+    evidence: list[CanonicalEvidence]
+    documents: list[str]
+    pages: list[int]
+    review_revision: int
+
+
+class AwardCheck(BaseModel):
+    """Un avis de coherencia. No reescriu res: nomes ho assenyala."""
+
+    code: str
+    label: str
+    item_ids: list[uuid.UUID] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class AwardCriteriaView(BaseModel):
+    view: Literal["scoring", "all"]
+    criteria: list[CanonicalAwardCriterion]
+    #: Sempre de l'estructura de puntuacio, sigui quina sigui la vista demanada.
+    scored_count: int
+    total_points: float
+    checks: list[AwardCheck]
+
+
+class AwardStartResult(BaseModel):
+    tender_id: uuid.UUID
+    created: int
+    already_present: int
+    total_award_criteria: int
