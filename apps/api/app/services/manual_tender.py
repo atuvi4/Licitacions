@@ -31,7 +31,12 @@ from dataclasses import dataclass
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.errors import (
+    ConflictError,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
 from app.models.enums import MembershipRole, SourceType
 from app.models.identity import User
 from app.models.sources import Source
@@ -126,6 +131,18 @@ class TenderNotManualError(ValidationError):
     """Nomes s'editen les licitacions obertes a ma. Les d'una font, no."""
 
     code = "tender_not_manual"
+
+
+class TenderNotOwnedError(PermissionDeniedError):
+    """Una licitacio oberta a ma que NO es d'aquesta empresa: es llegeix, no s'hi escriu.
+
+    Nomes arriba aqui una de publica (sense propietari): les anteriors a 0027,
+    que aquella migracio va deixar visibles per a tothom. Com que ja existeix
+    per a tothom, dir que no s'hi pot escriure no n'enumera res. Una d'una
+    altra empresa ni tan sols es veu, i continua donant 404.
+    """
+
+    code = "tender_not_owned"
 
 
 class TenderRevisionConflictError(ConflictError):
@@ -379,6 +396,12 @@ async def load_editable_tender(
     Una licitacio d'una altra empresa dona 404, com arreu: dir «no pots» ja
     seria dir que existeix. Una de publica existeix per a tothom, aixi que
     aquesta si que pot dir que no s'edita per aquesta via.
+
+    **Nomes la propietaria escriu.** Requisits, cites i documents que s'hi
+    escriuen van a taules sense `company_id`: la seva tenancy es la de la
+    licitacio. Una licitacio manual PUBLICA (anterior a 0027, sense propietari)
+    seria la porta perque una empresa escrivis el que veuen totes. Es tanca:
+    sense propietari no s'hi escriu, i no s'endevina de qui es.
     """
     tender = (
         await session.execute(
@@ -391,6 +414,10 @@ async def load_editable_tender(
     source = await get_or_create_manual_source(session)
     if not is_manual(tender, source):
         raise TenderNotManualError("Aquesta licitacio no s'ha obert a ma.")
+    if tender.owner_company_id != company_id:
+        raise TenderNotOwnedError(
+            "Aquesta licitacio no es de la teva empresa: no s'hi pot escriure."
+        )
     return tender
 
 
