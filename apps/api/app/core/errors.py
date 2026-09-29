@@ -169,6 +169,12 @@ class PermissionDeniedError(AppError):
     code = "permission_denied"
 
 
+class PasswordChangeRequiredError(PermissionDeniedError):
+    """Sessio amb contrasenya temporal: nomes es pot canviar-la (o sortir)."""
+
+    code = "password_change_required"
+
+
 class PayloadTooLargeError(AppError):
     status_code = 413
     code = "payload_too_large"

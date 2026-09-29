@@ -53,6 +53,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
         <SidebarNavigation
           pathname={pathname}
           onNavigate={() => setMobileOpen(false)}
+          platformAdmin={user.is_platform_admin ?? false}
           counts={{
             avui: counts.avui,
             oportunitats: counts.oportunitats,

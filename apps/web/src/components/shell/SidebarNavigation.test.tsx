@@ -27,4 +27,12 @@ describe("SidebarNavigation", () => {
     expect(screen.getByRole("link", { name: "Biblioteca de documents" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Totes les àrees" })).toBeTruthy();
   });
+
+  it("l'alta d'empresa només surt a l'administració de la plataforma", () => {
+    const { unmount } = render(<SidebarNavigation pathname="/avui" onNavigate={() => undefined} />);
+    expect(screen.queryByRole("link", { name: /Alta d'empresa/ })).toBeNull();
+    unmount();
+    render(<SidebarNavigation pathname="/avui" onNavigate={() => undefined} platformAdmin />);
+    expect(screen.getByRole("link", { name: /Alta d'empresa/ }).getAttribute("href")).toBe("/plataforma/empreses/nova");
+  });
 });

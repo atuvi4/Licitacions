@@ -49,4 +49,8 @@ class UserRead(ORMModel):
     full_name: str | None = None
     is_active: bool
     last_login_at: datetime | None = None
+    #: Contrasenya temporal: la interficie porta a canviar-la; el backend bloqueja la resta.
+    must_change_password: bool = False
+    #: Administracio de la plataforma (alta d'empreses). No dona acces a cap empresa.
+    is_platform_admin: bool = False
     memberships: list[MembershipRead] = []

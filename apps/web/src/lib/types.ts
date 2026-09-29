@@ -111,6 +111,10 @@ export interface CurrentUser {
   full_name: string | null;
   is_active: boolean;
   last_login_at: string | null;
+  /** Contrasenya temporal: s'ha de canviar abans de fer res més (el backend ho bloqueja). */
+  must_change_password?: boolean;
+  /** Administració de la plataforma (alta d'empreses). No dona accés a cap empresa. */
+  is_platform_admin?: boolean;
   memberships: Membership[];
 }
 

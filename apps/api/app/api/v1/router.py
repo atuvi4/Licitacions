@@ -24,6 +24,7 @@ from app.api.v1.routers import (
     job_requests,
     matching,
     people,
+    platform,
     profile,
     projects,
     readiness,
@@ -77,6 +78,8 @@ company_scoped.include_router(review.router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
+# Administracio de la plataforma: alta d'empresa i propietari (nomes superusuaris).
+api_router.include_router(platform.router)
 api_router.include_router(config.router)
 api_router.include_router(companies.router)
 api_router.include_router(cpv.catalog_router)

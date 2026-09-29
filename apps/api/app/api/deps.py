@@ -15,7 +15,12 @@ from fastapi import Depends, Path, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.errors import AuthenticationError, NotFoundError
+from app.core.errors import (
+    AuthenticationError,
+    NotFoundError,
+    PasswordChangeRequiredError,
+    PermissionDeniedError,
+)
 from app.core.security import decode_access_token
 from app.db.session import get_session
 from app.models.identity import Company, CompanyMembership, User
@@ -30,7 +35,12 @@ def _extract_token(request: Request) -> str | None:
     return request.cookies.get(settings.SESSION_COOKIE_NAME)
 
 
-async def get_current_user(request: Request, session: SessionDep) -> User:
+async def get_session_user(request: Request, session: SessionDep) -> User:
+    """L'usuari de la sessio, encara que tingui un canvi de contrasenya pendent.
+
+    Nomes per a `/auth/me` i `/auth/password`: la resta de rutes fan servir
+    `CurrentUser`, que ho bloqueja.
+    """
     token = _extract_token(request)
     if not token:
         raise AuthenticationError("Cal iniciar sessio.")
@@ -50,7 +60,28 @@ async def get_current_user(request: Request, session: SessionDep) -> User:
     return user
 
 
+SessionUser = Annotated[User, Depends(get_session_user)]
+
+
+async def get_current_user(user: SessionUser) -> User:
+    # Imposat al backend, no a la interficie: amb la temporal no es fa res mes.
+    if user.must_change_password:
+        raise PasswordChangeRequiredError(
+            "Cal canviar la contrasenya temporal abans de continuar."
+        )
+    return user
+
+
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def get_platform_admin(user: CurrentUser) -> User:
+    if not user.is_superuser:
+        raise PermissionDeniedError("Nomes l'administracio de la plataforma pot fer aixo.")
+    return user
+
+
+PlatformAdmin = Annotated[User, Depends(get_platform_admin)]
 
 
 @dataclass(slots=True)

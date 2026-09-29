@@ -1,5 +1,6 @@
 "use client";
 
+import { Building } from "lucide-react";
 import Link from "next/link";
 
 import { cn } from "@/components/ui";
@@ -11,9 +12,13 @@ interface SidebarNavigationProps {
   onNavigate: () => void;
   /** Recomptes ja calculats; els absents no es pinten, i un 0 tampoc: només feina pendent. */
   counts?: Partial<Record<NavCountKey, number | string>>;
+  /** Administració de la plataforma: afegeix l'alta d'empreses. */
+  platformAdmin?: boolean;
 }
 
-export function SidebarNavigation({ pathname, onNavigate, counts = {} }: SidebarNavigationProps) {
+const PLATFORM_ONBOARDING = "/plataforma/empreses/nova";
+
+export function SidebarNavigation({ pathname, onNavigate, counts = {}, platformAdmin = false }: SidebarNavigationProps) {
   return (
     <nav aria-label="Navegació principal" className="scroll-thin min-h-0 flex-1 overflow-y-auto px-3.5 pt-2 pb-4">
       {NAVIGATION_GROUPS.map((group, index) => (
@@ -76,6 +81,25 @@ export function SidebarNavigation({ pathname, onNavigate, counts = {} }: Sidebar
           </ul>
         </div>
       ))}
+      {platformAdmin && (
+        <div className="mt-5">
+          <p className="mb-1.5 px-2.5 font-heading text-[10.5px] font-semibold tracking-[0.14em] text-sidebar-muted uppercase">
+            Plataforma
+          </p>
+          <ul className="space-y-0.5">
+            <li>
+              <Link
+                href={PLATFORM_ONBOARDING}
+                onClick={onNavigate}
+                className="flex min-h-9 items-center gap-2.5 px-2.5 py-2 text-[14px] leading-5 text-sidebar-ink/80 transition-colors duration-150 hover:bg-white/8 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+              >
+                <Building size={16} strokeWidth={1.5} aria-hidden className="shrink-0" />
+                <span className="min-w-0 flex-1 truncate">Alta d&apos;empresa</span>
+              </Link>
+            </li>
+          </ul>
+        </div>
+      )}
     </nav>
   );
 }

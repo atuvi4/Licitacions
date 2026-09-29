@@ -14,9 +14,9 @@ from datetime import UTC, datetime
 import sqlalchemy as sa
 from fastapi import APIRouter, Response, status
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import SessionDep, SessionUser
 from app.core.config import settings
-from app.core.errors import AuthenticationError
+from app.core.errors import AuthenticationError, ValidationError
 from app.core.security import create_access_token, hash_password, needs_rehash, verify_password
 from app.models.enums import AuditAction
 from app.models.identity import User
@@ -90,7 +90,7 @@ async def logout(response: Response) -> Message:
 
 
 @router.get("/me", response_model=UserRead, summary="Usuari autenticat i les seves empreses")
-async def me(user: CurrentUser) -> User:
+async def me(user: SessionUser) -> User:
     return user
 
 
@@ -101,11 +101,15 @@ async def me(user: CurrentUser) -> User:
     summary="Canvia la contrasenya",
 )
 async def change_password(
-    payload: PasswordChangeRequest, user: CurrentUser, session: SessionDep, response: Response
+    payload: PasswordChangeRequest, user: SessionUser, session: SessionDep, response: Response
 ) -> Message:
+    # `SessionUser`: es l'unica sortida d'una sessio amb contrasenya temporal.
     if not verify_password(payload.current_password, user.hashed_password):
         raise AuthenticationError("La contrasenya actual no es correcta.")
+    if payload.new_password == payload.current_password:
+        raise ValidationError("La contrasenya nova ha de ser diferent de l'actual.")
     user.hashed_password = hash_password(payload.new_password)
+    user.must_change_password = False
     await audit.record(
         session, action=AuditAction.UPDATE, user_id=user.id, summary="Canvi de contrasenya"
     )

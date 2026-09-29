@@ -21,6 +21,10 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
     is_superuser: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     last_login_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Contrasenya temporal (alta per la plataforma): no pot fer res mes fins que la canvia.
+    must_change_password: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
 
     # Preparat per a MFA. Cap flux l'utilitza encara.
     mfa_enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
@@ -29,6 +33,11 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     memberships: Mapped[list[CompanyMembership]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"
     )
+
+    @property
+    def is_platform_admin(self) -> bool:
+        """Administracio de la plataforma (alta d'empreses). No dona acces a cap empresa."""
+        return bool(self.is_superuser)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<User {self.email}>"

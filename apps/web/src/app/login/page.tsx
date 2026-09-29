@@ -5,6 +5,7 @@ import { Suspense, useState } from "react";
 
 import { Button, Field, Input } from "@/components/ui";
 import { ApiError, api } from "@/lib/api";
+import type { CurrentUser } from "@/lib/types";
 
 function LoginForm() {
   const router = useRouter();
@@ -19,9 +20,11 @@ function LoginForm() {
     setLoading(true);
     setError(null);
     try {
-      await api.post("/auth/login", { email, password });
+      const user = await api.post<CurrentUser>("/auth/login", { email, password });
       const next = searchParams.get("next");
-      router.replace(next && next.startsWith("/") ? next : "/avui");
+      // Una contrasenya temporal es canvia abans d'anar enlloc més.
+      if (user?.must_change_password) router.replace("/compte/contrasenya");
+      else router.replace(next && next.startsWith("/") ? next : "/avui");
       router.refresh();
     } catch (caught) {
       setError(
