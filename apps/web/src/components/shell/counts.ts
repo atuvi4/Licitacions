@@ -36,6 +36,17 @@ export function profileFooterLine(sections: CompletenessSection[]): string | nul
   return `${pending.length} àrees del perfil no estan al dia`;
 }
 
+/**
+ * Les «oportunitats obertes» del menú i de la cerca: les candidates del pre-fit.
+ *
+ * Si aquesta empresa encara no ha calculat mai el pre-fit, no se sap quantes
+ * n'hi ha: dir «0 oportunitats obertes» seria afirmar que no n'hi ha cap quan hi
+ * pot haver licitacions obertes sense puntuar. Aleshores no hi ha xifra.
+ */
+export function openOpportunities(summary: MatchSummary): number | undefined {
+  return summary.last_calculated_at ? summary.candidates : undefined;
+}
+
 export interface ShellCounts {
   avui?: number;
   oportunitats?: number;
@@ -70,7 +81,7 @@ export function useShellCounts(companyId: string, pathname: string): ShellCounts
       setCounts({
         avui: workspaces.status === "fulfilled" ? countPendingDecisions(workspaces.value) : undefined,
         candidatures: workspaces.status === "fulfilled" ? workspaces.value.length : undefined,
-        oportunitats: summary.status === "fulfilled" ? summary.value.candidates : undefined,
+        oportunitats: summary.status === "fulfilled" ? openOpportunities(summary.value) : undefined,
         perfil: profile.status === "fulfilled" ? `${profile.value.completeness.score} %` : undefined,
         profileLine: profile.status === "fulfilled" ? profileFooterLine(profile.value.completeness.sections) : undefined,
       });

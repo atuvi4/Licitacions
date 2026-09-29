@@ -12,7 +12,7 @@ from typing import Annotated, Literal
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import noload, selectinload
 
 from app.api.deps import CompanyCtx, SessionDep
 from app.api.v1.tender_filters import TenderFilters, tender_filters
@@ -101,52 +101,67 @@ async def list_matches(
 ):
     # Els criteris sobre la licitacio son exactament els del cataleg public:
     # canviar de vista no ha de canviar que es cerca.
-    filters = [CompanyTenderMatch.company_id == ctx.company_id, *criteria.criteria()]
+    #
+    # **«Totes» son les licitacions visibles, no els pre-fits.** Sense filtre de
+    # pre-fit, l'univers es el mateix que compta `summary.total_tenders`: cada
+    # licitacio visible per a l'empresa, amb el seu pre-fit AL COSTAT si n'hi ha
+    # (`match` nul si encara no s'ha calculat). Abans la llista partia dels
+    # pre-fits: una empresa sense cap pre-fit calculat veia «Totes 9» i una llista
+    # buida. Les vistes per estat o per puntuacio si que parteixen del pre-fit.
+    status_view = bool(match_status) or min_score is not None
+    same_company = sa.and_(
+        CompanyTenderMatch.tender_id == Tender.id,
+        CompanyTenderMatch.company_id == ctx.company_id,
+    )
+    filters = [visible_to_company(ctx.company_id), *criteria.criteria()]
     if match_status:
         filters.append(CompanyTenderMatch.status.in_(match_status))
     if min_score is not None:
         filters.append(CompanyTenderMatch.score >= min_score)
 
+    def scoped(select: sa.Select) -> sa.Select:
+        select = select.select_from(Tender)
+        if status_view:
+            return select.join(CompanyTenderMatch, same_company)
+        return select.outerjoin(CompanyTenderMatch, same_company)
+
     total = (
-        await session.execute(
-            sa.select(sa.func.count())
-            .select_from(CompanyTenderMatch)
-            .join(Tender, Tender.id == CompanyTenderMatch.tender_id)
-            .where(*filters)
-        )
+        await session.execute(scoped(sa.select(sa.func.count())).where(*filters))
     ).scalar_one()
 
-    # Les mateixes ordenacions que el cataleg public, mes la del pre-fit.
+    # Les mateixes ordenacions que el cataleg public, mes la del pre-fit. Sense
+    # pre-fit, la puntuacio va al final; el desempat es per licitacio (una
+    # empresa te com a molt un pre-fit per licitacio).
+    tie = Tender.id.desc()
     order = {
-        "score": (CompanyTenderMatch.score.desc().nullslast(), CompanyTenderMatch.id.desc()),
-        "deadline": (Tender.deadline_at.asc().nullslast(), CompanyTenderMatch.id.desc()),
-        "recent": (Tender.first_seen_at.desc(), CompanyTenderMatch.id.desc()),
-        "published": (Tender.publication_date.desc().nullslast(), CompanyTenderMatch.id.desc()),
+        "score": (CompanyTenderMatch.score.desc().nullslast(), tie),
+        "deadline": (Tender.deadline_at.asc().nullslast(), tie),
+        "recent": (Tender.first_seen_at.desc(), tie),
+        "published": (Tender.publication_date.desc().nullslast(), tie),
         "amount": (
             sa.func.coalesce(Tender.estimated_value, Tender.base_budget).desc().nullslast(),
-            CompanyTenderMatch.id.desc(),
+            tie,
         ),
     }[sort]
 
     rows = (
         await session.execute(
-            sa.select(CompanyTenderMatch)
-            .join(Tender, Tender.id == CompanyTenderMatch.tender_id)
+            scoped(sa.select(Tender, CompanyTenderMatch))
             .where(*filters)
             .options(
                 selectinload(CompanyTenderMatch.lot_matches),
-                selectinload(CompanyTenderMatch.tender).selectinload(Tender.cpvs),
-                selectinload(CompanyTenderMatch.tender).selectinload(Tender.lots),
-                selectinload(CompanyTenderMatch.tender).noload(Tender.documents),
+                selectinload(Tender.cpvs),
+                selectinload(Tender.lots),
+                noload(Tender.documents),
             )
             .order_by(*order)
             .limit(limit)
             .offset(offset)
         )
-    ).scalars().unique().all()
+    ).unique().all()
 
     profile = await load_profile(session, ctx.company_id)
-    codes = {item.cpv_code for row in rows for item in row.tender.cpvs}
+    codes = {item.cpv_code for tender, _match in rows for item in tender.cpvs}
     descriptions = dict(
         (
             await session.execute(
@@ -159,21 +174,21 @@ async def list_matches(
     items = [
         TenderMatchListItem(
             tender=TenderListItem(
-                id=row.tender.id,
-                external_id=row.tender.external_id,
-                expediente_number=row.tender.expediente_number,
-                title=row.tender.title,
-                status=row.tender.status,
-                procedure_type=row.tender.procedure_type,
-                contract_type=row.tender.contract_type,
-                estimated_value=row.tender.estimated_value,
-                base_budget=row.tender.base_budget,
-                currency=row.tender.currency,
-                publication_date=row.tender.publication_date,
-                deadline_at=row.tender.deadline_at,
-                nuts_code=row.tender.nuts_code,
-                place_of_execution=row.tender.place_of_execution,
-                buyer=BuyerSummary.model_validate(row.tender.buyer) if row.tender.buyer else None,
+                id=tender.id,
+                external_id=tender.external_id,
+                expediente_number=tender.expediente_number,
+                title=tender.title,
+                status=tender.status,
+                procedure_type=tender.procedure_type,
+                contract_type=tender.contract_type,
+                estimated_value=tender.estimated_value,
+                base_budget=tender.base_budget,
+                currency=tender.currency,
+                publication_date=tender.publication_date,
+                deadline_at=tender.deadline_at,
+                nuts_code=tender.nuts_code,
+                place_of_execution=tender.place_of_execution,
+                buyer=BuyerSummary.model_validate(tender.buyer) if tender.buyer else None,
                 cpvs=[
                     TenderCPVRead(
                         cpv_code=item.cpv_code,
@@ -181,19 +196,21 @@ async def list_matches(
                         description=descriptions.get(item.cpv_code),
                     )
                     for item in sorted(
-                        row.tender.cpvs, key=lambda i: (not i.is_main, i.cpv_code)
+                        tender.cpvs, key=lambda i: (not i.is_main, i.cpv_code)
                     )
                 ],
-                lot_count=len(row.tender.lots),
-                source_publication_count=row.tender.revision_count,
-                source_code=source_codes.get(row.tender.source_id),
-                is_modified=row.tender.revision_count > 1,
+                lot_count=len(tender.lots),
+                source_publication_count=tender.revision_count,
+                source_code=source_codes.get(tender.source_id),
+                is_modified=tender.revision_count > 1,
             ),
-            match=_to_read(
-                row, is_stale(row, profile.profile_changed_at, row.tender.last_changed_at)
+            match=(
+                _to_read(match, is_stale(match, profile.profile_changed_at, tender.last_changed_at))
+                if match is not None
+                else None
             ),
         )
-        for row in rows
+        for tender, match in rows
     ]
     return Page[TenderMatchListItem](items=items, total=total, limit=limit, offset=offset)
 

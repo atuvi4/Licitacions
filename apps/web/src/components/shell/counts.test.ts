@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CompletenessSection } from "@/lib/types";
 import type { WorkspaceSummary } from "@/lib/workspace";
 
-import { countPendingDecisions, profileFooterLine } from "./counts";
+import { countPendingDecisions, openOpportunities, profileFooterLine } from "./counts";
 
 function workspace(overrides: Partial<WorkspaceSummary>): WorkspaceSummary {
   return {
@@ -56,5 +56,21 @@ describe("profileFooterLine", () => {
     expect(profileFooterLine([section("empty"), section("partial"), section("complete")])).toBe(
       "2 àrees del perfil no estan al dia",
     );
+  });
+});
+
+describe("openOpportunities", () => {
+  const base = {
+    total_tenders: 9, actionable: 0, candidates: 0, high_fit: 0, low_fit: 0, excluded: 0,
+    closed: 0, insufficient_data: 0, stale: 0, rules_version: "v1",
+  };
+
+  it("sense cap pre-fit calculat no dona xifra: no diu «0 oportunitats obertes»", () => {
+    expect(openOpportunities({ ...base, last_calculated_at: null })).toBeUndefined();
+  });
+
+  it("amb el pre-fit calculat, les candidates (també quan són zero)", () => {
+    expect(openOpportunities({ ...base, candidates: 3, last_calculated_at: "2026-09-29T08:00:00Z" })).toBe(3);
+    expect(openOpportunities({ ...base, candidates: 0, last_calculated_at: "2026-09-29T08:00:00Z" })).toBe(0);
   });
 });
