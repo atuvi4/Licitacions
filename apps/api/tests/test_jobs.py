@@ -243,6 +243,8 @@ async def test_two_companies_share_one_execution_and_cannot_tell(
         body = response.json()
         assert body["status"] == "accepted" and body["already_requested"] is False
         assert body["progress"] is None
+        # A la cua i sense worker: ni l'una ni l'altra la veuen començada.
+        assert body["started"] is False
         assert "work_job" not in response.text and "linked" not in response.text
     assert await _count(session, WorkJob) == 1
     requests = (await session.scalars(sa.select(JobRequest))).all()
@@ -307,6 +309,56 @@ async def test_the_progress_seen_by_a_tenant_starts_at_its_request():
     assert job_requests.tenant_view(late, job)["progress"] == {"done": 2, "total": 5}
     assert job_requests.tenant_view(joined_now, job)["progress"] is None
     assert job_requests.tenant_view(late, job)["status"] == "accepted"
+
+
+def _pending(
+    requested_at: datetime, status: JobRequestStatus = JobRequestStatus.PENDING
+) -> JobRequest:
+    return JobRequest(
+        job_type=WorkJobType.PROCESS_TENDER_DOCUMENTS,
+        tender_id=uuid.uuid4(),
+        status=status,
+        progress_baseline=0,
+        requested_at=requested_at,
+        reused_existing=False,
+    )
+
+
+async def test_a_tenant_sees_queued_apart_from_running_without_learning_who_asked_first():
+    asked = datetime.now(UTC)
+    request = _pending(asked)
+
+    # A la cua (cap worker l'ha agafada) o sense execució: encara no ha començat.
+    queued = WorkJob(status=WorkJobStatus.QUEUED)
+    assert job_requests.tenant_view(request, queued)["started"] is False
+    assert job_requests.tenant_view(request, None)["started"] is False
+
+    # Començada després de la petició: s'executa per a aquesta petició.
+    running = WorkJob(status=WorkJobStatus.RUNNING, started_at=asked + timedelta(seconds=5))
+    assert job_requests.tenant_view(request, running)["started"] is True
+    orphaned = WorkJob(status=WorkJobStatus.ORPHANED, started_at=asked + timedelta(seconds=5))
+    assert job_requests.tenant_view(request, orphaned)["started"] is True
+
+    # Començada ABANS de la petició (la d'una altra empresa): no es revela fins
+    # que avança des d'aquesta, com el progrés; i mai se n'exposa l'hora.
+    earlier = WorkJob(status=WorkJobStatus.RUNNING, started_at=asked - timedelta(minutes=3),
+                      progress_current=3, progress_total=8)
+    joined = _pending(asked)
+    joined.progress_baseline = 3
+    view = job_requests.tenant_view(joined, earlier)
+    assert view["started"] is False and view["progress"] is None
+    assert "started_at" not in view
+    earlier.progress_current = 5
+    assert job_requests.tenant_view(joined, earlier)["started"] is True
+
+    # SQLite torna dates sense zona: la comparació no peta.
+    naive_start = (asked + timedelta(seconds=1)).replace(tzinfo=None)
+    naive = WorkJob(status=WorkJobStatus.RUNNING, started_at=naive_start)
+    assert job_requests.tenant_view(request, naive)["started"] is True
+
+    # Acabada: el camp ja no diu res; l'estat final és el que compta.
+    for status in (JobRequestStatus.SUCCEEDED, JobRequestStatus.FAILED, JobRequestStatus.CANCELLED):
+        assert job_requests.tenant_view(_pending(asked, status), running)["started"] is None
 
 
 async def test_cancelling_detaches_the_request_and_only_cancels_unneeded_queued_work(

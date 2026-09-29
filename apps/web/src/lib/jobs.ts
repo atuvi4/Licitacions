@@ -27,6 +27,8 @@ export interface JobRequest {
   requested_at: string;
   finished_at: string | null;
   progress: { done: number; total: number } | null;
+  /** Mentre és `accepted`: `false` = a la cua, encara no ha començat. */
+  started?: boolean | null;
   already_requested?: boolean;
 }
 

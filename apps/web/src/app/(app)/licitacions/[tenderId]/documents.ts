@@ -62,10 +62,17 @@ export interface Pill {
   label: string;
 }
 
+/** Acceptada però encara a la cua: cap worker l'ha començada. */
+export function isQueued(request: JobRequest | null): boolean {
+  return request?.status === "accepted" && request.started === false && !request.progress;
+}
+
 /** La feina de processat, tal com està: un 200 en demanar-la no és «processat». */
 export function jobPill(request: JobRequest | null): Pill | null {
   if (!request) return null;
   const level = jobLevel(request);
+  // «accepted» vol dir a la cua o executant-se: no es diu «Processant» si no ha començat.
+  if (isQueued(request)) return { level: "neutral", label: "En cua · pendent d'inici" };
   if (request.status === "accepted") {
     return {
       level,

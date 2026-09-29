@@ -53,7 +53,7 @@ import {
 import { DocumentReviewPanel, NewVersionButton } from "@/components/DocumentReviewPanel";
 import type { WorkspaceDetail } from "@/lib/workspace";
 
-import { extractedText, fileErrorText, jobPill, readingSubtext, selectionLabel, versionText } from "./documents";
+import { extractedText, fileErrorText, isQueued, jobPill, readingSubtext, selectionLabel, versionText } from "./documents";
 import {
   amountMeta,
   candidatureMeta,
@@ -363,9 +363,15 @@ function TenderDetail() {
         return (
           <div className="flex flex-col items-start gap-1">
             {processingIds.has(document.id) ? (
-              <StatusPill level="running" size="sm">
-                Processant
-              </StatusPill>
+              isQueued(jobState) ? (
+                <StatusPill level="neutral" size="sm">
+                  En cua
+                </StatusPill>
+              ) : (
+                <StatusPill level="running" size="sm">
+                  Processant
+                </StatusPill>
+              )
             ) : (
               <StatusPill level={DOCUMENT_STATE_LEVEL[state]} size="sm">
                 {DOCUMENT_STATE_LABELS[state]}

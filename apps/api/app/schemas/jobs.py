@@ -42,6 +42,9 @@ class JobRequestRead(BaseModel):
     requested_at: datetime
     finished_at: datetime | None = None
     progress: JobProgressRead | None = None
+    #: Mentre es `accepted`: `false` si encara es a la cua, `true` si ja s'executa
+    #: per a aquesta peticio. `null` quan ja ha acabat.
+    started: bool | None = None
 
 
 class JobSubmissionRead(JobRequestRead):

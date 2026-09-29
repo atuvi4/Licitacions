@@ -238,6 +238,20 @@ describe("Fitxa de licitació", () => {
     expect([...container.querySelectorAll("tbody [data-level]")].map((p) => p.textContent?.trim())).toContain("No descarregat");
   });
 
+  it("Plecs: feina acceptada però a la cua → «En cua · pendent d'inici», mai «Processant»; les files guarden el seu estat", async () => {
+    search = "tab=plecs";
+    jobRequest = { id: "j1", job_type: "process_tender_documents", tender_id: "t1", status: "accepted", outcome: null, reused_existing: false, result_run_id: null, error_code: null, requested_at: "2026-09-16T10:00:00Z", finished_at: null, progress: null, started: false };
+    respondWith(base());
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByText("Plec tècnic.pdf");
+    const pills = [...container.querySelectorAll("[data-level]")].map((p) => p.textContent?.trim());
+    expect(pills).toContain("En cua · pendent d'inici");
+    expect(pills.some((label) => label?.startsWith("Processant"))).toBe(false);
+    // L'estat de cada document és el que té desat, no el de la feina.
+    expect([...container.querySelectorAll("tbody [data-level]")].map((p) => p.textContent?.trim())).toContain("No descarregat");
+    for (const button of screen.getAllByRole("button", { name: /Processa|Reprocessa/ })) expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("Plecs: feina fallada → ErrorState amb la frase del diccionari i el codi només al detall tècnic", async () => {
     search = "tab=plecs";
     jobRequest = { id: "j1", job_type: "process_tender_documents", tender_id: "t1", status: "failed", outcome: null, reused_existing: false, result_run_id: null, error_code: "worker_lost", requested_at: "2026-09-16T10:00:00Z", finished_at: "2026-09-16T10:01:00Z", progress: null };

@@ -7,6 +7,7 @@ import {
   FILE_ERROR_MESSAGES,
   extractedText,
   fileErrorText,
+  isQueued,
   jobPill,
   readingSubtext,
   selectionLabel,
@@ -95,6 +96,19 @@ describe("pastilla de la feina", () => {
     expect(jobPill(job({ status: "succeeded", outcome: "executed" }))).toEqual({ level: "ready", label: "Processat" });
     expect(jobPill(job({ status: "succeeded", outcome: "partial" }))).toEqual({ level: "attention", label: "Processat amb avisos" });
     expect(jobPill(job({ status: "failed", error_code: "worker_lost" }))).toEqual({ level: "blocking", label: "No s'ha pogut processar" });
+  });
+
+  it("acceptada no vol dir processant: a la cua es diu «En cua»; començada, «Processant»", () => {
+    expect(jobPill(job({ started: false }))).toEqual({ level: "neutral", label: "En cua · pendent d'inici" });
+    expect(isQueued(job({ started: false }))).toBe(true);
+    expect(jobPill(job({ started: true }))).toEqual({ level: "running", label: "Processant" });
+    expect(jobPill(job({ started: true, progress: { done: 2, total: 5 } }))).toEqual({ level: "running", label: "Processant · 2 de 5" });
+    // Si hi ha progrés, ha començat encara que el camp no ho digui.
+    expect(jobPill(job({ started: false, progress: { done: 1, total: 3 } }))?.label).toBe("Processant · 1 de 3");
+    // Els estats finals no canvien.
+    expect(jobPill(job({ status: "succeeded", outcome: "partial", started: null }))).toEqual({ level: "attention", label: "Processat amb avisos" });
+    expect(jobPill(job({ status: "cancelled", started: null }))?.label).toBe("Cancel·lada");
+    expect(isQueued(job({ status: "succeeded", started: false }))).toBe(false);
   });
 });
 

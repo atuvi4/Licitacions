@@ -25,6 +25,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import sqlalchemy as sa
@@ -500,6 +501,32 @@ _TENANT_STATUS = {
 }
 
 
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
+
+
+def _started_for_tenant(
+    request: JobRequest, job: WorkJob | None, progress: dict[str, int] | None
+) -> bool | None:
+    """Si la feina ja ha començat, vist des de la peticio d'aquesta empresa.
+
+    Nomes te sentit mentre la peticio es pendent. Com amb el progres, no es
+    revela res d'abans de la peticio: una execucio comencada abans (per la
+    peticio d'una altra empresa) compta com a comencada nomes quan ha avancat
+    des d'aquesta. Mai s'exposa `started_at`: diria quan ho va demanar un altre.
+    """
+    if request.status != JobRequestStatus.PENDING:
+        return None
+    if job is None or job.status not in (WorkJobStatus.RUNNING, WorkJobStatus.ORPHANED):
+        return False
+    started_at, requested_at = _utc(job.started_at), _utc(request.requested_at)
+    if started_at is not None and requested_at is not None and started_at >= requested_at:
+        return True
+    return progress is not None
+
+
 def tenant_view(request: JobRequest, job: WorkJob | None) -> dict[str, Any]:
     """El que pot veure l'empresa que ha fet la peticio, i res mes."""
     progress = None
@@ -528,6 +555,7 @@ def tenant_view(request: JobRequest, job: WorkJob | None) -> dict[str, Any]:
         "requested_at": request.requested_at,
         "finished_at": request.finished_at,
         "progress": progress,
+        "started": _started_for_tenant(request, job, progress),
     }
 
 
