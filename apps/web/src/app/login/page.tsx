@@ -5,7 +5,7 @@ import { Suspense, useState } from "react";
 
 import { Button, Field, Input } from "@/components/ui";
 import { ApiError, api } from "@/lib/api";
-import type { CurrentUser } from "@/lib/types";
+import { type CurrentUser, TUVI_ADMIN_HOME, isTuviAdmin } from "@/lib/types";
 
 function LoginForm() {
   const router = useRouter();
@@ -24,6 +24,8 @@ function LoginForm() {
       const next = searchParams.get("next");
       // Una contrasenya temporal es canvia abans d'anar enlloc més.
       if (user?.must_change_password) router.replace("/compte/contrasenya");
+      // L'Administració Tuvi no té empresa: la seva àrea és la plataforma.
+      else if (isTuviAdmin(user)) router.replace(TUVI_ADMIN_HOME);
       else router.replace(next && next.startsWith("/") ? next : "/avui");
       router.refresh();
     } catch (caught) {

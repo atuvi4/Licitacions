@@ -1,4 +1,7 @@
-"""Qui administra la plataforma (`users.is_superuser`): concedir, retirar, llistar.
+"""Qui fa d'Administracio Tuvi (`users.is_superuser`): concedir, retirar, llistar.
+
+Es un compte intern de Tuvi, separat dels clients: no pot pertanyer a cap
+empresa (es comprova en concedir-lo i a cada peticio).
 
     python -m app.platform_admin list
     python -m app.platform_admin grant <correu> --confirm <correu>
@@ -20,8 +23,12 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import AuditAction
-from app.models.identity import User
+from app.models.identity import CompanyMembership, User
 from app.services import audit
+
+
+class HasCompanyError(ValueError):
+    """Un compte d'empresa no pot ser Administracio Tuvi (identitats separades)."""
 
 
 async def _find(session: AsyncSession, email: str) -> User | None:
@@ -36,6 +43,17 @@ async def set_platform_admin(session: AsyncSession, email: str, *, value: bool) 
         raise LookupError(f"No hi ha cap usuari {email}.")
     if user.is_superuser == value:
         return user
+    if value:
+        memberships = await session.scalar(
+            sa.select(sa.func.count())
+            .select_from(CompanyMembership)
+            .where(CompanyMembership.user_id == user.id)
+        )
+        if memberships:
+            raise HasCompanyError(
+                f"{user.email} pertany a una empresa: l'Administracio Tuvi ha de ser un compte "
+                "intern sense empresa."
+            )
     user.is_superuser = value
     await audit.record(
         session,
@@ -87,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
                     user = await set_platform_admin(
                         session, args.email, value=args.command == "grant"
                     )
-                except LookupError as exc:
+                except (LookupError, HasCompanyError) as exc:
                     print(f"{exc} No s'ha fet res.", file=sys.stderr)
                     return 1
                 state = "administra" if user.is_superuser else "ja no administra"

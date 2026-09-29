@@ -118,6 +118,14 @@ export interface CurrentUser {
   memberships: Membership[];
 }
 
+/** Administració Tuvi: compte intern, sense cap empresa (el backend ho imposa igual). */
+export function isTuviAdmin(user: Pick<CurrentUser, "is_platform_admin" | "memberships"> | null | undefined): boolean {
+  return Boolean(user?.is_platform_admin) && (user?.memberships.length ?? 0) === 0;
+}
+
+/** On comença cada compte després d'entrar. */
+export const TUVI_ADMIN_HOME = "/plataforma/empreses/nova";
+
 export interface Company extends Audited {
   legal_name: string;
   trade_name: string | null;

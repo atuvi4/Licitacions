@@ -14,12 +14,12 @@ import pytest
 import sqlalchemy as sa
 
 from app import platform_admin
-from app.core.security import verify_password
+from app.core.security import hash_password, verify_password
 from app.models.audit import AuditLog
 from app.models.enums import MembershipRole
 from app.models.identity import Company, CompanyMembership, User
 from app.services import platform_onboarding
-from tests.conftest import create_user_with_company, login
+from tests.conftest import TEST_PASSWORD, login
 
 pytestmark = pytest.mark.asyncio
 
@@ -27,13 +27,23 @@ URL = "/api/v1/platform/companies"
 NEW_PASSWORD = "Indalec-2026-nova"
 
 
-@pytest.fixture
-async def admin(db) -> User:
-    user, _ = await create_user_with_company(
-        db, email=f"admin-{uuid.uuid4().hex[:8]}@plataforma-qa.com", company_name="Plataforma"
+async def create_operator(db) -> User:
+    """Administracio Tuvi: un compte intern, sense cap empresa."""
+    user = User(
+        email=f"operador-{uuid.uuid4().hex[:8]}@tuvi-qa.com",
+        hashed_password=hash_password(TEST_PASSWORD),
+        full_name="Operador Tuvi",
+        is_active=True,
     )
+    db.add(user)
+    await db.commit()
     await platform_admin.set_platform_admin(db, user.email, value=True)
     return user
+
+
+@pytest.fixture
+async def admin(db) -> User:
+    return await create_operator(db)
 
 
 @pytest.fixture
@@ -152,6 +162,47 @@ async def test_qui_no_administra_la_plataforma_no_pot_donar_d_alta(client_a, cli
 async def test_l_administrador_es_veu_com_a_tal(admin_client):
     me = (await admin_client.get("/api/v1/auth/me")).json()
     assert me["is_platform_admin"] is True and me["must_change_password"] is False
+    # Identitat separada: cap empresa a la sessio ni al llistat.
+    assert me["memberships"] == []
+    assert (await admin_client.get("/api/v1/companies")).json() == []
+
+
+async def test_l_administracio_tuvi_no_es_usuaria_de_l_empresa_que_crea(admin_client):
+    created = (await admin_client.post(URL, json=_payload())).json()
+    company_id = created["company"]["id"]
+    assert (await admin_client.get("/api/v1/companies")).json() == []
+    assert (await admin_client.get(f"/api/v1/companies/{company_id}")).status_code == 404
+    me = (await admin_client.get("/api/v1/auth/me")).json()
+    assert me["memberships"] == []
+
+
+async def test_el_rol_tuvi_no_es_dona_a_un_compte_d_empresa(db, tenant_a, capsys):
+    owner, _ = tenant_a
+    with pytest.raises(platform_admin.HasCompanyError):
+        await platform_admin.set_platform_admin(db, owner.email, value=True)
+    await db.refresh(owner)
+    assert owner.is_superuser is False
+
+
+async def test_un_superusuari_amb_empresa_no_administra_ni_entra(db, tenant_a, client_factory):
+    """Si algu el marques a ma a la base, les dues portes continuen tancades."""
+    owner, company = tenant_a
+    owner.is_superuser = True
+    await db.commit()
+    http_client = client_factory()
+    await login(http_client, owner.email)
+
+    denied = await http_client.post(URL, json=_payload())
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "permission_denied"
+    assert (await http_client.get(f"/api/v1/companies/{company.id}")).status_code == 404
+    assert (await http_client.get("/api/v1/companies")).json() == []
+
+
+async def test_l_operador_no_pot_ser_propietari_d_un_client(admin_client, admin):
+    reused = await admin_client.post(URL, json=_payload(owner_email=admin.email))
+    assert reused.status_code == 409
+    assert reused.json()["error"]["code"] == "owner_email_in_use"
 
 
 async def test_no_es_repeteix_ni_el_correu_ni_el_nif(admin_client, session, tenant_a):
@@ -213,8 +264,12 @@ async def test_la_temporal_es_llegible_i_passa_la_regla_de_contrasenyes():
         assert not value.isdigit() and not value.isalpha()
 
 
-async def test_el_rol_de_plataforma_nomes_es_dona_per_linia_d_ordres(db, tenant_a, session):
-    user, _ = tenant_a
+async def test_el_rol_de_plataforma_nomes_es_dona_per_linia_d_ordres(db, session):
+    # Un compte intern, sense empresa: l'unic a qui es pot donar.
+    user = User(email="intern@tuvi-qa.com", hashed_password=hash_password(TEST_PASSWORD),
+                full_name="Intern", is_active=True)
+    db.add(user)
+    await db.commit()
     await platform_admin.set_platform_admin(db, user.email.upper(), value=True)
     assert [u.email for u in await platform_admin.list_platform_admins(db)] == [user.email]
     await platform_admin.set_platform_admin(db, user.email, value=False)

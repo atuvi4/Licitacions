@@ -28,11 +28,11 @@ describe("SidebarNavigation", () => {
     expect(screen.getByRole("link", { name: "Totes les àrees" })).toBeTruthy();
   });
 
-  it("l'alta d'empresa només surt a l'administració de la plataforma", () => {
-    const { unmount } = render(<SidebarNavigation pathname="/avui" onNavigate={() => undefined} />);
+  it("l'app d'empresa diu «Administració de l'empresa» i no porta res de l'Administració Tuvi", () => {
+    render(<SidebarNavigation pathname="/avui" onNavigate={() => undefined} />);
+    expect(screen.getByText("Administració de l'empresa")).toBeTruthy();
+    expect(screen.queryByText(/Administració Tuvi|Plataforma/)).toBeNull();
     expect(screen.queryByRole("link", { name: /Alta d'empresa/ })).toBeNull();
-    unmount();
-    render(<SidebarNavigation pathname="/avui" onNavigate={() => undefined} platformAdmin />);
-    expect(screen.getByRole("link", { name: /Alta d'empresa/ }).getAttribute("href")).toBe("/plataforma/empreses/nova");
+    expect([...document.querySelectorAll("a")].some((a) => a.getAttribute("href")?.startsWith("/plataforma"))).toBe(false);
   });
 });

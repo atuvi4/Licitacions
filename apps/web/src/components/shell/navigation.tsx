@@ -30,7 +30,8 @@ export const NAVIGATION_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: "Empresa",
+    // L'administració de la PRÒPIA empresa; la de la plataforma és l'«Administració Tuvi», fora de l'app.
+    label: "Administració de l'empresa",
     items: [{ href: "/empresa", label: "El nostre perfil", icon: Building2, countKey: "perfil" }],
   },
 ];

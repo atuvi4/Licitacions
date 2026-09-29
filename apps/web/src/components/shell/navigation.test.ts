@@ -4,7 +4,7 @@ import { NAVIGATION_GROUPS, PROFILE_SUBNAV, isNavigationActive, isSubnavActive }
 
 describe("navegació del shell", () => {
   it("té quatre destins en dos grups: Treball i Empresa", () => {
-    expect(NAVIGATION_GROUPS.map((group) => group.label)).toEqual(["Treball", "Empresa"]);
+    expect(NAVIGATION_GROUPS.map((group) => group.label)).toEqual(["Treball", "Administració de l'empresa"]);
     expect(NAVIGATION_GROUPS[0].items.map((item) => item.label)).toEqual(["Avui", "Oportunitats", "Candidatures"]);
     expect(NAVIGATION_GROUPS[1].items.map((item) => item.label)).toEqual(["El nostre perfil"]);
     expect(NAVIGATION_GROUPS.flatMap((group) => group.items)).toHaveLength(4);

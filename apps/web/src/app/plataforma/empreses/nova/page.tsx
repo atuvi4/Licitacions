@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { StandalonePage } from "@/components/StandalonePage";
 import { Button, Field, Input, LinkButton, PageSkeleton } from "@/components/ui";
 import { ApiError, api } from "@/lib/api";
-import type { CurrentUser } from "@/lib/types";
+import { type CurrentUser, isTuviAdmin } from "@/lib/types";
 
 interface Onboarded {
   company: { id: string; legal_name: string; trade_name: string | null; tax_id: string | null };
@@ -15,6 +15,21 @@ interface Onboarded {
 }
 
 const EMPTY = { legal_name: "", trade_name: "", tax_id: "", owner_full_name: "", owner_email: "" };
+
+/** Qui és i on és: l'àrea interna de Tuvi, no l'administració d'una empresa. */
+function TuviAdminBar({ email, onLogout }: { email: string; onLogout: () => void }) {
+  return (
+    <div className="mb-5 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+      <div>
+        <p className="font-heading text-kicker font-semibold tracking-[0.1em] text-brand-strong uppercase">Administració Tuvi</p>
+        <p className="text-caption text-muted">{email}</p>
+      </div>
+      <button type="button" onClick={onLogout} className="text-[13px] text-muted underline decoration-1 underline-offset-2">
+        Tanca la sessió
+      </button>
+    </div>
+  );
+}
 
 /**
  * Alta d'una empresa client i del seu propietari. Només l'administració de la
@@ -67,6 +82,14 @@ export default function NewCompanyPage() {
     }
   }
 
+  async function logout() {
+    try {
+      await api.post("/auth/logout", {});
+    } finally {
+      router.replace("/login");
+    }
+  }
+
   async function copy(value: string) {
     try {
       await navigator.clipboard.writeText(value);
@@ -81,12 +104,13 @@ export default function NewCompanyPage() {
     return <PageSkeleton variant="detail" title="Alta d'empresa" context="comprovant l'accés…" />;
   }
 
-  if (!me.is_platform_admin) {
+  if (!isTuviAdmin(me)) {
     return (
       <StandalonePage>
         <h1 className="mb-1 text-base font-semibold text-ink">Alta d&apos;empresa</h1>
         <p className="mb-5 text-[13px] text-muted">
-          Aquesta pàgina és de l&apos;administració de la plataforma. El teu compte no hi té accés.
+          Aquesta pàgina és de l&apos;Administració Tuvi. Els comptes d&apos;empresa, també els propietaris, no hi
+          tenen accés: la vostra empresa s&apos;administra des de l&apos;aplicació.
         </p>
         <LinkButton href="/avui" variant="primary" size="md">
           Torna a l&apos;aplicació
@@ -98,6 +122,7 @@ export default function NewCompanyPage() {
   if (result) {
     return (
       <StandalonePage wide>
+        <TuviAdminBar email={me.email} onLogout={() => void logout()} />
         <h1 className="mb-1 text-base font-semibold text-ink">Empresa donada d&apos;alta</h1>
         <dl className="mt-4 grid gap-3 text-[13px] sm:grid-cols-2">
           <div>
@@ -130,11 +155,6 @@ export default function NewCompanyPage() {
           <Button variant="primary" onClick={() => setResult(null)}>
             Dona d&apos;alta una altra empresa
           </Button>
-          {me.memberships.length > 0 && (
-            <LinkButton href="/avui" variant="secondary" size="md">
-              Torna a l&apos;aplicació
-            </LinkButton>
-          )}
         </div>
       </StandalonePage>
     );
@@ -142,10 +162,12 @@ export default function NewCompanyPage() {
 
   return (
     <StandalonePage wide>
+      <TuviAdminBar email={me.email} onLogout={() => void logout()} />
       <h1 className="mb-1 text-base font-semibold text-ink">Alta d&apos;empresa</h1>
       <p className="mb-5 text-[13px] text-muted">
-        Crea l&apos;empresa client i el compte del seu propietari. El propietari rebrà una contrasenya temporal i
-        l&apos;haurà de canviar en entrar.
+        Crea l&apos;empresa client i el compte del seu propietari, que l&apos;administrarà des de l&apos;aplicació.
+        El propietari rebrà una contrasenya temporal i l&apos;haurà de canviar en entrar. Tu no quedes com a usuari de
+        l&apos;empresa.
       </p>
       <form onSubmit={onSubmit} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -176,11 +198,6 @@ export default function NewCompanyPage() {
           <Button type="submit" variant="primary" loading={saving}>
             Dona d&apos;alta
           </Button>
-          {me.memberships.length > 0 && (
-            <LinkButton href="/avui" variant="ghost" size="md">
-              Cancel·la
-            </LinkButton>
-          )}
         </div>
       </form>
     </StandalonePage>

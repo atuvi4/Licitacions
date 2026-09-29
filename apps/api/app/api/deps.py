@@ -76,8 +76,13 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
 async def get_platform_admin(user: CurrentUser) -> User:
-    if not user.is_superuser:
-        raise PermissionDeniedError("Nomes l'administracio de la plataforma pot fer aixo.")
+    """Administracio Tuvi: un compte intern, separat de qualsevol empresa client.
+
+    Un compte amb empresa no hi entra encara que tingui `is_superuser`: el
+    propietari d'una empresa administra la seva empresa, no la plataforma.
+    """
+    if not user.is_superuser or user.memberships:
+        raise PermissionDeniedError("Nomes l'Administracio Tuvi pot fer aixo.")
     return user
 
 
@@ -110,7 +115,12 @@ async def get_company_context(
 
     Si no hi pertany es retorna 404 i no 403: no volem confirmar l'existencia
     d'empreses d'altres tenants (prevencio d'IDOR i enumeracio).
+
+    L'Administracio Tuvi no entra mai a les dades d'una empresa client, tampoc
+    si per error se li hagues donat una pertinenca.
     """
+    if user.is_superuser:
+        raise NotFoundError("Empresa no trobada.")
     row = (
         await session.execute(
             sa.select(Company, CompanyMembership)

@@ -31,12 +31,13 @@ describe("SessionProvider i l'alta", () => {
     expect(screen.queryByText("app")).toBeNull();
   });
 
-  it("un administrador de plataforma sense empresa pot anar a l'alta", async () => {
+  it("l'Administració Tuvi no entra a l'app d'empresa: va a la seva àrea i no demana res més", async () => {
     get.mockImplementation((path: string) => Promise.resolve(path === "/auth/me" ? { ...base, is_platform_admin: true } : {}));
     render(<SessionProvider><p>app</p></SessionProvider>);
     await flush();
-    const link = screen.getByRole("link", { name: "Dona d'alta una empresa" });
-    expect(link.getAttribute("href")).toBe("/plataforma/empreses/nova");
+    expect(replace).toHaveBeenCalledWith("/plataforma/empreses/nova");
+    expect(get.mock.calls.map(([path]) => path)).toEqual(["/auth/me"]);
+    expect(screen.queryByText("app")).toBeNull();
   });
 
   it("qui no administra i no té empresa continua veient només «tanca la sessió»", async () => {

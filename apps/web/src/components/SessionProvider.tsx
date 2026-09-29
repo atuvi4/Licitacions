@@ -11,9 +11,9 @@ import {
   type ReactNode,
 } from "react";
 
-import { Button, EmptyState, ErrorState, LinkButton, PageSkeleton } from "@/components/ui";
+import { Button, EmptyState, ErrorState, PageSkeleton } from "@/components/ui";
 import { ApiError, api } from "@/lib/api";
-import type { ClientConfig, CurrentUser, Membership } from "@/lib/types";
+import { type ClientConfig, type CurrentUser, type Membership, TUVI_ADMIN_HOME, isTuviAdmin } from "@/lib/types";
 
 interface SessionValue {
   user: CurrentUser;
@@ -44,6 +44,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // Amb una contrasenya temporal el backend no deixa fer res més: primer, canviar-la.
       if (me.must_change_password) {
         router.replace("/compte/contrasenya");
+        return;
+      }
+      // L'Administració Tuvi no és usuària de cap empresa: no entra a l'app d'empresa.
+      if (isTuviAdmin(me)) {
+        router.replace(TUVI_ADMIN_HOME);
         return;
       }
       const clientConfig = await api.get<ClientConfig>("/config");
@@ -137,21 +142,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           <EmptyState
             className="w-full max-w-lg"
             title="Aquest usuari no té cap empresa assignada"
-            description={
-              user.is_platform_admin
-                ? "Administres la plataforma: pots donar d'alta una empresa i el seu propietari."
-                : "Demana a un administrador que et doni accés a una empresa. Mentrestant no hi ha res a veure aquí."
-            }
+            description="Demana a un administrador que et doni accés a una empresa. Mentrestant no hi ha res a veure aquí."
             action={
-              user.is_platform_admin ? (
-                <LinkButton href="/plataforma/empreses/nova" variant="primary" size="md">
-                  Dona d&apos;alta una empresa
-                </LinkButton>
-              ) : (
-                <Button variant="primary" size="md" onClick={() => void logout()}>
-                  Tanca la sessió
-                </Button>
-              )
+              <Button variant="primary" size="md" onClick={() => void logout()}>
+                Tanca la sessió
+              </Button>
             }
           />
         </main>

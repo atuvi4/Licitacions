@@ -83,14 +83,39 @@ describe("Alta d'empresa i propietari", () => {
     expect(screen.queryByRole("region", { name: "Contrasenya temporal" })).toBeNull();
   });
 
-  it("qui no administra la plataforma no veu el formulari ni pot enviar res", async () => {
-    get.mockResolvedValue({ ...admin, is_platform_admin: false, memberships: [{ company_id: "c1" }] });
+  it("un propietari d'empresa no hi entra: és l'Administració Tuvi, no la de la seva empresa", async () => {
+    get.mockResolvedValue({ ...admin, is_platform_admin: false, memberships: [{ company_id: "c1", role: "owner" }] });
     render(<NewCompanyPage />);
     await flush();
 
-    expect(screen.getByText(/El teu compte no hi té accés/)).toBeTruthy();
+    expect(screen.getByText(/Aquesta pàgina és de l'Administració Tuvi/)).toBeTruthy();
+    expect(screen.getByText(/també els propietaris, no hi tenen accés/)).toBeTruthy();
     expect(screen.queryByLabelText(/Nom legal/)).toBeNull();
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it("un superusuari amb empresa tampoc (el mateix criteri que el backend)", async () => {
+    get.mockResolvedValue({ ...admin, is_platform_admin: true, memberships: [{ company_id: "c1", role: "owner" }] });
+    render(<NewCompanyPage />);
+    await flush();
+    expect(screen.queryByLabelText(/Nom legal/)).toBeNull();
+  });
+
+  it("l'àrea es diu «Administració Tuvi», diu qui hi és i permet sortir", async () => {
+    get.mockResolvedValue(admin);
+    post.mockResolvedValue({});
+    render(<NewCompanyPage />);
+    await flush();
+    expect(screen.getByText("Administració Tuvi")).toBeTruthy();
+    expect(screen.getByText("ops@tuvi.cat")).toBeTruthy();
+    expect(screen.getByText(/Tu no quedes com a usuari de l'empresa/)).toBeTruthy();
+    // Cap sortida cap a l'app d'empresa: l'operador no en té.
+    expect(screen.queryByRole("link", { name: /Torna a l'aplicació|Cancel·la/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Tanca la sessió" }));
+    await flush();
+    expect(post).toHaveBeenCalledWith("/auth/logout", {});
+    expect(replace).toHaveBeenCalledWith("/login");
   });
 
   it("amb una contrasenya temporal pendent, primer s'ha de canviar", async () => {

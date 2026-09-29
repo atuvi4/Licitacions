@@ -25,6 +25,9 @@ router = APIRouter(tags=["companies"])
 
 @router.get("/companies", response_model=list[CompanyRead], summary="Empreses de l'usuari")
 async def list_my_companies(session: SessionDep, user: CurrentUser) -> list[Company]:
+    # L'Administracio Tuvi no es usuaria de cap empresa.
+    if user.is_superuser:
+        return []
     rows = (
         await session.execute(
             sa.select(Company)
