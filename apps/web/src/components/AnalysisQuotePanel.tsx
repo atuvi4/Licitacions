@@ -10,9 +10,8 @@
  * Mai un botó que analitzi directament: sempre preview → confirmació humana.
  */
 
-import { Button, PermissionNote } from "@/components/ui";
+import { Button } from "@/components/ui";
 import type { AnalysisQuote } from "@/lib/jobs";
-import { roleLabel } from "@/lib/labels";
 
 const SKIPPED_REASONS: Record<string, string> = {
   document_not_processed: "no processat",
@@ -30,7 +29,7 @@ export function AnalysisQuotePanel({
   quote,
   notice,
   canConfirm,
-  confirmRoles,
+  rerun,
   confirming,
   onConfirm,
   onCancel,
@@ -38,26 +37,25 @@ export function AnalysisQuotePanel({
   quote: AnalysisQuote;
   notice: string | null;
   canConfirm: boolean;
-  /** Rols que sí que poden confirmar (`analysis-limits.confirm_roles`). */
-  confirmRoles?: string[];
+  /** Ja hi ha una anàlisi: aquesta la tornaria a fer. */
+  rerun: boolean;
   confirming: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   const reused = quote.reusable_run_id !== null && quote.chunks_to_send === 0;
   const blocked = !quote.allowed;
-  const who = confirmRoles && confirmRoles.length > 0 ? confirmRoles.map(roleLabel).join(" o ") : "qui té permís de confirmar";
-
-  const confirmButton = (
-    <Button variant="primary" onClick={onConfirm} disabled={confirming || blocked || !canConfirm} loading={confirming}>
-      Confirma i analitza
-    </Button>
-  );
+  // El que fa l'acció, abans del perquè no es pot: no és una acció de
+  // revisió, és una extracció automàtica nova (amb cost de model).
+  const whatItDoes = rerun
+    ? "Torna a extreure automàticament els requisits i els criteris dels plecs. La revisió de l'empresa no canvia."
+    : "Extreu automàticament els requisits i els criteris dels plecs.";
 
   return (
     <div className="border-b border-border-strong bg-surface px-5 py-4 text-[13px]">
-      <p className={`${KICKER} text-brand-strong`}>Abans d&apos;analitzar</p>
+      <p className={`${KICKER} text-brand-strong`}>{rerun ? "Nova anàlisi del plec" : "Anàlisi del plec"}</p>
       <p className="mt-1 font-heading text-[17px] font-semibold text-ink">Aquest és el volum</p>
+      <p className="mt-1 text-muted">{whatItDoes}</p>
       {notice && <p className="mt-1.5 text-warning">{notice}</p>}
 
       <ul className="mt-3 divide-y divide-border border-t border-b border-border">
@@ -120,17 +118,21 @@ export function AnalysisQuotePanel({
       )}
 
       <div className="mt-4 flex flex-wrap items-start gap-2">
-        {canConfirm ? (
-          confirmButton
-        ) : (
-          <PermissionNote who={who} what="confirmar l'anàlisi" action={<span className="text-muted">Pots veure el volum; demana-li que la confirmi.</span>}>
-            {confirmButton}
-          </PermissionNote>
-        )}
+        <Button variant="primary" onClick={onConfirm} disabled={confirming || blocked || !canConfirm} loading={confirming}>
+          Inicia l&apos;anàlisi
+        </Button>
         <Button variant="ghost" onClick={onCancel} disabled={confirming}>
           Cancel·la
         </Button>
       </div>
+      {!canConfirm && (
+        // El permís no canvia (el backend el torna a comprovar): només s'explica
+        // sense el vocabulari intern de rols.
+        <p className="mt-2 text-[13px] leading-5 text-warning">
+          Només els responsables de la licitació poden iniciar una anàlisi nova, perquè té cost. Pots consultar-ne el
+          volum i demanar-los que la iniciïn.
+        </p>
+      )}
     </div>
   );
 }

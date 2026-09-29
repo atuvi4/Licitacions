@@ -445,7 +445,7 @@ export function RequirementAnalysisSection({
             quote={quote}
             notice={quoteNotice}
             canConfirm={canConfirm}
-            confirmRoles={limits.data?.confirm_roles}
+            rerun={run !== null}
             confirming={submitting}
             onConfirm={() => void confirm()}
             onCancel={() => {

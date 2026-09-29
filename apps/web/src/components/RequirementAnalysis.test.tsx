@@ -157,22 +157,43 @@ describe("RequirementAnalysisSection", () => {
     expect(confirmAnalysis).not.toHaveBeenCalled();
     expect(await screen.findByText("Aquest és el volum")).toBeTruthy();
     expect(screen.getByText("Plec administratiu")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Confirma i analitza" }));
+    expect(screen.getByText("Anàlisi del plec")).toBeTruthy();
+    expect(screen.getByText("Extreu automàticament els requisits i els criteris dels plecs.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Inicia l'anàlisi" }));
     await flush();
     expect(confirmAnalysis).toHaveBeenCalledWith("c1", "q1");
     expect(track).toHaveBeenCalledWith(expect.objectContaining({ id: "j1", status: "accepted" }));
   });
 
-  it("sense permís de confirmar: el botó es veu, desactivat, amb qui sí que pot", async () => {
+  it("sense permís de confirmar: el botó es veu, desactivat; primer què fa i després per què no", async () => {
     get.mockResolvedValue({ ...limits, can_confirm: false });
     previewAnalysis.mockResolvedValue({ id: "q1", tender_id: "t1", status: "open", planning_version: "1", profile: "std", provider: "anthropic", model: "claude", force: false, input_fingerprint: "f", documents: [], skipped_documents: [], pages_total: 0, pages_in_plan: 0, pages_truncated: false, chunks: 0, chunks_to_send: 0, reusable_run_id: null, estimated_input_tokens: null, estimated_output_tokens: null, max_chunks: 40, allowed: true, blocking_reason: null, expires_at: "" });
     renderSection(null);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Analitza els plecs" }));
     await flush();
-    const confirm = (await screen.findByRole("button", { name: "Confirma i analitza" })) as HTMLButtonElement;
+    const confirm = (await screen.findByRole("button", { name: "Inicia l'anàlisi" })) as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
-    expect(screen.getByText(/Només .*Propietari.*pot confirmar l'anàlisi\./)).toBeTruthy();
+    fireEvent.click(confirm);
+    expect(confirmAnalysis).not.toHaveBeenCalled();
+    const what = screen.getByText("Extreu automàticament els requisits i els criteris dels plecs.");
+    const why = screen.getByText(/^Només els responsables de la licitació poden iniciar una anàlisi nova/);
+    expect(what.compareDocumentPosition(why) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Ni vocabulari intern de rols ni «confirmar», que sonava a confirmar la revisió.
+    expect(screen.queryByText(/Propietari|Administrador|Responsable de candidatures/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Confirma/ })).toBeNull();
+  });
+
+  it("amb una anàlisi feta: es diu que és una anàlisi nova i que la revisió no canvia", async () => {
+    get.mockResolvedValue({ ...limits, can_confirm: false });
+    previewAnalysis.mockResolvedValue({ id: "q2", tender_id: "t1", status: "open", planning_version: "1", profile: "std", provider: "anthropic", model: "claude", force: true, input_fingerprint: "f", documents: [], skipped_documents: [], pages_total: 0, pages_in_plan: 0, pages_truncated: false, chunks: 0, chunks_to_send: 0, reusable_run_id: null, estimated_input_tokens: null, estimated_output_tokens: null, max_chunks: 40, allowed: true, blocking_reason: null, expires_at: "" });
+    renderSection(analysis());
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Torna a analitzar" }));
+    await flush();
+    expect(await screen.findByText("Nova anàlisi del plec")).toBeTruthy();
+    expect(screen.getByText(/Torna a extreure automàticament .* La revisió de l'empresa no canvia\./)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Inicia l'anàlisi" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("amb anàlisi: pastilla d'estat real, requisits amb cita, pàgina i atribució IA; cap codi intern", async () => {
