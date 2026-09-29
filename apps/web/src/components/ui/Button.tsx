@@ -4,22 +4,23 @@ import Link from "next/link";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 import { cn } from "./cn";
-import { RegistrationMarks } from "./Marks";
 import { Spinner } from "./Spinner";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md";
 
 /**
- * Un sol sòlid per pantalla (handoff §2.5). El primari porta les marques de
- * registre; el secundari és de línia; `ghost` és l'enllaç d'acció en acer 700.
+ * Un sol sòlid per pantalla (handoff §2.5). El primari és l'únic blau ple; el
+ * secundari és blanc amb vora subtil; `ghost` és l'enllaç d'acció en blau.
  * `danger` es conserva per compatibilitat però deixa d'usar-se per al NO-GO:
  * els destructius no tenen color propi, el text ho diu.
+ * `data-variant` permet identificar l'acció principal a les proves.
  */
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
-  // Blanc sobre accent-700 (6,5:1); hover un pas més fosc, premut dos.
-  primary: "relative border-brand bg-brand text-white hover:border-accent-800 hover:bg-accent-800 active:border-accent-900 active:bg-accent-900 max-sm:min-h-12",
-  secondary: "border-border-strong bg-transparent text-ink hover:bg-subtle active:bg-neutral-200",
+  // Blanc sobre #2f5d8a (6,9:1); hover un pas més fosc, premut dos.
+  primary:
+    "relative border-brand bg-brand text-white shadow-control hover:border-accent-800 hover:bg-accent-800 active:border-accent-900 active:bg-accent-900 max-sm:min-h-12",
+  secondary: "border-border-strong bg-surface text-ink shadow-control hover:bg-subtle active:bg-neutral-100",
   ghost: "border-transparent bg-transparent text-brand-strong hover:bg-brand-soft hover:text-accent-800 active:bg-brand-soft",
   danger: "border-danger bg-danger text-white hover:opacity-90",
 };
@@ -50,6 +51,7 @@ export function Button({
   return (
     <button
       {...props}
+      data-variant={variant}
       disabled={disabled || loading}
       className={cn(
         BASE_CLASS,
@@ -61,7 +63,6 @@ export function Button({
         className,
       )}
     >
-      {variant === "primary" && <RegistrationMarks size="sm" tone="inverse" />}
       {loading && <Spinner className="h-3.5 w-3.5" />}
       {children}
     </button>
@@ -88,8 +89,7 @@ export function LinkButton({
   children: ReactNode;
 }) {
   return (
-    <Link href={href} className={cn(BASE_CLASS, sizeClass(size), BUTTON_VARIANTS[variant], className)}>
-      {variant === "primary" && <RegistrationMarks size="sm" tone="inverse" />}
+    <Link href={href} data-variant={variant} className={cn(BASE_CLASS, sizeClass(size), BUTTON_VARIANTS[variant], className)}>
       {children}
     </Link>
   );

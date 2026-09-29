@@ -100,14 +100,14 @@ export function DataTable<T>({
           "border-b border-border last:border-b-0",
           selected ? "bg-brand-soft" : tint ? TINT_CLASS[tint] : undefined,
           clickable && "cursor-pointer hover:bg-subtle focus-visible:outline-2 focus-visible:outline-brand",
-          stacked && "max-md:block max-md:px-3 max-md:py-2.5",
+          stacked && "max-md:block max-md:px-4 max-md:py-3",
         )}
       >
         {columns.map((column) => (
           <td
             key={column.key}
             className={cn(
-              "px-3 py-2.5 align-top text-body text-ink",
+              "px-4 py-3 align-top text-body text-ink",
               column.align === "right" && "text-right tabular-nums",
               column.hideBelow && HIDE_CLASS[column.hideBelow],
               stacked && "max-md:flex max-md:justify-between max-md:gap-3 max-md:px-0 max-md:py-1 max-md:text-left",
@@ -143,7 +143,7 @@ export function DataTable<T>({
                 scope="col"
                 style={column.width ? { width: column.width } : undefined}
                 className={cn(
-                  "border-b border-border-strong bg-subtle px-3 py-2 text-left",
+                  "border-b border-border bg-subtle px-4 py-2.5 text-left",
                   KICKER,
                   column.align === "right" && "text-right",
                   column.hideBelow && HIDE_CLASS[column.hideBelow],
@@ -167,7 +167,7 @@ export function DataTable<T>({
                 const isCollapsed = collapsed[group.key] ?? false;
                 return [
                   <tr key={`group-${group.key}`} className={cn("border-b border-border bg-subtle", stacked && "max-md:block")}>
-                    <td colSpan={visibleColumns} className="px-3 py-1.5">
+                    <td colSpan={visibleColumns} className="px-4 py-2">
                       <button
                         type="button"
                         aria-expanded={!isCollapsed}
@@ -188,7 +188,7 @@ export function DataTable<T>({
         </tbody>
       </table>
       {footer && (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-2 text-[13px] text-muted">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2.5 text-[13px] text-muted">
           {footer}
         </div>
       )}

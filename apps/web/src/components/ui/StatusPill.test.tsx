@@ -23,10 +23,10 @@ describe("StatusPill", () => {
     expect(pill.className).toContain("border");
   });
 
-  it("no té cantonades rodones ni text que es trenqui", () => {
+  it("fa servir el radi de pastilla del sistema i el text no es trenca", () => {
     render(<StatusPill level="ready">A punt</StatusPill>);
     const pill = screen.getByText("A punt");
     expect(pill.className).toContain("whitespace-nowrap");
-    expect(pill.className).not.toMatch(/rounded-(full|md|lg)/);
+    expect(pill.className).toContain("rounded-pill");
   });
 });

@@ -4,15 +4,14 @@ import { describe, expect, it } from "vitest";
 import { Button, LinkButton } from "./Button";
 
 describe("Button", () => {
-  it("el primari porta les quatre marques de registre", () => {
-    const { container } = render(<Button variant="primary">Acció principal</Button>);
-    expect(container.querySelectorAll("[data-mark]")).toHaveLength(4);
-    expect(screen.getByRole("button", { name: "Acció principal" })).toBeTruthy();
+  it("el primari es marca com a acció principal", () => {
+    render(<Button variant="primary">Acció principal</Button>);
+    expect(screen.getByRole("button", { name: "Acció principal" }).getAttribute("data-variant")).toBe("primary");
   });
 
-  it("el secundari no porta marques", () => {
-    const { container } = render(<Button variant="secondary">Acció secundària</Button>);
-    expect(container.querySelectorAll("[data-mark]")).toHaveLength(0);
+  it("el secundari no es marca com a principal", () => {
+    render(<Button variant="secondary">Acció secundària</Button>);
+    expect(screen.getByRole("button", { name: "Acció secundària" }).getAttribute("data-variant")).toBe("secondary");
   });
 
   it("desactivat baixa al 45 % i no s'amaga", () => {

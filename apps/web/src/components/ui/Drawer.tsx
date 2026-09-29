@@ -86,7 +86,7 @@ export function Drawer({ open, title, description, onClose, children, footer, wi
         className={cn(
           "animate-fade-in relative z-10 flex h-full w-full flex-col",
           wide ? "max-w-[40rem]" : "max-w-[26rem]",
-          "border-l border-border-strong bg-canvas shadow-dialog",
+          "border-l border-border bg-surface shadow-dialog",
         )}
       >
         <header className="flex items-start justify-between gap-4 border-b border-border px-4 py-3.5">

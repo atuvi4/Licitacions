@@ -22,7 +22,7 @@ export function EmptyState({ title, description, action, secondary, icon, classN
   return (
     <div className={cn("flex flex-col items-center justify-center gap-3 px-10 py-14 text-center", className)}>
       {icon && (
-        <span className="grid h-11 w-11 place-items-center border border-border-strong text-brand-strong [&>svg]:h-[22px] [&>svg]:w-[22px]">
+        <span className="grid h-11 w-11 place-items-center rounded-card bg-brand-soft text-brand-strong [&>svg]:h-[22px] [&>svg]:w-[22px]">
           {icon}
         </span>
       )}

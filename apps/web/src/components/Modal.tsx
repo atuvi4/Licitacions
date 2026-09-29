@@ -39,7 +39,7 @@ export function Modal({ open, title, description, onClose, children, footer, siz
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "animate-fade-in relative z-10 w-full rounded-card border border-border-strong bg-canvas shadow-dialog",
+          "animate-fade-in relative z-10 w-full rounded-card border border-border bg-surface shadow-dialog",
           size === "lg" ? "max-w-3xl" : "max-w-xl",
         )}
       >

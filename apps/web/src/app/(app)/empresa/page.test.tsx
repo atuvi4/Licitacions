@@ -105,9 +105,9 @@ describe("El nostre perfil (hub)", () => {
     // Acció: primari només a la primera fila «Sense dada»; cada àrea porta a la seva pantalla.
     const actions = [...table.querySelectorAll("a[href]")];
     const registrations = actions.find((a) => a.getAttribute("href") === "/empresa/registres")!;
-    expect(registrations.querySelectorAll("[data-mark]")).toHaveLength(4);
+    expect(registrations.getAttribute("data-variant")).toBe("primary");
     const insurances = actions.find((a) => a.getAttribute("href") === "/empresa/assegurances")!;
-    expect(insurances.querySelectorAll("[data-mark]")).toHaveLength(0);
+    expect(insurances.getAttribute("data-variant")).not.toBe("primary");
     expect(actions.some((a) => a.getAttribute("href") === "/empresa/dades")).toBe(true);
     expect(actions.some((a) => a.getAttribute("href") === "/experiencia")).toBe(true);
 
@@ -140,7 +140,7 @@ describe("El nostre perfil (hub)", () => {
     expect(await screen.findByRole("heading", { name: "Tres coses del perfil, i l'encaix es calcula sol" })).toBeTruthy();
     const start = screen.getByRole("link", { name: "Comença" });
     expect(start.getAttribute("href")).toBe("/empresa/cpv");
-    expect(start.querySelectorAll("[data-mark]")).toHaveLength(4);
+    expect(start.getAttribute("data-variant")).toBe("primary");
     expect(screen.getByRole("link", { name: /territoris/i }).getAttribute("href")).toBe("/empresa/territoris");
     expect(screen.getByRole("link", { name: /franja d'import/i }).getAttribute("href")).toBe("/empresa/solvencia");
     expect(screen.queryByRole("status")).toBeNull();

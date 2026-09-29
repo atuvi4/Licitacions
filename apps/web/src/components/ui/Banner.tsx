@@ -4,11 +4,12 @@ import { cn } from "./cn";
 
 export type BannerLevel = "neutral" | "attention" | "blocking" | "ready";
 
+// Fons tou i vora a to amb poca opacitat: l'avís es llegeix pel rètol, no pel pes.
 const LEVEL_CLASS: Record<BannerLevel, { box: string; kicker: string }> = {
-  neutral: { box: "border-border-strong bg-subtle", kicker: "text-muted" },
-  attention: { box: "border-warning bg-warning-soft", kicker: "text-warning" },
-  blocking: { box: "border-danger bg-danger-soft", kicker: "text-danger" },
-  ready: { box: "border-success bg-success-soft", kicker: "text-success" },
+  neutral: { box: "border-border bg-subtle", kicker: "text-muted" },
+  attention: { box: "border-warning/25 bg-warning-soft", kicker: "text-warning" },
+  blocking: { box: "border-danger/25 bg-danger-soft", kicker: "text-danger" },
+  ready: { box: "border-success/25 bg-success-soft", kicker: "text-success" },
 };
 
 /**
@@ -27,7 +28,11 @@ export function Banner({ level, kicker, children, action, className }: BannerPro
     <div
       role="status"
       data-level={level}
-      className={cn("flex flex-col gap-2 border px-3.5 py-2.5 sm:flex-row sm:items-center sm:gap-3.5", classes.box, className)}
+      className={cn(
+        "flex flex-col gap-2 rounded-card border px-4 py-3 sm:flex-row sm:items-center sm:gap-4",
+        classes.box,
+        className,
+      )}
     >
       <span className={cn("shrink-0 font-heading text-[13px] font-semibold tracking-[0.06em] uppercase", classes.kicker)}>
         {kicker}

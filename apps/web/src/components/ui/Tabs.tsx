@@ -77,7 +77,7 @@ export function Tabs({ items, value, onChange, param = "tab", history = "replace
             onClick={() => void select(item.key)}
             className={cn(
               "-mb-px flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-body whitespace-nowrap transition-colors",
-              active ? "border-accent-500 font-semibold text-ink" : "border-transparent text-muted hover:text-ink",
+              active ? "border-brand font-semibold text-ink" : "border-transparent text-muted hover:text-ink",
             )}
           >
             {item.label}

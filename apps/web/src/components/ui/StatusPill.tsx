@@ -10,7 +10,7 @@ import { cn } from "./cn";
 export type Level = "neutral" | "running" | "ready" | "attention" | "blocking" | "action";
 
 const FILL: Record<Level, string> = {
-  neutral: "bg-neutral-200 text-muted",
+  neutral: "bg-neutral-100 text-neutral-600",
   running: "bg-running-soft text-running",
   ready: "bg-success-soft text-success",
   attention: "bg-warning-soft text-warning",
@@ -18,13 +18,14 @@ const FILL: Record<Level, string> = {
   action: "bg-brand text-white",
 };
 
+// Vores a mig to: el contorn marca l'estat sense pesar més que el text.
 const OUTLINE: Record<Level, string> = {
-  neutral: "border-border-strong text-muted",
-  running: "border-running text-running",
-  ready: "border-success text-success",
-  attention: "border-warning text-warning",
-  blocking: "border-danger text-danger",
-  action: "border-brand text-brand-strong",
+  neutral: "border-border-strong text-neutral-600",
+  running: "border-running/40 text-running",
+  ready: "border-success/40 text-success",
+  attention: "border-warning/40 text-warning",
+  blocking: "border-danger/40 text-danger",
+  action: "border-brand/60 text-brand-strong",
 };
 
 export interface StatusPillProps {
@@ -42,7 +43,7 @@ export function StatusPill({ level, children, size = "md", outline = false, clas
       data-level={level}
       data-outline={outline ? "true" : undefined}
       className={cn(
-        "inline-flex items-center gap-1.5 font-medium whitespace-nowrap tabular-nums",
+        "inline-flex items-center gap-1.5 rounded-pill font-medium whitespace-nowrap tabular-nums",
         size === "sm" ? "px-[7px] py-px text-[11.5px] leading-[1.5]" : "px-[9px] py-[2px] text-[12.5px] leading-[1.5]",
         outline ? cn("border bg-transparent", OUTLINE[level]) : FILL[level],
         className,

@@ -368,7 +368,7 @@ export function DecisionPanel({
             </div>
           )}
 
-          <div className="border border-border px-4 py-3">
+          <div className="rounded-card border border-border px-4 py-3">
             <p className="text-[13px] font-semibold text-ink">
               {warnings.length > 0
                 ? `Quedaran registrats ${plural(warnings.length, "avís obert", "avisos oberts")}`

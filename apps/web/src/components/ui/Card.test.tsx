@@ -4,11 +4,11 @@ import { describe, expect, it } from "vitest";
 import { Card, CardHeader, PageHeader } from "./Card";
 
 describe("Card", () => {
-  it("amb frame porta les marques de registre; sense, cap", () => {
+  it("amb frame es marca com a targeta de decisió; sense, no", () => {
     const { container, rerender } = render(<Card frame>Decisió</Card>);
-    expect(container.querySelectorAll("[data-mark]")).toHaveLength(4);
+    expect(container.querySelector("section")?.getAttribute("data-frame")).toBe("true");
     rerender(<Card>Panell</Card>);
-    expect(container.querySelectorAll("[data-mark]")).toHaveLength(0);
+    expect(container.querySelector("section")?.getAttribute("data-frame")).toBeNull();
   });
 
   it("CardHeader i PageHeader titulen amb encapçalaments", () => {
