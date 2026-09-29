@@ -6,7 +6,7 @@ import { EvidenceRef } from "./EvidenceRef";
 const href = "/licitacions/t1/documents/d1?page=3&extraction=e1";
 
 describe("EvidenceRef", () => {
-  it("compon document, pàgina i revisió, i enllaça a la revisió citada", () => {
+  it("compon document, pàgina i versió del text, i enllaça a la versió citada", () => {
     render(
       <EvidenceRef
         documentName="Plec administratiu"
@@ -16,7 +16,7 @@ describe("EvidenceRef", () => {
         quote="…un límite total de 600.000 euros…"
       />,
     );
-    expect(screen.getByText("Plec administratiu · p. 3 · revisió 1")).toBeTruthy();
+    expect(screen.getByText("Plec administratiu · p. 3 · versió del text 1")).toBeTruthy();
     const link = screen.getByRole("link", { name: /Obre la pàgina 3 del plec/ }) as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe(href);
     expect(screen.getByText(/600.000 euros/)).toBeTruthy();
@@ -26,7 +26,7 @@ describe("EvidenceRef", () => {
     render(
       <EvidenceRef documentName="Plec tècnic" pageNumber={12} extractionRevision={2} href={href} quote="cita" compact />,
     );
-    expect(screen.getByText("Plec tècnic · p. 12 · revisió 2")).toBeTruthy();
+    expect(screen.getByText("Plec tècnic · p. 12 · versió del text 2")).toBeTruthy();
     expect(screen.queryByText("cita")).toBeNull();
   });
 

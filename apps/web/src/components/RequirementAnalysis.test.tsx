@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnalysisQuote, JobRequest } from "@/lib/jobs";
@@ -181,7 +181,7 @@ describe("RequirementAnalysisSection", () => {
     const pills = [...container.querySelectorAll("[data-level]")].map((p) => `${p.textContent?.trim()}[${p.getAttribute("data-level")}]`);
     expect(pills.some((pill) => /Anàlisi completa · 2 requisits/.test(pill) && /\[ready\]$/.test(pill))).toBe(true);
     expect(screen.getByText("Certificat ISO 14001 en vigor")).toBeTruthy();
-    expect(container.textContent).toContain("Plec administratiu · p. 4 · revisió 1");
+    expect(container.textContent).toContain("Plec administratiu · p. 4 · versió del text 1");
     expect(screen.getAllByRole("link", { name: "Obre la pàgina 4 del plec →" })[0].getAttribute("href")).toBe("/licitacions/t1/documents/d1?page=4&extraction=ex1");
     expect(container.textContent).toContain("confiança alta");
     expect(container.querySelector("[data-kind='ai']")).not.toBeNull();
@@ -193,7 +193,7 @@ describe("RequirementAnalysisSection", () => {
     expect([...container.querySelectorAll("details")].some((d) => d.textContent?.includes("tender-requirements-v1"))).toBe(true);
     expect(container.textContent).not.toMatch(/\{"/);
     // Filtres de recompte: els que demanen revisió es poden aïllar.
-    fireEvent.click(screen.getByRole("button", { name: /Per revisar/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Incidències de l'extracció/ }));
     expect(screen.queryByText("Certificat ISO 14001 en vigor")).toBeNull();
     expect(screen.getByText("Sublímit per víctima de 150.000 €")).toBeTruthy();
   });
@@ -448,5 +448,71 @@ describe("requisits escrits a mà", () => {
 
     expect(screen.getByText(/Preus.xlsx/)).toBeTruthy();
     expect(screen.getByText(/Full Càlculs, fila 42/)).toBeTruthy();
+  });
+
+  describe("senyals de l'extracció, no de la revisió", () => {
+    it("les pastilles de fila diuen «Extracció …», de contorn, i mai el vocabulari de la revisió", async () => {
+      const { container } = renderSection(analysis({
+        requirements: [
+          requirement(),
+          requirement({ id: "r2", title: "Sublímit per víctima de 150.000 €", review_status: "needs_review" }),
+          requirement({ id: "r4", title: "Assegurança validada abans", review_status: "verified" }),
+          requirement({ id: "r5", title: "Fila descartada abans", review_status: "rejected" }),
+        ],
+      }));
+      await flush();
+
+      const pill = (title: string) => {
+        const row = screen.getByText(title).closest("li")!;
+        return [...row.querySelectorAll("[data-level]")].at(-1) as HTMLElement;
+      };
+      expect(pill("Certificat ISO 14001 en vigor").textContent).toBe("Extracció sense validar");
+      expect(pill("Sublímit per víctima de 150.000 €").textContent).toBe("Extracció amb incidència");
+      expect(pill("Assegurança validada abans").textContent).toBe("Extracció validada");
+      expect(pill("Fila descartada abans").textContent).toBe("Extracció descartada");
+      expect(pill("Sublímit per víctima de 150.000 €").getAttribute("data-outline")).toBe("true");
+
+      const list = screen.getByText(/^Requisits extrets \(/).closest("section, div")!.parentElement as HTMLElement;
+      for (const canonical of ["Cal revisar", "Pendent de revisar", "Verificat", "No revisat", "Per revisar"]) {
+        expect(within(list).queryByText(canonical)).toBeNull();
+      }
+      expect(container.textContent).not.toMatch(/\bCal revisar\b|\bNo revisat\b/);
+    });
+
+    it("els filtres diuen què compten a l'extracció, amb els mateixos recomptes", async () => {
+      renderSection(analysis());
+      await flush();
+
+      const group = screen.getByRole("group", { name: "Filtres de requisits" });
+      const labels = within(group).getAllByRole("button").map((b) => b.textContent);
+      // r2 marcat per l'anàlisi + r3 de confiança baixa = 2; r3 és l'únic «puntuable».
+      expect(labels).toEqual(["Tots3", "Obligatoris2", "Incidències de l'extracció2", "Puntuables segons l'extracció1"]);
+      expect(within(group).queryByText("Per revisar")).toBeNull();
+      expect(within(group).queryByText(/^Puntuables$/)).toBeNull();
+    });
+
+    it("l'extracció no repeteix el resum de la revisió: només un enllaç discret", async () => {
+      renderSection(analysis());
+      await flush();
+
+      expect(screen.queryByLabelText("Resum de la revisió")).toBeNull();
+      const link = screen.getByRole("link", { name: "Obre la revisió" });
+      expect(link.className).not.toMatch(/bg-brand/);
+    });
+  });
+
+  describe("fragments fallits", () => {
+    it("un fragment: «1 fallit»", async () => {
+      renderSection(analysis({ run: run({ status: "partial", chunks_total: 22, chunks_completed: 21, chunks_failed: 1 }) }));
+      await flush();
+      expect(screen.getByText(/· 1 fallit$/)).toBeTruthy();
+      expect(screen.queryByText(/1 fallits/)).toBeNull();
+    });
+
+    it("diversos: «N fallits»", async () => {
+      renderSection(analysis({ run: run({ status: "partial", chunks_total: 22, chunks_completed: 19, chunks_failed: 3 }) }));
+      await flush();
+      expect(screen.getByText(/· 3 fallits$/)).toBeTruthy();
+    });
   });
 });

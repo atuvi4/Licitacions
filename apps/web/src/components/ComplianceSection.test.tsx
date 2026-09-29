@@ -144,7 +144,7 @@ describe("ComplianceSection", () => {
     renderSection(compliance);
     fireEvent.click(screen.getByRole("button", { name: /plegats · desplega/ }));
     const row = screen.getByText("Certificat ISO 9001 en vigor").closest("li")!;
-    expect(row.textContent).toContain("Plec administratiu · p. 4 · revisió 1");
+    expect(row.textContent).toContain("Plec administratiu · p. 4 · versió del text 1");
     expect([...row.querySelectorAll("a")].some((a) => a.getAttribute("href") === "/licitacions/t1/documents/d1?page=4&extraction=ex1")).toBe(true);
     expect(row.textContent).toContain("ISO 9001:2015 · AENOR");
     expect(row.textContent).toContain("Acreditada");

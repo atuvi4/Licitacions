@@ -17,13 +17,13 @@ export interface EvidenceRefProps {
   href: string | null;
   quote?: string | null;
   extractedAt?: string | null;
-  /** Només la línia «document · pàgina · revisió». */
+  /** Només la línia «document · pàgina · versió del text». */
   compact?: boolean;
   className?: string;
 }
 
 /**
- * Cita literal + document + pàgina + revisió d'extracció (handoff §2.3).
+ * Cita literal + document + pàgina + versió del text llegit (handoff §2.3).
  * Sense cita ho diu en Atenció: el requisit mai s'oculta.
  */
 export function EvidenceRef({
@@ -46,7 +46,8 @@ export function EvidenceRef({
 
   const parts = [documentName ?? "Document"];
   if (pageNumber !== null) parts.push(`p. ${pageNumber}`);
-  if (extractionRevision !== null && extractionRevision !== undefined) parts.push(`revisió ${extractionRevision}`);
+  // La versió de la lectura del text del document (no la revisió de l'empresa).
+  if (extractionRevision !== null && extractionRevision !== undefined) parts.push(`versió del text ${extractionRevision}`);
   if (extractedAt) parts.push(`llegit el ${formatDate(extractedAt)}`);
   const line = parts.join(" · ");
   const linkLabel = pageNumber !== null ? `Obre la pàgina ${pageNumber} del plec →` : "Obre el plec →";

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TenderDetail } from "@/lib/tenders";
+import { awardScoring, reviewOverview } from "@/test/review-fixture";
 
 const get = vi.fn();
 const post = vi.fn();
@@ -309,5 +310,30 @@ describe("Fitxa de licitació", () => {
     fireEvent.click(screen.getByRole("button", { name: "Torna-ho a provar" }));
     await flush();
     expect(get.mock.calls.filter((call) => call[0] === "/tenders/t1").length).toBeGreaterThan(before);
+  });
+
+  it("Resum: la revisió de l'empresa es descobreix d'entrada, amb xifres vives i una sola crida principal", async () => {
+    respondWith(base({
+      "/companies/c1/tenders/t1/review/overview": reviewOverview,
+      "/companies/c1/tenders/t1/review/award-criteria?view=scoring": awardScoring,
+    }));
+    render(<TenderDetailPage />);
+    const metrics = await screen.findByLabelText("Resum de la revisió");
+    await flush();
+
+    const value = (label: string) => [...metrics.querySelectorAll("dt")].find((dt) => dt.textContent === label)?.nextElementSibling?.textContent;
+    expect(value("Requisits")).toBe(String(reviewOverview.total_requirements));
+    expect(value("Cal revisar")).toBe(String(reviewOverview.needs_review_count));
+    expect(value("Criteris que puntuen")).toBe("9");
+    expect(value("Punts")).toBe("100 punts");
+    const ctas = screen.getAllByRole("link", { name: "Obre la revisió" });
+    expect(ctas).toHaveLength(1);
+    expect(ctas[0].getAttribute("href")).toBe("/licitacions/t1/revisio");
+
+    // A «Requisits extrets» ja no es repeteix la targeta gran.
+    fireEvent.click(screen.getByRole("tab", { name: /Requisits extrets/ }));
+    expect(await screen.findByTestId("analysis")).toBeTruthy();
+    expect(screen.queryByLabelText("Resum de la revisió")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Revisió de la licitació" })).toBeNull();
   });
 });

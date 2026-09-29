@@ -526,6 +526,8 @@ function TenderDetail() {
       {/* ============================================================ Resum === */}
       {tab === "resum" && (
         <div className="space-y-4">
+          {/* L'entrada principal a la revisió de l'empresa, a la pestanya on s'arriba. */}
+          <ReviewSummaryCard companyId={companyId} tenderId={tenderId} />
           {!match.loading &&
             (match.data ? (
               <PreFitPanel match={match.data} />
@@ -838,7 +840,6 @@ function TenderDetail() {
         // redissenya): si es fan més amples que un telèfon, es desplacen aquí
         // dins i no eixamplen la pàgina.
         <div className="min-w-0 space-y-4 overflow-x-auto">
-          <ReviewSummaryCard companyId={companyId} tenderId={tenderId} />
           <RequirementAnalysisSection
             tenderId={tenderId}
             companyId={companyId}

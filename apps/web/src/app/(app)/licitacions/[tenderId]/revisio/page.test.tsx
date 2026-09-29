@@ -279,7 +279,7 @@ describe("Revisió de la licitació", () => {
     expect(within(evidence).getByText("«connectivitat a nivell 2 amb el datacenter»")).toBeTruthy();
     expect(within(evidence).getByText("Citat manualment")).toBeTruthy();
     expect(within(evidence).getByText("Cita sense valors estructurats automàticament")).toBeTruthy();
-    expect(within(detail).getByText("2")).toBeTruthy(); // revisió
+    expect(within(detail).getByText("Versió de revisió 2")).toBeTruthy();
   });
 
   it("el detall s'obre amb el teclat i Escape el tanca", async () => {

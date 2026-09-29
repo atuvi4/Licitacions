@@ -71,8 +71,8 @@ export {
   CATEGORY_ORDER,
   CONFIDENCE_LABELS,
   EVALUATION_LABELS,
+  EXTRACTION_STATUS_LABELS,
   OBLIGATION_LABELS,
-  REVIEW_LABELS,
   SKIP_REASON_LABELS,
   analysisState,
 } from "@/lib/requirements";
@@ -327,7 +327,7 @@ export function cpvPreferenceLevel(preference: { active: boolean; excluded: bool
   return activeLevel(preference.active);
 }
 
-/** Estat de revisió humana d'un requisit extret. */
+/** Senyal de l'extracció d'un requisit extret (no la revisió de l'empresa). */
 export const REVIEW_LEVEL: Record<ReviewStatus, Level> = {
   unreviewed: "neutral",
   verified: "ready",
@@ -524,7 +524,8 @@ export function ANALYSIS_STATUS_TEXT(analysis: RequirementAnalysis | null, jobRe
     ].filter(Boolean);
     return parts.length > 0 ? `Anàlisi parcial · ${parts.join(" · ")}` : "Anàlisi parcial";
   }
-  return `Anàlisi completa · ${run.requirements_extracted} requisits · ${when}`;
+  const extracted = run.requirements_extracted;
+  return `Anàlisi completa · ${extracted} ${extracted === 1 ? "requisit" : "requisits"} · ${when}`;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -46,8 +46,8 @@ import {
   CATEGORY_LABELS,
   CATEGORY_ORDER,
   EVALUATION_LABELS,
+  EXTRACTION_STATUS_LABELS,
   OBLIGATION_LABELS,
-  REVIEW_LABELS,
   REVIEW_LEVEL,
   SKIP_REASON_LABELS,
   analysisState,
@@ -96,11 +96,13 @@ function Evidence({ tenderId, evidence }: { tenderId: string; evidence: Requirem
  * Nomes lectura. Aquesta vista ja no revisa: els botons antics escrivien
  * l'estat directament al requisit extret, compartit per totes les empreses,
  * saltant-se la revisio de l'empresa. La revisio es fa a `/revisio`.
+ * Es mostra com el que és, un senyal de l'extracció: text «Extracció …» i
+ * pastilla de contorn, perquè no es confongui amb l'estat de la revisió.
  */
-function ReviewStatusPill({ current }: { current: ReviewStatus }) {
+function ExtractionStatusPill({ current }: { current: ReviewStatus }) {
   return (
-    <StatusPill level={REVIEW_LEVEL[current]} size="sm">
-      {REVIEW_LABELS[current]}
+    <StatusPill level={REVIEW_LEVEL[current]} size="sm" outline>
+      {EXTRACTION_STATUS_LABELS[current]}
     </StatusPill>
   );
 }
@@ -176,7 +178,7 @@ function RequirementRow({
           )}
         </div>
         <div className="shrink-0 md:max-w-[40%]">
-          <ReviewStatusPill current={requirement.review_status} />
+          <ExtractionStatusPill current={requirement.review_status} />
         </div>
       </div>
     </li>
@@ -325,8 +327,11 @@ export function RequirementAnalysisSection({
   const FILTERS: Array<{ key: Filter; label: string; level: "blocking" | "attention" | "neutral" }> = [
     { key: "all", label: "Tots", level: "neutral" },
     { key: "mandatory", label: "Obligatoris", level: "neutral" },
-    { key: "review", label: "Per revisar", level: "attention" },
-    { key: "scored", label: "Puntuables", level: "neutral" },
+    // Incidències = marcats per l'anàlisi, en conflicte o de confiança baixa: no
+    // és el «Cal revisar» de la revisió. Puntuables = requisits que l'extracció
+    // ha classificat amb obligació «puntuable»; no són els criteris que puntuen.
+    { key: "review", label: "Incidències de l'extracció", level: "attention" },
+    { key: "scored", label: "Puntuables segons l'extracció", level: "neutral" },
   ];
 
   return (
@@ -506,7 +511,12 @@ export function RequirementAnalysisSection({
               <dt className={KICKER}>Fragments llegits</dt>
               <dd className="mt-0.5 tabular-nums">
                 {run.chunks_completed} de {run.chunks_total}
-                {run.chunks_failed > 0 && <span className="text-danger"> · {run.chunks_failed} fallits</span>}
+                {run.chunks_failed > 0 && (
+                  <span className="text-danger">
+                    {" "}
+                    · {run.chunks_failed} {run.chunks_failed === 1 ? "fallit" : "fallits"}
+                  </span>
+                )}
               </dd>
             </div>
           </dl>
@@ -570,7 +580,7 @@ export function RequirementAnalysisSection({
             title={`Requisits extrets (${requirements.length})`}
             description="Proposats per l'anàlisi automàtica amb cita i pàgina. Extret no vol dir acreditat: el compliment es compara a sota."
           />
-          {/* Una sola crida principal a la revisió (la targeta de dalt): aquí, només text i un enllaç discret. */}
+          {/* La crida principal a la revisió és al Resum: aquí, només text i un enllaç discret. */}
           <p className="border-b border-border px-4 py-2 text-caption text-muted sm:px-5">
             La revisió es gestiona des de la vista de revisió.{" "}
             <Link href={`/licitacions/${tenderId}/revisio`} className="text-brand-strong underline decoration-1 underline-offset-2 hover:text-accent-800">

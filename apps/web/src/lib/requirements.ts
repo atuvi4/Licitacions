@@ -258,11 +258,18 @@ export const CONFIDENCE_LABELS: Record<ExtractionConfidence, string> = {
   low: "Baixa",
 };
 
-export const REVIEW_LABELS: Record<ReviewStatus, string> = {
-  unreviewed: "No revisat",
-  verified: "Verificat",
-  needs_review: "Cal revisar",
-  rejected: "Rebutjat",
+/**
+ * `Requirement.review_status` és un senyal de l'EXTRACCIÓ, no la revisió de
+ * l'empresa (que viu a `/revisio`). L'anàlisi hi deixa `needs_review` quan
+ * marca una incidència i `unreviewed` si no; `verified`/`rejected` només els
+ * escrivien els antics botons per fila. Cap etiqueta reutilitza el vocabulari
+ * de la revisió canònica («Cal revisar», «Pendent de revisar», «Verificat»).
+ */
+export const EXTRACTION_STATUS_LABELS: Record<ReviewStatus, string> = {
+  unreviewed: "Extracció sense validar",
+  verified: "Extracció validada",
+  needs_review: "Extracció amb incidència",
+  rejected: "Extracció descartada",
 };
 
 export const EVALUATION_LABELS: Record<AwardEvaluationType, string> = {

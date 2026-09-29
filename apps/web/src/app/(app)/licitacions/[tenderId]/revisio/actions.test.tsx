@@ -100,8 +100,10 @@ describe("Accions de revisió d'un requisit", () => {
   it("Confirmar envia la revisió visible i mostra el que torna el servidor", async () => {
     post.mockResolvedValue(after(SOLVENCY, "verified", "Verificat"));
     const dialog = await openItem(/Volum anual de negocis mínim/);
-    const revision = within(dialog).getByText("Revisió", { selector: "dt" }).nextElementSibling;
-    expect(revision?.textContent).toBe("1");
+    // La versió de revisió és traçabilitat secundària, fora dels fets del requisit.
+    expect(within(dialog).queryByText("Revisió", { selector: "dt" })).toBeNull();
+    const revision = () => within(dialog).getByText(/^Versió de revisió \d+$/).textContent;
+    expect(revision()).toBe("Versió de revisió 1");
 
     await click("Confirmar requisit", dialog);
 
@@ -112,7 +114,7 @@ describe("Accions de revisió d'un requisit", () => {
       payload: {},
     });
     expect(within(dialog).getByText("Requisit confirmat.")).toBeTruthy();
-    expect(revision?.textContent).toBe("2");
+    expect(revision()).toBe("Versió de revisió 2");
     const row = within(screen.getByRole("list", { name: "Requisits" })).getByRole("button", { name: /Volum anual/ });
     expect(within(row).getByText("Verificat")).toBeTruthy();
     // El resum es torna a llegir: cap recompte fet a mà.
@@ -183,7 +185,7 @@ describe("Accions de revisió d'un requisit", () => {
 
     expect(post.mock.calls[0][1]).toEqual({ action: "note", expected_revision: 1, payload: { note: "Cal confirmar-ho amb l'òrgan" } });
     expect(within(dialog).getByText("Nota afegida a l'historial.")).toBeTruthy();
-    expect(within(dialog).getByText("Revisió", { selector: "dt" }).nextElementSibling?.textContent).toBe("2");
+    expect(within(dialog).getByText(/^Versió de revisió \d+$/).textContent).toBe("Versió de revisió 2");
     expect(within(dialog).getAllByText("Pendent de revisar").length).toBeGreaterThan(0);
     expect(calls(`${REVIEW}/overview`)).toBe(1);
   });
@@ -220,7 +222,7 @@ describe("Accions de revisió d'un requisit", () => {
     expect(post).toHaveBeenCalledTimes(1);
     expect(within(dialog).getByRole("alert").textContent).toMatch(/ha canviat des que l'has obert/);
     expect(calls(`${REVIEW}/requirements/r-solvency`)).toBe(1);
-    expect(within(dialog).getByText("Revisió", { selector: "dt" }).nextElementSibling?.textContent).toBe("3");
+    expect(within(dialog).getByText(/^Versió de revisió \d+$/).textContent).toBe("Versió de revisió 3");
     const row = within(screen.getByRole("list", { name: "Requisits" })).getByRole("button", { name: /Volum anual/ });
     expect(within(row).getByText("Verificat")).toBeTruthy();
     // El formulari es tanca: cal tornar-ho a decidir sobre la versió nova.

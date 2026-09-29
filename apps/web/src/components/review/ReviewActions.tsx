@@ -97,17 +97,15 @@ function ReviewReasons({ item }: { item: CanonicalRequirement }) {
   const others = reasons.filter((reason) => reason.code !== CORRECTED_NOT_VERIFIED);
   if (!corrected && others.length === 0) return null;
   return (
-    <div className="mt-2 space-y-1.5">
-      {corrected && <p className="text-[13px] leading-5 text-ink">{corrected.label}</p>}
+    <div role="group" aria-label="Per què cal revisar?" className="mt-2">
+      <p className="text-[13px] font-semibold text-ink">Per què cal revisar?</p>
+      {corrected && <p className="mt-0.5 text-[13px] leading-5 text-ink">{corrected.label}</p>}
       {others.length > 0 && (
-        <div role="group" aria-label="Per què cal revisar?">
-          <p className="text-[13px] font-semibold text-ink">Per què cal revisar?</p>
-          <ul className="mt-0.5 list-disc space-y-0.5 pl-5 text-[13px] leading-5 text-muted">
-            {others.map((reason) => (
-              <li key={reason.code}>{reason.label}</li>
-            ))}
-          </ul>
-        </div>
+        <ul className="mt-0.5 list-disc space-y-0.5 pl-5 text-[13px] leading-5 text-muted">
+          {others.map((reason) => (
+            <li key={reason.code}>{reason.label}</li>
+          ))}
+        </ul>
       )}
     </div>
   );

@@ -208,7 +208,10 @@ describe("Aspecte SaaS clar a la revisió", () => {
 describe("Per què cal revisar", () => {
   it("corregit però no verificat: es diu en una frase, el valor és del revisor i la cita no diu «sense valors» al plec", async () => {
     const dialog = await open(/Latència màxima/);
-    expect(within(dialog).getByText("El contingut s'ha corregit, però el requisit encara no s'ha verificat.")).toBeTruthy();
+    // El mateix encapçalament que qualsevol altre motiu.
+    const reasons = within(dialog).getByRole("group", { name: "Per què cal revisar?" });
+    expect(within(reasons).getByText("Per què cal revisar?")).toBeTruthy();
+    expect(within(reasons).getByText("El contingut s'ha corregit, però el requisit encara no s'ha verificat.")).toBeTruthy();
     expect(within(dialog).getByText("< 70 ms")).toBeTruthy();
     expect(within(dialog).getAllByText("Corregit pel revisor").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("Cita sense valors estructurats automàticament")).toBeTruthy();
@@ -219,6 +222,7 @@ describe("Per què cal revisar", () => {
   it("un «Cal revisar» amb motius deterministes els llista", async () => {
     const dialog = await open(/Classificació d'avaries/);
     const reasons = within(dialog).getByRole("group", { name: "Per què cal revisar?" });
+    expect(within(reasons).getByText("Per què cal revisar?")).toBeTruthy();
     expect(within(reasons).getByText("Algun valor extret no s'ha pogut comprovar amb la cita.")).toBeTruthy();
   });
 
@@ -227,6 +231,16 @@ describe("Per què cal revisar", () => {
     expect(within(dialog).getByText("«afectació de més del 50% d’usuaris»")).toBeTruthy();
     expect(within(dialog).getByText("«afectació de menys del 10% d’usuaris»")).toBeTruthy();
     expect(within(dialog).queryByText(/Nivell alt|Nivell mitjà|Nivell baix/)).toBeNull();
+  });
+
+  it("la versió de revisió és metadada secundària, no un fet al costat de Categoria i Origen", async () => {
+    const dialog = await open(/Latència màxima/);
+    const facts = [...dialog.querySelectorAll("dt")].map((dt) => dt.textContent);
+    expect(facts).not.toContain("Revisió");
+    const version = within(dialog).getByText(/^Versió de revisió \d+$/);
+    expect(version.tagName).toBe("P");
+    expect(version.className).toMatch(/text-muted/);
+    expect(version.closest("dl")).toBeNull();
   });
 
   it("confirmar diu què confirma i l'aplicació es mostra a part de l'obligació", async () => {

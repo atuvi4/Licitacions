@@ -281,6 +281,7 @@ describe("ANALYSIS_STATUS_TEXT", () => {
 
   it("completa: requisits i data", () => {
     expect(ANALYSIS_STATUS_TEXT(analysis({}), null)).toMatch(/^Anàlisi completa · 38 requisits · .*2026$/);
+    expect(ANALYSIS_STATUS_TEXT(analysis({ requirements_extracted: 1 }), null)).toMatch(/^Anàlisi completa · 1 requisit · .*2026$/);
   });
   it("en marxa amb progrés o sense", () => {
     expect(ANALYSIS_STATUS_TEXT(analysis({}), job({ done: 3, total: 14 }))).toBe("Analitzant · 3 de 14");

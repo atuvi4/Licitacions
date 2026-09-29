@@ -318,7 +318,6 @@ function RequirementDetail({
         <Fact label="Origen">
           <ProvenanceBadge item={item} labelled />
         </Fact>
-        <Fact label="Revisió">{item.review_revision}</Fact>
       </dl>
 
       {item.values.length > 0 && (
@@ -388,6 +387,11 @@ function RequirementDetail({
           currentUserId={review.currentUserId}
         />
       )}
+
+      {/* Comptador de concurrència i historial: traçabilitat, no un fet del requisit. */}
+      <p className="text-caption text-muted" data-review-revision={item.review_revision}>
+        Versió de revisió {item.review_revision}
+      </p>
     </>
   );
   return (

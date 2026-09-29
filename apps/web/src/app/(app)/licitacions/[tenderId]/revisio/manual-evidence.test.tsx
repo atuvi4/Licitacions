@@ -354,7 +354,7 @@ describe("Afegir evidència a un requisit existent", () => {
     ]);
     expect(within(dialog).getByText("Evidència afegida.")).toBeTruthy();
     expect(within(dialog).getByText("Citat manualment")).toBeTruthy();
-    expect(within(dialog).getByText("Revisió", { selector: "dt" }).nextElementSibling?.textContent).toBe("2");
+    expect(within(dialog).getByText(/^Versió de revisió \d+$/).textContent).toBe("Versió de revisió 2");
     expect(within(dialog).getAllByText("Pendent de revisar").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("Extret automàticament")).toBeTruthy();
     expect(within(dialog).getByText("≥ 450.000 EUR")).toBeTruthy();
@@ -388,7 +388,7 @@ describe("Afegir evidència a un requisit existent", () => {
     expect(post).toHaveBeenCalledTimes(1);
     expect(within(dialog).getByRole("alert").textContent).toMatch(/ha canviat des que l'has obert\. La cita triada es conserva/);
     expect(within(dialog).getByText("«connectivitat a nivell 2»")).toBeTruthy();
-    expect(within(dialog).getByText("Revisió", { selector: "dt" }).nextElementSibling?.textContent).toBe("3");
+    expect(within(dialog).getByText(/^Versió de revisió \d+$/).textContent).toBe("Versió de revisió 3");
 
     post.mockResolvedValueOnce({ ...newer, review_revision: 4 });
     fireEvent.click(attach(dialog));
