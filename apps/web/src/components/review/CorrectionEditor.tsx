@@ -28,6 +28,20 @@ import { type CanonicalRequirement, actionFailure, submitCorrection } from "@/li
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
+/** Una cita llarga, retallada per paraules: la sencera es pot consultar al detall. */
+function snippet(quote: string, max = 280): string {
+  const text = quote.replace(/\s+/g, " ").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, text.lastIndexOf(" ", max) > 0 ? text.lastIndexOf(" ", max) : max)}…`;
+}
+
+/** D'on surt un valor, segons l'element: corregir un extret no és el mateix que afegir-ne un. */
+function sourceLabel(source: string | undefined, provenance: string): string | null {
+  if (source === "document") return "extret del document";
+  if (source === "reviewer") return provenance === "manual" ? "afegit manualment" : "corregit pel revisor";
+  return null;
+}
+
 export const CONFLICT_DRAFT_MESSAGE = "Aquest requisit ha canviat mentre l'editaves. No hem desat la teva correcció.";
 
 /** Els camps del 422 del backend, dits amb el nom que veu la persona. */
@@ -36,7 +50,7 @@ const FIELD_NAMES: Record<string, string> = {
   description: "Descripció",
   category: "Categoria",
   obligation: "Obligació",
-  modality: "Modalitat",
+  modality: "Aplicació",
   values: "Valors",
   remove_values: "Valors",
   note: "Nota de correcció",
@@ -219,7 +233,7 @@ export function CorrectionEditor({
       </div>
 
       {conflict && (
-        <div role="alert" className="space-y-2 border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
+        <div role="alert" className="space-y-2 rounded-control border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
           <p className="font-semibold">{CONFLICT_DRAFT_MESSAGE}</p>
           <p>
             Hi ha una revisió nova (revisió {conflict.current.review_revision}, estat «{conflict.current.verification_label}»).
@@ -257,10 +271,33 @@ export function CorrectionEditor({
         <Field label="Obligació" hint="Què en fa el plec.">
           <Select value={draft.obligation} options={OBLIGATION_OPTIONS} onChange={(event) => update({ obligation: event.target.value })} />
         </Field>
-        <Field label="Modalitat" hint="Com obliga.">
+        <Field label="Aplicació" hint="Quan s'aplica el requisit.">
           <Select value={draft.modality} options={MODALITY_OPTIONS} onChange={(event) => update({ modality: event.target.value })} />
         </Field>
       </div>
+
+      {base.evidence.length > 0 && (
+        // La cita al costat dels valors: es poden corregir sense baixar pel calaix.
+        <section aria-label="Evidència de referència" className="space-y-1.5">
+          <p className={KICKER}>Evidència de referència</p>
+          <ul className="space-y-2">
+            {base.evidence.map((evidence, index) => (
+              <li key={`${evidence.page}-${index}`} className="border-l-2 border-accent-500 pl-2.5">
+                <p className="text-caption text-muted">
+                  <span className="font-medium text-ink">{evidence.document ?? "Document"}</span>
+                  {evidence.page !== null && <> · p. {evidence.page}</>}
+                  {evidence.section && <> · § {evidence.section}</>}
+                </p>
+                {evidence.quote && (
+                  <blockquote className="mt-0.5 text-[13px] leading-relaxed text-ink italic">
+                    «{snippet(evidence.quote)}»
+                  </blockquote>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <fieldset className="space-y-2">
         <legend className={KICKER}>Valors</legend>
@@ -270,7 +307,7 @@ export function CorrectionEditor({
             key={row.key}
             index={index}
             row={row}
-            source={base.editable.values.find((value) => value.key === row.key)?.source ?? null}
+            sourceLabel={sourceLabel(base.editable.values.find((value) => value.key === row.key)?.source, base.provenance)}
             error={show ? errors.values[row.key] : undefined}
             onChange={(patch) => updateValue(row.key, patch)}
             onRemove={() => removeValue(row)}
@@ -307,14 +344,14 @@ export function CorrectionEditor({
       </Field>
 
       {serverError && (
-        <div role="alert" className="border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
+        <div role="alert" className="rounded-control border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
           {serverError.message}
           {serverError.fields.length > 0 && <> ({serverError.fields.join(", ")})</>}
         </div>
       )}
 
       {confirmDiscard ? (
-        <div role="alertdialog" aria-labelledby={`${id}-discard`} className="space-y-2 border border-border-strong px-3 py-2">
+        <div role="alertdialog" aria-labelledby={`${id}-discard`} className="space-y-2 rounded-control border border-border-strong px-3 py-2">
           <p id={`${id}-discard`} className="text-body font-semibold text-ink">
             Descartar els canvis no desats?
           </p>

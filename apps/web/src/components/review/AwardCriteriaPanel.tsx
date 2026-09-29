@@ -103,9 +103,16 @@ function StructureView({ view }: { view: AwardCriteriaView }) {
                   <p className={section.counts ? "min-w-0 text-body text-ink" : "min-w-0 text-body text-muted"}>{row.name}</p>
                   <Points points={row.points} muted={!section.counts} />
                 </div>
+                {row.role === "parent_total" && !row.folded_into && (
+                  // Un total de bloc no és una fila que puntua: ho diu, i es veu diferent.
+                  <p className="mt-1 rounded-control bg-subtle px-2 py-1 text-caption text-muted">
+                    Total informatiu: aquests {formatPoints(row.points)} ja provenen dels criteris del bloc.
+                  </p>
+                )}
                 <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-faint">
                   <StatusPill level="neutral" size="sm">
-                    {row.role_label}
+                    {/* Una repetició té el paper «Puntua» del criteri original: aquí no suma de nou. */}
+                    {row.folded_into ? "Repetició · no suma de nou" : row.role_label}
                   </StatusPill>
                   {row.folded_into && <span>Repeteix «{row.folded_into.name}»</span>}
                   {row.parent && <span>Dins de «{row.parent.name}»</span>}
@@ -143,7 +150,13 @@ function Checks({ view }: { view: AwardCriteriaView }) {
                   <span className="sr-only">{tone === "info" ? "Informació: " : "Atenció: "}</span>
                   {check.label}
                 </p>
-                {names.length > 0 && <p className="text-muted">{names.join(" · ")}</p>}
+                {names.length > 0 && (
+                  <ul className="mt-0.5 space-y-0.5 text-muted">
+                    {names.map((name, index) => (
+                      <li key={`${name}-${index}`}>{name}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </li>
           );
@@ -180,7 +193,7 @@ export function AwardCriteriaPanel({
 
   const view = scoring.data;
   const unprepared = view !== null && view.criteria.length === 0;
-  const description = view && !unprepared ? `${formatPoints(view.total_points)} totals · ${view.scored_count} criteris puntuats` : undefined;
+  const description = view && !unprepared ? `${formatPoints(view.total_points)} totals · ${view.scored_count} criteris que puntuen` : undefined;
 
   return (
     <Card>
@@ -190,7 +203,7 @@ export function AwardCriteriaPanel({
         action={
           view && !unprepared ? (
             <Button size="sm" variant="secondary" aria-pressed={full} onClick={() => setFull((value) => !value)}>
-              {full ? "Veure només els que puntuen" : "Veure estructura completa"}
+              {full ? `Mostra només els ${view.scored_count} criteris que sumen punts` : "Veure estructura completa"}
             </Button>
           ) : undefined
         }

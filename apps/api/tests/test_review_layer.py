@@ -300,7 +300,8 @@ async def test_i_j_k_l_vocabulari_i_evidencia(session, extracted, tenant_a, clie
     assert ordinary["provenance_label"] == "Extret automàticament"
     assert ordinary["values"] == [{
         "key": "volum_minim", "operator": "gte", "value": 450000, "unit_label": "EUR",
-        "source_label": "Del document", "status_label": "Confirmat al document"}]
+        "source_label": "Extret del document", "status_label": "Confirmat al document",
+        "source": "document", "context": "volumen anual de negocios"}]
     # J: informative/informational -> Informatiu.
     assert unsupported["obligation_label"] == "Informatiu"
     assert unsupported["category_label"] == "Assegurança"

@@ -191,7 +191,7 @@ export function EvidencePicker({
               ref={textRef}
               tabIndex={0}
               aria-label={`Text de la pàgina ${page.page_number}`}
-              className="max-h-64 overflow-auto border border-border bg-surface px-3 py-2 font-sans text-[13px] leading-relaxed whitespace-pre-wrap text-ink"
+              className="max-h-64 overflow-auto rounded-control border border-border bg-surface px-3 py-2 font-sans text-[13px] leading-relaxed whitespace-pre-wrap text-ink"
             >
               {page.text}
             </pre>

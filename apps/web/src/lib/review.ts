@@ -35,6 +35,16 @@ export interface CanonicalValue {
   unit_label: string | null;
   source_label: string;
   status_label: string;
+  /** `document` (extret) o `reviewer` (corregit o afegit pel revisor). */
+  source?: "document" | "reviewer";
+  /** El fragment literal del plec a què es refereix un valor extret. Mai inventat. */
+  context?: string | null;
+}
+
+/** Per què un requisit demana revisió: codi estable i frase de producte. */
+export interface ReviewReason {
+  code: string;
+  label: string;
 }
 
 export interface CanonicalEvidence {
@@ -70,6 +80,8 @@ export interface CanonicalRequirement {
   verification_status: string;
   verification_label: string;
   needs_review: boolean;
+  /** Només per als no resolts (pendent o «Cal revisar»). */
+  review_reasons?: ReviewReason[];
   values: CanonicalValue[];
   evidence_label: string;
   evidence: CanonicalEvidence[];
@@ -635,4 +647,88 @@ export function relationFailure(caught: unknown): string {
   if (status === 404) return "Un dels requisits ja no està disponible.";
   if (status === 422 && caught instanceof ApiError) return caught.message || "Aquesta relació no és vàlida.";
   return "No s'ha pogut desar. Torna-ho a provar d'aquí a un moment.";
+}
+
+// --------------------------------------------------------------------------- //
+// Presentació: motius, aplicació, notes d'importació                            //
+// --------------------------------------------------------------------------- //
+
+export const CORRECTED_NOT_VERIFIED = "corrected_not_verified";
+
+/** Estats que encara demanen una decisió: només aquí té sentit «Per què cal revisar?». */
+export function isUnresolved(status: string): boolean {
+  return status === "needs_review" || status === "unreviewed";
+}
+
+/**
+ * `modality` del backend, dit com s'aplica el requisit. Cada codi té una sola
+ * etiqueta; l'obligació és un camp a part i no es barreja.
+ */
+export const MODALITY_LABELS: Record<string, string> = {
+  mandatory: "Sempre",
+  conditional: "Condicional",
+  alternative: "Alternativa",
+  optional: "Opcional",
+  informational: "Informativa",
+  unknown: "Per determinar",
+};
+
+/** Una nota separada en text de producte i traça tècnica (identificador d'annex). */
+export interface NoteParts {
+  text: string | null;
+  trace: string | null;
+}
+
+/**
+ * Les dues plantilles EXACTES amb què l'importador de Palamós escriu les notes
+ * de relació. Només aquestes: una nota escrita per una persona no es toca.
+ */
+const IMPORTED_RELATION_NOTES: Array<{ pattern: RegExp; text: string | null }> = [
+  // L'etiqueta de la relació («Cobreix parcialment») ja diu el mateix.
+  { pattern: /^Coincidencia parcial amb l'element automatic \(annex (M\d+)\)\.$/, text: null },
+  { pattern: /^Relacionats, no equivalents \(annex (M\d+)\)\.$/, text: "Relacionats, no equivalents" },
+];
+
+export function relationNote(note: string | null): NoteParts {
+  if (!note) return { text: null, trace: null };
+  for (const template of IMPORTED_RELATION_NOTES) {
+    const match = template.pattern.exec(note);
+    if (match) return { text: template.text, trace: `annex ${match[1]}` };
+  }
+  return { text: note, trace: null };
+}
+
+/** Una revisió creada per l'importador (no per una persona): ho diu la seva càrrega. */
+export function isImportedEntry(entry: ReviewHistoryEntry): boolean {
+  return typeof entry.changes?.import_batch_id === "string";
+}
+
+/**
+ * La nota d'una revisió IMPORTADA, sense vocabulari intern: els codis coneguts
+ * de l'importador es diuen en català i l'identificador d'annex passa a la traça.
+ * Una nota escrita per una persona es mostra tal com és.
+ */
+export function historyNote(entry: ReviewHistoryEntry): NoteParts {
+  const note = entry.note;
+  if (!note) return { text: null, trace: null };
+  if (!isImportedEntry(entry)) return { text: note, trace: null };
+  let text = note.replace(/\bneeds_review\b/g, "cal revisar").replace(/\bGAP\b/g, "requisit afegit manualment");
+  let trace: string | null = null;
+  const annex = / ?\(annex (M\d+)\)(\.?)$/.exec(text);
+  if (annex) {
+    trace = `annex ${annex[1]}`;
+    text = text.slice(0, annex.index) + annex[2];
+  }
+  return { text: text.trim() || null, trace };
+}
+
+/** Relacions consecutives amb la mateixa etiqueta, agrupades (l'ordre es manté). */
+export function groupRelations(relations: CanonicalRelation[]): Array<{ label: string; relations: CanonicalRelation[] }> {
+  const groups: Array<{ label: string; relations: CanonicalRelation[] }> = [];
+  for (const relation of relations) {
+    const last = groups[groups.length - 1];
+    if (last && last.label === relation.relation_label) last.relations.push(relation);
+    else groups.push({ label: relation.relation_label, relations: [relation] });
+  }
+  return groups;
 }

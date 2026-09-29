@@ -26,7 +26,7 @@ export type TabKey = "resum" | "plecs" | "requisits" | "historial";
 export const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "resum", label: "Resum" },
   { key: "plecs", label: "Plecs" },
-  { key: "requisits", label: "Requisits" },
+  { key: "requisits", label: "Requisits extrets" },
   { key: "historial", label: "Historial" },
 ];
 

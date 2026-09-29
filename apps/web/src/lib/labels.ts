@@ -514,8 +514,15 @@ export function ANALYSIS_STATUS_TEXT(analysis: RequirementAnalysis | null, jobRe
   const when = formatDate(run.completed_at ?? run.started_at);
   if (analysis?.is_stale) return `Anàlisi del ${when} · el plec ha canviat`;
   if (run.status === "partial") {
+    // Dos fets diferents i tots dos certs: un document sencer que no s'ha pogut
+    // llegir i una part d'un document que ha fallat. No es barregen.
     const skipped = run.skipped_documents?.length ?? 0;
-    return `Anàlisi parcial · ${skipped} ${skipped === 1 ? "document omès" : "documents omesos"}`;
+    const failed = run.chunks_failed ?? 0;
+    const parts = [
+      skipped > 0 ? `${skipped} ${skipped === 1 ? "document omès" : "documents omesos"}` : null,
+      failed > 0 ? `${failed} ${failed === 1 ? "part no processada" : "parts no processades"}` : null,
+    ].filter(Boolean);
+    return parts.length > 0 ? `Anàlisi parcial · ${parts.join(" · ")}` : "Anàlisi parcial";
   }
   return `Anàlisi completa · ${run.requirements_extracted} requisits · ${when}`;
 }

@@ -294,6 +294,18 @@ describe("ANALYSIS_STATUS_TEXT", () => {
     });
     expect(ANALYSIS_STATUS_TEXT(partial, null)).toBe("Anàlisi parcial · 1 document omès");
   });
+  it("parcial: una part fallada es diu part, no document; i si són totes dues coses, totes dues", () => {
+    const skipped = [{ tender_document_id: "d", document_name: "Dimensionament", document_type: "additional", reason: "document_not_analyzable" }];
+    expect(ANALYSIS_STATUS_TEXT(analysis({ status: "partial", chunks_failed: 1 }), null)).toBe(
+      "Anàlisi parcial · 1 part no processada",
+    );
+    expect(ANALYSIS_STATUS_TEXT(analysis({ status: "partial", chunks_failed: 1, skipped_documents: skipped }), null)).toBe(
+      "Anàlisi parcial · 1 document omès · 1 part no processada",
+    );
+    expect(ANALYSIS_STATUS_TEXT(analysis({ status: "partial", chunks_failed: 2 }), null)).toBe(
+      "Anàlisi parcial · 2 parts no processades",
+    );
+  });
   it("obsoleta: la data i que el plec ha canviat", () => {
     expect(ANALYSIS_STATUS_TEXT(analysis({}, true), null)).toMatch(/^Anàlisi del .*2026 · el plec ha canviat$/);
   });

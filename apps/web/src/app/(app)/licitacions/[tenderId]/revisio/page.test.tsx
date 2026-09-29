@@ -99,7 +99,7 @@ describe("Revisió de la licitació", () => {
     const stat = (label: string) => within(summary).getByText(label).nextElementSibling?.textContent;
     expect(stat("Requisits")).toBe("257");
     expect(stat("Cal revisar")).toBe("56");
-    expect(stat("Criteris puntuats")).toBe("9");
+    expect(stat("Criteris que puntuen")).toBe("9");
     expect(stat("Puntuació")).toBe("100");
     expect(screen.getByText("Servei de telefonia fixa i mòbil de l'Ajuntament de Palamós")).toBeTruthy();
     // Només les rutes canòniques de revisió; mai les files d'extracció.
@@ -121,7 +121,7 @@ describe("Revisió de la licitació", () => {
     const rows = within(scoring).getAllByText(/^\d+ punts?$/);
     // 80 + 20 del bloc + els 8 criteris del bloc.
     expect(rows).toHaveLength(10);
-    expect(screen.getByText("100 punts totals · 9 criteris puntuats")).toBeTruthy();
+    expect(screen.getByText("100 punts totals · 9 criteris que puntuen")).toBeTruthy();
     expect(screen.getByText("Total").nextElementSibling?.textContent).toBe("100 punts");
     // Les 23 files no surten per defecte.
     expect(screen.queryByText("Backup 4G/5G per serveis de veu")).toBeNull();
@@ -133,7 +133,7 @@ describe("Revisió de la licitació", () => {
     await renderPage();
 
     const warnings = screen.getByRole("heading", { name: "Per tenir en compte" }).parentElement as HTMLElement;
-    expect(within(warnings).getByText("Fórmula detectada, pendent de verificar")).toBeTruthy();
+    expect(within(warnings).getByText("Fórmula pendent de verificar")).toBeTruthy();
     expect(within(warnings).getAllByText("Informació:")).toHaveLength(2);
     expect(within(warnings).queryByText("Atenció:")).toBeNull();
     expect(within(warnings).getByText("Criteri preu")).toBeTruthy();
@@ -159,7 +159,7 @@ describe("Revisió de la licitació", () => {
     }
     expect(screen.getByText("Backup 4G/5G per serveis de veu")).toBeTruthy();
     expect(screen.getAllByText("Repeteix «Criteris qualitatius»")).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Veure només els que puntuen" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Mostra només els 9 criteris que sumen punts" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("filtra els requisits per estat, origen, obligació, categoria i text", async () => {
@@ -220,8 +220,9 @@ describe("Revisió de la licitació", () => {
     fireEvent.click(m15);
     const detail = screen.getByRole("dialog", { name: "Mínim 64 trucades simultànies" });
     expect(within(detail).getByText("≥ 64 trucades")).toBeTruthy();
-    expect(within(detail).getByText("Afirmat pel revisor")).toBeTruthy();
-    expect(within(detail).getByText("Afegit manualment")).toBeTruthy();
+    // El valor d'un requisit manual el diu «Afegit manualment», com l'origen.
+    expect(within(detail).getAllByText("Afegit manualment").length).toBeGreaterThanOrEqual(2);
+    expect(within(detail).queryByText(/Afirmat pel revisor/)).toBeNull();
     expect(within(detail).getByText("Pendent de revisar")).toBeTruthy();
     expect(within(detail).getByText("p. 23")).toBeTruthy();
     expect(within(detail).getByText("Citat manualment")).toBeTruthy();
@@ -249,7 +250,10 @@ describe("Revisió de la licitació", () => {
     fireEvent.click(screen.getByRole("button", { name: /Accés directe a extensió \(DDI\)/ }));
     detail = screen.getByRole("dialog", { name: "Accés directe a extensió (DDI)" });
     expect(within(detail).getByText("Relacionat amb:")).toBeTruthy();
-    expect(within(detail).getByText("Relacionats, no equivalents (annex M21).")).toBeTruthy();
+    // La nota de l'importador sense l'identificador d'annex: aquest queda a la traçabilitat.
+    expect(within(detail).getByText("Relacionats, no equivalents")).toBeTruthy();
+    expect(within(detail).queryByText("Relacionats, no equivalents (annex M21).")).toBeNull();
+    expect(within(detail).getByText("Traçabilitat de la importació")).toBeTruthy();
     expect(within(detail).queryByText(/Duplicat/)).toBeNull();
     // Cada un és a la llista pel seu compte: res plegat.
     const list = screen.getByRole("list", { name: "Requisits" });
@@ -274,7 +278,7 @@ describe("Revisió de la licitació", () => {
     // Els salts de línia del PDF no trenquen la cita.
     expect(within(evidence).getByText("«connectivitat a nivell 2 amb el datacenter»")).toBeTruthy();
     expect(within(evidence).getByText("Citat manualment")).toBeTruthy();
-    expect(within(evidence).getByText("Al document, sense valors")).toBeTruthy();
+    expect(within(evidence).getByText("Cita sense valors estructurats automàticament")).toBeTruthy();
     expect(within(detail).getByText("2")).toBeTruthy(); // revisió
   });
 

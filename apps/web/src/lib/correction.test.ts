@@ -135,8 +135,8 @@ describe("rebase després d'un 409", () => {
     expect(result.draft.title).toBe("Títol nou del servidor");
     expect(result.draft.modality).toBe("optional");
     expect(result.draft.category).toBe("contract_condition");
-    expect(result.changedOnServer).toEqual(["Títol", "Modalitat"]);
-    expect(result.conflicts).toEqual(["Modalitat"]);
+    expect(result.changedOnServer).toEqual(["Títol", "Aplicació"]);
+    expect(result.conflicts).toEqual(["Aplicació"]);
     // Contra la versió nova, només viatja el que ha canviat la persona.
     const content = diff(current, result.draft);
     expect(content).toMatchObject({ modality: "optional", category: "contract_condition" });

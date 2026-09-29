@@ -31,7 +31,7 @@ const FIELD_NAMES: Record<string, string> = {
   description: "Descripció",
   category: "Categoria",
   obligation: "Obligació",
-  modality: "Modalitat",
+  modality: "Aplicació",
   values: "Valors",
   note: "Nota",
   citations: "Evidència",
@@ -188,7 +188,7 @@ export function ManualRequirementEditor({ companyId, tenderId, onCreated, onClos
         <Field label="Obligació" hint="Què en fa el plec.">
           <Select value={draft.obligation} options={OBLIGATION_OPTIONS} onChange={(event) => update({ obligation: event.target.value })} />
         </Field>
-        <Field label="Modalitat" hint="Com obliga.">
+        <Field label="Aplicació" hint="Quan s'aplica el requisit.">
           <Select value={draft.modality} options={MODALITY_OPTIONS} onChange={(event) => update({ modality: event.target.value })} />
         </Field>
       </div>
@@ -201,7 +201,6 @@ export function ManualRequirementEditor({ companyId, tenderId, onCreated, onClos
             key={row.key}
             index={index}
             row={row}
-            source={null}
             error={show ? errors.values[row.key] : undefined}
             onChange={(patch) => updateValue(row.key, patch)}
             onRemove={() => update({ values: draft.values.filter((value) => value.key !== row.key) })}
@@ -249,13 +248,13 @@ export function ManualRequirementEditor({ companyId, tenderId, onCreated, onClos
       </Field>
 
       {serverError && (
-        <div role="alert" className="border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
+        <div role="alert" className="rounded-control border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
           {serverError}
         </div>
       )}
 
       {confirmDiscard ? (
-        <div role="alertdialog" aria-labelledby={`${id}-discard`} className="space-y-2 border border-border-strong px-3 py-2">
+        <div role="alertdialog" aria-labelledby={`${id}-discard`} className="space-y-2 rounded-control border border-border-strong px-3 py-2">
           <p id={`${id}-discard`} className="text-body font-semibold text-ink">
             Descartar els canvis no desats?
           </p>

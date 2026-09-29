@@ -17,7 +17,7 @@ const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-mut
 
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
-    <div className="border border-border px-3.5 py-3">
+    <div className="rounded-card border border-border bg-surface px-3.5 py-3 shadow-card">
       <dt className={KICKER}>{label}</dt>
       <dd className="mt-1 font-heading text-[28px] leading-none font-semibold text-ink tabular-nums">{value}</dd>
       {note && <dd className="mt-1 text-caption text-muted">{note}</dd>}
@@ -162,7 +162,7 @@ export default function TenderReviewPage() {
         <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Requisits" value={String(data.total_requirements)} />
           <Stat label="Cal revisar" value={String(data.needs_review_count)} />
-          <Stat label="Criteris puntuats" value={award ? String(award.scored_count) : "…"} />
+          <Stat label="Criteris que puntuen" value={award ? String(award.scored_count) : "…"} />
           <Stat label="Puntuació" value={award ? String(award.total_points) : "…"} note={award ? "punts en total" : undefined} />
         </dl>
       </section>

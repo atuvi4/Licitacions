@@ -50,7 +50,7 @@ function editableOf(item: Omit<CanonicalRequirement, "editable">): EditableRequi
       operator: value.operator,
       value: value.value,
       unit_label: value.unit_label,
-      source: value.source_label === "Afirmat pel revisor" ? "reviewer" : "document",
+      source: value.source ?? (value.source_label === "Extret del document" ? "document" : "reviewer"),
     })),
   };
 }
@@ -67,7 +67,7 @@ function requirement(overrides: Partial<CanonicalRequirement> & Pick<CanonicalRe
     verification_label: "Pendent de revisar",
     needs_review: false,
     values: [],
-    evidence_label: "Al document, sense valors",
+    evidence_label: "Cita sense valors estructurats automàticament",
     evidence: [],
     documents: [PPT],
     pages: [],
@@ -104,8 +104,9 @@ export const reviewRequirements: CanonicalRequirement[] = [
         operator: ">=",
         value: 64,
         unit_label: "trucades",
-        source_label: "Afirmat pel revisor",
-        status_label: "Afirmat pel revisor",
+        source_label: "Afegit manualment",
+        status_label: "Afegit manualment",
+        source: "reviewer",
       },
     ],
     evidence: [manualCitation(23, "8.1.1.7", "mínim de 64 trucades simultànies")],
@@ -134,7 +135,7 @@ export const reviewRequirements: CanonicalRequirement[] = [
   requirement({
     canonical_id: CLOUD_HA,
     title: "Plataforma de comunicacions de veu fixa en alta disponibilitat al núvol",
-    evidence: [{ document: PPT, page: 32, section: null, quote: "plataforma al núvol en alta disponibilitat", status_label: "Al document, sense valors" }],
+    evidence: [{ document: PPT, page: 32, section: null, quote: "plataforma al núvol en alta disponibilitat", status_label: "Cita sense valors estructurats automàticament" }],
     pages: [32],
     visible_relations: [
       {
@@ -174,7 +175,7 @@ export const reviewRequirements: CanonicalRequirement[] = [
     canonical_id: SIP_DDI,
     title: "Troncal SIP - numeració múltiple DDI/DID",
     pages: [31],
-    evidence: [{ document: PPT, page: 31, section: null, quote: "numeració múltiple DDI", status_label: "Al document, sense valors" }],
+    evidence: [{ document: PPT, page: 31, section: null, quote: "numeració múltiple DDI", status_label: "Cita sense valors estructurats automàticament" }],
   }),
   requirement({
     canonical_id: "m09",
@@ -182,7 +183,7 @@ export const reviewRequirements: CanonicalRequirement[] = [
     description: "Requeriment que els equipaments municipals tinguin connectivitat a nivell 2 amb el datacenter.",
     evidence: [
       // Amb el salt de línia del PDF, com arriba de l'extracció.
-      { document: PPT, page: 31, section: null, quote: "connectivitat a nivell 2\namb el datacenter", status_label: "Al document, sense valors" },
+      { document: PPT, page: 31, section: null, quote: "connectivitat a nivell 2\namb el datacenter", status_label: "Cita sense valors estructurats automàticament" },
       manualCitation(22, "8.1.1.4", "hauran de disposar de connectivitat a nivell 2"),
     ],
     pages: [22, 31],
@@ -201,7 +202,8 @@ export const reviewRequirements: CanonicalRequirement[] = [
         operator: "exists",
         value: true,
         unit_label: null,
-        source_label: "Del document",
+        source_label: "Extret del document",
+        source: "document",
         status_label: "Al document, valor per confirmar",
       },
     ],
@@ -222,7 +224,8 @@ export const reviewRequirements: CanonicalRequirement[] = [
         operator: "gte",
         value: 450000,
         unit_label: "EUR",
-        source_label: "Del document",
+        source_label: "Extret del document",
+        source: "document",
         status_label: "Confirmat al document",
       },
     ],
@@ -289,7 +292,7 @@ const PRICE = award({
   pages: [14],
   formula: "Vi = Bi × 80 punts / Max(Bs, Bmax)",
   formula_status: "not_evidence_verified",
-  formula_label: "Fórmula detectada, pendent de verificar",
+  formula_label: "Fórmula pendent de verificar",
 });
 
 const INFORME_MOBILE = ref("a-i1", "Servei de trànsit de veu de mòbils - Minuts mensuals per mòbil 20000 minuts", 1, INFORME, 6);
@@ -308,7 +311,7 @@ const scoredChildren = CHILDREN.map(([id, name, points]) =>
 const CHECKS = [
   {
     code: "formula_not_evidence_verified",
-    label: "Fórmula detectada, pendent de verificar",
+    label: "Fórmula pendent de verificar",
     item_ids: [PRICE.canonical_id],
     details: {},
   },

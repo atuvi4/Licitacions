@@ -154,7 +154,7 @@ describe("Fitxa de licitació", () => {
     expect(screen.getByRole("button", { name: "Continua la candidatura" })).toBeTruthy();
 
     const tabs = screen.getAllByRole("tab").map((tab) => `${tab.textContent?.replace(/\s+/g, " ").trim()}${tab.getAttribute("aria-selected") === "true" ? " *" : ""}`);
-    expect(tabs).toEqual(["Resum *", "Plecs3", "Requisits14", "Historial"]);
+    expect(tabs).toEqual(["Resum *", "Plecs3", "Requisits extrets14", "Historial"]);
 
     // Resum: pre-fit i dades; els plecs i els requisits no hi són.
     expect(screen.getByText("Pre-fit amb el vostre perfil")).toBeTruthy();

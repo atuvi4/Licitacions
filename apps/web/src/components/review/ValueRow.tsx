@@ -13,26 +13,26 @@ import { type DraftValue, VALUE_TYPE_OPTIONS, type ValueType, operatorKey, opera
 export function ValueRow({
   index,
   row,
-  source,
+  sourceLabel,
   error,
   onChange,
   onRemove,
 }: {
   index: number;
   row: DraftValue;
-  source: "document" | "reviewer" | null;
+  /** D'on surt el valor, ja dit segons l'element («corregit pel revisor»…). */
+  sourceLabel?: string | null;
   error?: string;
   onChange: (patch: Partial<DraftValue>) => void;
   onRemove: () => void;
 }) {
   const name = `Valor ${index + 1}`;
   return (
-    <div role="group" aria-label={name} className="space-y-2 border border-border px-2.5 py-2">
+    <div role="group" aria-label={name} className="space-y-2 rounded-control border border-border px-2.5 py-2">
       <div className="flex items-center justify-between gap-2">
         <p className="text-caption text-muted">
           {name}
-          {source === "document" && " · del document"}
-          {source === "reviewer" && " · afirmat pel revisor"}
+          {sourceLabel && ` · ${sourceLabel}`}
           {row.isNew && " · nou"}
         </p>
         <button

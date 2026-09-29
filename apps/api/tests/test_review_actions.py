@@ -223,7 +223,8 @@ async def test_a_latencia_corregida_a_menys_de_70_ms(session, palamos_like, tena
     body = response.json()
     assert body["values"] == [{
         "key": "latencia_dades_max", "operator": "<", "value": 70, "unit_label": "ms",
-        "source_label": "Afirmat pel revisor", "status_label": "Afirmat pel revisor"}]
+        "source_label": "Corregit pel revisor", "status_label": "Corregit pel revisor",
+        "source": "reviewer", "context": None}]
     assert (body["provenance"], body["provenance_label"]) == ("automated_corrected",
                                                               "Extret i corregit")
     assert body["verification_status"] == "verified"
@@ -247,7 +248,8 @@ async def test_c_asseguranca_corregida_a_500000_eur(session, palamos_like, tenan
 
     assert body["values"] == [{
         "key": "import_minim", "operator": ">=", "value": 500000, "unit_label": "EUR",
-        "source_label": "Afirmat pel revisor", "status_label": "Afirmat pel revisor"}]
+        "source_label": "Corregit pel revisor", "status_label": "Corregit pel revisor",
+        "source": "reviewer", "context": None}]
     assert body["obligation_label"] == "Obligatori"
     assert body["provenance"] == "automated_corrected"
     history = (await client_a.get(_url(company, tid, f"/items/{item.id}/history"))).json()
@@ -652,7 +654,7 @@ async def test_editable_es_la_instantania_acceptada_amb_codis(session, palamos_l
         "source": "document"}]
     # Les etiquetes de la interficie no canvien: `editable` nomes transporta.
     assert (body["obligation_label"], body["category_label"]) == ("Informatiu", "Assegurança")
-    assert body["values"][0]["source_label"] == "Del document"
+    assert body["values"][0]["source_label"] == "Extret del document"
 
 
 async def test_editable_fa_la_volta_d_una_correccio_diferencial(session, palamos_like, tenant_a,
@@ -683,7 +685,8 @@ async def test_editable_fa_la_volta_d_una_correccio_diferencial(session, palamos
         {"key": "reviewer_value_1", "operator": "<", "value": 70, "unit_label": "ms",
          "source": "reviewer"},
     ]
-    assert [v["source_label"] for v in after["values"]] == ["Del document", "Afirmat pel revisor"]
+    assert [v["source_label"] for v in after["values"]] == [
+        "Extret del document", "Corregit pel revisor"]
     assert (after["verification_status"], after["provenance"]) == ("unreviewed",
                                                                    "automated_corrected")
     assert after["obligation_label"] == "Condicional"

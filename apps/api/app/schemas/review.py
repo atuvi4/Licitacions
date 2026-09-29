@@ -406,6 +406,18 @@ class CanonicalValue(BaseModel):
     unit_label: str | None
     source_label: str
     status_label: str
+    #: `document` (extret) o `reviewer` (escrit pel revisor). Codi estable.
+    source: Literal["document", "reviewer"] = "document"
+    #: El fragment literal del plec a que es refereix el valor extret (l'ancora
+    #: desada pel pipeline). Nomes per a valors del document; mai s'endevina.
+    context: str | None = None
+
+
+class ReviewReason(BaseModel):
+    """Per que un requisit demana revisio. Nomes motius deterministes i desats."""
+
+    code: str
+    label: str
 
 
 class RelationCreate(_TextFields):
@@ -503,6 +515,8 @@ class CanonicalRequirement(BaseModel):
     folded_relations: list[CanonicalRelation] = Field(default_factory=list)
     #: Per a l'editor de correccions: la instantania acceptada amb codis estables.
     editable: EditableRequirement
+    #: «Per que cal revisar?»: nomes per als no resolts (pendent o cal revisar).
+    review_reasons: list[ReviewReason] = Field(default_factory=list)
 
 
 class CountLabel(BaseModel):

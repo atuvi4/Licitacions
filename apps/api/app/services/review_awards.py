@@ -92,7 +92,7 @@ ROLE_LABELS = {
 ROLE_UNASSIGNED = "Paper per assignar"
 FORMULA_LABELS = {
     "verified": "Fórmula confirmada al document",
-    "not_evidence_verified": "Fórmula detectada, pendent de verificar",
+    "not_evidence_verified": "Fórmula pendent de verificar",
 }
 MECHANISM_LABELS = {
     "verified": "Puntuació confirmada al document",

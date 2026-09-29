@@ -74,7 +74,7 @@ const items = [
   insurance("i-plec", PLEC, {
     provenance: "automated_corrected",
     provenance_label: "Extret i corregit",
-    values: [{ key: "reviewer_value_1", operator: ">=", value: 500000, unit_label: "EUR", source_label: "Afirmat pel revisor", status_label: "Afirmat pel revisor" }],
+    values: [{ key: "reviewer_value_1", operator: ">=", value: 500000, unit_label: "EUR", source_label: "Corregit pel revisor", status_label: "Corregit pel revisor", source: "reviewer" }],
     visible_relations: [relation("r1", "incoming", "restatement_of", "Reiterat a", "i-informe", INFORME)],
   }),
   insurance("i-informe", INFORME, {

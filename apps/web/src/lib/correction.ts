@@ -82,7 +82,7 @@ export const OBLIGATION_OPTIONS: Option[] = [
 ];
 
 export const MODALITY_OPTIONS: Option[] = [
-  { value: "mandatory", label: "Obliga sempre" },
+  { value: "mandatory", label: "Sempre" },
   { value: "conditional", label: "Condicional (només si es dona un supòsit)" },
   { value: "alternative", label: "Alternativa (una de diverses vies)" },
   { value: "optional", label: "Opcional" },
@@ -379,7 +379,7 @@ export const FIELD_LABELS: Record<string, string> = {
   description: "Descripció",
   category: "Categoria",
   obligation: "Obligació",
-  modality: "Modalitat",
+  modality: "Aplicació",
 };
 
 export interface Rebased {

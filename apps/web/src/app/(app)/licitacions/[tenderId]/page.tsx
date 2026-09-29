@@ -7,6 +7,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ComplianceSection } from "@/components/ComplianceSection";
 import { PreFitPanel, ScoreValue } from "@/components/PreFit";
 import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
+import { ReviewSummaryCard } from "@/components/review/ReviewSummaryCard";
 import { useSession } from "@/components/SessionProvider";
 import { TenderChangeHistory } from "@/components/TenderChangeHistory";
 import { WorkspaceLauncher } from "@/components/WorkspaceLauncher";
@@ -837,17 +838,7 @@ function TenderDetail() {
         // redissenya): si es fan més amples que un telèfon, es desplacen aquí
         // dins i no eixamplen la pàgina.
         <div className="min-w-0 space-y-4 overflow-x-auto">
-          <Card>
-            <CardHeader
-              title="Revisió de la licitació"
-              description="Requisits i criteris d'adjudicació tal com els revisa la vostra empresa: què puntua, què cal revisar i d'on surt cada cosa."
-              action={
-                <LinkButton href={`/licitacions/${tenderId}/revisio`} variant="primary" size="sm">
-                  Obre la revisió
-                </LinkButton>
-              }
-            />
-          </Card>
+          <ReviewSummaryCard companyId={companyId} tenderId={tenderId} />
           <RequirementAnalysisSection
             tenderId={tenderId}
             companyId={companyId}

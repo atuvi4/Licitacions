@@ -103,7 +103,7 @@ describe("Accions de revisió d'un requisit", () => {
     const revision = within(dialog).getByText("Revisió", { selector: "dt" }).nextElementSibling;
     expect(revision?.textContent).toBe("1");
 
-    await click("Confirmar", dialog);
+    await click("Confirmar requisit", dialog);
 
     expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith(`${REVIEW}/items/r-solvency/actions`, {
@@ -123,12 +123,14 @@ describe("Accions de revisió d'un requisit", () => {
     post.mockResolvedValue(after(M15, "verified", "Verificat"));
     const dialog = await openItem(/Mínim 64 trucades simultànies/);
 
-    await click("Confirmar", dialog);
+    await click("Confirmar requisit", dialog);
 
     const row = within(screen.getByRole("list", { name: "Requisits" })).getByRole("button", { name: /Mínim 64 trucades/ });
     expect(within(row).getByText("Afegit manualment")).toBeTruthy();
     expect(within(row).getByText("Verificat")).toBeTruthy();
-    expect(within(dialog).getByText("Afegit manualment")).toBeTruthy();
+    // L'origen continua sent «Afegit manualment» (i el valor també ho diu).
+    const origin = within(dialog).getByText("Origen").closest("div")!;
+    expect(within(origin).getByText("Afegit manualment")).toBeTruthy();
   });
 
   it("Marcar parcial demana una nota abans d'enviar res", async () => {
@@ -191,7 +193,7 @@ describe("Accions de revisió d'un requisit", () => {
     post.mockImplementation(() => new Promise((done) => (resolve = done)));
     const dialog = await openItem(/Volum anual de negocis mínim/);
 
-    await click("Confirmar", dialog);
+    await click("Confirmar requisit", dialog);
     const confirm = within(dialog).getByRole("button", { name: /Confirmar/ }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
     expect((within(dialog).getByRole("button", { name: "Descartar" }) as HTMLButtonElement).disabled).toBe(true);
@@ -234,7 +236,7 @@ describe("Accions de revisió d'un requisit", () => {
     post.mockRejectedValue(new ApiError(status, code, "detall intern"));
     const dialog = await openItem(/Volum anual de negocis mínim/);
 
-    await click("Confirmar", dialog);
+    await click("Confirmar requisit", dialog);
 
     expect(within(dialog).getByRole("alert").textContent).toBe(message);
     expect(document.body.textContent).not.toContain("detall intern");
@@ -246,10 +248,10 @@ describe("Accions de revisió d'un requisit", () => {
     post.mockRejectedValue(new TypeError("Failed to fetch"));
     const dialog = await openItem(/Volum anual de negocis mínim/);
 
-    await click("Confirmar", dialog);
+    await click("Confirmar requisit", dialog);
 
     expect(within(dialog).getByRole("alert").textContent).toMatch(/Torna-ho a provar/);
-    expect((within(dialog).getByRole("button", { name: "Confirmar" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((within(dialog).getByRole("button", { name: "Confirmar requisit" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("422: el missatge del backend al costat del formulari", async () => {
@@ -277,7 +279,7 @@ describe("Accions de revisió d'un requisit", () => {
     fireEvent.click(within(list()).getByRole("button", { name: /Volum anual/ }));
     await flush();
 
-    await click("Confirmar");
+    await click("Confirmar requisit");
 
     expect((screen.getByLabelText("Estat") as HTMLSelectElement).value).toBe("unreviewed");
     expect(within(list()).getAllByRole("listitem")).toHaveLength(before - 1);
@@ -314,7 +316,7 @@ describe("Accions de revisió d'un requisit", () => {
     const dialog = await openItem(/Volum anual de negocis mínim/);
     expect(calls(`${REVIEW}/items/r-solvency/history`)).toBe(1);
 
-    await click("Confirmar", dialog);
+    await click("Confirmar requisit", dialog);
 
     expect(calls(`${REVIEW}/items/r-solvency/history`)).toBe(2);
   });

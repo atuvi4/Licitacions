@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { correctionSummary } from "@/lib/correction";
 import { useResource } from "@/lib/hooks";
-import { type ReviewHistoryEntry, reviewPath } from "@/lib/review";
+import { type ReviewHistoryEntry, historyNote, isImportedEntry, reviewPath } from "@/lib/review";
 import { formatDateTime } from "@/lib/tenders";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
@@ -72,7 +72,20 @@ export function ReviewHistory({
                 {entry.action === "correct" && correctionSummary(entry.changes) && (
                   <p className="mt-0.5 text-caption text-muted">Canvis: {correctionSummary(entry.changes)}</p>
                 )}
-                {entry.note && <p className="mt-0.5 text-[13px] leading-5 text-ink">{entry.note}</p>}
+                {(() => {
+                  // Una nota IMPORTADA es mostra sense codis interns; la traça (annex) va a part.
+                  const note = historyNote(entry);
+                  return (
+                    <>
+                      {note.text && <p className="mt-0.5 text-[13px] leading-5 text-ink">{note.text}</p>}
+                      {isImportedEntry(entry) && (
+                        <p className="mt-0.5 text-caption text-faint">
+                          Importat de la revisió manual{note.trace ? ` · traçabilitat: ${note.trace}` : ""}
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </li>
             ))}
           </ol>

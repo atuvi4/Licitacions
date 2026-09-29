@@ -104,7 +104,7 @@ describe("Editor de correccions", () => {
 
     expect(field(editor, "Títol").value).toBe("Volum anual de negocis mínim");
     expect((field(editor, "Categoria") as unknown as HTMLSelectElement).value).toBe("economic_solvency");
-    expect((field(editor, "Modalitat") as unknown as HTMLSelectElement).value).toBe("conditional");
+    expect((field(editor, "Aplicació") as unknown as HTMLSelectElement).value).toBe("conditional");
     const value = within(editor).getByRole("group", { name: "Valor 1" });
     expect((within(value).getByLabelText("Valor") as HTMLInputElement).value).toBe("450000");
     expect((within(value).getByLabelText("Unitat") as HTMLInputElement).value).toBe("EUR");
@@ -145,7 +145,7 @@ describe("Editor de correccions", () => {
     fireEvent.change(field(editor, "Descripció"), { target: { value: "Dels tres darrers exercicis." } });
     fireEvent.change(field(editor, "Categoria"), { target: { value: "technical_solvency" } });
     fireEvent.change(field(editor, "Obligació"), { target: { value: "scored" } });
-    fireEvent.change(field(editor, "Modalitat"), { target: { value: "mandatory" } });
+    fireEvent.change(field(editor, "Aplicació"), { target: { value: "mandatory" } });
     await submit(editor);
 
     expect(payload().payload).toEqual({

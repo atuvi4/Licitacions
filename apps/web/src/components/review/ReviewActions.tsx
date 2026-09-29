@@ -8,9 +8,11 @@ import { RelationEditor } from "@/components/review/RelationEditor";
 import { Button, ResultNotice, StatusPill, Textarea } from "@/components/ui";
 import {
   type ActionFailure,
+  CORRECTED_NOT_VERIFIED,
   type CanonicalRequirement,
   type ReviewActionName,
   actionFailure,
+  isUnresolved,
   submitLinkSource,
   submitReviewAction,
   verificationLevel,
@@ -79,6 +81,36 @@ export interface ReviewActionsProps {
   candidates?: CanonicalRequirement[];
   /** Les relacions viuen a la llista: després de crear-ne una, es torna a llegir. */
   onRelationsChanged?: () => Promise<void>;
+  /** L'editor de correccions s'obre o es tanca: el detall es pot compactar. */
+  onEditingChange?: (editing: boolean) => void;
+}
+
+/**
+ * Per què cal revisar: només motius desats i deterministes (els dona l'API).
+ * «Corregit però no verificat» es diu a part, en una frase: és el cas que
+ * confonia més a les proves (el contingut ja és el bo, però ningú no l'ha verificat).
+ */
+function ReviewReasons({ item }: { item: CanonicalRequirement }) {
+  if (!isUnresolved(item.verification_status)) return null;
+  const reasons = item.review_reasons ?? [];
+  const corrected = reasons.find((reason) => reason.code === CORRECTED_NOT_VERIFIED);
+  const others = reasons.filter((reason) => reason.code !== CORRECTED_NOT_VERIFIED);
+  if (!corrected && others.length === 0) return null;
+  return (
+    <div className="mt-2 space-y-1.5">
+      {corrected && <p className="text-[13px] leading-5 text-ink">{corrected.label}</p>}
+      {others.length > 0 && (
+        <div role="group" aria-label="Per què cal revisar?">
+          <p className="text-[13px] font-semibold text-ink">Per què cal revisar?</p>
+          <ul className="mt-0.5 list-disc space-y-0.5 pl-5 text-[13px] leading-5 text-muted">
+            {others.map((reason) => (
+              <li key={reason.code}>{reason.label}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -99,6 +131,7 @@ export function ReviewActions({
   registerCloseGuard,
   candidates = [],
   onRelationsChanged,
+  onEditingChange,
 }: ReviewActionsProps) {
   const [form, setForm] = useState<keyof typeof FORMS | null>(null);
   const [editing, setEditing] = useState(false);
@@ -133,6 +166,10 @@ export function ReviewActions({
   useEffect(() => {
     if (form) focusField();
   }, [form]);
+
+  useEffect(() => {
+    onEditingChange?.(editing);
+  }, [editing, onEditingChange]);
 
   // El focus torna al botó que ha obert el formulari, un cop tornat a pintar.
   useEffect(() => {
@@ -249,7 +286,7 @@ export function ReviewActions({
   const active = form ? FORMS[form] : null;
 
   return (
-    <section ref={section} aria-labelledby="detall-revisio" className="border border-border px-3 py-3">
+    <section ref={section} aria-labelledby="detall-revisio" className="rounded-card border border-border bg-surface px-3 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 id="detall-revisio" className={KICKER}>
           Revisió
@@ -258,10 +295,11 @@ export function ReviewActions({
           {item.verification_label}
         </StatusPill>
       </div>
+      <ReviewReasons item={item} />
 
       {done && <ResultNotice message={done} tone="success" onDismiss={() => setDone(null)} />}
       {failure && (
-        <div role="alert" className="mt-2 border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
+        <div role="alert" className="mt-2 rounded-control border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
           {failure.message}
         </div>
       )}
@@ -306,7 +344,7 @@ export function ReviewActions({
                 <>
                   <CitationPreview draft={chosen} />
                   {linkProblem && (
-                    <p role="alert" className="border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
+                    <p role="alert" className="rounded-control border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
                       {linkProblem}
                     </p>
                   )}
@@ -351,7 +389,7 @@ export function ReviewActions({
           {!active && !editing && !linking && !relating && (
             <div className="mt-2.5 flex flex-wrap gap-2" role="group" aria-label="Accions de revisió">
               <Button size="sm" variant="primary" loading={pending === "confirm"} disabled={busy} onClick={() => void run("confirm")}>
-                Confirmar
+                Confirmar requisit
               </Button>
               {(["mark_partial", "reject"] as const).map((name) => (
                 <Button

@@ -292,7 +292,7 @@ async def test_els_avisos_de_palamos_i_la_formula_del_preu(session, awards, tena
     assert len(checks["restatement_excluded"]["item_ids"]) == 2
     price = body["criteria"][0]
     assert (price["formula"], price["formula_status"], price["formula_label"]) == (
-        PRICE_FORMULA, "not_evidence_verified", "Fórmula detectada, pendent de verificar")
+        PRICE_FORMULA, "not_evidence_verified", "Fórmula pendent de verificar")
     assert checks["formula_not_evidence_verified"]["item_ids"] == [price["canonical_id"]]
     # Assignar papers no verifica res.
     assert {c["verification_status"] for c in body["criteria"]} == {"unreviewed"}

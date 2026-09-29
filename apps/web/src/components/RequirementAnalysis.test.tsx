@@ -212,7 +212,7 @@ describe("RequirementAnalysisSection", () => {
     // L'estat que va deixar l'anàlisi es continua veient, nomes com a pastilla.
     const r2 = screen.getByText("Sublímit per víctima de 150.000 €").closest("li")!;
     expect(r2.querySelector("[data-level]")).not.toBeNull();
-    expect(screen.getByText("La revisió es gestiona des de la vista de revisió de la licitació.")).toBeTruthy();
+    expect(screen.getByText(/La revisió es gestiona des de la vista de revisió\./)).toBeTruthy();
   });
 
   it("la revisio porta a la vista canonica /revisio", async () => {
@@ -221,6 +221,35 @@ describe("RequirementAnalysisSection", () => {
 
     const link = screen.getByRole("link", { name: "Obre la revisió" });
     expect(link.getAttribute("href")).toBe("/licitacions/t1/revisio");
+  });
+
+  it("una anàlisi incompleta es diu en llengua de producte; el diagnòstic cru només al detall tècnic", async () => {
+    const raw = "1 de 22 chunks fallits (schema_invalid: 1). Darrer error: schema_invalid: La sortida no compleix el contracte del perfil (2 errors).";
+    const { container } = renderSection(analysis({
+      run: run({ status: "partial", error_code: "some_chunks_failed", error_message: raw, chunks_failed: 1,
+                 requirements_extracted: 214, award_criteria_extracted: 14 }),
+    }));
+    await flush();
+
+    expect(screen.getByText("Anàlisi incompleta: una part del plec no s'ha pogut processar automàticament.")).toBeTruthy();
+    expect(screen.getByText("La revisió pot incorporar contingut revisat manualment.")).toBeTruthy();
+    const visible = container.cloneNode(true) as HTMLElement;
+    visible.querySelectorAll("details").forEach((element) => element.remove());
+    expect(visible.textContent).not.toMatch(/chunk|schema_invalid|contracte del perfil/);
+    const technical = [...container.querySelectorAll("details")].find((d) => d.textContent?.includes("Detall tècnic") && d.textContent?.includes(raw));
+    expect(technical).toBeTruthy();
+    // Les xifres de l'anàlisi automàtica es diuen com el que són.
+    expect(screen.getByText("Anàlisi automàtica")).toBeTruthy();
+    expect(screen.getByText("Requisits extrets")).toBeTruthy();
+    expect(screen.getByText("Criteris detectats")).toBeTruthy();
+  });
+
+  it("a la llista d'extrets, la revisió és un enllaç discret, no una segona crida principal", async () => {
+    renderSection(analysis());
+    await flush();
+    const link = screen.getByRole("link", { name: "Obre la revisió" });
+    expect(link.className).not.toMatch(/bg-brand/);
+    expect(screen.getByText(/^Requisits extrets \(/)).toBeTruthy();
   });
 
   it("res de la llista no pot fer el POST antic de revisio", async () => {

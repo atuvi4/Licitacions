@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ManualRequirementEditor } from "@/components/review/ManualRequirementEditor";
 import { ReviewActions } from "@/components/review/ReviewActions";
@@ -21,9 +21,20 @@ import {
   filterOptions,
   filterRequirements,
   formatValue,
+  groupRelations,
+  MODALITY_LABELS,
+  relationNote,
   verificationLevel,
   whereLine,
 } from "@/lib/review";
+
+/** L'obligació sola (el codi de l'editor); com s'aplica va a «Aplicació». */
+const OBLIGATION_LABELS: Record<string, string> = {
+  mandatory: "Obligatori",
+  scored: "Valorable (dona punts)",
+  informative: "Informatiu",
+  unknown: "Per determinar",
+};
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
@@ -199,12 +210,22 @@ function RelationList({
           {message.text}
         </p>
       )}
-      <ul className="mt-1.5 space-y-2">
-        {relations.map((relation) => (
+      <ul className="mt-1.5 space-y-3">
+        {groupRelations(relations).map((group) => (
+          <li key={group.label} className="text-body">
+            {group.relations.length > 1 && (
+              <p className="text-muted">
+                {group.label} ({group.relations.length})
+              </p>
+            )}
+            <ul className={group.relations.length > 1 ? "mt-1 space-y-2 border-l-2 border-border pl-2.5" : "space-y-2"}>
+        {group.relations.map((relation) => {
+          const note = relationNote(relation.note);
+          return (
           <li key={`${relation.relation_id}-${relation.direction}`} className="text-body">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <span className="text-muted">{relation.relation_label}: </span>
+                {group.relations.length === 1 && <span className="text-muted">{relation.relation_label}: </span>}
                 <button
                   type="button"
                   className="text-left text-brand-strong underline decoration-1 underline-offset-2 hover:text-accent-800"
@@ -212,7 +233,7 @@ function RelationList({
                 >
                   {relation.other_item_title ?? "Element sense títol"}
                 </button>
-                {relation.note && <p className="text-caption text-muted">{relation.note}</p>}
+                {note.text && <p className="text-caption text-muted">{note.text}</p>}
               </div>
               {review?.canWrite && confirming !== relation.relation_id && (
                 <Button size="sm" variant="ghost" disabled={pending} onClick={() => setConfirming(relation.relation_id)}>
@@ -221,7 +242,7 @@ function RelationList({
               )}
             </div>
             {confirming === relation.relation_id && (
-              <div role="group" aria-label="Confirmar que es treu la relació" className="mt-1.5 space-y-1.5 border border-border-strong px-2.5 py-2">
+              <div role="group" aria-label="Confirmar que es treu la relació" className="mt-1.5 space-y-1.5 rounded-control border border-border-strong px-2.5 py-2">
                 <p className="text-[13px] leading-5 text-ink">
                   Es treu només aquesta relació. El requisit i el seu historial no s&apos;eliminaran.
                 </p>
@@ -236,8 +257,26 @@ function RelationList({
               </div>
             )}
           </li>
+          );
+        })}
+            </ul>
+          </li>
         ))}
       </ul>
+      {relations.some((relation) => relationNote(relation.note).trace) && (
+        <details className="mt-2 text-caption text-muted">
+          <summary className="cursor-pointer">Traçabilitat de la importació</summary>
+          <ul className="mt-1 space-y-0.5">
+            {relations
+              .filter((relation) => relationNote(relation.note).trace)
+              .map((relation) => (
+                <li key={`${relation.relation_id}-trace`}>
+                  {relation.other_item_title ?? "Element"} · {relationNote(relation.note).trace}
+                </li>
+              ))}
+          </ul>
+        </details>
+      )}
     </section>
   );
 }
@@ -256,28 +295,20 @@ function RequirementDetail({
   registerCloseGuard: (guard: (() => boolean) | null) => void;
 }) {
   const relations = [...item.visible_relations, ...item.folded_relations];
-  return (
-    <div className="space-y-5 px-4 py-4">
-      {item.description && <p className="text-body leading-relaxed text-ink">{item.description}</p>}
-
-      {review && (
-        <ReviewActions
-          item={item}
-          companyId={review.companyId}
-          tenderId={review.tenderId}
-          canWrite={review.canWrite}
-          onUpdated={review.onUpdated}
-          onStale={() => review.onStale(item.canonical_id)}
-          onGone={() => review.onGone(item.canonical_id)}
-          registerCloseGuard={registerCloseGuard}
-          candidates={candidates}
-          onRelationsChanged={review.onRelationsChanged}
-        />
-      )}
-
+  // Mentre es corregeix, el calaix mostra l'editor (amb la cita al costat dels
+  // valors) i el detall actual queda plegat: abans es repetia sencer a sota.
+  const [editing, setEditing] = useState(false);
+  const [peek, setPeek] = useState(false);
+  // Tancar l'editor torna al detall normal: el «consulta» no queda enganxat.
+  useEffect(() => {
+    if (!editing) setPeek(false);
+  }, [editing]);
+  const detail = (
+    <>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
         <Fact label="Categoria">{item.category_label}</Fact>
-        <Fact label="Obligació">{item.obligation_label}</Fact>
+        <Fact label="Obligació">{OBLIGATION_LABELS[item.editable.obligation] ?? item.obligation_label}</Fact>
+        <Fact label="Aplicació">{MODALITY_LABELS[item.editable.modality] ?? "Per determinar"}</Fact>
         {/* Amb la secció «Revisió», l'estat ja hi és al capdamunt: no es repeteix. */}
         {!review && (
           <Fact label="Estat">
@@ -299,6 +330,11 @@ function RequirementDetail({
             {item.values.map((value) => (
               <li key={value.key} className="py-2">
                 <p className="text-body font-semibold text-ink">{formatValue(value)}</p>
+                {value.context && (
+                  // El fragment literal del plec a què es refereix el valor: el context
+                  // que el pipeline va desar, no una etiqueta inventada.
+                  <p className="text-[13px] leading-5 text-ink">«{value.context}»</p>
+                )}
                 <p className="text-caption text-muted">
                   {value.source_label}
                   {value.status_label !== value.source_label && ` · ${value.status_label}`}
@@ -352,6 +388,43 @@ function RequirementDetail({
           currentUserId={review.currentUserId}
         />
       )}
+    </>
+  );
+  return (
+    <div className="space-y-5 px-4 py-4">
+      {item.description && !editing && <p className="text-body leading-relaxed text-ink">{item.description}</p>}
+
+      {review && (
+        <ReviewActions
+          item={item}
+          companyId={review.companyId}
+          tenderId={review.tenderId}
+          canWrite={review.canWrite}
+          onUpdated={review.onUpdated}
+          onStale={() => review.onStale(item.canonical_id)}
+          onGone={() => review.onGone(item.canonical_id)}
+          registerCloseGuard={registerCloseGuard}
+          candidates={candidates}
+          onRelationsChanged={review.onRelationsChanged}
+          onEditingChange={setEditing}
+        />
+      )}
+
+      {editing && (
+        <button
+          type="button"
+          aria-expanded={peek}
+          aria-controls={`detall-${item.canonical_id}`}
+          className="text-[13px] font-medium text-brand-strong underline decoration-1 underline-offset-2 hover:text-accent-800"
+          onClick={() => setPeek((value) => !value)}
+        >
+          {peek ? "Amaga el detall actual" : "Consulta el detall actual"}
+        </button>
+      )}
+      {/* Sempre al mateix lloc de l'arbre: amagar-lo no el desmunta (l'historial no es torna a llegir). */}
+      <div id={`detall-${item.canonical_id}`} hidden={editing && !peek} className="space-y-5">
+        {detail}
+      </div>
     </div>
   );
 }

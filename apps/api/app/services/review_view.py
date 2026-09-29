@@ -60,6 +60,7 @@ from app.schemas.review import (
     EditableRequirement,
     RequirementSnapshot,
     ReviewOverview,
+    ReviewReason,
     ReviewStartResult,
 )
 from app.services.manual_requirement import effective_requirements
@@ -94,9 +95,18 @@ PROVENANCE_LABELS = {
     PROVENANCE_CORRECTED: "Extret i corregit",
 }
 VALUE_SOURCE_LABELS = {"document": "Del document", "reviewer": "Afirmat pel revisor"}
+#: D'on surt un valor, dit segons l'element: el revisor que corregeix un
+#: requisit extret no «afirma» res nou, el corregeix; en un de manual, l'afegeix.
+VALUE_ORIGIN_LABELS = {
+    "document": "Extret del document",
+    "corrected": "Corregit pel revisor",
+    "manual": "Afegit manualment",
+}
 
 EVIDENCE_CONFIRMED = "Confirmat al document"
-EVIDENCE_NO_VALUES = "Al document, sense valors"
+#: La cita hi es, pero el pipeline no n'ha estructurat cap valor. No vol dir
+#: que el plec no en digui cap (sovint el text de la cita en porta).
+EVIDENCE_NO_VALUES = "Cita sense valors estructurats automàticament"
 EVIDENCE_TO_CONFIRM = "Al document, valor per confirmar"
 EVIDENCE_CITED = "Citat manualment"
 EVIDENCE_NONE = "Sense cita"
@@ -390,6 +400,83 @@ def _evidence_status(row: RequirementEvidence) -> str:
     return EVIDENCE_CONFIRMED if all(c == "supported" for c in checks) else EVIDENCE_TO_CONFIRM
 
 
+#: Codis PROPIS de la revisio (estables, de producte). Els del pipeline no surten
+#: mai a l'API: es tradueixen aqui (`_PIPELINE_REASONS`).
+REVIEW_REASON_LABELS = {
+    "corrected_not_verified": (
+        "El contingut s'ha corregit, però el requisit encara no s'ha verificat."
+    ),
+    "value_not_supported": "Algun valor extret no apareix a la cita.",
+    "value_unverified": "Algun valor extret no s'ha pogut comprovar amb la cita.",
+    "value_unreadable": "L'extracció no ha pogut llegir algun valor.",
+    "values_incomplete": "L'extracció pot no haver recollit tots els valors.",
+    "values_completeness_unknown": "No se sap si l'extracció ha recollit tots els valors.",
+    "extraction_flagged": "L'anàlisi automàtica l'ha marcat per revisar.",
+    "no_evidence": "No té cap cita del plec.",
+}
+_PIPELINE_REASONS = {
+    "claim_not_supported": "value_not_supported",
+    "claim_unverified": "value_unverified",
+    "claim_value_unknown": "value_unreadable",
+    "claims_partial": "values_incomplete",
+    "claims_completeness_unknown": "values_completeness_unknown",
+}
+_UNRESOLVED = (ReviewVerification.UNREVIEWED, ReviewVerification.NEEDS_REVIEW)
+
+
+def review_reasons(
+    *,
+    verification: ReviewVerification,
+    corrected: bool,
+    snapshot: RequirementSnapshot,
+    requirement: tuple[str | None, Any] | None,
+    evidence: list[RequirementEvidence],
+    has_citations: bool,
+) -> list[ReviewReason]:
+    """Per que cal revisar, NOMES amb el que hi ha desat. Pur i determinista.
+
+    * Corregit i no verificat: el contingut ja l'ha tocat una persona.
+    * Si no s'ha corregit: els motius que va deixar el pipeline sobre els seus
+      propis valors (`stored_requirement_support`), o, si no n'hi ha cap de
+      concret, la seva marca generica de revisio.
+    * Sense cap cita (ni extreta ni afegida).
+    Un requisit ja resolt (verificat, parcial, descartat) no en porta cap.
+    """
+    if verification not in _UNRESOLVED:
+        return []
+    codes: list[str] = []
+    if corrected:
+        codes.append("corrected_not_verified")
+    elif requirement is not None:
+        schema, value_json = requirement
+        support = stored_requirement_support(
+            schema, value_json, [e.claim_support_json for e in evidence]
+        )
+        found = support.review_reasons if support else []
+        codes += [_PIPELINE_REASONS[code] for code in found if code in _PIPELINE_REASONS]
+        if not codes and snapshot.needs_review_from_extraction:
+            codes.append("extraction_flagged")
+    if not evidence and not has_citations:
+        codes.append("no_evidence")
+    return [ReviewReason(code=code, label=REVIEW_REASON_LABELS[code]) for code in codes]
+
+
+def _claim_anchors(requirement: tuple[str | None, Any] | None) -> dict[str, str]:
+    """Ancora literal de cada claim extret, amb els salts de linia del PDF refets."""
+    if requirement is None:
+        return {}
+    schema, value_json = requirement
+    if schema != VALUE_SCHEMA_V3 or not isinstance(value_json, Mapping):
+        return {}
+    anchors: dict[str, str] = {}
+    for claim in value_json.get("claims") or []:
+        if isinstance(claim, Mapping) and claim.get("id") and isinstance(claim.get("anchor"), str):
+            text = " ".join(claim["anchor"].split())
+            if text:
+                anchors[str(claim["id"])] = text
+    return anchors
+
+
 async def _document_names(
     session: AsyncSession, tender_id: uuid.UUID, extraction_ids: Iterable[uuid.UUID]
 ) -> dict[uuid.UUID, str]:
@@ -422,6 +509,8 @@ class _ItemContext:
     citations: dict[uuid.UUID, list[TenderSourceRef]]
     citation_names: dict[uuid.UUID, str]
     relations: dict[uuid.UUID, list[CanonicalRelation]]
+    #: Requisit extret de cada font primaria: (esquema, valors) per als motius i les ancores.
+    requirements: dict[uuid.UUID, tuple[str | None, Any]]
 
 
 async def _item_context(
@@ -482,8 +571,16 @@ async def _item_context(
     relations = await relations_of(
         session, company_id=items[0].company_id, item_ids=ids
     ) if items else {}
+    requirements: dict[uuid.UUID, tuple[str | None, Any]] = {}
+    if primary:
+        rows = await session.execute(
+            sa.select(Requirement.id, Requirement.value_schema, Requirement.value_json).where(
+                Requirement.id.in_(set(primary.values()))
+            )
+        )
+        requirements = {row_id: (schema, value_json) for row_id, schema, value_json in rows.all()}
     return _ItemContext(
-        primary, evidence, names, corrected, citations, citation_names, relations
+        primary, evidence, names, corrected, citations, citation_names, relations, requirements
     )
 
 
@@ -505,18 +602,25 @@ def _canonical_one(item: ReviewItem, ctx: _ItemContext) -> CanonicalRequirement:
     requirement_id = ctx.primary.get(item.id)
     rows = ctx.evidence.get(requirement_id, []) if requirement_id else []
     checks = _checks_per_claim(rows)
+    extracted = ctx.requirements.get(requirement_id) if requirement_id else None
+    anchors = _claim_anchors(extracted)
+    reviewer_label = VALUE_ORIGIN_LABELS["corrected" if requirement_id else "manual"]
     values = [
         CanonicalValue(
             key=value.key,
             operator=value.operator,
             value=value.value,
             unit_label=value.unit_label,
-            source_label=VALUE_SOURCE_LABELS[value.source],
+            source=value.source,
+            source_label=(
+                VALUE_ORIGIN_LABELS["document"] if value.source == "document" else reviewer_label
+            ),
             status_label=(
                 _value_status(checks.get(value.key, []))
                 if value.source == "document"
-                else VALUE_SOURCE_LABELS["reviewer"]
+                else reviewer_label
             ),
+            context=anchors.get(value.key) if value.source == "document" else None,
         )
         for value in snapshot.values
     ]
@@ -595,6 +699,14 @@ def _canonical_one(item: ReviewItem, ctx: _ItemContext) -> CanonicalRequirement:
             obligation=snapshot.obligation.value,
             modality=snapshot.modality.value,
             values=snapshot.values,
+        ),
+        review_reasons=review_reasons(
+            verification=verification,
+            corrected=item.id in ctx.corrected,
+            snapshot=snapshot,
+            requirement=extracted,
+            evidence=rows,
+            has_citations=bool(refs),
         ),
     )
 

@@ -16,6 +16,7 @@
  * preview → confirmació humana; el botó «Analitza» només demana el preview.
  */
 
+import Link from "next/link";
 import { useCallback, useState } from "react";
 
 import { ManualRequirementForm, canWriteRequirements } from "@/components/ManualRequirementForm";
@@ -339,7 +340,7 @@ export function RequirementAnalysisSection({
       />
       <Card>
         <CardHeader
-          title="Anàlisi del plec"
+          title="Anàlisi automàtica"
           description="Extreu els requisits i els criteris d'adjudicació dels documents processats."
           action={
             <div className="flex flex-wrap items-center gap-2">
@@ -488,11 +489,11 @@ export function RequirementAnalysisSection({
         {run && (
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 px-5 py-4 text-[13px] md:grid-cols-4">
             <div>
-              <dt className={KICKER}>Requisits</dt>
+              <dt className={KICKER}>Requisits extrets</dt>
               <dd className="mt-0.5 tabular-nums">{run.requirements_extracted}</dd>
             </div>
             <div>
-              <dt className={KICKER}>Criteris</dt>
+              <dt className={KICKER}>Criteris detectats</dt>
               <dd className="mt-0.5 tabular-nums">{run.award_criteria_extracted}</dd>
             </div>
             <div>
@@ -526,9 +527,25 @@ export function RequirementAnalysisSection({
         )}
 
         {run?.error_message && (
-          <p className="border-t border-border px-5 py-3 text-[13px] text-danger" title={run.error_code ?? undefined}>
-            {jobErrorAction(run.error_code).title}: {run.error_message}
-          </p>
+          // Frase de producte al davant; el diagnòstic cru (fragments, esquema,
+          // contracte) només al detall tècnic, sense perdre'l.
+          <div className="border-t border-border px-5 py-3 text-[13px]">
+            <p className="text-ink">
+              {run.status === "partial"
+                ? "Anàlisi incompleta: una part del plec no s'ha pogut processar automàticament."
+                : jobErrorAction(run.error_code).title}
+            </p>
+            {run.status === "partial" && (
+              <p className="mt-0.5 text-muted">La revisió pot incorporar contingut revisat manualment.</p>
+            )}
+            <details className="mt-1">
+              <summary className="cursor-pointer text-caption text-muted">Detall tècnic</summary>
+              <p className="mt-1 font-mono text-[11.5px] text-muted">
+                {run.error_code ? `${run.error_code} · ` : ""}
+                {run.error_message}
+              </p>
+            </details>
+          </div>
         )}
 
         {run?.skipped_documents && run.skipped_documents.length > 0 && (
@@ -550,16 +567,15 @@ export function RequirementAnalysisSection({
       {requirements.length > 0 && (
         <Card>
           <CardHeader
-            title={`Requisits (${requirements.length})`}
-            description="Proposats per l'anàlisi amb cita i pàgina. Extret no vol dir acreditat: el compliment es compara a sota."
-            action={
-              <LinkButton href={`/licitacions/${tenderId}/revisio`} variant="primary" size="sm">
-                Obre la revisió
-              </LinkButton>
-            }
+            title={`Requisits extrets (${requirements.length})`}
+            description="Proposats per l'anàlisi automàtica amb cita i pàgina. Extret no vol dir acreditat: el compliment es compara a sota."
           />
+          {/* Una sola crida principal a la revisió (la targeta de dalt): aquí, només text i un enllaç discret. */}
           <p className="border-b border-border px-4 py-2 text-caption text-muted sm:px-5">
-            La revisió es gestiona des de la vista de revisió de la licitació.
+            La revisió es gestiona des de la vista de revisió.{" "}
+            <Link href={`/licitacions/${tenderId}/revisio`} className="text-brand-strong underline decoration-1 underline-offset-2 hover:text-accent-800">
+              Obre la revisió
+            </Link>
           </p>
           <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5" role="group" aria-label="Filtres de requisits">
             {FILTERS.map((item) => {
