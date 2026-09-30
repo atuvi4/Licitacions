@@ -1,7 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "./cn";
 
@@ -27,23 +27,45 @@ const FOCUSABLE =
  * és imprescindible: el focus queda atrapat a dins i torna al control que l'ha
  * obert. Sense això, tabular se'n va a la pàgina de sota, que segueix visible.
  */
-export function Drawer({ open, title, description, onClose, children, footer, wide = false }: DrawerProps) {
-  const panel = useRef<HTMLDivElement>(null);
-  const opener = useRef<HTMLElement | null>(null);
+export function Drawer(props: DrawerProps) {
+  // El panell només existeix mentre el calaix és obert: obrir-lo és muntar-lo.
+  if (!props.open) return null;
+  return <DrawerPanel {...props} />;
+}
 
+/** L'element que té el focus ara mateix. Al servidor no n'hi ha cap. */
+function focusedElement(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null;
+}
+
+function DrawerPanel({ title, description, onClose, children, footer, wide = false }: DrawerProps) {
+  const panel = useRef<HTMLDivElement>(null);
+  // Qui tenia el focus abans d'obrir. Es llegeix al primer render i no a
+  // l'efecte: React aplica l'`autoFocus` dels fills abans de cap efecte, i
+  // llavors «qui tenia el focus» ja seria un camp de dins del calaix.
+  const [opener] = useState(focusedElement);
+  // L'`onClose` vigent, sense que sigui dependència de l'efecte de sota. Un pare
+  // que la crea a cada render (el cas habitual) el tornava a executar a cada
+  // tecla escrita en un camp del calaix, i el focus saltava al botó de tancar.
+  const latestOnClose = useRef(onClose);
   useEffect(() => {
-    if (!open) return;
-    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    latestOnClose.current = onClose;
+  }, [onClose]);
+
+  // Només en obrir i en tancar: moure el focus és cosa d'aquests dos moments.
+  useEffect(() => {
+    const node = panel.current;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        onClose();
+        latestOnClose.current();
         return;
       }
-      if (event.key !== "Tab" || !panel.current) return;
-      const focusable = Array.from(panel.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (event.key !== "Tab" || !node) return;
+      const focusable = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE));
       if (focusable.length === 0) {
         event.preventDefault();
         return;
@@ -51,7 +73,7 @@ export function Drawer({ open, title, description, onClose, children, footer, wi
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = document.activeElement;
-      if (event.shiftKey && (active === first || !panel.current.contains(active))) {
+      if (event.shiftKey && (active === first || !node.contains(active))) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && active === last) {
@@ -61,19 +83,22 @@ export function Drawer({ open, title, description, onClose, children, footer, wi
     };
 
     document.addEventListener("keydown", onKeyDown);
-    // El primer element del calaix rep el focus: qui l'obre amb el teclat hi ha
-    // de poder llegir sense tabular a cegues.
-    const target = panel.current?.querySelector<HTMLElement>(FOCUSABLE);
-    target?.focus();
+    // Si un fill ha demanat el focus amb `autoFocus`, ja el té i és seu. Si no
+    // l'ha demanat ningú, el rep el primer element del calaix: qui l'obre amb
+    // el teclat hi ha de poder llegir sense tabular a cegues.
+    if (!node?.contains(document.activeElement)) {
+      node?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+    }
 
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
-      opener.current?.focus();
+      // El focus torna a qui l'havia obert quan el calaix ha marxat de la
+      // pantalla. El mode estricte de React desfà i refà els efectes amb el
+      // calaix encara a lloc; moure'l llavors el prendria al camp que el té.
+      if (!node?.isConnected) opener?.focus();
     };
-  }, [open, onClose]);
-
-  if (!open) return null;
+  }, [opener]);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-ink/45">

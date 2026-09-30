@@ -256,6 +256,144 @@ describe("Empreses", () => {
     await flush();
     expect(patch).toHaveBeenCalledWith("/platform/companies/c2/status", { status: "paused" });
   });
+
+  describe("escriure al calaix «Nova empresa»", () => {
+    const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input:not([disabled]), select, [tabindex]:not([tabindex="-1"])';
+
+    /**
+     * Escriu com una persona, tecla a tecla, al camp que ja té el focus; i el
+     * focus s'hi ha de quedar després de cadascuna. No l'hi posa: qui crida
+     * decideix si abans hi ha hagut un clic (`input.focus()`) o no.
+     */
+    function type(input: HTMLInputElement, text: string) {
+      expect(document.activeElement, "abans d'escriure").toBe(input);
+      let written = "";
+      for (const char of text) {
+        fireEvent.keyDown(input, { key: char });
+        written += char;
+        fireEvent.change(input, { target: { value: written } });
+        fireEvent.keyUp(input, { key: char });
+        expect(document.activeElement, `després d'escriure «${written}»`).toBe(input);
+      }
+    }
+
+    /**
+     * Tab com el fa el navegador: si ningú no l'intercepta, el focus passa a
+     * l'element enfocable següent (o anterior) en l'ordre del document. jsdom
+     * envia la tecla però no mou el focus.
+     */
+    function pressTab(options: { shift?: boolean } = {}) {
+      const notIntercepted = fireEvent.keyDown(document.activeElement ?? document.body, { key: "Tab", shiftKey: options.shift ?? false });
+      if (!notIntercepted) return;
+      const order = [...document.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      const index = order.indexOf(document.activeElement as HTMLElement);
+      order[index + (options.shift ? -1 : 1)]?.focus();
+    }
+
+    async function openDrawer() {
+      search = "nova=1";
+      await showList();
+      return screen.getByRole("dialog", { name: "Nova empresa" });
+    }
+
+    it("en clicar «Nova empresa» el cursor ja és a «Nom legal»: s'hi escriu sense clicar cap camp", async () => {
+      respond();
+      const view = renderInLayout(<CompaniesPage />);
+      await flush();
+      await flush();
+      // El router simulat no navega. Aquí sí, com el de Next: canvia la URL i la pàgina es repinta.
+      replace.mockImplementation((url: string) => {
+        search = url.split("?")[1] ?? "";
+        view.rerender(
+          <PlatformLayout>
+            <CompaniesPage />
+          </PlatformLayout>,
+        );
+      });
+      const button = screen.getByRole("button", { name: /Nova empresa/ });
+      // Com el clic d'un navegador: el botó es queda el focus i després obre.
+      button.focus();
+      fireEvent.click(button);
+
+      const drawer = screen.getByRole("dialog", { name: "Nova empresa" });
+      const legal = within(drawer).getByLabelText(/Nom legal/) as HTMLInputElement;
+      expect(document.activeElement).toBe(legal);
+      type(legal, "Indaleccius Telecomunicacions");
+      expect(legal.value).toBe("Indaleccius Telecomunicacions");
+      expect(document.activeElement).toBe(legal);
+
+      pressTab();
+      expect(document.activeElement).toBe(within(drawer).getByLabelText(/Nom comercial/));
+      pressTab({ shift: true });
+      expect(document.activeElement).toBe(legal);
+
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(replace).toHaveBeenLastCalledWith("/plataforma/empreses", { scroll: false });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      // I el focus torna al botó que l'havia obert, no es perd.
+      expect(document.activeElement).toBe(button);
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it("es poden escriure frases senceres sense perdre el focus, camp per camp", async () => {
+      const drawer = await openDrawer();
+      const fields: Array<[RegExp, string]> = [
+        [/Nom legal/, "Indaleccius Telecomunicacions"],
+        [/Nom i cognoms/, "Maria Rovira i Soler"],
+        [/Correu del propietari/, "maria.rovira@exemple.cat"],
+      ];
+      for (const [label, text] of fields) {
+        const input = within(drawer).getByLabelText(label) as HTMLInputElement;
+        input.focus(); // el clic al camp
+        type(input, text);
+        expect(input.value).toBe(text);
+        expect(document.activeElement).toBe(input);
+      }
+      // El calaix és el mateix node de principi a fi: no s'ha remuntat a cada tecla,
+      // i el que s'ha escrit als altres camps hi continua.
+      expect(screen.getByRole("dialog", { name: "Nova empresa" })).toBe(drawer);
+      expect((within(drawer).getByLabelText(/Nom legal/) as HTMLInputElement).value).toBe("Indaleccius Telecomunicacions");
+      // El botó de tancar no ha rebut el focus en cap moment, i no s'ha enviat res.
+      expect(document.activeElement).not.toBe(within(drawer).getByRole("button", { name: "Tanca" }));
+      expect(replace).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it("Tab passa al camp següent i Shift+Tab torna, també després d'escriure", async () => {
+      const drawer = await openDrawer();
+      const legal = within(drawer).getByLabelText(/Nom legal/) as HTMLInputElement;
+      legal.focus();
+      type(legal, "Indaleccius");
+
+      pressTab();
+      expect(document.activeElement).toBe(within(drawer).getByLabelText(/Nom comercial/));
+      pressTab();
+      expect(document.activeElement).toBe(within(drawer).getByLabelText(/NIF/));
+      pressTab({ shift: true });
+      pressTab({ shift: true });
+      expect(document.activeElement).toBe(legal);
+      expect(legal.value).toBe("Indaleccius");
+    });
+
+    it("el focus no surt del calaix, i Escape el tanca", async () => {
+      const drawer = await openDrawer();
+      const close = within(drawer).getByRole("button", { name: "Tanca" });
+      const submit = within(drawer).getByRole("button", { name: "Crear empresa" });
+      const legal = within(drawer).getByLabelText(/Nom legal/) as HTMLInputElement;
+      legal.focus();
+      type(legal, "Indaleccius");
+
+      // Des de l'últim element, Tab torna al primer; des del primer, Shift+Tab va a l'últim.
+      submit.focus();
+      pressTab();
+      expect(document.activeElement).toBe(close);
+      pressTab({ shift: true });
+      expect(document.activeElement).toBe(submit);
+
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(replace).toHaveBeenCalledWith("/plataforma/empreses", { scroll: false });
+    });
+  });
 });
 
 describe("Fitxa d'empresa", () => {
