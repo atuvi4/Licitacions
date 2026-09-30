@@ -125,12 +125,14 @@ interface GapProps {
   state: EffectiveState;
   children?: ReactNode;
   actions?: ReactNode;
+  /** Quan la fila és un candidat de l'històric: l'observació de què parla. */
+  observationId?: string;
 }
 
 /** Una clau sense dada actual: només la diu l'històric, o no se'n sap res. */
-export function KnowledgeGap({ title, subtitle, state, children, actions }: GapProps) {
+export function KnowledgeGap({ title, subtitle, state, children, actions, observationId }: GapProps) {
   return (
-    <li className="border-b border-border last:border-b-0" data-gap={state.state}>
+    <li className="border-b border-border last:border-b-0" data-gap={state.state} data-observation={observationId}>
       <div className="flex flex-col gap-3 px-5 py-3.5 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">

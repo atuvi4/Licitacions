@@ -1,7 +1,7 @@
 "use client";
 
 import { formatDate } from "@/lib/format";
-import { candidateTitle, isPromotable, type KnowledgeHint, type Observation } from "@/lib/knowledge";
+import { candidateTitle, describeProposal, isPromotable, type KnowledgeHint, type Observation, type Vocabulary } from "@/lib/knowledge";
 
 import { CandidateActions } from "./CandidateActions";
 import { KnowledgeGap } from "./KnowledgeItem";
@@ -11,6 +11,22 @@ const HISTORIC = { state: "historic" as const, flags: [] };
 
 function origin(item: { source_ref: string | null; observed_on: string | null }): string {
   return [item.source_ref, item.observed_on ? formatDate(item.observed_on) : null].filter(Boolean).join(" · ");
+}
+
+/**
+ * El que l'històric proposa desar, dit a partir de la proposta estructurada i
+ * no del seu text: una proposta en negatiu s'ha de llegir en negatiu abans de
+ * decidir res.
+ */
+function Proposed({ observation, vocabulary }: { observation: Observation; vocabulary: Vocabulary | null }) {
+  const described = describeProposal(observation, vocabulary);
+  if (!described.sentence) return null;
+  return (
+    <p className="mt-1 text-body text-ink" data-proposed={described.negative ? "negative" : "positive"}>
+      <span className="text-muted">{"L'històric indica: "}</span>
+      <span className="font-medium">{described.sentence}</span>
+    </p>
+  );
 }
 
 function Notes({ observation, superseded }: { observation: Observation; superseded: boolean }) {
@@ -40,6 +56,7 @@ export function CandidateRow({ observation, view }: { observation: Observation; 
     <KnowledgeGap
       title={candidateTitle(observation.subject, observation.subject_key, view.vocabulary)}
       state={HISTORIC}
+      observationId={observation.id}
       actions={
         <CandidateActions
           observation={observation}
@@ -50,7 +67,8 @@ export function CandidateRow({ observation, view }: { observation: Observation; 
         />
       }
     >
-      <p className="mt-1 text-body text-ink">{observation.statement}</p>
+      <Proposed observation={observation} vocabulary={view.vocabulary} />
+      <p className="mt-0.5 text-[13px] leading-5 text-muted">{observation.statement}</p>
       {source && <p className="mt-0.5 text-caption text-muted">{source}</p>}
       <Notes observation={observation} superseded={superseded} />
     </KnowledgeGap>
@@ -65,9 +83,14 @@ export function HintList({ hints, view }: { hints: KnowledgeHint[]; view: Knowle
         const observation = view.observations.get(hint.observation_id);
         const source = origin(hint);
         return (
-          <li key={hint.observation_id} className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+          <li
+            key={hint.observation_id}
+            data-observation={hint.observation_id}
+            className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between"
+          >
             <div className="min-w-0">
-              <p className="text-body text-ink">{hint.statement}</p>
+              {observation && <Proposed observation={observation} vocabulary={view.vocabulary} />}
+              <p className={observation ? "mt-0.5 text-[13px] leading-5 text-muted" : "text-body text-ink"}>{hint.statement}</p>
               {source && <p className="mt-0.5 text-caption text-muted">{source}</p>}
               {observation && <Notes observation={observation} superseded={view.superseded.has(observation.id)} />}
             </div>

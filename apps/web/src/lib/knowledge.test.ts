@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { claimFixture, emptySnapshotFixture, observationsFixture, snapshotFixture, vocabularyFixture } from "@/test/knowledge-fixture";
 
 import {
+  FACT_KEYS,
   FLAG_LABELS,
   STATE_LABELS,
   canDecideKnowledge,
@@ -13,6 +14,7 @@ import {
   capabilityValue,
   certificationTitle,
   claimState,
+  describeProposal,
   entryState,
   findEntry,
   groupCandidates,
@@ -20,7 +22,7 @@ import {
   indexSnapshot,
   isPromotable,
   pendingCandidates,
-  proposalSummary,
+  proposalHeadline,
   recordState,
   serviceLineLabel,
   summarize,
@@ -101,13 +103,142 @@ describe("candidats de l'històric", () => {
     expect(isPromotable(byId["o-sol"])).toBe(true);
   });
 
-  it("diu què naixeria si es confirma, amb paraules", () => {
-    expect(proposalSummary(byId["o-24x7"], vocabularyFixture)).toBe("Suport 24x7: Sí");
-    expect(proposalSummary(byId["o-sol"], vocabularyFixture)).toBe("Centraleta Demo · Centraleta i veu IP · Fabricant Demo");
-    expect(proposalSummary(byId["o-iso"], vocabularyFixture)).toBe("L'històric diu que NO es tenia ISO 9001");
-    expect(
-      proposalSummary({ subject: "partner", proposal: { name: "Soci Demo", roles: [{ role: "wholesale_operator" }] } }, vocabularyFixture),
-    ).toBe("Soci Demo · Operador majorista");
+  describe("què es desaria si es confirma: surt de la proposta, no del text de l'històric", () => {
+    const fact = (key: string, value: boolean, detail?: string) =>
+      describeProposal({ subject: "operating_fact", proposal: { key, value, ...(detail ? { detail } : {}) } }, vocabularyFixture);
+
+    it("un fet operatiu en positiu es desa com a SÍ", () => {
+      const described = describeProposal(byId["o-24x7"], vocabularyFixture);
+      expect(described).toEqual({ label: "Suport 24x7", value: "SÍ", negative: false, fields: [], sentence: "Ofereix suport 24x7" });
+      expect(proposalHeadline(described)).toBe("Suport 24x7: SÍ");
+    });
+
+    it("un fet operatiu en negatiu es desa com a NO, i es diu en negatiu", () => {
+      const described = fact("own_ftth_infrastructure", false);
+      expect(described).toEqual({
+        label: "Infraestructura FTTH pròpia",
+        value: "NO",
+        negative: true,
+        fields: [],
+        sentence: "No disposa d'infraestructura FTTH pròpia",
+      });
+      expect(proposalHeadline(described)).toBe("Infraestructura FTTH pròpia: NO");
+      // Res del que es mostra no es pot llegir com un sí.
+      expect(`${proposalHeadline(described)} ${described.sentence}`).not.toMatch(/SÍ|Sí/);
+      expect(described.sentence).toMatch(/^No /);
+    });
+
+    it("el mateix fet, en positiu i en negatiu, no es pot confondre", () => {
+      for (const key of FACT_KEYS) {
+        const yes = fact(key, true);
+        const no = fact(key, false);
+        expect([yes.value, yes.negative], key).toEqual(["SÍ", false]);
+        expect([no.value, no.negative], key).toEqual(["NO", true]);
+        expect(no.sentence, key).toMatch(/^No /);
+        expect(yes.sentence, key).not.toMatch(/^No /);
+        expect(yes.sentence, key).not.toBe(no.sentence);
+      }
+    });
+
+    it("un fet que la pantalla no coneix no es queda sense valor", () => {
+      expect(fact("fet_nou", false)).toMatchObject({ label: "fet_nou", value: "NO", negative: true, sentence: "fet_nou: NO" });
+      expect(fact("fet_nou", true).sentence).toBe("fet_nou: SÍ");
+    });
+
+    it("l'aclariment d'un fet és un camp més del que es crearà", () => {
+      expect(fact("datacenter_tier3", true, "Centre Demo").fields).toEqual([{ label: "Aclariment", value: "Centre Demo" }]);
+    });
+
+    it("una solució: el nom i els camps que es crearan", () => {
+      expect(describeProposal(byId["o-sol"], vocabularyFixture)).toEqual({
+        label: "Solució",
+        value: "Centraleta Demo",
+        negative: false,
+        fields: [
+          { label: "Línia de servei", value: "Centraleta i veu IP" },
+          { label: "Fabricant", value: "Fabricant Demo" },
+        ],
+        sentence: "Solució Centraleta Demo · Centraleta i veu IP · fabricant Fabricant Demo",
+      });
+      expect(
+        describeProposal({ subject: "solution", proposal: { name: "Centraleta Demo", service_line_code: "voice_pbx", edition: "Pro" } }, vocabularyFixture).fields,
+      ).toEqual([
+        { label: "Línia de servei", value: "Centraleta i veu IP" },
+        { label: "Edició", value: "Pro" },
+      ]);
+    });
+
+    it("un producte: fabricant, model i línia", () => {
+      expect(
+        describeProposal({ subject: "product", proposal: { manufacturer: "Marca Demo", model: "T1", service_line_code: "voice_pbx" } }, vocabularyFixture),
+      ).toEqual({
+        label: "Producte",
+        value: "Marca Demo T1",
+        negative: false,
+        fields: [
+          { label: "Fabricant", value: "Marca Demo" },
+          { label: "Model", value: "T1" },
+          { label: "Línia de servei", value: "Centraleta i veu IP" },
+        ],
+        sentence: "Producte Marca Demo T1 · Centraleta i veu IP",
+      });
+    });
+
+    it("un partner: el nom i cada paper que es crearà", () => {
+      const described = describeProposal(
+        {
+          subject: "partner",
+          proposal: {
+            name: "Soci Demo",
+            roles: [{ role: "commercial_partner", territory: "Girona" }, { role: "subcontractor", service_line_code: "civil_works", territory: "Girona" }, { role: "bid_writer" }],
+          },
+        },
+        vocabularyFixture,
+      );
+      expect(described).toEqual({
+        label: "Partner",
+        value: "Soci Demo",
+        negative: false,
+        fields: [
+          { label: "Paper", value: "Soci comercial · Girona" },
+          { label: "Paper", value: "Subcontractista · Obra civil · Girona" },
+          { label: "Paper", value: "Redacció d'ofertes" },
+        ],
+        sentence: "Partner Soci Demo: Soci comercial · Girona; Subcontractista · Obra civil · Girona; Redacció d'ofertes",
+      });
+      expect(describeProposal({ subject: "partner", proposal: { name: "Soci Demo" } }, vocabularyFixture)).toMatchObject({ fields: [], sentence: "Partner Soci Demo" });
+    });
+
+    it("un servei: el nom, la línia i la modalitat", () => {
+      expect(
+        describeProposal({ subject: "service", proposal: { name: "Centraleta al núvol", service_line_code: "voice_pbx", delivery_mode: "resale" } }, vocabularyFixture),
+      ).toEqual({
+        label: "Servei",
+        value: "Centraleta al núvol",
+        negative: false,
+        fields: [
+          { label: "Línia de servei", value: "Centraleta i veu IP" },
+          { label: "Modalitat", value: "Revenda" },
+        ],
+        sentence: "Servei «Centraleta al núvol» · Centraleta i veu IP · Revenda",
+      });
+    });
+
+    it("una certificació que no es tenia es diu en negatiu", () => {
+      expect(describeProposal(byId["o-iso"], vocabularyFixture)).toEqual({
+        label: "ISO 9001",
+        value: "NO",
+        negative: true,
+        fields: [],
+        sentence: "No disposava de la certificació ISO 9001",
+      });
+      expect(describeProposal({ subject: "certification", proposal: { standard_code: "ENS", level: "medium" } }, vocabularyFixture)).toMatchObject({
+        label: "Certificació",
+        value: "ENS · Mitjà",
+        negative: false,
+        fields: [{ label: "Abast", value: "Sense estructurar" }],
+      });
+    });
   });
 
   it("agrupa per categoria i, si es demana, deixa al final el que només es pot descartar", () => {

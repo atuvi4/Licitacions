@@ -547,31 +547,140 @@ export function groupCandidates(observations: Observation[], superseded: Set<str
   return groups.filter((group) => group.items.length > 0);
 }
 
+/** Un camp de la dada que es crearia: «Línia de servei», «Centraleta i veu IP». */
+export interface ProposalField {
+  label: string;
+  value: string;
+}
+
+/**
+ * La proposta d'una observació, tal com es desaria si es confirma. Surt només
+ * de la `proposal` estructurada —la fila exacta que crearia el servidor—, mai
+ * del text de l'històric, que és una cita i pot ser ambigu sobre si diu que sí
+ * o que no.
+ */
+export interface ProposalDescription {
+  /** De què és la dada: el fet o la norma, o el tipus («Solució», «Partner»…). */
+  label: string;
+  /** El que es desaria: «SÍ», «NO» o el nom. */
+  value: string;
+  /** Una proposta en negatiu: confirmar-la és deixar escrit un NO. */
+  negative: boolean;
+  /** La resta de camps que es crearien amb la dada. */
+  fields: ProposalField[];
+  /** Tot plegat en una línia, per a la fila del candidat. */
+  sentence: string;
+}
+
+/** Com es diu cada fet operatiu quan es té i quan no. Sense frase, es mostra «Fet: SÍ» o «Fet: NO». */
+const FACT_SENTENCES: Record<string, { yes: string; no: string }> = {
+  telecom_operator_cnmc: { yes: "És operador inscrit a la CNMC", no: "No és operador inscrit a la CNMC" },
+  own_number_range_nrn: { yes: "Disposa de rang de numeració propi (NRN)", no: "No disposa de rang de numeració propi (NRN)" },
+  datacenter_tier3: { yes: "Disposa de centre de dades Tier-3", no: "No disposa de centre de dades Tier-3" },
+  support_24x7: { yes: "Ofereix suport 24x7", no: "No ofereix suport 24x7" },
+  own_ftth_infrastructure: { yes: "Disposa d'infraestructura FTTH pròpia", no: "No disposa d'infraestructura FTTH pròpia" },
+};
+
+/** «Subcontractista · Obra civil · Girona»: el paper, la línia i el territori, si n'hi ha. */
+function partnerRoleText(role: Record<string, unknown>, vocabulary?: Vocabulary | null): string {
+  return [
+    PARTNER_ROLE_LABELS[String(role.role)] ?? String(role.role),
+    typeof role.service_line_code === "string" ? serviceLineLabel(role.service_line_code, vocabulary) : null,
+    typeof role.territory === "string" ? role.territory : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /** Què naixeria si es confirma: la persona ho ha de veure abans de dir que sí. */
-export function proposalSummary(observation: Pick<Observation, "subject" | "proposal">, vocabulary?: Vocabulary | null): string {
+export function describeProposal(observation: Pick<Observation, "subject" | "proposal">, vocabulary?: Vocabulary | null): ProposalDescription {
   const proposal = observation.proposal;
   const text = (name: string) => (typeof proposal[name] === "string" ? (proposal[name] as string) : "");
+  const line = text("service_line_code") ? serviceLineLabel(text("service_line_code"), vocabulary) : "";
+  const lineField: ProposalField[] = line ? [{ label: "Línia de servei", value: line }] : [];
+  const named = (label: string, value: string, fields: ProposalField[], sentence: string): ProposalDescription => ({
+    label,
+    value,
+    negative: false,
+    fields,
+    sentence,
+  });
+
   switch (observation.subject) {
-    case "operating_fact":
-      return `${FACT_LABELS[text("key")] ?? text("key")}: ${proposal.value === false ? "No" : "Sí"}`;
+    case "operating_fact": {
+      const key = text("key");
+      const label = FACT_LABELS[key] ?? key;
+      const negative = proposal.value === false;
+      const value = negative ? "NO" : proposal.value === true ? "SÍ" : "—";
+      const sentences = FACT_SENTENCES[key];
+      return {
+        label,
+        value,
+        negative,
+        fields: text("detail") ? [{ label: "Aclariment", value: text("detail") }] : [],
+        sentence: sentences && value !== "—" ? (negative ? sentences.no : sentences.yes) : `${label}: ${value}`,
+      };
+    }
     case "certification": {
       const title = certificationTitle({ name: text("name"), standard_code: text("standard_code"), level: text("level") || null }, vocabulary);
-      return proposal.held === false ? `L'històric diu que NO es tenia ${title}` : title;
+      if (proposal.held === false) {
+        return { label: title, value: "NO", negative: true, fields: [], sentence: `No disposava de la certificació ${title}` };
+      }
+      const scope = Array.isArray(proposal.scope_service_lines)
+        ? (proposal.scope_service_lines as string[]).map((code) => serviceLineLabel(code, vocabulary)).join(", ")
+        : "Sense estructurar";
+      return named("Certificació", title, [{ label: "Abast", value: scope }], `Disposava de la certificació ${title}`);
     }
-    case "service":
-      return [text("name"), serviceLineLabel(text("service_line_code"), vocabulary)].filter(Boolean).join(" · ");
+    case "service": {
+      const mode = text("delivery_mode") ? (DELIVERY_MODE_LABELS[text("delivery_mode")] ?? text("delivery_mode")) : "";
+      return named(
+        "Servei",
+        text("name"),
+        [...lineField, ...(mode ? [{ label: "Modalitat", value: mode }] : [])],
+        [`Servei «${text("name")}»`, line, mode].filter(Boolean).join(" · "),
+      );
+    }
     case "solution":
-      return [text("name"), serviceLineLabel(text("service_line_code"), vocabulary), text("vendor")].filter(Boolean).join(" · ");
-    case "product":
-      return `${text("manufacturer")} ${text("model")}`.trim();
+      return named(
+        "Solució",
+        text("name"),
+        [
+          ...lineField,
+          ...(text("vendor") ? [{ label: "Fabricant", value: text("vendor") }] : []),
+          ...(text("edition") ? [{ label: "Edició", value: text("edition") }] : []),
+        ],
+        [`Solució ${text("name")}`, line, text("vendor") && `fabricant ${text("vendor")}`, text("edition") && `edició ${text("edition")}`]
+          .filter(Boolean)
+          .join(" · "),
+      );
+    case "product": {
+      const name = `${text("manufacturer")} ${text("model")}`.trim();
+      return named(
+        "Producte",
+        name,
+        [{ label: "Fabricant", value: text("manufacturer") }, { label: "Model", value: text("model") }, ...lineField],
+        [`Producte ${name}`, line].filter(Boolean).join(" · "),
+      );
+    }
     case "partner": {
-      const roles = Array.isArray(proposal.roles) ? (proposal.roles as Array<Record<string, unknown>>) : [];
-      const labels = roles.map((role) => PARTNER_ROLE_LABELS[String(role.role)] ?? String(role.role));
-      return [text("name"), ...labels].filter(Boolean).join(" · ");
+      const roles = (Array.isArray(proposal.roles) ? (proposal.roles as Array<Record<string, unknown>>) : []).map((role) =>
+        partnerRoleText(role, vocabulary),
+      );
+      return named(
+        "Partner",
+        text("name"),
+        roles.map((role) => ({ label: "Paper", value: role })),
+        roles.length > 0 ? `Partner ${text("name")}: ${roles.join("; ")}` : `Partner ${text("name")}`,
+      );
     }
     default:
-      return "";
+      return named("", "", [], "");
   }
+}
+
+/** «Infraestructura FTTH pròpia: NO», «Solució: 3CX»: la dada que es desaria, en una línia. */
+export function proposalHeadline(description: Pick<ProposalDescription, "label" | "value">): string {
+  return `${description.label}: ${description.value}`;
 }
 
 /* ----- Evidència i rols ------------------------------------------------------ */

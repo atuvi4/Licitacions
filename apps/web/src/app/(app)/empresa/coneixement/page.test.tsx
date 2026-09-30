@@ -9,6 +9,7 @@ import {
   snapshotFixture,
   vocabularyFixture,
 } from "@/test/knowledge-fixture";
+import type { Observation } from "@/lib/knowledge";
 
 const get = vi.fn();
 const post = vi.fn();
@@ -235,18 +236,199 @@ describe("Coneixement de l'empresa", () => {
     post.mockResolvedValue({});
     await renderPage();
     const before = snapshotCalls();
-    fireEvent.click(screen.getByRole("button", { name: "Confirma com a actual: Suport 24x7" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revisa i confirma: Suport 24x7" }));
 
-    const dialog = screen.getByRole("dialog");
+    const dialog = screen.getByRole("dialog", { name: "Revisa i confirma «Suport 24x7»" });
     expect(dialog.textContent).toContain("Declaraven suport 24x7");
-    expect(dialog.textContent).toContain("Suport 24x7: Sí");
-    expect(dialog.textContent).toContain("No quedarà verificada");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Confirma com a actual" }));
+    const saved = within(dialog).getByRole("group", { name: "Si ho confirmes, Tuvi guardarà com a dada actual" });
+    expect(saved.querySelector("[data-proposal]")?.textContent).toBe("Suport 24x7: SÍ");
+    expect(saved.querySelector("[data-proposal]")?.getAttribute("data-proposal")).toBe("positive");
+    // En positiu no hi ha res a advertir.
+    expect(within(dialog).queryByRole("note")).toBeNull();
+    const after = within(dialog).getByRole("list", { name: "Com quedarà" });
+    expect(within(after).getAllByRole("listitem").map((item) => item.querySelector("strong")?.textContent)).toEqual([
+      "Declarat",
+      "No verificat",
+      "Sense evidència",
+    ]);
+    // Aportar evidència no verifica: són dos passos, i es diu així.
+    expect(after.textContent).toContain("Per verificar aquesta dada caldrà aportar evidència i verificar-la.");
+    expect(dialog.textContent).not.toMatch(/fins que s'hi enllaci evidència|Pendent d'acreditar/);
+    // Encara no s'ha enviat res: obrir el diàleg només és revisar.
+    expect(post).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirma i desa" }));
     await flush();
 
+    expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith(`${BASE}/knowledge/observations/o-24x7/promote`, { note: null });
     expect(snapshotCalls()).toBe(before + 1);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  describe("una proposta de l'històric es mostra tal com es desarà", () => {
+    const ftth: Observation = {
+      id: "o-ftth",
+      subject: "operating_fact",
+      subject_key: "own_ftth_infrastructure",
+      // El text de l'històric és ambigu expressament: la pantalla no l'ha de fer servir per dir què es desarà.
+      statement: "Xarxa de fibra pròpia: «ho vam estudiar»",
+      proposal: { key: "own_ftth_infrastructure", value: false },
+      observed_on: "2025-05-23",
+      source_ref: "Licitació de mostra",
+      status: "candidate",
+    };
+    const product: Observation = {
+      id: "o-prod",
+      subject: "product",
+      subject_key: "Marca Demo T1",
+      statement: "Producte que apareix als càlculs: Marca Demo T1",
+      proposal: { manufacturer: "Marca Demo", model: "T1", service_line_code: "voice_pbx" },
+      observed_on: null,
+      source_ref: null,
+      status: "candidate",
+    };
+    const partner: Observation = {
+      id: "o-partner",
+      subject: "partner",
+      subject_key: "Operador Demo",
+      statement: "Operador majorista a l'històric: Operador Demo",
+      proposal: { name: "Operador Demo", roles: [{ role: "wholesale_operator", service_line_code: "access_ftth" }, { role: "subcontractor", territory: "Girona" }] },
+      observed_on: null,
+      source_ref: null,
+      status: "candidate",
+    };
+
+    async function openHistoric() {
+      respond({ [`${BASE}/knowledge/observations?status=candidate`]: [...observationsFixture, ftth, product, partner] });
+      const view = await renderPage();
+      fireEvent.click(screen.getByRole("tab", { name: /Històric detectat/ }));
+      return view;
+    }
+
+    function row(container: HTMLElement, id: string): HTMLElement {
+      const found = container.querySelector<HTMLElement>(`[data-observation="${id}"]`);
+      if (!found) throw new Error(`No hi ha el candidat ${id}`);
+      return found;
+    }
+
+    function review(name: string): HTMLElement {
+      fireEvent.click(screen.getByRole("button", { name: `Revisa i confirma: ${name}` }));
+      return screen.getByRole("dialog", { name: `Revisa i confirma «${name}»` });
+    }
+
+    const saved = (dialog: HTMLElement) => within(dialog).getByRole("group", { name: "Si ho confirmes, Tuvi guardarà com a dada actual" });
+    const fields = (dialog: HTMLElement) =>
+      [...saved(dialog).querySelectorAll("dl > div")].map((item) => [item.querySelector("dt")?.textContent, item.querySelector("dd")?.textContent]);
+
+    it("una proposta en negatiu no es pot llegir com una confirmació en positiu", async () => {
+      post.mockResolvedValue({});
+      const { container } = await openHistoric();
+      const candidate = row(container, "o-ftth");
+
+      // A la fila: què indica l'històric, dit en negatiu, i cap botó que convidi a «confirmar» sense mirar.
+      expect(candidate.querySelector("[data-proposed]")?.textContent).toBe("L'històric indica: No disposa d'infraestructura FTTH pròpia");
+      expect(candidate.querySelector("[data-proposed]")?.getAttribute("data-proposed")).toBe("negative");
+      expect(within(candidate).queryByRole("button", { name: /Confirma com a actual/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Confirma com a actual/ })).toBeNull();
+
+      const dialog = review("Infraestructura FTTH pròpia");
+      const proposal = saved(dialog).querySelector("[data-proposal]")!;
+      expect(proposal.textContent).toBe("Infraestructura FTTH pròpia: NO");
+      expect(proposal.getAttribute("data-proposal")).toBe("negative");
+      expect(within(dialog).getByRole("note").textContent).toContain("Es desarà en negatiu");
+      // Enlloc del diàleg no hi diu que sí.
+      expect(dialog.textContent).not.toMatch(/SÍ|: Sí/);
+      expect(dialog.textContent).not.toContain("com a actual");
+
+      // Confirmar envia exactament el mateix que abans: la proposta és la que ja té el servidor.
+      fireEvent.click(within(dialog).getByRole("button", { name: "Confirma i desa" }));
+      await flush();
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post).toHaveBeenCalledWith(`${BASE}/knowledge/observations/o-ftth/promote`, { note: null });
+      expect(patch).not.toHaveBeenCalled();
+    });
+
+    it("el que es mostra surt de la proposta estructurada, no del text de l'històric", async () => {
+      // El mateix text, amb la proposta en positiu: canvia el que es mostra.
+      respond({ [`${BASE}/knowledge/observations?status=candidate`]: [{ ...ftth, proposal: { key: "own_ftth_infrastructure", value: true } }] });
+      const { container } = await renderPage();
+      fireEvent.click(screen.getByRole("tab", { name: /Històric detectat/ }));
+      expect(row(container, "o-ftth").querySelector("[data-proposed]")?.textContent).toBe("L'històric indica: Disposa d'infraestructura FTTH pròpia");
+      const dialog = review("Infraestructura FTTH pròpia");
+      expect(saved(dialog).querySelector("[data-proposal]")?.textContent).toBe("Infraestructura FTTH pròpia: SÍ");
+      expect(within(dialog).queryByRole("note")).toBeNull();
+      // El text de l'històric hi és, però a part i com a cita.
+      expect(dialog.textContent).toContain("Xarxa de fibra pròpia: «ho vam estudiar»");
+    });
+
+    it("una solució: el nom i els camps que es crearan", async () => {
+      const { container } = await openHistoric();
+      expect(row(container, "o-sol").querySelector("[data-proposed]")?.textContent).toBe(
+        "L'històric indica: Solució Centraleta Demo · Centraleta i veu IP · fabricant Fabricant Demo",
+      );
+      const dialog = review("Centraleta Demo");
+      expect(saved(dialog).querySelector("[data-proposal]")?.textContent).toBe("Solució: Centraleta Demo");
+      expect(fields(dialog)).toEqual([
+        ["Línia de servei", "Centraleta i veu IP"],
+        ["Fabricant", "Fabricant Demo"],
+      ]);
+    });
+
+    it("un producte: fabricant, model i línia de servei", async () => {
+      post.mockResolvedValue({});
+      await openHistoric();
+      const dialog = review("Marca Demo T1");
+      expect(saved(dialog).querySelector("[data-proposal]")?.textContent).toBe("Producte: Marca Demo T1");
+      expect(fields(dialog)).toEqual([
+        ["Fabricant", "Marca Demo"],
+        ["Model", "T1"],
+        ["Línia de servei", "Centraleta i veu IP"],
+      ]);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Confirma i desa" }));
+      await flush();
+      expect(post).toHaveBeenCalledWith(`${BASE}/knowledge/observations/o-prod/promote`, { note: null });
+    });
+
+    it("un partner: el nom i cada paper que es crearà", async () => {
+      const { container } = await openHistoric();
+      expect(row(container, "o-partner").querySelector("[data-proposed]")?.textContent).toBe(
+        "L'històric indica: Partner Operador Demo: Operador majorista · Accessos FTTH; Subcontractista · Girona",
+      );
+      const dialog = review("Operador Demo");
+      expect(saved(dialog).querySelector("[data-proposal]")?.textContent).toBe("Partner: Operador Demo");
+      expect(fields(dialog)).toEqual([
+        ["Paper", "Operador majorista · Accessos FTTH"],
+        ["Paper", "Subcontractista · Girona"],
+      ]);
+    });
+
+    it("una certificació que no es tenia es diu en negatiu i continua sense poder-se confirmar", async () => {
+      const { container } = await openHistoric();
+      const iso = row(container, "o-iso");
+      expect(iso.querySelector("[data-proposed]")?.textContent).toBe("L'històric indica: No disposava de la certificació ISO 9001");
+      expect(within(iso).queryByRole("button", { name: /Revisa i confirma/ })).toBeNull();
+      expect(within(iso).getByRole("button", { name: "Descarta: ISO 9001" })).toBeTruthy();
+    });
+
+    it("a «Coneixement actual» també es veu què indica l'històric abans de confirmar", async () => {
+      const snapshot = snapshotFixture();
+      snapshot.facts.push({
+        key: "own_ftth_infrastructure",
+        source: "historic",
+        accreditation_pending: false,
+        claims: [],
+        hints: [{ observation_id: "o-ftth", statement: ftth.statement, observed_on: ftth.observed_on, source_ref: ftth.source_ref }],
+      });
+      respond({ [`${BASE}/knowledge/snapshot`]: snapshot, [`${BASE}/knowledge/observations?status=candidate`]: [...observationsFixture, ftth] });
+      const { container } = await renderPage();
+      fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+      const facts = container.querySelector("#fets")!;
+      expect([...facts.querySelectorAll("[data-proposed]")].map((item) => item.textContent)).toEqual([
+        "L'històric indica: Ofereix suport 24x7",
+        "L'històric indica: No disposa d'infraestructura FTTH pròpia",
+      ]);
+      expect(within(facts as HTMLElement).getByRole("button", { name: "Revisa i confirma: Infraestructura FTTH pròpia" })).toBeTruthy();
+    });
   });
 
   it("descartar un candidat demana el motiu", async () => {
@@ -266,19 +448,19 @@ describe("Coneixement de l'empresa", () => {
 
   it("una observació negativa o ja superada per una dada actual només es pot descartar", async () => {
     await renderPage();
-    expect(screen.queryByRole("button", { name: "Confirma com a actual: ISO 9001" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Revisa i confirma: ISO 9001" })).toBeNull();
     expect(screen.getByRole("button", { name: "Descarta: ISO 9001" })).toBeTruthy();
     expect(screen.getByText(/L'històric diu que no es tenia/)).toBeTruthy();
     // ENS ja està declarat: el que en diu l'històric no el pot trepitjar.
-    expect(screen.queryByRole("button", { name: "Confirma com a actual: ENS" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Revisa i confirma: ENS" })).toBeNull();
     expect(screen.getByText(/Ja hi ha una dada actual sobre això/)).toBeTruthy();
   });
 
   it("si la promoció xoca amb una dada actual, l'error es queda al diàleg", async () => {
     post.mockRejectedValue(new ApiError(409, "knowledge_already_declared", "Ja hi ha coneixement actual sobre support_24x7."));
     await renderPage();
-    fireEvent.click(screen.getByRole("button", { name: "Confirma com a actual: Suport 24x7" }));
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Confirma com a actual" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revisa i confirma: Suport 24x7" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Confirma i desa" }));
     await flush();
     expect(screen.getByRole("dialog").textContent).toContain("Ja hi ha coneixement actual");
   });
@@ -303,7 +485,7 @@ describe("Coneixement de l'empresa", () => {
     const historic = facts.querySelector<HTMLElement>('[data-gap="historic"]')!;
     expect(historic.textContent).toContain("Suport 24x7");
     expect(historic.textContent).toContain("Històric detectat");
-    expect(within(historic).getByRole("button", { name: "Confirma com a actual: Suport 24x7" })).toBeTruthy();
+    expect(within(historic).getByRole("button", { name: "Revisa i confirma: Suport 24x7" })).toBeTruthy();
 
     // Desconegut: no és un «no».
     const unknown = facts.querySelector<HTMLElement>('[data-gap="unknown"]')!;
@@ -439,7 +621,7 @@ describe("Coneixement de l'empresa", () => {
     const { container } = await renderPage();
     expect(container.textContent).toContain("pot confirmar o descartar el que diu l'històric");
     expect(container.textContent).toContain("pot verificar una dada");
-    expect((screen.getByRole("button", { name: "Confirma com a actual: Suport 24x7" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Revisa i confirma: Suport 24x7" }) as HTMLButtonElement).disabled).toBe(true);
     expect((within(record(container, "cert-ens")).getByRole("button", { name: "Verifica" }) as HTMLButtonElement).disabled).toBe(true);
     // Aportar evidència sí que pot.
     expect((within(record(container, "cert-ens")).getByRole("button", { name: "Afegeix evidència" }) as HTMLButtonElement).disabled).toBe(false);

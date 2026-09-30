@@ -7,7 +7,7 @@ import { useCompanyPath } from "@/components/SessionProvider";
 import { Button, ErrorNotice, Field, Textarea } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useMutation } from "@/lib/hooks";
-import { candidateTitle, isPromotable, proposalSummary, type Observation, type Vocabulary } from "@/lib/knowledge";
+import { candidateTitle, describeProposal, isPromotable, proposalHeadline, type Observation, type Vocabulary } from "@/lib/knowledge";
 
 const ACTION = "min-h-11 md:min-h-0";
 
@@ -20,10 +20,16 @@ interface Props {
   onChanged: () => void;
 }
 
+const SAVED = "Si ho confirmes, Tuvi guardarà com a dada actual";
+
 /**
  * El que es pot fer amb una dada detectada a l'històric: confirmar-la com a
  * actual o descartar-la. Confirmar-la NO l'acredita: en neix una dada actual
  * declarada, que continua pendent d'evidència. Res no es promou sol.
+ *
+ * Abans de confirmar es veu la dada exacta que es desarà, llegida de la
+ * proposta estructurada: una proposta en negatiu («no en té») es desa com un
+ * NO, i no s'ha de poder prendre per un sí.
  */
 export function CandidateActions({ observation, vocabulary, canDecide, superseded = false, onChanged }: Props) {
   const path = useCompanyPath();
@@ -33,6 +39,7 @@ export function CandidateActions({ observation, vocabulary, canDecide, supersede
 
   const promotable = isPromotable(observation) && !superseded;
   const title = candidateTitle(observation.subject, observation.subject_key, vocabulary);
+  const described = describeProposal(observation, vocabulary);
   const base = path(`/knowledge/observations/${observation.id}`);
 
   function open(next: "promote" | "dismiss") {
@@ -53,7 +60,6 @@ export function CandidateActions({ observation, vocabulary, canDecide, supersede
     }
   }
 
-  const label = promotable ? "Confirma com a actual" : "Descarta";
   return (
     <>
       {promotable && (
@@ -63,10 +69,10 @@ export function CandidateActions({ observation, vocabulary, canDecide, supersede
           className={ACTION}
           disabled={!canDecide}
           title={canDecide ? undefined : "El teu rol no pot confirmar l'històric"}
-          aria-label={`${label}: ${title}`}
+          aria-label={`Revisa i confirma: ${title}`}
           onClick={() => open("promote")}
         >
-          Confirma com a actual
+          Revisa i confirma
         </Button>
       )}
       <Button
@@ -83,7 +89,7 @@ export function CandidateActions({ observation, vocabulary, canDecide, supersede
 
       <Modal
         open={mode !== null}
-        title={mode === "promote" ? `Confirma «${title}» com a actual` : `Descarta «${title}»`}
+        title={mode === "promote" ? `Revisa i confirma «${title}»` : `Descarta «${title}»`}
         onClose={() => setMode(null)}
         footer={
           <>
@@ -97,7 +103,7 @@ export function CandidateActions({ observation, vocabulary, canDecide, supersede
               loading={saving}
               disabled={mode === "dismiss" && note.trim().length < 3}
             >
-              {mode === "promote" ? "Confirma com a actual" : "Descarta"}
+              {mode === "promote" ? "Confirma i desa" : "Descarta"}
             </Button>
           </>
         }
@@ -109,11 +115,48 @@ export function CandidateActions({ observation, vocabulary, canDecide, supersede
             <p className="mt-0.5 text-body text-ink">{observation.statement}</p>
           </div>
           {mode === "promote" ? (
-            <p className="text-body leading-6 text-ink">
-              Es crearà com a dada actual <strong className="font-medium">declarada</strong>:{" "}
-              <strong className="font-medium">{proposalSummary(observation, vocabulary)}</strong>. No quedarà verificada:
-              confirmar el que deia l&apos;històric no és acreditar-ho, i continuarà pendent d&apos;evidència.
-            </p>
+            <>
+              <div role="group" aria-label={SAVED} className="rounded-card border border-border-strong bg-surface px-4 py-3">
+                <p className="text-caption font-medium text-muted">{SAVED}</p>
+                <p
+                  className="mt-1 font-heading text-[18px] leading-tight font-semibold text-ink"
+                  data-proposal={described.negative ? "negative" : "positive"}
+                >
+                  {described.label}: <span className={described.negative ? "text-danger" : undefined}>{described.value}</span>
+                </p>
+                {described.fields.length > 0 && (
+                  <dl className="mt-2 space-y-1">
+                    {described.fields.map((field, position) => (
+                      <div key={position} className="flex flex-wrap gap-x-2 text-body">
+                        <dt className="text-muted">{field.label}</dt>
+                        <dd className="text-ink">{field.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </div>
+              {described.negative && (
+                <p role="note" className="rounded-control border border-warning bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
+                  Es desarà en negatiu: quedarà escrit «{proposalHeadline(described)}». Si avui la resposta és que sí, no ho
+                  confirmis: descarta el suggeriment i declara la dada des de «Coneixement actual».
+                </p>
+              )}
+              <div>
+                <p className="text-caption font-medium text-muted">Quedarà</p>
+                <ul aria-label="Com quedarà" className="mt-1 list-disc space-y-0.5 pl-5 text-body text-ink">
+                  <li>
+                    <strong className="font-medium">Declarat</strong>, amb l&apos;origen anotat com a confirmat de l&apos;històric.
+                  </li>
+                  <li>
+                    <strong className="font-medium">No verificat</strong>: confirmar el que deia l&apos;històric no és acreditar-ho.
+                  </li>
+                  <li>
+                    <strong className="font-medium">Sense evidència</strong>. Per verificar aquesta dada caldrà aportar evidència i
+                    verificar-la.
+                  </li>
+                </ul>
+              </div>
+            </>
           ) : (
             <p className="text-body leading-6 text-ink">
               Deixarà de sortir com a pendent. No s&apos;esborra: queda registrat qui l&apos;ha descartat i per què.
