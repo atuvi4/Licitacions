@@ -240,6 +240,195 @@ async def test_everything_declared_by_hand_is_declared_and_pending(client_a, ten
     }
 
 
+async def test_mobile_telephony_works_like_any_other_service_line(client_a, tenant_a, db):
+    """La telefonia mobil es una linia mes: vocabulari, serveis, papers i fotografia.
+
+    Un mateix partner pot ser operador majorista de dues linies alhora
+    (FTTH i mobil) sense duplicar-lo: son dos papers del mateix partner.
+    """
+    _, company = tenant_a
+    base = BASE.format(company=company.id)
+
+    lines = (await client_a.get(f"{base}/vocabulary")).json()["service_lines"]
+    assert {"code": "mobile_telephony", "label": "Telefonia mobil"} in lines
+
+    before = (await _snapshot(client_a, company))["fingerprint"]
+
+    # Un servei d'aquesta linia.
+    service = await client_a.post(
+        f"/api/v1/companies/{company.id}/services",
+        json={
+            "name": "Linies mobils per a empreses",
+            "service_line_code": "mobile_telephony",
+            "delivery_mode": "resale",
+        },
+    )
+    assert service.status_code == 201, service.text
+    assert service.json()["service_line_code"] == "mobile_telephony"
+
+    # UN partner amb dos papers iguals sobre dues linies, i un altre nomes de mobil.
+    partner = await _declare(
+        client_a,
+        company,
+        "partner",
+        {
+            "name": "Operador Demo",
+            "roles": [{"role": "wholesale_operator", "service_line_code": "access_ftth"}],
+        },
+    )
+    await _declare(
+        client_a,
+        company,
+        "partner_role",
+        {
+            "partner_id": partner["id"],
+            "role": "wholesale_operator",
+            "service_line_code": "mobile_telephony",
+        },
+    )
+    await _declare(
+        client_a,
+        company,
+        "partner",
+        {
+            "name": "Mobil Demo",
+            "roles": [{"role": "wholesale_operator", "service_line_code": "mobile_telephony"}],
+        },
+    )
+
+    records = (await client_a.get(f"{base}/records")).json()
+    assert sorted(p["name"] for p in records["partners"]) == ["Mobil Demo", "Operador Demo"]
+    assert sorted(
+        (r["role"], r["service_line_code"])
+        for r in records["partner_roles"]
+        if r["partner_id"] == partner["id"]
+    ) == [
+        ("wholesale_operator", "access_ftth"),
+        ("wholesale_operator", "mobile_telephony"),
+    ]
+
+    snapshot = await _snapshot(client_a, company)
+    service_entry = _entry(snapshot, "services", "mobile_telephony")
+    assert service_entry is not None
+    assert (service_entry["source"], service_entry["accreditation_pending"]) == (
+        "current_declared",
+        True,
+    )
+    assert service_entry["claims"][0]["value"] == {
+        "name": "Linies mobils per a empreses",
+        "mode": "resale",
+    }
+    assert _entry(snapshot, "partners", "Operador Demo")["claims"][0]["value"]["roles"] == [
+        {"role": "wholesale_operator", "line": "access_ftth", "territory": None},
+        {"role": "wholesale_operator", "line": "mobile_telephony", "territory": None},
+    ]
+    assert _entry(snapshot, "partners", "Mobil Demo")["claims"][0]["value"]["roles"] == [
+        {"role": "wholesale_operator", "line": "mobile_telephony", "territory": None},
+    ]
+    assert snapshot["fingerprint"] != before
+
+    # Una linia que no es del vocabulari continua sense entrar, tambe als papers.
+    rejected = await client_a.post(
+        f"{base}/records/partner_role",
+        json={
+            "partner_id": partner["id"],
+            "role": "wholesale_operator",
+            "service_line_code": "mobile_5g",
+        },
+    )
+    assert rejected.status_code == 422
+
+
+async def test_a_promoted_partner_can_be_renamed_and_gain_a_second_line(client_a, tenant_a, db):
+    """El cas d'un partner de l'historic que avui fa mes coses i es diu diferent.
+
+    L'historic el coneix amb un nom curt i un sol paper. La persona el confirma,
+    li corregeix el nom i hi afegeix el mateix paper sobre una segona linia. Ha
+    de continuar sent UN partner, amb la procedencia de la promocio intacta.
+    """
+    user, company = tenant_a
+    base = BASE.format(company=company.id)
+    observation = await company_knowledge.record_observation(
+        db,
+        company_id=company.id,
+        subject=ObservationSubject.PARTNER,
+        subject_key="Operador Curt",
+        statement="Operador majorista d'accessos FTTH a l'historic: Operador Curt",
+        proposal={
+            "name": "Operador Curt",
+            "roles": [{"role": "wholesale_operator", "service_line_code": "access_ftth"}],
+        },
+        source_ref="KB de mostra",
+    )
+    await db.commit()
+
+    # 1. Confirmar: neix el partner amb la procedencia de la promocio.
+    promoted = await client_a.post(
+        f"{base}/observations/{observation.id}/promote", json={"note": "Encara hi treballem"}
+    )
+    assert promoted.status_code == 200, promoted.text
+    records = (await client_a.get(f"{base}/records")).json()
+    (partner,) = records["partners"]
+    assert partner["name"] == "Operador Curt"
+    assert partner["knowledge_origin"] == "promoted_observation"
+    partner_id, as_of = partner["id"], partner["as_of"]
+
+    # 2. Canviar-li el nom, amb el cos que envia el dialeg d'edicio.
+    renamed = await client_a.patch(
+        f"{base}/records/partner/{partner_id}",
+        json={
+            "name": "Operador Curt Telecom",
+            "tax_id": None,
+            "lifecycle": "current",
+            "valid_until": None,
+        },
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["knowledge_origin"] == "promoted_observation"
+    assert renamed.json()["as_of"] == as_of
+
+    # 3. Un segon paper igual, sobre la linia nova.
+    role = await _declare(
+        client_a,
+        company,
+        "partner_role",
+        {
+            "partner_id": partner_id,
+            "role": "wholesale_operator",
+            "service_line_code": "mobile_telephony",
+            "lifecycle": "current",
+            "valid_until": None,
+        },
+    )
+    assert role["partner_id"] == partner_id
+
+    # Continua sent un sol partner, amb el nom nou i els dos papers.
+    records = (await client_a.get(f"{base}/records")).json()
+    assert [(p["id"], p["name"], p["knowledge_origin"]) for p in records["partners"]] == [
+        (partner_id, "Operador Curt Telecom", "promoted_observation")
+    ]
+    assert sorted(r["service_line_code"] for r in records["partner_roles"]) == [
+        "access_ftth",
+        "mobile_telephony",
+    ]
+    snapshot = await _snapshot(client_a, company)
+    assert [e["key"] for e in snapshot["partners"]] == ["Operador Curt Telecom"]
+    entry = snapshot["partners"][0]
+    assert entry["source"] == "current_declared"
+    assert entry["hints"] == []
+    assert entry["claims"][0]["value"]["roles"] == [
+        {"role": "wholesale_operator", "line": "access_ftth", "territory": None},
+        {"role": "wholesale_operator", "line": "mobile_telephony", "territory": None},
+    ]
+    # I l'observacio continua apuntant a la mateixa fila.
+    await db.refresh(observation)
+    assert (str(observation.status), observation.promoted_entity_id) == (
+        "promoted",
+        uuid.UUID(partner_id),
+    )
+    assert observation.reviewed_by == user.id
+
+
 async def test_a_declaration_cannot_carry_verification_or_origin(client_a, tenant_a):
     _, company = tenant_a
     for extra in (

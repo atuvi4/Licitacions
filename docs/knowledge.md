@@ -29,12 +29,13 @@ Són catàlegs compartits, sense `company_id`, com `cpv_codes`:
 
 | Taula | Contingut |
 | --- | --- |
-| `service_lines` | `voice_pbx`, `voice_trunk`, `access_ftth`, `dedicated_network`, `radio_link`, `network_switching`, `fiber_deployment`, `civil_works`, `support_ops` |
+| `service_lines` | `voice_pbx`, `voice_trunk`, `access_ftth`, `dedicated_network`, `radio_link`, `network_switching`, `fiber_deployment`, `civil_works`, `support_ops`, `mobile_telephony` (afegida a la `0046`) |
 | `capability_definitions` | 19 capacitats per al pilot de l'Escala. Cadascuna té tipus (`boolean` · `number` · `ordinal`), comparador (`is_true` · `gte` · `lte`), unitat i escala |
 | `certification_standards` | `ENS` (nivells `basic < medium < high`), `ISO_9001`, `ISO_14001`, `ISO_27001` |
 
 * **La font de veritat és `app/knowledge/vocabulary.py`.** La migració `0045` en
-  copia les dades, i un test comprova que coincideixen.
+  copia les dades; una ampliació posterior és una migració que només afegeix files
+  (`0046`: telefonia mòbil). Un test comprova que, sumades, coincideixen amb el codi.
 * **Codis tancats.** Cap API no hi escriu, i un model de llenguatge no pot
   inventar codis. Un codi nou és un canvi de codi i de migració.
 * **No porten el nom de cap empresa.** Un test ho vigila.

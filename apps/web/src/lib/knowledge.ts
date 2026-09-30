@@ -177,6 +177,7 @@ export const SERVICE_LINE_LABELS: Record<string, string> = {
   fiber_deployment: "Desplegament i certificació de fibra",
   civil_works: "Obra civil",
   support_ops: "Suport, operació i nivells de servei",
+  mobile_telephony: "Telefonia mòbil",
 };
 
 export const CAPABILITY_LABELS: Record<string, string> = {

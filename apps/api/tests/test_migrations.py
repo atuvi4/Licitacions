@@ -377,6 +377,16 @@ def test_les_migracions_son_reversibles(migration_sql):
         assert "pass" not in body.split("\n")[1], f"{revision.revision} no te downgrade real"
 
 
+def test_els_identificadors_de_revisio_caben_a_alembic_version():
+    """`alembic_version.version_num` es VARCHAR(32): un id mes llarg trenca l'upgrade."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(Config(str(API_ROOT / "alembic.ini")))
+    too_long = [r.revision for r in script.walk_revisions() if len(r.revision) > 32]
+    assert not too_long, too_long
+
+
 def _varchar_widths(ddl: str) -> dict[tuple[str, str], int]:
     """Amplada final de cada VARCHAR segons les migracions, en ordre d'aplicacio.
 
@@ -1493,6 +1503,26 @@ def test_la_recepcio_i_la_classificacio_es_poden_aplicar_i_desfer():
     assert created == set(re.findall(r"DROP INDEX (\w+)", down))
     # Cap taula existent no es toca.
     assert "ALTER TABLE" not in up.replace("ALTER TABLE alembic_version", "")
+
+
+def test_la_telefonia_mobil_entra_al_vocabulari_i_es_pot_desfer():
+    """0045 -> 0046 -> 0045: una linia de servei mes, i res mes.
+
+    El downgrade treu la fila; si alguna empresa ja la fa servir, la clau forana
+    ho impedeix, que es el que toca: no s'esborra coneixement d'amagat.
+    """
+    up = _offline_sql("upgrade", "0045_company_knowledge:0046_mobile_telephony_line")
+    down = _offline_sql("downgrade", "0046_mobile_telephony_line:0045_company_knowledge")
+
+    assert up.count("INSERT INTO service_lines") == 1
+    assert "VALUES ('mobile_telephony', 'Telefonia mobil')" in up
+    for forbidden in ("CREATE TABLE", "ALTER TABLE company", "DROP", "capability_definitions",
+                      "certification_standards"):
+        assert forbidden not in up, forbidden
+    assert "DELETE FROM service_lines WHERE code = 'mobile_telephony'" in down
+    assert down.count("DELETE") == 1
+    for forbidden in ("DROP TABLE", "ALTER TABLE company", "company_services", "partner_roles"):
+        assert forbidden not in down, forbidden
 
 
 def test_el_coneixement_de_l_empresa_es_pot_aplicar_i_desfer():

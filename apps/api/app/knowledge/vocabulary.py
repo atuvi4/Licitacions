@@ -2,8 +2,10 @@
 
 **Aquesta es la font de veritat.** Les taules `service_lines`,
 `capability_definitions` i `certification_standards` en son una copia perque la
-base pugui imposar les claus foranes; les omple una migracio i
-`test_knowledge_vocabulary` comprova que diuen el mateix que aquest fitxer.
+base pugui imposar les claus foranes; les omple la migracio `0045` i, el que
+s'hi ha afegit despres, una migracio per ampliacio (`0046`: telefonia mobil).
+`test_knowledge_vocabulary` comprova que, sumades, diuen el mateix que aquest
+fitxer.
 
 **Codis tancats.** No hi ha cap API que en creï. Un requisit del plec que no
 encaixi amb cap capacitat quedara pendent de revisio i proposara un codi nou,
@@ -65,6 +67,8 @@ SERVICE_LINES: tuple[ServiceLine, ...] = (
     ServiceLine("fiber_deployment", "Desplegament i certificacio de fibra"),
     ServiceLine("civil_works", "Obra civil"),
     ServiceLine("support_ops", "Suport, operacio i nivells de servei"),
+    # Afegida a la migracio 0046.
+    ServiceLine("mobile_telephony", "Telefonia mobil"),
 )
 
 _B, _N, _O = CapabilityValueType.BOOLEAN, CapabilityValueType.NUMBER, CapabilityValueType.ORDINAL

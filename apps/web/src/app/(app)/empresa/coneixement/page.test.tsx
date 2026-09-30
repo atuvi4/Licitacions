@@ -563,6 +563,54 @@ describe("Coneixement de l'empresa", () => {
     });
   });
 
+  it("un partner es pot reanomenar i rebre un segon paper sobre la línia de telefonia mòbil", async () => {
+    patch.mockResolvedValue({});
+    post.mockResolvedValue({});
+    respond({
+      [`${BASE}/knowledge/vocabulary`]: {
+        ...vocabularyFixture,
+        service_lines: [...vocabularyFixture.service_lines, { code: "mobile_telephony", label: "Telefonia mobil" }],
+      },
+    });
+    const { container } = await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+
+    // Canviar el nom: el mateix registre, sense tocar-ne la procedència.
+    fireEvent.click(within(record(container, "partner-1")).getByRole("button", { name: "Edita" }));
+    let dialog = screen.getByRole("dialog", { name: "Edita el partner" });
+    fireEvent.change(within(dialog).getByLabelText(/^Nom/), { target: { value: "Soci Demo Telecom" } });
+    fireEvent.submit(dialog.querySelector("form")!);
+    await flush();
+    expect(patch).toHaveBeenCalledWith(`${BASE}/knowledge/records/partner/partner-1`, {
+      name: "Soci Demo Telecom",
+      tax_id: null,
+      lifecycle: "current",
+      valid_until: null,
+    });
+    expect(patch.mock.calls[0][1]).not.toHaveProperty("as_of");
+    expect(patch.mock.calls[0][1]).not.toHaveProperty("knowledge_origin");
+
+    // Un segon paper sobre la línia nova, al mateix partner.
+    fireEvent.click(within(record(container, "partner-1")).getByRole("button", { name: "Afegeix un paper" }));
+    dialog = screen.getByRole("dialog");
+    const line = within(dialog).getByLabelText(/Línia de servei/) as HTMLSelectElement;
+    expect([...line.options].map((option) => option.textContent)).toContain("Telefonia mòbil");
+    fireEvent.change(within(dialog).getByLabelText(/^Paper/), { target: { value: "wholesale_operator" } });
+    fireEvent.change(line, { target: { value: "mobile_telephony" } });
+    fireEvent.submit(dialog.querySelector("form")!);
+    await flush();
+    expect(post).toHaveBeenCalledWith(`${BASE}/knowledge/records/partner_role`, {
+      partner_id: "partner-1",
+      role: "wholesale_operator",
+      service_line_code: "mobile_telephony",
+      territory: null,
+      lifecycle: "current",
+      valid_until: null,
+    });
+    // Cap segon partner: només s'ha creat un paper.
+    expect(post.mock.calls.map(([path]) => path)).toEqual([`${BASE}/knowledge/records/partner_role`]);
+  });
+
   it("declara una certificació amb norma, nivell i abast estructurat", async () => {
     post.mockResolvedValue({});
     await renderPage();

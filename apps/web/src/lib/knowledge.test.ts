@@ -266,6 +266,9 @@ describe("candidats de l'històric", () => {
 describe("rètols i permisos", () => {
   it("posa accents als rètols del vocabulari i cau al de l'API si no el coneix", () => {
     expect(serviceLineLabel("radio_link")).toBe("Radioenllaços");
+    // La línia afegida a la 0046 té rètol propi, com les altres.
+    expect(serviceLineLabel("mobile_telephony")).toBe("Telefonia mòbil");
+    expect(serviceLineLabel("mobile_telephony", { ...vocabularyFixture, service_lines: [{ code: "mobile_telephony", label: "Telefonia mobil" }] })).toBe("Telefonia mòbil");
     expect(serviceLineLabel("linia_nova", { ...vocabularyFixture, service_lines: [{ code: "linia_nova", label: "Linia nova" }] })).toBe("Linia nova");
     expect(certificationTitle({ name: "x", standard_code: "ENS", level: "medium" }, vocabularyFixture)).toBe("ENS · Mitjà");
     expect(certificationTitle({ name: "Certificat propi", standard_code: null })).toBe("Certificat propi");

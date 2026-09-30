@@ -21,10 +21,12 @@ from app.models.knowledge import CapabilityDefinitionRow, CertificationStandardR
 
 API_ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = API_ROOT / "alembic" / "versions" / "0045_company_knowledge.py"
+#: Les migracions posteriors que amplien el vocabulari, en ordre.
+LATER_MIGRATIONS = (API_ROOT / "alembic" / "versions" / "0046_mobile_telephony_line.py",)
 
 
-def _migration():
-    spec = importlib.util.spec_from_file_location("m0045", MIGRATION)
+def _migration(path: Path = MIGRATION):
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return module
@@ -41,6 +43,7 @@ def test_the_pilot_needs_are_covered():
         "fiber_deployment",
         "civil_works",
         "support_ops",
+        "mobile_telephony",
     } <= SERVICE_LINE_CODES
     assert {c.code for c in CAPABILITIES} == {
         "pbx.concurrent_calls",
@@ -81,9 +84,14 @@ def test_every_definition_is_coherent():
         assert (cap.value_type == CapabilityValueType.ORDINAL) == (cap.ordinal_scale is not None)
 
 
-def test_the_migration_seeds_exactly_this_vocabulary():
+def test_the_migrations_seed_exactly_this_vocabulary():
+    """El vocabulari es la 0045 mes el que hi han afegit les migracions posteriors."""
     migration = _migration()
-    assert migration._SERVICE_LINES == tuple((s.code, s.label) for s in SERVICE_LINES)
+    seeded_lines = migration._SERVICE_LINES
+    for path in LATER_MIGRATIONS:
+        seeded_lines += _migration(path)._SERVICE_LINES
+    assert seeded_lines == tuple((s.code, s.label) for s in SERVICE_LINES)
+    assert len(set(code for code, _ in seeded_lines)) == len(seeded_lines)
     assert migration._CAPABILITIES == tuple(
         (
             c.code,
@@ -106,13 +114,36 @@ def test_the_migration_seeds_exactly_this_vocabulary():
     [
         API_ROOT / "app" / "knowledge" / "vocabulary.py",
         MIGRATION,
+        *LATER_MIGRATIONS,
         API_ROOT / "app" / "models" / "knowledge.py",
     ],
 )
 def test_no_company_is_hardcoded_in_the_global_layer(path):
     text = path.read_text(encoding="utf-8").lower()
-    for name in ("indaleccius", "inatic", "templus", "3cx", "freepbx", "yealink", "sewan"):
+    for name in (
+        "indaleccius",
+        "inatic",
+        "templus",
+        "3cx",
+        "freepbx",
+        "yealink",
+        "sewan",
+        "ion mobile",
+        "cablem",
+    ):
         assert name not in text, (path.name, name)
+
+
+async def test_mobile_telephony_is_a_service_line_like_the_others(db):
+    """Una linia de servei mes: al vocabulari, als codis valids i a la taula."""
+    line = next(s for s in SERVICE_LINES if s.code == "mobile_telephony")
+    assert line.label == "Telefonia mobil"
+    assert "mobile_telephony" in SERVICE_LINE_CODES
+    await seed_vocabulary(db)
+    await db.commit()
+    rows = {r.code: r.label for r in await db.scalars(sa.select(ServiceLineRow))}
+    assert rows == {s.code: s.label for s in SERVICE_LINES}
+    assert rows["mobile_telephony"] == "Telefonia mobil"
 
 
 def test_no_route_can_create_vocabulary():

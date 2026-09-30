@@ -25,6 +25,7 @@ from app.knowledge.snapshot import (
     PartnerRoleIn,
     PendingKind,
     Provenance,
+    ServiceIn,
     SolutionIn,
     build_snapshot,
     evaluate_capability,
@@ -304,6 +305,45 @@ def test_a_retired_solution_takes_its_capabilities_with_it():
     )
     snapshot = snap(solutions=[solution], capabilities=[queues])
     assert evaluate_capability(snapshot, "pbx.queues").result == EvaluationResult.UNKNOWN
+
+
+def test_a_partner_can_play_the_same_role_on_two_lines():
+    """Operador majorista de FTTH i de mobil alhora: un partner, dos papers."""
+    partner = PartnerIn(prov=prov("p1"), name="Operador Demo")
+    ftth = PartnerRoleIn(
+        prov=prov("r1"), partner_id="p1", role="wholesale_operator", service_line_code="access_ftth"
+    )
+    mobile = PartnerRoleIn(
+        prov=prov("r2"),
+        partner_id="p1",
+        role="wholesale_operator",
+        service_line_code="mobile_telephony",
+    )
+    both = snap(partners=[partner], partner_roles=[ftth, mobile])
+    assert list(both.partners) == ["Operador Demo"]
+    assert both.partners["Operador Demo"].effective.value["roles"] == [
+        {"role": "wholesale_operator", "line": "access_ftth", "territory": None},
+        {"role": "wholesale_operator", "line": "mobile_telephony", "territory": None},
+    ]
+    only_ftth = snap(partners=[partner], partner_roles=[ftth])
+    assert both.fingerprint != only_ftth.fingerprint
+
+
+def test_mobile_telephony_is_a_service_line_like_any_other_in_the_snapshot():
+    mobile = ServiceIn(
+        prov=prov("s1"),
+        name="Linies mobils",
+        service_line_code="mobile_telephony",
+        delivery_mode="resale",
+    )
+    snapshot = snap(services=[mobile])
+    entry = snapshot.services["mobile_telephony"]
+    assert entry.source == KnowledgeSource.CURRENT_DECLARED
+    assert entry.effective.value == {"name": "Linies mobils", "mode": "resale"}
+    as_ftth = snap(services=[replace(mobile, service_line_code="access_ftth")])
+    assert list(as_ftth.services) == ["access_ftth"]
+    assert as_ftth.fingerprint != snapshot.fingerprint
+    assert snap(services=[mobile]).fingerprint == snapshot.fingerprint
 
 
 def test_a_retired_partner_takes_its_roles_with_it():
