@@ -21,6 +21,20 @@ from app.models.documents import Document, DocumentLink
 from app.models.identity import Company, CompanyMembership, User
 from app.models.issues import WorkspaceIssue, WorkspaceIssueSourceRef
 from app.models.jobs import JobRequest, WorkJob
+from app.models.knowledge import (
+    CapabilityDefinitionRow,
+    CertificationStandardRow,
+    CompanyOperatingFact,
+    CompanyPartner,
+    CompanyProduct,
+    CompanySolution,
+    HistoricBid,
+    KnowledgeObservation,
+    PartnerRoleRow,
+    ServiceLineRow,
+    SolutionCapability,
+    SolutionProduct,
+)
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
 from app.models.offer import (
     EconomicOffer,
@@ -86,6 +100,18 @@ from app.models.workspace import (
 )
 
 __all__ = [
+    "CapabilityDefinitionRow",
+    "CertificationStandardRow",
+    "CompanyOperatingFact",
+    "CompanyPartner",
+    "CompanyProduct",
+    "CompanySolution",
+    "HistoricBid",
+    "KnowledgeObservation",
+    "PartnerRoleRow",
+    "ServiceLineRow",
+    "SolutionCapability",
+    "SolutionProduct",
     "ReviewItem",
     "ReviewItemRelation",
     "ReviewItemRevision",

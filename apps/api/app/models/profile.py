@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from decimal import Decimal
 
 import sqlalchemy as sa
@@ -16,7 +17,14 @@ from app.db.base import (
     UUIDPrimaryKeyMixin,
     enum_column,
 )
-from app.models.enums import SpecializationLevel, TerritoryType
+from app.models.enums import (
+    DeliveryMode,
+    KnowledgeOrigin,
+    SpecializationLevel,
+    TerritoryType,
+    VerificationStatus,
+)
+from app.models.review import in_values
 
 MONEY = sa.Numeric(18, 2)
 
@@ -24,11 +32,30 @@ MONEY = sa.Numeric(18, 2)
 class CompanyService(
     UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, Base
 ):
-    """Servei o capacitat que l'empresa pot executar. Totalment configurable."""
+    """Servei o capacitat que l'empresa pot executar. Totalment configurable.
+
+    Tambe es coneixement actual (fase 2 del motor): `service_line_code` el lliga
+    al vocabulari global, `delivery_mode` diu qui el fa, i porta la procedencia.
+    `active` fa de cicle de vida (inactiu = no compta): no s'hi afegeix un
+    `lifecycle` que diria el mateix.
+    """
 
     __tablename__ = "company_services"
     __table_args__ = (
         sa.UniqueConstraint("company_id", "name", name="uq_company_services_company_name"),
+        sa.CheckConstraint(
+            "delivery_mode IS NULL OR " + in_values("delivery_mode", DeliveryMode),
+            name="delivery_mode_valid",
+        ),
+        sa.CheckConstraint(
+            in_values("knowledge_origin", KnowledgeOrigin), name="knowledge_origin_valid"
+        ),
+        sa.CheckConstraint(
+            in_values("verification_status", VerificationStatus), name="verification_valid"
+        ),
+        sa.CheckConstraint(
+            "valid_until IS NULL OR valid_until >= as_of", name="valid_until_after_as_of"
+        ),
     )
 
     name: Mapped[str] = mapped_column(sa.String(160), nullable=False)
@@ -39,6 +66,28 @@ class CompanyService(
     )
     active: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
     notes: Mapped[str | None] = mapped_column(sa.Text)
+    service_line_code: Mapped[str | None] = mapped_column(
+        sa.String(40), sa.ForeignKey("service_lines.code", ondelete="RESTRICT")
+    )
+    delivery_mode: Mapped[DeliveryMode | None] = mapped_column(
+        enum_column(DeliveryMode, "delivery_mode")
+    )
+    knowledge_origin: Mapped[KnowledgeOrigin] = mapped_column(
+        enum_column(KnowledgeOrigin, "knowledge_origin"),
+        nullable=False,
+        default=KnowledgeOrigin.DECLARED,
+        server_default=KnowledgeOrigin.DECLARED.value,
+    )
+    as_of: Mapped[date] = mapped_column(
+        sa.Date, nullable=False, default=date.today, server_default=sa.text("CURRENT_DATE")
+    )
+    valid_until: Mapped[date | None] = mapped_column(sa.Date)
+    verification_status: Mapped[VerificationStatus] = mapped_column(
+        enum_column(VerificationStatus, "verification_status"),
+        nullable=False,
+        default=VerificationStatus.PENDING_VERIFICATION,
+        server_default=VerificationStatus.PENDING_VERIFICATION.value,
+    )
 
 
 class CompanyTerritory(

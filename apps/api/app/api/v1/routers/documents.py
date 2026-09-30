@@ -26,7 +26,7 @@ from app.schemas.documents import (
     DocumentUpdate,
     EvidenceRead,
 )
-from app.services import audit
+from app.services import audit, knowledge_evidence
 from app.services.document_retention import assert_document_is_deletable
 from app.services.entities import assert_entity_in_company
 from app.services.files import compute_sha256, extension_for, sanitize_filename, validate_upload
@@ -213,7 +213,12 @@ async def delete_document(
     # impediria; aixo hi posa un error que es pot llegir.
     await assert_document_is_deletable(session, document.id)
     storage_key = document.storage_key
+    # Si aquest document era l'unica evidencia d'un coneixement verificat, deixa de
+    # ser-ho: es llegeixen els enllacos abans que caiguin.
+    targets = [(link.entity_type, link.entity_id) for link in document.links]
     await session.delete(document)  # els enllacos cauen per FK ON DELETE CASCADE
+    await session.flush()
+    await knowledge_evidence.revoke_unsupported_verifications(session, ctx.company_id, targets)
     await audit.record(
         session,
         action=AuditAction.DELETE,
@@ -321,7 +326,11 @@ async def delete_link(
     ).scalar_one_or_none()
     if link is None:
         raise NotFoundError("Enllac no trobat.")
+    target = (link.entity_type, link.entity_id)
     await session.delete(link)
+    await session.flush()
+    # Sense cap altra evidencia, el coneixement verificat deixa de ser-ho.
+    await knowledge_evidence.revoke_unsupported_verifications(session, ctx.company_id, [target])
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

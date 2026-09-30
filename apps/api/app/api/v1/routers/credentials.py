@@ -14,6 +14,7 @@ from app.schemas.credentials import (
     RegistrationRead,
     RegistrationUpdate,
 )
+from app.services.knowledge_evidence import require_evidence_if_verified
 
 certifications_router = build_crud_router(
     model=CompanyCertification,
@@ -25,6 +26,8 @@ certifications_router = build_crud_router(
     resource_name="certificacio",
     order_by=[CompanyCertification.name],
     entity_type=LinkedEntityType.COMPANY_CERTIFICATION,
+    # Verificada nomes amb evidencia enllacada (coneixement de l'empresa, fase 2).
+    validate=require_evidence_if_verified,
 )
 
 registrations_router = build_crud_router(

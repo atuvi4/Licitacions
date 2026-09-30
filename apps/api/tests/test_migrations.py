@@ -1493,3 +1493,54 @@ def test_la_recepcio_i_la_classificacio_es_poden_aplicar_i_desfer():
     assert created == set(re.findall(r"DROP INDEX (\w+)", down))
     # Cap taula existent no es toca.
     assert "ALTER TABLE" not in up.replace("ALTER TABLE alembic_version", "")
+
+
+def test_el_coneixement_de_l_empresa_es_pot_aplicar_i_desfer():
+    """0044 -> 0045 -> 0044: vocabularis globals omplerts, estat actual, historic.
+
+    Les taules existents (serveis i certificacions) nomes guanyen columnes, i el
+    downgrade les hi treu sense esborrar cap fila. Els vocabularis s'omplen a la
+    mateixa migracio i no porten `company_id`.
+    """
+    up = _offline_sql("upgrade", "0044_reception_classification:0045_company_knowledge")
+    down = _offline_sql("downgrade", "0045_company_knowledge:0044_reception_classification")
+
+    new_tables = (
+        "service_lines", "capability_definitions", "certification_standards",
+        "company_operating_facts", "company_solutions", "solution_capabilities",
+        "company_products", "solution_products", "company_partners", "partner_roles",
+        "historic_bids", "knowledge_observations",
+    )
+    for table in new_tables:
+        assert f"CREATE TABLE {table}" in up, table
+        assert f"DROP TABLE {table}" in down, table
+    vocabularies = up.split("CREATE TABLE company_operating_facts")[0]
+    assert "company_id" not in vocabularies
+    assert up.count("INSERT INTO service_lines") == 9
+    assert up.count("INSERT INTO capability_definitions") == 19
+    assert up.count("INSERT INTO certification_standards") == 4
+    assert """'["basic", "medium", "high"]'""" in up
+
+    for column in ("service_line_code", "delivery_mode", "knowledge_origin", "as_of",
+                   "valid_until", "verification_status"):
+        assert f"ALTER TABLE company_services ADD COLUMN {column}" in up, column
+        assert f"ALTER TABLE company_services DROP COLUMN {column}" in down, column
+    for column in ("standard_code", "level", "scope_service_lines", "knowledge_origin", "as_of",
+                   "lifecycle"):
+        assert f"ALTER TABLE company_certifications ADD COLUMN {column}" in up, column
+        assert f"ALTER TABLE company_certifications DROP COLUMN {column}" in down, column
+    assert "UPDATE company_services SET as_of = CAST(created_at AS DATE)" in up
+    assert "UPDATE company_certifications SET as_of = CAST(created_at AS DATE)" in up
+
+    for name in (
+        "ck_company_operating_facts_lifecycle_valid", "ck_solution_capabilities_status_valid",
+        "ck_partner_roles_role_valid", "ck_knowledge_observations_promoted_has_target",
+        "ck_company_certifications_level_needs_standard", "ck_company_services_verification_valid",
+    ):
+        assert name in up, name
+    assert "REFERENCES company_solutions (id, company_id) ON DELETE CASCADE" in up
+    assert "REFERENCES company_partners (id, company_id) ON DELETE CASCADE" in up
+    assert "REFERENCES historic_bids (id) ON DELETE SET NULL" in up
+    created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
+    assert created == set(re.findall(r"DROP INDEX (\w+)", down))
+    assert "DELETE" not in down.upper().replace("ON DELETE", "")

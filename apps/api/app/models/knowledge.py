@@ -1,0 +1,416 @@
+"""Coneixement de l'empresa: vocabularis globals, estat actual i historic.
+
+**Vocabularis globals** (sense `company_id`, com `cpv_codes`): `service_lines`,
+`capability_definitions` i `certification_standards`. Els omple una migracio a
+partir de `app/knowledge/vocabulary.py`; cap API no hi escriu. Esborrar una
+empresa no els toca.
+
+**Estat actual** (tenant): el que l'empresa es i pot fer avui. Cada fila porta
+la seva procedencia (`KnowledgeProvenanceMixin`): qui l'afirma, de quan es, fins
+quan val, si esta verificada i si encara es vigent. Les taules existents que ja
+cobrien un concepte (serveis, certificacions) s'amplien a
+`app/models/profile.py` i `app/models/credentials.py`; no es dupliquen aqui.
+
+**Historic** (tenant): `historic_bids` i `knowledge_observations`. Una
+observacio es un suggeriment. Nomes una persona la pot promoure a coneixement
+actual, i aleshores en queda la traça en tots dos sentits.
+
+Les filles referencien el pare per `(id, company_id)`: res d'una empresa pot
+penjar d'una fila d'una altra. Tots els enums porten CHECK.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
+
+import sqlalchemy as sa
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base, UUIDPrimaryKeyMixin, enum_column
+from app.models.enums import (
+    CapabilityComparator,
+    CapabilityStatus,
+    CapabilityValueType,
+    HistoricBidDecision,
+    HistoricBidResult,
+    KnowledgeLifecycle,
+    KnowledgeOrigin,
+    ObservationStatus,
+    ObservationSubject,
+    OperatingFactKey,
+    PartnerRole,
+    VerificationStatus,
+)
+from app.models.review import JSONDocument, in_values
+
+# --------------------------------------------------------------------------- #
+# Vocabularis globals                                                          #
+# --------------------------------------------------------------------------- #
+
+
+class ServiceLineRow(Base):
+    __tablename__ = "service_lines"
+
+    code: Mapped[str] = mapped_column(sa.String(40), primary_key=True)
+    label: Mapped[str] = mapped_column(sa.String(160), nullable=False)
+
+
+class CapabilityDefinitionRow(Base):
+    __tablename__ = "capability_definitions"
+    __table_args__ = (
+        sa.CheckConstraint(in_values("value_type", CapabilityValueType), name="value_type_valid"),
+        sa.CheckConstraint(in_values("comparator", CapabilityComparator), name="comparator_valid"),
+    )
+
+    code: Mapped[str] = mapped_column(sa.String(80), primary_key=True)
+    service_line_code: Mapped[str] = mapped_column(
+        sa.String(40), sa.ForeignKey("service_lines.code", ondelete="RESTRICT"), nullable=False
+    )
+    label: Mapped[str] = mapped_column(sa.String(200), nullable=False)
+    value_type: Mapped[CapabilityValueType] = mapped_column(
+        enum_column(CapabilityValueType, "capability_value_type"), nullable=False
+    )
+    comparator: Mapped[CapabilityComparator] = mapped_column(
+        enum_column(CapabilityComparator, "capability_comparator"), nullable=False
+    )
+    unit: Mapped[str | None] = mapped_column(sa.String(20))
+    #: Nomes per a `ordinal`: de menor a major.
+    ordinal_scale: Mapped[list[str] | None] = mapped_column(JSONDocument)
+
+
+class CertificationStandardRow(Base):
+    __tablename__ = "certification_standards"
+
+    code: Mapped[str] = mapped_column(sa.String(40), primary_key=True)
+    label: Mapped[str] = mapped_column(sa.String(200), nullable=False)
+    #: De menor a major. Nul si la norma no te nivells.
+    levels: Mapped[list[str] | None] = mapped_column(JSONDocument)
+
+
+# --------------------------------------------------------------------------- #
+# Procedencia del coneixement actual                                           #
+# --------------------------------------------------------------------------- #
+
+
+def provenance_constraints() -> tuple[sa.CheckConstraint, ...]:
+    """Els CHECK de la procedencia, un joc nou per taula."""
+    return (
+        sa.CheckConstraint(
+            in_values("knowledge_origin", KnowledgeOrigin), name="knowledge_origin_valid"
+        ),
+        sa.CheckConstraint(
+            in_values("verification_status", VerificationStatus), name="verification_valid"
+        ),
+        sa.CheckConstraint(in_values("lifecycle", KnowledgeLifecycle), name="lifecycle_valid"),
+        sa.CheckConstraint(
+            "valid_until IS NULL OR valid_until >= as_of", name="valid_until_after_as_of"
+        ),
+    )
+
+
+class KnowledgeProvenanceMixin:
+    """D'on surt una dada actual i si encara val.
+
+    * `knowledge_origin`: declarada per una persona o promoguda des de l'historic.
+    * `as_of`: de quan es la dada.
+    * `valid_until`: fins quan val (una tarifa, un certificat). Nul = sense data.
+    * `verification_status`: si hi ha evidencia verificada (decisio humana).
+    * `lifecycle`: `current` compta; `in_progress` i `retired`, no.
+    """
+
+    knowledge_origin: Mapped[KnowledgeOrigin] = mapped_column(
+        enum_column(KnowledgeOrigin, "knowledge_origin"),
+        nullable=False,
+        default=KnowledgeOrigin.DECLARED,
+        server_default=KnowledgeOrigin.DECLARED.value,
+    )
+    as_of: Mapped[date] = mapped_column(
+        sa.Date, nullable=False, default=date.today, server_default=sa.text("CURRENT_DATE")
+    )
+    valid_until: Mapped[date | None] = mapped_column(sa.Date)
+    verification_status: Mapped[VerificationStatus] = mapped_column(
+        enum_column(VerificationStatus, "verification_status"),
+        nullable=False,
+        default=VerificationStatus.PENDING_VERIFICATION,
+        server_default=VerificationStatus.PENDING_VERIFICATION.value,
+    )
+    lifecycle: Mapped[KnowledgeLifecycle] = mapped_column(
+        enum_column(KnowledgeLifecycle, "knowledge_lifecycle"),
+        nullable=False,
+        default=KnowledgeLifecycle.CURRENT,
+        server_default=KnowledgeLifecycle.CURRENT.value,
+    )
+
+
+def _company_fk() -> Mapped[uuid.UUID]:
+    return mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+
+
+def _service_line_fk(nullable: bool) -> Any:
+    return mapped_column(
+        sa.String(40),
+        sa.ForeignKey("service_lines.code", ondelete="RESTRICT"),
+        nullable=nullable,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Estat actual                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+class CompanyOperatingFact(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
+    """Un fet de l'empresa que no te lloc a cap altra taula (operador CNMC, NRN...)."""
+
+    __tablename__ = "company_operating_facts"
+    __table_args__ = (
+        *provenance_constraints(),
+        sa.CheckConstraint(in_values("key", OperatingFactKey), name="key_valid"),
+        sa.UniqueConstraint("company_id", "key", name="uq_company_operating_facts_key"),
+    )
+
+    company_id: Mapped[uuid.UUID] = _company_fk()
+    key: Mapped[OperatingFactKey] = mapped_column(
+        enum_column(OperatingFactKey, "operating_fact_key"), nullable=False
+    )
+    value: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    #: Aclariment curt ("CPD propi a un centre Tier-3"). Mai imports ni condicions comercials.
+    detail: Mapped[str | None] = mapped_column(sa.String(500))
+
+
+class CompanySolution(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
+    """Com l'empresa dona un servei: «centraleta cloud allotjada al CPD propi», per exemple."""
+
+    __tablename__ = "company_solutions"
+    __table_args__ = (
+        *provenance_constraints(),
+        sa.UniqueConstraint("company_id", "name", name="uq_company_solutions_name"),
+        sa.UniqueConstraint("id", "company_id", name="uq_company_solutions_id_company"),
+    )
+
+    company_id: Mapped[uuid.UUID] = _company_fk()
+    service_line_code: Mapped[str] = _service_line_fk(nullable=False)
+    name: Mapped[str] = mapped_column(sa.String(160), nullable=False)
+    vendor: Mapped[str | None] = mapped_column(sa.String(160))
+    #: La llicencia importa: una funcio pot ser nomes d'una edicio.
+    edition: Mapped[str | None] = mapped_column(sa.String(80))
+
+
+class SolutionCapability(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
+    """Que fa una solucio respecte d'una capacitat del vocabulari.
+
+    L'absencia de fila vol dir **desconegut**, no "no ho fa". Per dir que no ho
+    fa hi ha `not_supported`.
+    """
+
+    __tablename__ = "solution_capabilities"
+    __table_args__ = (
+        *provenance_constraints(),
+        sa.CheckConstraint(in_values("status", CapabilityStatus), name="status_valid"),
+        sa.UniqueConstraint(
+            "solution_id", "capability_code", name="uq_solution_capabilities_capability"
+        ),
+        sa.ForeignKeyConstraint(
+            ["solution_id", "company_id"],
+            ["company_solutions.id", "company_solutions.company_id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    company_id: Mapped[uuid.UUID] = _company_fk()
+    solution_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    capability_code: Mapped[str] = mapped_column(
+        sa.String(80),
+        sa.ForeignKey("capability_definitions.code", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[CapabilityStatus] = mapped_column(
+        enum_column(CapabilityStatus, "capability_status"), nullable=False
+    )
+    #: Per a capacitats `number` (canals, minuts...).
+    value_number: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 4))
+    #: Per a capacitats `ordinal` (un valor de l'escala del vocabulari).
+    value_level: Mapped[str | None] = mapped_column(sa.String(20))
+    limits_note: Mapped[str | None] = mapped_column(sa.Text)
+
+
+class CompanyProduct(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
+    """Un producte que l'empresa fa servir o homologa. Sense preus: no toca encara."""
+
+    __tablename__ = "company_products"
+    __table_args__ = (
+        *provenance_constraints(),
+        sa.UniqueConstraint(
+            "company_id", "manufacturer", "model", name="uq_company_products_model"
+        ),
+        sa.UniqueConstraint("id", "company_id", name="uq_company_products_id_company"),
+    )
+
+    company_id: Mapped[uuid.UUID] = _company_fk()
+    manufacturer: Mapped[str] = mapped_column(sa.String(120), nullable=False)
+    model: Mapped[str] = mapped_column(sa.String(160), nullable=False)
+    service_line_code: Mapped[str | None] = _service_line_fk(nullable=True)
+
+
+class SolutionProduct(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
+    """Un producte compatible o homologat per a una solucio."""
+
+    __tablename__ = "solution_products"
+    __table_args__ = (
+        *provenance_constraints(),
+        sa.UniqueConstraint("solution_id", "product_id", name="uq_solution_products_pair"),
+        sa.ForeignKeyConstraint(
+            ["solution_id", "company_id"],
+            ["company_solutions.id", "company_solutions.company_id"],
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["product_id", "company_id"],
+            ["company_products.id", "company_products.company_id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    company_id: Mapped[uuid.UUID] = _company_fk()
+    solution_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+
+
+class CompanyPartner(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
+    """Un tercer: proveidor, operador majorista, subcontractista, soci...
+
+    Una sola taula per a tots: el mateix tercer sovint fa diversos papers, i el que
+    en diu que fa es a `partner_roles`. Sense condicions economiques.
+    """
+
+    __tablename__ = "company_partners"
+    __table_args__ = (
+        *provenance_constraints(),
+        sa.UniqueConstraint("company_id", "name", name="uq_company_partners_name"),
+        sa.UniqueConstraint("id", "company_id", name="uq_company_partners_id_company"),
+    )
+
+    company_id: Mapped[uuid.UUID] = _company_fk()
+    name: Mapped[str] = mapped_column(sa.String(200), nullable=False)
+    tax_id: Mapped[str | None] = mapped_column(sa.String(32))
+
+
+class PartnerRoleRow(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
+    __tablename__ = "partner_roles"
+    __table_args__ = (
+        *provenance_constraints(),
+        sa.CheckConstraint(in_values("role", PartnerRole), name="role_valid"),
+        sa.ForeignKeyConstraint(
+            ["partner_id", "company_id"],
+            ["company_partners.id", "company_partners.company_id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    company_id: Mapped[uuid.UUID] = _company_fk()
+    partner_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    role: Mapped[PartnerRole] = mapped_column(
+        enum_column(PartnerRole, "partner_role"), nullable=False
+    )
+    service_line_code: Mapped[str | None] = _service_line_fk(nullable=True)
+    territory: Mapped[str | None] = mapped_column(sa.String(160))
+
+
+# --------------------------------------------------------------------------- #
+# Historic                                                                     #
+# --------------------------------------------------------------------------- #
+
+
+class HistoricBid(UUIDPrimaryKeyMixin, Base):
+    """Una licitacio analitzada en el passat. Nomes dades publiques i la decisio.
+
+    Sense oferta, baixa ni marge: son dades confidencials i aquesta iteracio no
+    les necessita.
+    """
+
+    __tablename__ = "historic_bids"
+    __table_args__ = (
+        sa.CheckConstraint(in_values("decision", HistoricBidDecision), name="decision_valid"),
+        sa.CheckConstraint(in_values("result", HistoricBidResult), name="result_valid"),
+        sa.UniqueConstraint("company_id", "reference", name="uq_historic_bids_reference"),
+    )
+
+    company_id: Mapped[uuid.UUID] = _company_fk()
+    #: Identificador de l'expedient a l'origen (la carpeta, per exemple).
+    reference: Mapped[str] = mapped_column(sa.String(300), nullable=False)
+    buyer_name: Mapped[str | None] = mapped_column(sa.String(300))
+    bid_date: Mapped[date | None] = mapped_column(sa.Date)
+    service_line_codes: Mapped[list[str] | None] = mapped_column(JSONDocument)
+    #: Pressupost base de licitacio (public).
+    base_budget: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 2))
+    decision: Mapped[HistoricBidDecision] = mapped_column(
+        enum_column(HistoricBidDecision, "historic_bid_decision"), nullable=False
+    )
+    decision_reason: Mapped[str | None] = mapped_column(sa.Text)
+    result: Mapped[HistoricBidResult] = mapped_column(
+        enum_column(HistoricBidResult, "historic_bid_result"),
+        nullable=False,
+        default=HistoricBidResult.UNKNOWN,
+    )
+    source_ref: Mapped[str | None] = mapped_column(sa.String(500))
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
+
+class KnowledgeObservation(UUIDPrimaryKeyMixin, Base):
+    """El que l'historic diu de l'empresa. Un suggeriment, mai coneixement actual.
+
+    Porta una `proposal` amb la forma exacta de la fila que en naixeria si una
+    persona la promogues (`app/knowledge/proposals.py`). Promoure-la es un acte
+    humà; aquesta taula no en te cap cami automatic.
+    """
+
+    __tablename__ = "knowledge_observations"
+    __table_args__ = (
+        sa.CheckConstraint(in_values("subject", ObservationSubject), name="subject_valid"),
+        sa.CheckConstraint(in_values("status", ObservationStatus), name="status_valid"),
+        sa.CheckConstraint(
+            "status <> 'promoted' OR promoted_entity_id IS NOT NULL", name="promoted_has_target"
+        ),
+        sa.CheckConstraint(
+            "status = 'candidate' OR reviewed_at IS NOT NULL", name="reviewed_has_date"
+        ),
+        sa.Index("ix_knowledge_observations_scope", "company_id", "subject", "status"),
+    )
+
+    company_id: Mapped[uuid.UUID] = _company_fk()
+    historic_bid_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("historic_bids.id", ondelete="SET NULL")
+    )
+    subject: Mapped[ObservationSubject] = mapped_column(
+        enum_column(ObservationSubject, "observation_subject"), nullable=False
+    )
+    #: La clau de coneixement de que parla ("ENS", "datacenter_tier3", el nom d'una solucio).
+    subject_key: Mapped[str] = mapped_column(sa.String(160), nullable=False)
+    #: Que diu l'historic, en una frase. Mai imports ni condicions comercials.
+    statement: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    proposal: Mapped[dict[str, Any]] = mapped_column(JSONDocument, nullable=False)
+    observed_on: Mapped[date | None] = mapped_column(sa.Date)
+    source_ref: Mapped[str | None] = mapped_column(sa.String(500))
+    status: Mapped[ObservationStatus] = mapped_column(
+        enum_column(ObservationStatus, "observation_status"),
+        nullable=False,
+        default=ObservationStatus.CANDIDATE,
+    )
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    review_note: Mapped[str | None] = mapped_column(sa.Text)
+    #: Quina fila de coneixement actual en va neixer en promoure-la.
+    promoted_entity_type: Mapped[str | None] = mapped_column(sa.String(40))
+    promoted_entity_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )

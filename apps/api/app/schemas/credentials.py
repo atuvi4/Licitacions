@@ -6,11 +6,14 @@ from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
+from app.knowledge.vocabulary import SERVICE_LINE_CODES, validate_level
 from app.models.enums import (
     InsuranceLimitKind,
     InsuranceType,
+    KnowledgeLifecycle,
+    KnowledgeOrigin,
     RegistrationType,
     VerificationStatus,
 )
@@ -36,6 +39,32 @@ class CertificationBase(_DateOrderMixin):
     expires_at: date | None = None
     verification_status: VerificationStatus | None = None
     notes: str | None = None
+    #: Norma i nivell del vocabulari global (`ENS` + `medium`). Opcionals: una
+    #: certificacio sense norma continua existint, pero el motor nomes la pot
+    #: comparar pel nom.
+    standard_code: str | None = Field(default=None, max_length=40)
+    level: str | None = Field(default=None, max_length=20)
+    as_of: date | None = None
+    lifecycle: KnowledgeLifecycle | None = None
+    #: Abast ESTRUCTURAT: linies de servei que cobreix. El text de `scope` es nomes
+    #: una nota; el motor no en dedueix cobertura.
+    scope_service_lines: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("scope_service_lines")
+    @classmethod
+    def _known_service_lines(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        unknown = sorted(set(value) - SERVICE_LINE_CODES)
+        if unknown:
+            raise ValueError(f"Linies de servei desconegudes: {', '.join(unknown)}.")
+        return sorted(set(value))
+
+    @model_validator(mode="after")
+    def _level_of_standard(self):
+        if self.standard_code is not None or self.level is not None:
+            validate_level(self.standard_code, self.level)
+        return self
 
 
 class CertificationCreate(CertificationBase):
@@ -55,6 +84,12 @@ class CertificationRead(AuditFields, ExpirableMixin):
     issued_at: date | None = None
     verification_status: VerificationStatus
     notes: str | None = None
+    standard_code: str | None = None
+    level: str | None = None
+    scope_service_lines: list[str] | None = None
+    knowledge_origin: KnowledgeOrigin
+    as_of: date
+    lifecycle: KnowledgeLifecycle
 
 
 class RegistrationBase(_DateOrderMixin):

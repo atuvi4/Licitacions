@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from decimal import Decimal
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
-from app.models.enums import SpecializationLevel, TerritoryType
+from app.knowledge.vocabulary import SERVICE_LINE_CODES
+from app.models.enums import (
+    DeliveryMode,
+    KnowledgeOrigin,
+    SpecializationLevel,
+    TerritoryType,
+    VerificationStatus,
+)
 from app.schemas.common import APIModel, AuditFields
 
 CURRENT_YEAR_MAX = 2200
@@ -20,6 +28,25 @@ class ServiceBase(APIModel):
     specialization_level: SpecializationLevel | None = None
     active: bool | None = None
     notes: str | None = None
+    #: Linia del vocabulari global: el que permet comparar-lo amb un plec.
+    service_line_code: str | None = Field(default=None, max_length=40)
+    delivery_mode: DeliveryMode | None = None
+    as_of: date | None = None
+    valid_until: date | None = None
+    verification_status: VerificationStatus | None = None
+
+    @field_validator("service_line_code")
+    @classmethod
+    def _known_service_line(cls, value: str | None) -> str | None:
+        if value is not None and value not in SERVICE_LINE_CODES:
+            raise ValueError(f"Linia de servei desconeguda: {value}.")
+        return value
+
+    @model_validator(mode="after")
+    def _validity_after_as_of(self):
+        if self.as_of and self.valid_until and self.valid_until < self.as_of:
+            raise ValueError("`valid_until` no pot ser anterior a `as_of`.")
+        return self
 
 
 class ServiceCreate(ServiceBase):
@@ -39,6 +66,12 @@ class ServiceRead(AuditFields):
     specialization_level: SpecializationLevel | None = None
     active: bool
     notes: str | None = None
+    service_line_code: str | None = None
+    delivery_mode: DeliveryMode | None = None
+    knowledge_origin: KnowledgeOrigin
+    as_of: date
+    valid_until: date | None = None
+    verification_status: VerificationStatus
 
 
 class TerritoryBase(APIModel):

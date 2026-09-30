@@ -92,6 +92,11 @@ PUBLIC_TABLES = frozenset(
         "buyers",
         "companies",
         "cpv_codes",
+        # Vocabularis globals del coneixement (fase 2 del motor): el llenguatge
+        # comu entre plecs i empreses. Nomes els canvia una migracio.
+        "capability_definitions",
+        "certification_standards",
+        "service_lines",
         "ingestion_runs",
         "source_records",
         "sources",

@@ -23,6 +23,7 @@ from app.api.v1.routers import (
     insurance_limits,
     issues,
     job_requests,
+    knowledge,
     matching,
     people,
     platform,
@@ -81,6 +82,8 @@ company_scoped.include_router(review.router)
 # documental (independent del canal).
 company_scoped.include_router(receptions.router)
 company_scoped.include_router(document_classification.router)
+# Motor d'analisi, fase 2: coneixement actual de l'empresa i historic.
+company_scoped.include_router(knowledge.router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

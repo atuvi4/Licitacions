@@ -161,6 +161,26 @@ la licitació, vingui del canal que vingui. El detall és a
 Les filles referencien el pare per `(id, company_id)`. Tots els enums d'aquestes
 taules porten CHECK a la base.
 
+## Coneixement de l'empresa (fase 2)
+
+El detall és a [`knowledge.md`](knowledge.md).
+
+| Taula | Notes |
+| --- | --- |
+| `service_lines`, `capability_definitions`, `certification_standards` | **Globals** (sense `company_id`). Els omple la migració `0045` a partir de `app/knowledge/vocabulary.py`; cap API no hi escriu. |
+| `company_operating_facts` | Fets clau tancats (`key`), un per empresa i clau, amb valor booleà i procedència. |
+| `company_solutions`, `solution_capabilities` | Com es dona un servei i què en fa cada capacitat del vocabulari. Sense fila = desconegut. |
+| `company_products`, `solution_products` | Productes (sense preus) i quins van amb cada solució. |
+| `company_partners`, `partner_roles` | Tercers i els seus papers (sense condicions econòmiques). |
+| `company_services` (ampliada) | `service_line_code`, `delivery_mode` i procedència; `active` fa de cicle de vida. |
+| `company_certifications` (ampliada) | `standard_code`, `level`, `scope_service_lines` (abast estructurat), `knowledge_origin`, `as_of`, `lifecycle`; `verification_status` i `expires_at` ja hi eren. `verified` només amb evidència enllaçada. |
+| `historic_bids` | Licitacions passades: només dades públiques i la decisió. |
+| `knowledge_observations` | Suggeriments de l'històric amb la proposta de fila; `candidate` → `promoted` / `dismissed`, sempre per una persona. |
+
+Totes les taules d'estat actual porten `knowledge_origin`, `as_of`,
+`valid_until`, `verification_status` i `lifecycle` (o l'equivalent que ja hi
+havia). Les filles referencien el pare per `(id, company_id)`.
+
 ## Pre-fit (tenant)
 
 Aquí és on es creuen les dues meitats del model: el perfil corporatiu (privat) i

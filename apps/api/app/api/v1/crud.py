@@ -62,7 +62,11 @@ def build_crud_router(
     entity_type: LinkedEntityType | None = None,
     conflict_message: str = "Ja existeix un registre equivalent.",
     pre_delete: Callable[[AsyncSession, Any], Awaitable[None]] | None = None,
+    validate: Callable[[AsyncSession, Any, uuid.UUID], Awaitable[None]] | None = None,
 ) -> APIRouter:
+    """`validate(session, instance, company_id)` s'executa abans de desar una alta o
+    una modificacio, amb els canvis ja aplicats. Serveix per a regles que no es
+    poden expressar a l'esquema (p. ex. "verificat nomes amb evidencia")."""
     router = APIRouter(prefix=prefix, tags=[tag])
     ordering = list(order_by) if order_by is not None else [model.created_at.desc()]
 
@@ -89,6 +93,8 @@ def build_crud_router(
             **payload.model_dump(exclude_unset=True),
         )
         session.add(instance)
+        if validate is not None:
+            await validate(session, instance, ctx.company_id)
         await _commit(session, conflict_message)
         await session.refresh(instance)
         await audit.record(
@@ -115,6 +121,8 @@ def build_crud_router(
     ):
         instance = await get_owned_or_404(session, model, item_id, ctx.company_id)
         apply_changes(instance, payload, ctx.user_id)
+        if validate is not None:
+            await validate(session, instance, ctx.company_id)
         await _commit(session, conflict_message)
         await session.refresh(instance)
         await audit.record(

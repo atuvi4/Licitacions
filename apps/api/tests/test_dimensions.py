@@ -423,7 +423,10 @@ async def test_an_observation_cannot_be_edited_or_deleted(client_a, candidacy):
     """No és cap oblit: diu què deia una font el dia que algú ho va llegir."""
     from app.main import app
 
-    paths = [p for p in app.openapi()["paths"] if "observations" in p]
+    # Nomes les observacions d'una dimensio: les del coneixement de l'empresa
+    # (`/knowledge/observations`) son una altra cosa i si que es revisen.
+    paths = [p for p in app.openapi()["paths"] if "/dimensions/" in p and "observations" in p]
+    assert paths, "la ruta de les observacions d'una dimensio ha d'existir"
     methods = {
         method
         for path in paths

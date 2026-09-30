@@ -144,6 +144,15 @@ class LinkedEntityType(StrEnum):
     COMPANY_PERSON = "company_person"
     PERSON_QUALIFICATION = "person_qualification"
     COMPANY_PROJECT = "company_project"
+    # Coneixement de l'empresa (fase 2 del motor): l'evidencia que permet
+    # verificar-lo. Cap valor passa dels 22 caracters de la columna.
+    COMPANY_OPERATING_FACT = "company_operating_fact"
+    COMPANY_SOLUTION = "company_solution"
+    SOLUTION_CAPABILITY = "solution_capability"
+    COMPANY_PRODUCT = "company_product"
+    SOLUTION_PRODUCT = "solution_product"
+    COMPANY_PARTNER = "company_partner"
+    PARTNER_ROLE = "partner_role"
 
 
 class RelationshipType(StrEnum):
@@ -1320,3 +1329,109 @@ class ReviewRelationType(StrEnum):
     PARTIAL_MATCH_OF = "partial_match_of"
     SUPERSEDES = "supersedes"
     RELATED_TO = "related_to"
+
+
+# ---------------------------------------------------------------------------
+# Motor d'analisi, fase 2: coneixement de l'empresa.
+#
+# Dues naturaleses que no es barregen: l'ESTAT ACTUAL (el que l'empresa es i pot
+# fer avui, amb procedencia) i l'HISTORIC (el que va fer o dir en licitacions
+# passades). L'historic nomes suggereix: mai no acredita res.
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeOrigin(StrEnum):
+    """Qui afirma una dada del coneixement actual."""
+
+    #: Una persona de l'empresa l'ha declarada.
+    DECLARED = "declared"
+    #: Una persona ha validat una observacio de l'historic i l'ha promoguda.
+    PROMOTED_OBSERVATION = "promoted_observation"
+
+
+class KnowledgeLifecycle(StrEnum):
+    CURRENT = "current"
+    #: En tramit (una certificacio que s'esta obtenint): no compta, genera una pregunta.
+    IN_PROGRESS = "in_progress"
+    #: Ja no es aixi (una solucio que s'ha deixat d'oferir): no compta.
+    RETIRED = "retired"
+
+
+class CapabilityValueType(StrEnum):
+    BOOLEAN = "boolean"
+    NUMBER = "number"
+    #: Un valor d'una escala ordenada (PoE af < at < bt).
+    ORDINAL = "ordinal"
+
+
+class CapabilityComparator(StrEnum):
+    #: Booleana: cal que estigui suportada.
+    IS_TRUE = "is_true"
+    GTE = "gte"
+    LTE = "lte"
+
+
+class OperatingFactKey(StrEnum):
+    """Fets de l'empresa que avui no tenen cap altre lloc al perfil."""
+
+    TELECOM_OPERATOR_CNMC = "telecom_operator_cnmc"
+    OWN_NUMBER_RANGE_NRN = "own_number_range_nrn"
+    DATACENTER_TIER3 = "datacenter_tier3"
+    OWN_FTTH_INFRASTRUCTURE = "own_ftth_infrastructure"
+    SUPPORT_24X7 = "support_24x7"
+
+
+class CapabilityStatus(StrEnum):
+    SUPPORTED = "supported"
+    SUPPORTED_WITH_LIMITS = "supported_with_limits"
+    NOT_SUPPORTED = "not_supported"
+
+
+class DeliveryMode(StrEnum):
+    OWN = "own"
+    PARTNER = "partner"
+    SUBCONTRACT = "subcontract"
+    RESALE = "resale"
+
+
+class PartnerRole(StrEnum):
+    SUPPLIER = "supplier"
+    WHOLESALE_OPERATOR = "wholesale_operator"
+    SUBCONTRACTOR = "subcontractor"
+    COMMERCIAL_PARTNER = "commercial_partner"
+    BID_WRITER = "bid_writer"
+    ADVISOR = "advisor"
+
+
+class HistoricBidDecision(StrEnum):
+    SUBMITTED = "submitted"
+    #: Hi ha oferta preparada pero cap nota no confirma que es presentes.
+    PREPARED = "prepared"
+    NOT_SUBMITTED = "not_submitted"
+    UNDECIDED = "undecided"
+
+
+class HistoricBidResult(StrEnum):
+    WON = "won"
+    LOST = "lost"
+    UNKNOWN = "unknown"
+
+
+class ObservationSubject(StrEnum):
+    """De que parla una observacio: a quina part del coneixement actual es podria promoure."""
+
+    OPERATING_FACT = "operating_fact"
+    CERTIFICATION = "certification"
+    SERVICE = "service"
+    SOLUTION = "solution"
+    PRODUCT = "product"
+    PARTNER = "partner"
+
+
+class ObservationStatus(StrEnum):
+    #: Suggeriment de l'historic. No es coneixement actual.
+    CANDIDATE = "candidate"
+    #: Una persona l'ha validat: n'ha nascut coneixement actual traçable.
+    PROMOTED = "promoted"
+    #: Una persona l'ha descartat (ja no es aixi, o no s'hi pot fer res).
+    DISMISSED = "dismissed"

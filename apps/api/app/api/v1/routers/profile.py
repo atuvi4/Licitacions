@@ -14,6 +14,7 @@ from app.schemas.profile import (
     TerritoryRead,
     TerritoryUpdate,
 )
+from app.services.knowledge_evidence import require_evidence_if_verified
 
 services_router = build_crud_router(
     model=CompanyService,
@@ -26,6 +27,8 @@ services_router = build_crud_router(
     order_by=[CompanyService.name],
     entity_type=LinkedEntityType.COMPANY_SERVICE,
     conflict_message="Ja existeix un servei amb aquest nom.",
+    # Verificat nomes amb evidencia enllacada (coneixement de l'empresa, fase 2).
+    validate=require_evidence_if_verified,
 )
 
 territories_router = build_crud_router(

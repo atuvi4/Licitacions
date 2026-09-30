@@ -1,7 +1,8 @@
 # Motor d'anàlisi de licitacions noves
 
-> Estat: **disseny v0 aprovat**. Fase 1 implementada ([intake.md](intake.md)); la
-> resta, sense implementar. Data: 2026-09-29.
+> Estat: **disseny v0 aprovat**. Fase 1 implementada ([intake.md](intake.md)).
+> Fase 2 implementada ([knowledge.md](knowledge.md)). La resta, sense
+> implementar. Data: 2026-09-30.
 > Primer client: Indaleccius. Cas pilot: Ajuntament de l'Escala, *Telecomunicacions
 > 2027* (fitxa del pilot a `var/knowledge/indaleccius/pilot_lescala_2026.md`,
 > fora de git perquè creua el plec amb dades internes de l'empresa).
@@ -492,7 +493,7 @@ Criteris d'acceptació del pilot:
 | Fase | Contingut | Depèn de |
 | --- | --- | --- |
 | 1 ✔ | Recepció (canal ZIP) i classificació documental independent del canal (inclosos duplicats i títols enganyosos). **Fet**: [intake.md](intake.md). El parser XLSX citable queda pendent: ara un XLSX es classifica però no s'analitza. | — |
-| 2 | Coneixement actual: taxonomia, capacitats, solucions, productes, socis, polítiques i fets. Importació revisada de l'històric i observacions. | Dades d'Indaleccius (§10) |
+| 2 ✔ | Coneixement actual: vocabularis, fets, serveis, certificacions, solucions, capacitats, productes i tercers, amb procedència. Històric mínim (licitacions i observacions) i promoció manual. KnowledgeSnapshot. **Fet**: [knowledge.md](knowledge.md). Queden fora: preus i polítiques (`company_policies`, `product_prices`), `historic_bid_lines`. | Dades d'Indaleccius (§10) |
 | 3 | Metadades del contracte i abast (prompts nous, amb `fake` fins que es desbloquegi el pressupost). | 1 |
 | 4 | Regles de capacitat, canal, criteris assolibles, temeritat i riscos. FitScore. | 2, 3 |
 | 5 | Informe (plantilla determinista primer; LLM després) i ProposalDraft → *Adoptar* al workspace. | 4 |

@@ -17,6 +17,15 @@ from app.models.credentials import CompanyCertification, CompanyInsurance, Compa
 from app.models.documents import DocumentLink
 from app.models.enums import LinkedEntityType
 from app.models.identity import Company
+from app.models.knowledge import (
+    CompanyOperatingFact,
+    CompanyPartner,
+    CompanyProduct,
+    CompanySolution,
+    PartnerRoleRow,
+    SolutionCapability,
+    SolutionProduct,
+)
 from app.models.people import CompanyPerson, PersonQualification
 from app.models.profile import CompanyFinancialYear, CompanyService
 from app.models.projects import CompanyProject
@@ -30,6 +39,14 @@ _DIRECT_MODELS = {
     LinkedEntityType.COMPANY_INSURANCE: CompanyInsurance,
     LinkedEntityType.COMPANY_PERSON: CompanyPerson,
     LinkedEntityType.COMPANY_PROJECT: CompanyProject,
+    # Coneixement de l'empresa (fase 2 del motor).
+    LinkedEntityType.COMPANY_OPERATING_FACT: CompanyOperatingFact,
+    LinkedEntityType.COMPANY_SOLUTION: CompanySolution,
+    LinkedEntityType.SOLUTION_CAPABILITY: SolutionCapability,
+    LinkedEntityType.COMPANY_PRODUCT: CompanyProduct,
+    LinkedEntityType.SOLUTION_PRODUCT: SolutionProduct,
+    LinkedEntityType.COMPANY_PARTNER: CompanyPartner,
+    LinkedEntityType.PARTNER_ROLE: PartnerRoleRow,
 }
 
 

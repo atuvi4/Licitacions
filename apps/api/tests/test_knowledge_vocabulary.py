@@ -1,0 +1,156 @@
+"""Vocabularis globals del coneixement: tancats, genèrics i iguals a la migracio."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+import pytest
+import sqlalchemy as sa
+
+from app.knowledge.vocabulary import (
+    CAPABILITIES,
+    CERTIFICATION_STANDARDS,
+    SERVICE_LINE_CODES,
+    SERVICE_LINES,
+    seed_vocabulary,
+    validate_level,
+)
+from app.models.enums import CapabilityComparator, CapabilityValueType
+from app.models.knowledge import CapabilityDefinitionRow, CertificationStandardRow, ServiceLineRow
+
+API_ROOT = Path(__file__).resolve().parents[1]
+MIGRATION = API_ROOT / "alembic" / "versions" / "0045_company_knowledge.py"
+
+
+def _migration():
+    spec = importlib.util.spec_from_file_location("m0045", MIGRATION)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+def test_the_pilot_needs_are_covered():
+    assert {
+        "voice_pbx",
+        "voice_trunk",
+        "access_ftth",
+        "dedicated_network",
+        "radio_link",
+        "network_switching",
+        "fiber_deployment",
+        "civil_works",
+        "support_ops",
+    } <= SERVICE_LINE_CODES
+    assert {c.code for c in CAPABILITIES} == {
+        "pbx.concurrent_calls",
+        "pbx.ivr_multilevel",
+        "pbx.queues",
+        "pbx.blf",
+        "pbx.call_park",
+        "pbx.voicemail_email",
+        "pbx.cdr_export",
+        "pbx.recording_policy",
+        "pbx.tls_srtp",
+        "pbx.fraud_block",
+        "pbx.outbound_number_select",
+        "pbx.extra_softphones_free",
+        "pbx.queue_callback_keep_position",
+        "pbx.hot_desking",
+        "switch.poe_standard",
+        "switch.mlag",
+        "fiber.otdr_level",
+        "ops.sla_response_minutes",
+        "ops.sla_restore_hours",
+    }
+    assert {s.code: s.levels for s in CERTIFICATION_STANDARDS} == {
+        "ENS": ("basic", "medium", "high"),
+        "ISO_9001": None,
+        "ISO_14001": None,
+        "ISO_27001": None,
+    }
+
+
+def test_every_definition_is_coherent():
+    for cap in CAPABILITIES:
+        assert cap.service_line_code in SERVICE_LINE_CODES, cap.code
+        if cap.value_type == CapabilityValueType.BOOLEAN:
+            assert cap.comparator == CapabilityComparator.IS_TRUE, cap.code
+        else:
+            assert cap.comparator != CapabilityComparator.IS_TRUE, cap.code
+        assert (cap.value_type == CapabilityValueType.ORDINAL) == (cap.ordinal_scale is not None)
+
+
+def test_the_migration_seeds_exactly_this_vocabulary():
+    migration = _migration()
+    assert migration._SERVICE_LINES == tuple((s.code, s.label) for s in SERVICE_LINES)
+    assert migration._CAPABILITIES == tuple(
+        (
+            c.code,
+            c.service_line_code,
+            c.label,
+            str(c.value_type),
+            str(c.comparator),
+            c.unit,
+            list(c.ordinal_scale) if c.ordinal_scale else None,
+        )
+        for c in CAPABILITIES
+    )
+    assert migration._STANDARDS == tuple(
+        (s.code, s.label, list(s.levels) if s.levels else None) for s in CERTIFICATION_STANDARDS
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        API_ROOT / "app" / "knowledge" / "vocabulary.py",
+        MIGRATION,
+        API_ROOT / "app" / "models" / "knowledge.py",
+    ],
+)
+def test_no_company_is_hardcoded_in_the_global_layer(path):
+    text = path.read_text(encoding="utf-8").lower()
+    for name in ("indaleccius", "inatic", "templus", "3cx", "freepbx", "yealink", "sewan"):
+        assert name not in text, (path.name, name)
+
+
+def test_no_route_can_create_vocabulary():
+    from app.main import app
+
+    paths = {getattr(route, "path", "") for route in app.routes}
+    for fragment in (
+        "service-lines",
+        "capability-definitions",
+        "certification-standards",
+        "service_lines",
+        "capability_definitions",
+        "certification_standards",
+    ):
+        assert not [p for p in paths if fragment in p], fragment
+
+
+def test_levels_belong_to_their_standard():
+    validate_level("ENS", "medium")
+    validate_level("ISO_9001", None)
+    for standard, level in (
+        ("ENS", "altissim"),
+        ("ISO_9001", "high"),
+        (None, "high"),
+        ("ISO_45001", None),
+    ):
+        with pytest.raises(ValueError):
+            validate_level(standard, level)
+
+
+async def test_seeding_is_idempotent(db):
+    await seed_vocabulary(db)
+    await seed_vocabulary(db)
+    await db.commit()
+    counts = [
+        await db.scalar(sa.select(sa.func.count()).select_from(model))
+        for model in (ServiceLineRow, CapabilityDefinitionRow, CertificationStandardRow)
+    ]
+    assert counts == [len(SERVICE_LINES), len(CAPABILITIES), len(CERTIFICATION_STANDARDS)]
+    poe = await db.get(CapabilityDefinitionRow, "switch.poe_standard")
+    assert poe.ordinal_scale == ["af", "at", "bt"]

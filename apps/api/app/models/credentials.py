@@ -25,9 +25,12 @@ from app.db.base import (
 from app.models.enums import (
     InsuranceLimitKind,
     InsuranceType,
+    KnowledgeLifecycle,
+    KnowledgeOrigin,
     RegistrationType,
     VerificationStatus,
 )
+from app.models.review import JSONDocument, in_values
 
 MONEY = sa.Numeric(18, 2)
 
@@ -35,11 +38,28 @@ MONEY = sa.Numeric(18, 2)
 class CompanyCertification(
     UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, Base
 ):
+    """Una certificacio de l'empresa. Tambe es coneixement actual (fase 2 del motor).
+
+    La procedencia fa servir el que ja hi havia: `verification_status` es la
+    verificacio i `expires_at` fa de `valid_until`. S'hi afegeix `knowledge_origin`,
+    `as_of` i `lifecycle` (una certificacio `in_progress` no acredita res), i la
+    norma i el nivell del vocabulari global (`ENS` + `medium`) i l'abast
+    estructurat (`scope_service_lines`), que son el que permet comparar-la amb un
+    plec sense dependre de text lliure.
+    """
+
     __tablename__ = "company_certifications"
     __table_args__ = (
         sa.CheckConstraint(
             "expires_at IS NULL OR issued_at IS NULL OR expires_at >= issued_at",
             name="certification_dates_order",
+        ),
+        sa.CheckConstraint(
+            in_values("knowledge_origin", KnowledgeOrigin), name="knowledge_origin_valid"
+        ),
+        sa.CheckConstraint(in_values("lifecycle", KnowledgeLifecycle), name="lifecycle_valid"),
+        sa.CheckConstraint(
+            "level IS NULL OR standard_code IS NOT NULL", name="level_needs_standard"
         ),
     )
 
@@ -55,6 +75,35 @@ class CompanyCertification(
         default=VerificationStatus.PENDING_VERIFICATION,
     )
     notes: Mapped[str | None] = mapped_column(sa.Text)
+    standard_code: Mapped[str | None] = mapped_column(
+        sa.String(40),
+        # Nom explicit: el de la convencio passaria dels 63 caracters de PostgreSQL.
+        sa.ForeignKey(
+            "certification_standards.code",
+            ondelete="RESTRICT",
+            name="fk_company_certifications_standard_code",
+        ),
+    )
+    level: Mapped[str | None] = mapped_column(sa.String(20))
+    #: Linies de servei que cobreix el certificat, del vocabulari global. Nul =
+    #: abast sense estructurar: el motor no el dedueix del text de `scope`, que es
+    #: queda com a nota.
+    scope_service_lines: Mapped[list[str] | None] = mapped_column(JSONDocument)
+    knowledge_origin: Mapped[KnowledgeOrigin] = mapped_column(
+        enum_column(KnowledgeOrigin, "knowledge_origin"),
+        nullable=False,
+        default=KnowledgeOrigin.DECLARED,
+        server_default=KnowledgeOrigin.DECLARED.value,
+    )
+    as_of: Mapped[date] = mapped_column(
+        sa.Date, nullable=False, default=date.today, server_default=sa.text("CURRENT_DATE")
+    )
+    lifecycle: Mapped[KnowledgeLifecycle] = mapped_column(
+        enum_column(KnowledgeLifecycle, "knowledge_lifecycle"),
+        nullable=False,
+        default=KnowledgeLifecycle.CURRENT,
+        server_default=KnowledgeLifecycle.CURRENT.value,
+    )
 
 
 class CompanyRegistration(
