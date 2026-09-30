@@ -28,6 +28,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 
 export type { ColumnDef } from "@tanstack/react-table";
 
+/** `meta: { align: "right" }` a una columna: xifres alineades a la dreta. */
+function alignClass(meta: unknown): string | undefined {
+  return (meta as { align?: string } | undefined)?.align === "right" ? "text-right tabular-nums" : undefined;
+}
+
 export interface SortableTableProps<T> {
   columns: Array<ColumnDef<T, unknown>>;
   data: T[];
@@ -39,6 +44,8 @@ export interface SortableTableProps<T> {
   initialSorting?: SortingState;
   getRowId?: (row: T) => string;
   emptyState?: ReactNode;
+  /** Text inicial de la cerca (p. ex. el que arriba per la URL). */
+  initialSearch?: string;
 }
 
 const SORT_LABEL = { asc: "ascendent", desc: "descendent" } as const;
@@ -52,9 +59,10 @@ export function SortableTable<T>({
   initialSorting = [],
   getRowId,
   emptyState = "Cap resultat.",
+  initialSearch = "",
 }: SortableTableProps<T>) {
   const [sorting, setSorting] = useState<SortingState>(initialSorting);
-  const [globalFilter, setGlobalFilter] = useState("");
+  const [globalFilter, setGlobalFilter] = useState(initialSearch);
   const table = useReactTable({
     data,
     columns,
@@ -102,6 +110,7 @@ export function SortableTable<T>({
                 return (
                   <TableHead
                     key={header.id}
+                    className={alignClass(header.column.columnDef.meta)}
                     aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : canSort ? "none" : undefined}
                   >
                     {canSort ? (
@@ -140,7 +149,9 @@ export function SortableTable<T>({
             rows.map((row) => (
               <TableRow key={row.id}>
                 {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                  <TableCell key={cell.id} className={alignClass(cell.column.columnDef.meta)}>
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </TableCell>
                 ))}
               </TableRow>
             ))

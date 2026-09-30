@@ -38,7 +38,7 @@ describe("On porta el login", () => {
   it("l'Administració Tuvi va a la seva àrea, no a l'app d'empresa", async () => {
     post.mockResolvedValue({ ...user, is_platform_admin: true, memberships: [] });
     await signIn();
-    expect(replace).toHaveBeenCalledWith("/plataforma/empreses/nova");
+    expect(replace).toHaveBeenCalledWith("/plataforma/empreses");
   });
 
   it("una contrasenya temporal es canvia primer, sigui qui sigui", async () => {

@@ -38,6 +38,9 @@ export {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "./dropdown-menu";
 export { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "./table";

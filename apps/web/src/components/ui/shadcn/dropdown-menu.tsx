@@ -8,6 +8,7 @@
  */
 
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
+import { ChevronRight } from "lucide-react";
 import type { ComponentProps } from "react";
 
 import { cn } from "../cn";
@@ -16,6 +17,34 @@ export const DropdownMenu = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 export const DropdownMenuGroup = DropdownMenuPrimitive.Group;
 export const DropdownMenuPortal = DropdownMenuPrimitive.Portal;
+export const DropdownMenuSub = DropdownMenuPrimitive.Sub;
+
+const ITEM_CLASS =
+  "relative flex min-h-9 cursor-default items-center gap-2 rounded-[4px] px-2.5 py-1.5 text-[13.5px] outline-none select-none data-[highlighted]:bg-subtle data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
+const PANEL_CLASS =
+  "animate-fade-in z-50 min-w-[11rem] overflow-hidden rounded-control border border-border bg-surface p-1 text-body text-ink shadow-dialog";
+
+/** Un submenú (p. ex. «Canviar estat ›»). */
+export function DropdownMenuSubTrigger({ className, children, ...props }: ComponentProps<typeof DropdownMenuPrimitive.SubTrigger>) {
+  return (
+    <DropdownMenuPrimitive.SubTrigger
+      data-slot="dropdown-menu-sub-trigger"
+      className={cn(ITEM_CLASS, "text-ink data-[state=open]:bg-subtle", className)}
+      {...props}
+    >
+      {children}
+      <ChevronRight size={14} aria-hidden className="ml-auto text-muted" />
+    </DropdownMenuPrimitive.SubTrigger>
+  );
+}
+
+export function DropdownMenuSubContent({ className, ...props }: ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+  return (
+    <DropdownMenuPortal>
+      <DropdownMenuPrimitive.SubContent data-slot="dropdown-menu-sub-content" className={cn(PANEL_CLASS, className)} {...props} />
+    </DropdownMenuPortal>
+  );
+}
 
 export function DropdownMenuContent({
   className,

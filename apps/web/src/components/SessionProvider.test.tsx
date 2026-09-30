@@ -35,7 +35,7 @@ describe("SessionProvider i l'alta", () => {
     get.mockImplementation((path: string) => Promise.resolve(path === "/auth/me" ? { ...base, is_platform_admin: true } : {}));
     render(<SessionProvider><p>app</p></SessionProvider>);
     await flush();
-    expect(replace).toHaveBeenCalledWith("/plataforma/empreses/nova");
+    expect(replace).toHaveBeenCalledWith("/plataforma/empreses");
     expect(get.mock.calls.map(([path]) => path)).toEqual(["/auth/me"]);
     expect(screen.queryByText("app")).toBeNull();
   });

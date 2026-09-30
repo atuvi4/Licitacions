@@ -23,6 +23,18 @@ class MembershipRole(StrEnum):
     VIEWER = "viewer"
 
 
+class CompanyPlatformStatus(StrEnum):
+    """Estat d'una empresa client vist per l'Administracio Tuvi.
+
+    De moment nomes es registra i s'audita: `paused` encara NO bloqueja l'acces
+    dels usuaris del client (fase posterior).
+    """
+
+    PILOT = "pilot"
+    ACTIVE = "active"
+    PAUSED = "paused"
+
+
 class SpecializationLevel(StrEnum):
     BASIC = "basic"
     INTERMEDIATE = "intermediate"

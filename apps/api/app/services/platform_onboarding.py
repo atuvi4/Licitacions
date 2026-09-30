@@ -18,18 +18,21 @@ from __future__ import annotations
 import secrets
 import string
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, ValidationError
 from app.core.security import MIN_PASSWORD_LENGTH, hash_password
-from app.models.enums import AuditAction, MembershipRole
+from app.models.enums import AuditAction, CompanyPlatformStatus, MembershipRole
 from app.models.identity import Company, CompanyMembership, User
 from app.services import audit
 
 TEMPORARY_PASSWORD_LENGTH = max(16, MIN_PASSWORD_LENGTH)
+#: Durada per defecte d'un pilot nou.
+DEFAULT_PILOT_DAYS = 60
 # Sense caracters que es confonen en llegir-los o dictar-los (0/O, 1/l/I).
 _ALPHABET = "".join(c for c in string.ascii_letters + string.digits if c not in "0O1lI")
 
@@ -57,6 +60,18 @@ def temporary_password() -> str:
             return candidate
 
 
+def today() -> date:
+    return datetime.now(UTC).date()
+
+
+def pilot_end(requested: date | None, *, starts: date) -> date:
+    """La fi d'un pilot: la demanada o 60 dies; mai abans d'avui ni de l'inici."""
+    end = requested or starts + timedelta(days=DEFAULT_PILOT_DAYS)
+    if end < today() or end < starts:
+        raise ValidationError("La fi del pilot no pot ser anterior a avui.")
+    return end
+
+
 def normalize_tax_id(value: str | None) -> str | None:
     if value is None:
         return None
@@ -73,9 +88,20 @@ async def onboard_company(
     tax_id: str | None,
     owner_email: str,
     owner_full_name: str,
+    initial_status: CompanyPlatformStatus = CompanyPlatformStatus.PILOT,
+    pilot_ends_at: date | None = None,
 ) -> OnboardedCompany:
     email = owner_email.strip().lower()
     tax = normalize_tax_id(tax_id)
+    if tax is None:
+        raise ValidationError("Cal el NIF de l'empresa.")
+    if initial_status == CompanyPlatformStatus.PAUSED:
+        raise ValidationError("Una empresa nova comenca en pilot o activa.")
+    if initial_status != CompanyPlatformStatus.PILOT and pilot_ends_at is not None:
+        raise ValidationError("La fi del pilot nomes s'indica per a un pilot.")
+    starts = today()
+    is_pilot = initial_status == CompanyPlatformStatus.PILOT
+    ends = pilot_end(pilot_ends_at, starts=starts) if is_pilot else None
 
     taken = await session.scalar(sa.select(User.id).where(sa.func.lower(User.email) == email))
     if taken is not None:
@@ -95,7 +121,16 @@ async def onboard_company(
         is_active=True,
         must_change_password=True,
     )
-    company = Company(legal_name=legal_name, trade_name=trade_name or None, tax_id=tax)
+    company = Company(
+        legal_name=legal_name,
+        trade_name=trade_name or None,
+        tax_id=tax,
+        platform_status=initial_status,
+        pilot_started_at=starts if ends else None,
+        pilot_ends_at=ends,
+        status_changed_at=datetime.now(UTC),
+        onboarded_by=admin.id,
+    )
     session.add_all([owner, company])
     try:
         await session.flush()
@@ -115,7 +150,11 @@ async def onboard_company(
         user_id=admin.id,
         entity_type="companies",
         entity_id=company.id,
-        summary="Empresa donada d'alta per la plataforma",
+        summary=(
+            f"Empresa donada d'alta en pilot fins al {ends.isoformat()}"
+            if ends
+            else "Empresa donada d'alta com a activa"
+        ),
     )
     await audit.record(
         session,

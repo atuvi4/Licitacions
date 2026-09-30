@@ -124,7 +124,7 @@ export function isTuviAdmin(user: Pick<CurrentUser, "is_platform_admin" | "membe
 }
 
 /** On comença cada compte després d'entrar. */
-export const TUVI_ADMIN_HOME = "/plataforma/empreses/nova";
+export const TUVI_ADMIN_HOME = "/plataforma/empreses";
 
 export interface Company extends Audited {
   legal_name: string;

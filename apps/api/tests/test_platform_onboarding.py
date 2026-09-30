@@ -212,14 +212,15 @@ async def test_no_es_repeteix_ni_el_correu_ni_el_nif(admin_client, session, tena
     users_before = await session.scalar(sa.select(sa.func.count()).select_from(User))
 
     same_email = await admin_client.post(
-        URL, json=_payload(legal_name="Una altra SL", tax_id=None,
+        URL, json=_payload(legal_name="Una altra SL", tax_id="B99999991",
                            owner_email="PROPIETARIA@indaleccius-qa.com")
     )
     assert same_email.status_code == 409
     assert same_email.json()["error"]["code"] == "owner_email_in_use"
 
     existing_user = await admin_client.post(
-        URL, json=_payload(legal_name="Una altra SL", tax_id=None, owner_email=tenant_a[0].email)
+        URL,
+        json=_payload(legal_name="Una altra SL", tax_id="B99999992", owner_email=tenant_a[0].email),
     )
     assert existing_user.status_code == 409
 
@@ -238,6 +239,9 @@ async def test_no_es_repeteix_ni_el_correu_ni_el_nif(admin_client, session, tena
 async def test_les_dades_minimes_es_validen(admin_client):
     for broken in (
         _payload(legal_name=""),
+        # El NIF es obligatori (consola Tuvi).
+        _payload(tax_id=""),
+        {key: value for key, value in _payload().items() if key != "tax_id"},
         _payload(owner_email="no-es-un-correu"),
         _payload(owner_full_name=""),
         {**_payload(), "role": "admin"},

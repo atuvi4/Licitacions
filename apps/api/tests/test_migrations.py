@@ -1424,3 +1424,29 @@ def test_la_reconciliacio_es_pot_aplicar_i_desfer():
     old_check = down.split("ADD CONSTRAINT ck_review_item_revisions_action_valid")[1]
     assert "'reconcile'" not in old_check.split(";")[0]
     assert "DELETE" not in down.upper().replace("ON DELETE", "")
+
+
+def test_l_estat_del_client_es_pot_aplicar_i_desfer():
+    """0042 -> 0043 -> 0042: l'estat del client (consola Tuvi), amb les seves regles.
+
+    Les empreses existents queden `active` (server default), l'estat nomes
+    admet els tres valors, un pilot sempre te fi, i el downgrade ho treu tot
+    sense esborrar cap fila.
+    """
+    up = _offline_sql("upgrade", "0042_user_password_change:0043_company_platform_status")
+    down = _offline_sql("downgrade", "0043_company_platform_status:0042_user_password_change")
+
+    for column in ("platform_status", "pilot_started_at", "pilot_ends_at", "status_changed_at",
+                   "onboarded_by"):
+        assert f"ALTER TABLE companies ADD COLUMN {column}" in up
+        assert f"ALTER TABLE companies DROP COLUMN {column}" in down
+    assert "platform_status VARCHAR(6) DEFAULT 'active' NOT NULL" in up
+    for name in ("ck_companies_platform_status_valid", "ck_companies_pilot_has_end",
+                 "ck_companies_pilot_dates_ordered", "fk_companies_onboarded_by_users"):
+        assert f"ADD CONSTRAINT {name}" in up
+        assert f"DROP CONSTRAINT {name}" in down
+    status_check = up.split("ADD CONSTRAINT ck_companies_platform_status_valid")[1].split(";")[0]
+    assert "'pilot'" in status_check and "'active'" in status_check and "'paused'" in status_check
+    assert "ON DELETE SET NULL" in up
+    assert "DELETE" not in down.upper().replace("ON DELETE", "")
+
