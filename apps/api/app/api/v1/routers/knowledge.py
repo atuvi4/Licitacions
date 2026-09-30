@@ -10,8 +10,9 @@ d'una altra empresa dona 404.
 * Verificar una dada actual (hi ha evidencia): propietari o administracio.
 
 La declaracio de certificacions i serveis passa pels CRUD que ja existien, ara
-amb norma, nivell, linia de servei i procedencia. L'auditoria porta
-identificadors i codis, mai el contingut.
+amb norma, nivell, linia de servei i procedencia; la de la resta de coneixement
+(fets, solucions, capacitats, productes, tercers) es a `knowledge_records.py`.
+L'auditoria porta identificadors i codis, mai el contingut.
 """
 
 from __future__ import annotations
@@ -32,7 +33,9 @@ from app.schemas.knowledge import (
     ObservationRead,
     PromoteObservation,
     VerifiedRecord,
+    VocabularyRead,
     snapshot_read,
+    vocabulary_read,
 )
 from app.services import audit
 from app.services import company_knowledge as service
@@ -47,6 +50,12 @@ def _require(role: MembershipRole, allowed: frozenset[MembershipRole]) -> None:
     if role not in allowed:
         # Com a la resta de l'API: dir "no pots" ja seria dir que existeix.
         raise NotFoundError("No es pot fer aquesta accio amb aquest rol.")
+
+
+@router.get("/vocabulary", response_model=VocabularyRead, summary="Vocabularis globals")
+async def get_vocabulary(ctx: CompanyCtx):
+    """Linies de servei, capacitats i normes: el llenguatge comu, nomes lectura."""
+    return vocabulary_read()
 
 
 @router.get("/snapshot", response_model=KnowledgeSnapshotRead, summary="Fotografia efectiva")

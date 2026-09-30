@@ -167,6 +167,29 @@ def validate_level(standard_code: str | None, level: str | None) -> None:
         raise ValueError(f"{level!r} no es un nivell de {standard_code}.")
 
 
+def validate_capability_value(code: str, value_number, value_level: str | None) -> None:
+    """`ValueError` si el valor no te la forma que demana la capacitat.
+
+    Una booleana no porta valor; una numerica porta nombre; una ordinal porta un
+    nivell de la seva escala. El valor pot faltar (`None`): aleshores la
+    capacitat consta com a suportada pero sense dada comparable.
+    """
+    capability = CAPABILITIES_BY_CODE.get(code)
+    if capability is None:
+        raise ValueError(f"Capacitat desconeguda: {code}.")
+    if capability.value_type == CapabilityValueType.BOOLEAN:
+        if value_number is not None or value_level is not None:
+            raise ValueError(f"{code} es una capacitat de si o no: no porta valor.")
+    elif capability.value_type == CapabilityValueType.NUMBER:
+        if value_level is not None:
+            raise ValueError(f"{code} porta un nombre, no un nivell.")
+    else:
+        if value_number is not None:
+            raise ValueError(f"{code} porta un nivell de la seva escala, no un nombre.")
+        if value_level is not None and value_level not in (capability.ordinal_scale or ()):
+            raise ValueError(f"{value_level!r} no es de l'escala de {code}.")
+
+
 async def seed_vocabulary(session) -> None:
     """Omple les taules globals amb aquest fitxer. Idempotent.
 

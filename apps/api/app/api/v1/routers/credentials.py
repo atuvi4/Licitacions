@@ -1,6 +1,7 @@
 """Routers CRUD de certificacions, registres i assegurances."""
 
 from app.api.v1.crud import build_crud_router
+from app.knowledge import access
 from app.models.credentials import CompanyCertification, CompanyInsurance, CompanyRegistration
 from app.models.enums import LinkedEntityType
 from app.schemas.credentials import (
@@ -28,6 +29,9 @@ certifications_router = build_crud_router(
     entity_type=LinkedEntityType.COMPANY_CERTIFICATION,
     # Verificada nomes amb evidencia enllacada (coneixement de l'empresa, fase 2).
     validate=require_evidence_if_verified,
+    # Qui nomes consulta no modifica coneixement; eliminar, propietari o administracio.
+    authorize_write=access.assert_can_edit,
+    authorize_delete=access.assert_can_delete,
 )
 
 registrations_router = build_crud_router(

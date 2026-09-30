@@ -1,6 +1,7 @@
 """Routers CRUD de serveis, territoris i exercicis economics."""
 
 from app.api.v1.crud import build_crud_router
+from app.knowledge import access
 from app.models.enums import LinkedEntityType
 from app.models.profile import CompanyFinancialYear, CompanyService, CompanyTerritory
 from app.schemas.profile import (
@@ -29,6 +30,9 @@ services_router = build_crud_router(
     conflict_message="Ja existeix un servei amb aquest nom.",
     # Verificat nomes amb evidencia enllacada (coneixement de l'empresa, fase 2).
     validate=require_evidence_if_verified,
+    # Qui nomes consulta no modifica coneixement; eliminar, propietari o administracio.
+    authorize_write=access.assert_can_edit,
+    authorize_delete=access.assert_can_delete,
 )
 
 territories_router = build_crud_router(

@@ -42,6 +42,10 @@ interface Props {
   defaultCategory: DocumentCategory;
   title?: string;
   description?: string;
+  /** S'avisa quan canvia l'evidència (pujar, vincular, desvincular): qui l'obre pot rellegir-ne l'estat. */
+  onChange?: () => void;
+  /** Es veu l'evidència, però no se'n pot pujar, vincular ni desvincular. */
+  readOnly?: boolean;
 }
 
 /**
@@ -55,6 +59,8 @@ export function EvidencePanel({
   defaultCategory,
   title = "Evidències",
   description = "Documents que justifiquen aquesta dada davant d'un òrgan de contractació.",
+  onChange,
+  readOnly = false,
 }: Props) {
   const path = useCompanyPath();
   const { config } = useSession();
@@ -108,7 +114,10 @@ export function EvidencePanel({
       await api.upload(path("/documents"), form);
       await reload();
     });
-    if (ok) close();
+    if (ok) {
+      close();
+      onChange?.();
+    }
   }
 
   async function linkDocument(documentId: string) {
@@ -120,7 +129,10 @@ export function EvidencePanel({
       });
       await reload();
     });
-    if (ok) close();
+    if (ok) {
+      close();
+      onChange?.();
+    }
   }
 
   async function submitLink(event: React.FormEvent) {
@@ -130,10 +142,11 @@ export function EvidencePanel({
   }
 
   async function unlink(item: Evidence) {
-    await mutation.run(async () => {
+    const ok = await mutation.run(async () => {
       await api.delete(path(`/documents/${item.document.id}/links/${item.link_id}`));
       await reload();
     });
+    if (ok) onChange?.();
   }
 
   const filteredLibrary = (library.data ?? []).filter((document) =>
@@ -147,20 +160,24 @@ export function EvidencePanel({
           <h2 className="text-sm font-semibold text-ink">{title}</h2>
           <p className="mt-0.5 text-[13px] text-muted">{description}</p>
         </div>
-        <div className="flex gap-2">
-          <Button size="sm" variant="secondary" onClick={() => setMode("library")}>
-            Vincula existent
-          </Button>
-          <Button size="sm" variant="primary" onClick={() => setMode("upload")}>
-            Puja document
-          </Button>
-        </div>
+        {!readOnly && (
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setMode("library")}>
+              Vincula existent
+            </Button>
+            <Button size="sm" variant="primary" onClick={() => setMode("upload")}>
+              Puja document
+            </Button>
+          </div>
+        )}
       </div>
 
       {error && !data ? (
         <LoadErrorState what="les evidències" message={error} onRetry={() => void reload()} className="py-8" />
       ) : loading && !data ? (
         <PageSkeleton variant="list" context="carregant les evidències…" className="px-5 py-4" />
+      ) : evidence.length === 0 && readOnly ? (
+        <p className="px-5 py-4 text-body text-muted">Sense evidència documental.</p>
       ) : evidence.length === 0 ? (
         <EmptyState
           title="Sense evidència documental"
@@ -202,9 +219,11 @@ export function EvidencePanel({
                 >
                   Descarrega
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => void unlink(item)}>
-                  Desvincula
-                </Button>
+                {!readOnly && (
+                  <Button size="sm" variant="ghost" onClick={() => void unlink(item)}>
+                    Desvincula
+                  </Button>
+                )}
               </div>
             </li>
           ))}

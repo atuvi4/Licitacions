@@ -20,12 +20,13 @@ describe("SidebarNavigation", () => {
     expect(screen.queryByRole("link", { name: "Biblioteca de documents" })).toBeNull();
   });
 
-  it("dins d'Empresa despleguen els tres subdestins", () => {
+  it("dins d'Empresa despleguen els quatre subdestins", () => {
     render(<SidebarNavigation pathname="/experiencia" onNavigate={() => undefined} counts={{}} />);
     expect(screen.getByRole("link", { name: /El nostre perfil/ }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("link", { name: "Experiència" }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("link", { name: "Biblioteca de documents" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Totes les àrees" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Coneixement" }).getAttribute("href")).toBe("/empresa/coneixement");
   });
 
   it("l'app d'empresa diu «Administració de l'empresa» i no porta res de l'Administració Tuvi", () => {

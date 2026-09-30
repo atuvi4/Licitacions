@@ -249,6 +249,9 @@ class Claim:
     #: (`structured`) o no se sap (`scope_unknown`). Nuls per a la resta.
     scope: tuple[str, ...] | None = None
     scope_status: str | None = None
+    #: Te algun document enllacat. Una dada declarada amb evidencia esta a un pas
+    #: de verificar-se; sense evidencia, primer cal aportar-ne.
+    has_evidence: bool = False
 
     @property
     def accreditation_pending(self) -> bool:
@@ -362,6 +365,7 @@ def _claim(prov: Provenance, value: Any) -> Claim:
         value=value,
         as_of=prov.as_of,
         valid_until=prov.valid_until,
+        has_evidence=prov.has_evidence,
     )
 
 
@@ -415,16 +419,14 @@ def build_snapshot(inputs: KnowledgeInputs, *, on: date) -> KnowledgeSnapshot:
             }
         )
         if prov.source == KnowledgeSource.CURRENT_DECLARED:
+            if prov.verified_without_evidence:
+                detail = "Marcat verificat pero sense cap evidencia enllacada"
+            elif prov.has_evidence:
+                detail = "Amb evidencia enllacada, pendent de verificar"
+            else:
+                detail = "Declarat sense evidencia verificada"
             pending.append(
-                PendingItem(
-                    PendingKind.ACCREDITATION_PENDING,
-                    kind,
-                    key,
-                    "Marcat verificat pero sense cap evidencia enllacada"
-                    if prov.verified_without_evidence
-                    else "Declarat sense evidencia verificada",
-                    prov.record_id,
-                )
+                PendingItem(PendingKind.ACCREDITATION_PENDING, kind, key, detail, prov.record_id)
             )
         return True
 

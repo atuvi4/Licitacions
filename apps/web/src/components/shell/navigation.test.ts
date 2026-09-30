@@ -10,9 +10,10 @@ describe("navegació del shell", () => {
     expect(NAVIGATION_GROUPS.flatMap((group) => group.items)).toHaveLength(4);
   });
 
-  it("la secció Empresa té tres subdestins", () => {
+  it("la secció Empresa té quatre subdestins", () => {
     expect(PROFILE_SUBNAV.map((item) => [item.href, item.label])).toEqual([
       ["/empresa", "Totes les àrees"],
+      ["/empresa/coneixement", "Coneixement"],
       ["/documents", "Biblioteca de documents"],
       ["/experiencia", "Experiència"],
     ]);
@@ -37,5 +38,8 @@ describe("navegació del shell", () => {
     expect(isSubnavActive("/documents", "/empresa")).toBe(false);
     expect(isSubnavActive("/documents", "/documents")).toBe(true);
     expect(isSubnavActive("/experiencia/p1", "/experiencia")).toBe(true);
+    // «Coneixement» penja d'/empresa: només ell queda marcat, no «Totes les àrees».
+    expect(isSubnavActive("/empresa/coneixement", "/empresa/coneixement")).toBe(true);
+    expect(isSubnavActive("/empresa/coneixement", "/empresa")).toBe(false);
   });
 });

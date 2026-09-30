@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CompanyContext, CompanyCtx, SessionDep
 from app.core.errors import ConflictError, NotFoundError
-from app.models.enums import AuditAction, LinkedEntityType
+from app.models.enums import AuditAction, LinkedEntityType, MembershipRole
 from app.services import audit
 from app.services.entities import delete_links_for_entity
 
@@ -63,10 +63,16 @@ def build_crud_router(
     conflict_message: str = "Ja existeix un registre equivalent.",
     pre_delete: Callable[[AsyncSession, Any], Awaitable[None]] | None = None,
     validate: Callable[[AsyncSession, Any, uuid.UUID], Awaitable[None]] | None = None,
+    authorize_write: Callable[[MembershipRole], None] | None = None,
+    authorize_delete: Callable[[MembershipRole], None] | None = None,
 ) -> APIRouter:
     """`validate(session, instance, company_id)` s'executa abans de desar una alta o
     una modificacio, amb els canvis ja aplicats. Serveix per a regles que no es
-    poden expressar a l'esquema (p. ex. "verificat nomes amb evidencia")."""
+    poden expressar a l'esquema (p. ex. "verificat nomes amb evidencia").
+
+    `authorize_write(role)` i `authorize_delete(role)` limiten qui pot crear o
+    modificar, i qui pot esborrar. Sense ells, n'hi ha prou amb ser membre, com
+    fins ara: nomes els posen els recursos que en tenen politica propia."""
     router = APIRouter(prefix=prefix, tags=[tag])
     ordering = list(order_by) if order_by is not None else [model.created_at.desc()]
 
@@ -86,6 +92,8 @@ def build_crud_router(
         summary=f"Crea {resource_name}",
     )
     async def create_item(payload: create_schema, session: SessionDep, ctx: CompanyCtx):  # type: ignore[valid-type]
+        if authorize_write is not None:
+            authorize_write(ctx.membership.role)
         instance = model(
             company_id=ctx.company_id,
             created_by=ctx.user_id,
@@ -119,6 +127,8 @@ def build_crud_router(
         session: SessionDep,
         ctx: CompanyCtx,
     ):
+        if authorize_write is not None:
+            authorize_write(ctx.membership.role)
         instance = await get_owned_or_404(session, model, item_id, ctx.company_id)
         apply_changes(instance, payload, ctx.user_id)
         if validate is not None:
@@ -142,6 +152,8 @@ def build_crud_router(
         summary=f"Esborra {resource_name}",
     )
     async def delete_item(item_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx) -> Response:
+        if authorize_delete is not None:
+            authorize_delete(ctx.membership.role)
         instance = await get_owned_or_404(session, model, item_id, ctx.company_id)
         if pre_delete is not None:
             await pre_delete(session, instance)

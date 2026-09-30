@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.knowledge import proposals as P
+from app.knowledge import vocabulary
 from app.knowledge.snapshot import Entry, KnowledgeSnapshot
-from app.models.enums import ObservationStatus, ObservationSubject
+from app.models.enums import (
+    CapabilityStatus,
+    KnowledgeLifecycle,
+    KnowledgeOrigin,
+    ObservationStatus,
+    ObservationSubject,
+    OperatingFactKey,
+    PartnerRole,
+)
 from app.schemas.common import APIModel, ORMModel
 
 
@@ -20,6 +31,8 @@ class ClaimRead(BaseModel):
     as_of: date
     valid_until: date | None
     accreditation_pending: bool
+    #: Te algun document enllacat (encara que no estigui verificada).
+    has_evidence: bool = False
     #: Nomes per a certificacions: linies cobertes i `structured` o
     #: `scope_unknown` (abast sense estructurar: no es dedueix del text).
     scope_service_lines: list[str] | None = None
@@ -82,6 +95,7 @@ def _entry(entry: Entry) -> EntryRead:
                 as_of=c.as_of,
                 valid_until=c.valid_until,
                 accreditation_pending=c.accreditation_pending,
+                has_evidence=c.has_evidence,
                 scope_service_lines=list(c.scope) if c.scope is not None else None,
                 scope_status=c.scope_status,
             )
@@ -154,3 +168,256 @@ class VerifiedRecord(BaseModel):
     kind: str
     record_id: uuid.UUID
     verification_status: str
+
+
+# --------------------------------------------------------------------------- #
+# Vocabulari global (nomes lectura: cap API no hi escriu)                      #
+# --------------------------------------------------------------------------- #
+
+
+class ServiceLineRead(BaseModel):
+    code: str
+    label: str
+
+
+class CapabilityDefinitionRead(BaseModel):
+    code: str
+    service_line_code: str
+    label: str
+    value_type: str
+    comparator: str
+    unit: str | None
+    ordinal_scale: list[str] | None
+
+
+class CertificationStandardRead(BaseModel):
+    code: str
+    label: str
+    levels: list[str] | None
+
+
+class VocabularyRead(BaseModel):
+    service_lines: list[ServiceLineRead]
+    capabilities: list[CapabilityDefinitionRead]
+    standards: list[CertificationStandardRead]
+
+
+def vocabulary_read() -> VocabularyRead:
+    return VocabularyRead(
+        service_lines=[
+            ServiceLineRead(code=s.code, label=s.label) for s in vocabulary.SERVICE_LINES
+        ],
+        capabilities=[
+            CapabilityDefinitionRead(
+                code=c.code,
+                service_line_code=c.service_line_code,
+                label=c.label,
+                value_type=str(c.value_type),
+                comparator=str(c.comparator),
+                unit=c.unit,
+                ordinal_scale=list(c.ordinal_scale) if c.ordinal_scale else None,
+            )
+            for c in vocabulary.CAPABILITIES
+        ],
+        standards=[
+            CertificationStandardRead(
+                code=s.code, label=s.label, levels=list(s.levels) if s.levels else None
+            )
+            for s in vocabulary.CERTIFICATION_STANDARDS
+        ],
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Declaracio directa de coneixement actual                                     #
+# --------------------------------------------------------------------------- #
+#
+# El que es declara a ma neix `declared` i `pending_verification`: cap payload no
+# porta `knowledge_origin` ni `verification_status`. Una alta es la mateixa
+# proposta que portaria una observacio de l'historic, mes la procedencia.
+
+
+class _ProvenanceIn(APIModel):
+    as_of: date | None = None
+    valid_until: date | None = None
+    lifecycle: KnowledgeLifecycle | None = None
+
+    @model_validator(mode="after")
+    def _validity_after_as_of(self):
+        if self.as_of and self.valid_until and self.valid_until < self.as_of:
+            raise ValueError("`valid_until` no pot ser anterior a `as_of`.")
+        return self
+
+
+class _WithServiceLineIn(_ProvenanceIn):
+    @field_validator("service_line_code", check_fields=False)
+    @classmethod
+    def _known_service_line(cls, value: str | None) -> str | None:
+        if value is not None and value not in vocabulary.SERVICE_LINE_CODES:
+            raise ValueError(f"Linia de servei desconeguda: {value}.")
+        return value
+
+
+class OperatingFactDeclare(P.OperatingFactProposal, _ProvenanceIn):
+    pass
+
+
+class OperatingFactUpdate(_ProvenanceIn):
+    value: bool | None = None
+    detail: str | None = Field(default=None, max_length=500)
+
+
+class SolutionDeclare(P.SolutionProposal, _ProvenanceIn):
+    pass
+
+
+class SolutionUpdate(_WithServiceLineIn):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    service_line_code: str | None = None
+    vendor: str | None = Field(default=None, max_length=160)
+    edition: str | None = Field(default=None, max_length=80)
+
+
+class _CapabilityValueIn(_ProvenanceIn):
+    value_number: Decimal | None = None
+    value_level: str | None = Field(default=None, max_length=20)
+    limits_note: str | None = None
+
+
+class SolutionCapabilityDeclare(_CapabilityValueIn):
+    solution_id: uuid.UUID
+    capability_code: str = Field(max_length=80)
+    status: CapabilityStatus
+
+    @model_validator(mode="after")
+    def _value_of_capability(self):
+        vocabulary.validate_capability_value(
+            self.capability_code, self.value_number, self.value_level
+        )
+        return self
+
+
+class SolutionCapabilityUpdate(_CapabilityValueIn):
+    status: CapabilityStatus | None = None
+
+
+class ProductDeclare(P.ProductProposal, _ProvenanceIn):
+    pass
+
+
+class ProductUpdate(_WithServiceLineIn):
+    manufacturer: str | None = Field(default=None, min_length=1, max_length=120)
+    model: str | None = Field(default=None, min_length=1, max_length=160)
+    service_line_code: str | None = None
+
+
+class SolutionProductDeclare(_ProvenanceIn):
+    solution_id: uuid.UUID
+    product_id: uuid.UUID
+
+
+class SolutionProductUpdate(_ProvenanceIn):
+    pass
+
+
+class PartnerDeclare(P.PartnerProposal, _ProvenanceIn):
+    tax_id: str | None = Field(default=None, max_length=32)
+
+
+class PartnerUpdate(_ProvenanceIn):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    tax_id: str | None = Field(default=None, max_length=32)
+
+
+class PartnerRoleDeclare(P.PartnerRoleProposal, _ProvenanceIn):
+    partner_id: uuid.UUID
+
+
+class PartnerRoleUpdate(_WithServiceLineIn):
+    role: PartnerRole | None = None
+    service_line_code: str | None = None
+    territory: str | None = Field(default=None, max_length=160)
+
+
+class _ProvenanceRead(ORMModel):
+    """Les files tal com son, per editar-les. **Sense `verification_status`**:
+    l'estat efectiu (verificat, declarat, caducat...) el diu la fotografia, que
+    ja te en compte l'evidencia."""
+
+    id: uuid.UUID
+    knowledge_origin: KnowledgeOrigin
+    as_of: date
+    valid_until: date | None
+    lifecycle: KnowledgeLifecycle
+
+
+class OperatingFactRead(_ProvenanceRead):
+    key: OperatingFactKey
+    value: bool
+    detail: str | None
+
+
+class SolutionRead(_ProvenanceRead):
+    name: str
+    service_line_code: str
+    vendor: str | None
+    edition: str | None
+
+
+class SolutionCapabilityRead(_ProvenanceRead):
+    solution_id: uuid.UUID
+    capability_code: str
+    status: CapabilityStatus
+    value_number: Decimal | None
+    value_level: str | None
+    limits_note: str | None
+
+
+class ProductRead(_ProvenanceRead):
+    manufacturer: str
+    model: str
+    service_line_code: str | None
+
+
+class SolutionProductRead(_ProvenanceRead):
+    solution_id: uuid.UUID
+    product_id: uuid.UUID
+
+
+class PartnerRead(_ProvenanceRead):
+    name: str
+    tax_id: str | None
+
+
+class PartnerRoleRead(_ProvenanceRead):
+    partner_id: uuid.UUID
+    role: PartnerRole
+    service_line_code: str | None
+    territory: str | None
+
+
+class KnowledgeRecordsRead(BaseModel):
+    operating_facts: list[OperatingFactRead]
+    solutions: list[SolutionRead]
+    solution_capabilities: list[SolutionCapabilityRead]
+    products: list[ProductRead]
+    solution_products: list[SolutionProductRead]
+    partners: list[PartnerRead]
+    partner_roles: list[PartnerRoleRead]
+
+
+#: Tipus declarable → (alta, modificacio, lectura). Les certificacions i els
+#: serveis no hi son: es declaren amb els seus CRUD.
+RECORD_SCHEMAS: dict[str, tuple[type[APIModel], type[APIModel], type[_ProvenanceRead]]] = {
+    "operating_fact": (OperatingFactDeclare, OperatingFactUpdate, OperatingFactRead),
+    "solution": (SolutionDeclare, SolutionUpdate, SolutionRead),
+    "solution_capability": (
+        SolutionCapabilityDeclare,
+        SolutionCapabilityUpdate,
+        SolutionCapabilityRead,
+    ),
+    "product": (ProductDeclare, ProductUpdate, ProductRead),
+    "solution_product": (SolutionProductDeclare, SolutionProductUpdate, SolutionProductRead),
+    "partner": (PartnerDeclare, PartnerUpdate, PartnerRead),
+    "partner_role": (PartnerRoleDeclare, PartnerRoleUpdate, PartnerRoleRead),
+}

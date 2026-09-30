@@ -14,6 +14,10 @@ forana), aixi que es fa aqui, a totes les portes d'escriptura:
 * treure l'ultima evidencia (esborrar l'enllac o el document) torna el registre
   a `pending_verification`.
 
+**I una verificacio val per al que es va verificar.** Modificar materialment una
+dada verificada la torna a `pending_verification` conservant l'evidencia
+(`unverify_if_materially_changed`): cal tornar-la a verificar.
+
 I, per si de cas hi ha dades d'abans d'aquesta regla, el `KnowledgeSnapshot` tampoc
 no es creu un `verified` sense evidencia: el compta com a declarat.
 """
@@ -101,19 +105,79 @@ def _refuse(entity_type: LinkedEntityType) -> EvidenceRequiredError:
     )
 
 
+#: Camps que es poden retocar sense canviar el que la dada afirma. Tota la resta
+#: es material: si canvia, el que es va verificar ja no es el que hi ha.
+EDITORIAL_FIELDS = frozenset({"notes"})
+_BOOKKEEPING_FIELDS = frozenset(
+    {"verification_status", "created_at", "created_by", "updated_at", "updated_by"}
+)
+
+
+def material_changes(instance: Any) -> list[str]:
+    """Els camps materials que aquesta peticio ha canviat de debo (un valor igual
+    al que hi havia no es un canvi).
+
+    S'ha de cridar abans de qualsevol consulta: l'autoflush desa els canvis i
+    n'esborra l'historial.
+    """
+    state = sa.inspect(instance)
+    return sorted(
+        column.key
+        for column in state.mapper.column_attrs
+        if column.key not in EDITORIAL_FIELDS | _BOOKKEEPING_FIELDS
+        and state.attrs[column.key].history.has_changes()
+    )
+
+
+def unverify_if_materially_changed(instance: Any) -> bool:
+    """**Editar una dada verificada n'invalida la verificacio.**
+
+    El document enllacat acreditava el que hi havia; si la dada canvia (el nivell,
+    l'abast, la vigencia, el valor...), algu ha de tornar a mirar que encara
+    l'acredita. La dada torna a `pending_verification` i **l'evidencia es
+    conserva**: queda "declarada, pendent de verificar", no "sense evidencia".
+    Cert si l'ha desverificada.
+    """
+    if instance.verification_status != VerificationStatus.VERIFIED:
+        return False
+    if not material_changes(instance):
+        return False
+    instance.verification_status = VerificationStatus.PENDING_VERIFICATION
+    return True
+
+
 async def require_evidence_if_verified(
     session: AsyncSession, instance: Any, company_id: uuid.UUID
 ) -> None:
-    """Per als CRUD: refusa desar un registre `verified` que no te evidencia.
+    """Per als CRUD de certificacions i serveis: que en queda, de la verificacio,
+    despres d'una alta o una modificacio.
 
-    Un registre nou encara no pot tenir cap document enllacat: no pot neixer
-    verificat.
+    * **Demanar `verified`** (una alta, o passar-hi des de pendent) exigeix
+      evidencia enllacada; sense, `422 evidence_required`. Un registre nou no en
+      pot tenir: no pot neixer verificat.
+    * **Modificar materialment una dada que ja era verificada** la torna a
+      `pending_verification` i conserva l'evidencia
+      (`unverify_if_materially_changed`). La via per tornar-la a verificar es
+      `/verify`.
+    * **Dades anteriors a la regla.** Una fila que ja era `verified` sense cap
+      evidencia no es refusa, encara que el canvi sigui nomes editorial: es
+      normalitza a `pending_verification`, que es el que la fotografia ja en diu.
     """
     if instance.verification_status != VerificationStatus.VERIFIED:
         return
     entity_type = ENTITY_TYPE_BY_MODEL[type(instance)]
-    if not await has_evidence(session, company_id, entity_type, instance.id):
-        raise _refuse(entity_type)
+    # Abans de consultar res: la consulta fa autoflush i esborraria l'historial
+    # dels camps, que es el que diu que ha demanat i que ha canviat la peticio.
+    state = sa.inspect(instance)
+    asked = not state.persistent or state.attrs.verification_status.history.has_changes()
+    edited = state.persistent and bool(material_changes(instance))
+    evidenced = await has_evidence(session, company_id, entity_type, instance.id)
+    if asked:
+        if not evidenced:
+            raise _refuse(entity_type)
+        return
+    if edited or not evidenced:
+        instance.verification_status = VerificationStatus.PENDING_VERIFICATION
 
 
 async def verify(

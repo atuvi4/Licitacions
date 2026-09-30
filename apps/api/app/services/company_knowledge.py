@@ -24,7 +24,9 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 import sqlalchemy as sa
+from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
@@ -45,13 +47,14 @@ from app.knowledge.snapshot import (
     SolutionProductIn,
     build_snapshot,
 )
-from app.knowledge.vocabulary import validate_level
+from app.knowledge.vocabulary import validate_capability_value, validate_level
 from app.models.credentials import CompanyCertification
 from app.models.enums import (
     HistoricBidDecision,
     HistoricBidResult,
     KnowledgeLifecycle,
     KnowledgeOrigin,
+    LinkedEntityType,
     ObservationStatus,
     ObservationSubject,
     VerificationStatus,
@@ -70,6 +73,7 @@ from app.models.knowledge import (
 )
 from app.models.profile import CompanyService
 from app.services import knowledge_evidence
+from app.services.entities import delete_links_for_entity
 
 
 class ObservationNotCandidateError(ConflictError):
@@ -86,6 +90,10 @@ class KnowledgeAlreadyDeclaredError(ConflictError):
 
 class InvalidProposalError(ValidationError):
     code = "invalid_observation_proposal"
+
+
+class InvalidKnowledgeError(ValidationError):
+    code = "invalid_knowledge"
 
 
 # --------------------------------------------------------------------------- #
@@ -301,43 +309,38 @@ async def _exists(session: AsyncSession, model: Any, company_id: uuid.UUID, *whe
     return bool(found)
 
 
-async def promote_observation(
+def _conflict(subject: str, key: str) -> KnowledgeAlreadyDeclaredError:
+    return KnowledgeAlreadyDeclaredError(
+        f"Ja hi ha coneixement actual sobre {key}: mana el que s'ha declarat.",
+        details={"subject": subject, "key": key},
+    )
+
+
+async def _new_entity(
     session: AsyncSession,
-    *,
     company_id: uuid.UUID,
-    observation_id: uuid.UUID,
+    proposal: P._Proposal,
+    provenance: dict[str, Any],
     user: User,
-    note: str | None = None,
-) -> KnowledgeObservation:
-    """Una persona valida l'observacio: en neix coneixement actual declarat i traçable."""
-    observation = await _candidate(session, company_id, observation_id)
-    subject = ObservationSubject(observation.subject)
-    proposal = _validated(subject, observation.proposal)
-    promoted = {
-        "knowledge_origin": KnowledgeOrigin.PROMOTED_OBSERVATION,
-        "as_of": date.today(),
-        "verification_status": VerificationStatus.PENDING_VERIFICATION,
-    }
+) -> Any:
+    """La fila de coneixement actual que neix d'una proposta, ja afegida i amb id.
 
-    def conflict(what: str) -> KnowledgeAlreadyDeclaredError:
-        return KnowledgeAlreadyDeclaredError(
-            f"Ja hi ha coneixement actual sobre {what}: mana el que s'ha declarat.",
-            details={"subject": subject, "key": observation.subject_key},
-        )
-
+    La mateixa proposta serveix per promoure una observacio de l'historic i per
+    declarar a ma: nomes canvia la procedencia (`provenance`). Si ja hi ha
+    coneixement actual sobre la mateixa clau, es refusa: mana el que hi ha.
+    """
     entity: Any
     if isinstance(proposal, P.OperatingFactProposal):
         if await _exists(
             session, CompanyOperatingFact, company_id, CompanyOperatingFact.key == proposal.key
         ):
-            raise conflict(proposal.key)
+            raise _conflict("operating_fact", proposal.key)
         entity = CompanyOperatingFact(
             company_id=company_id,
             key=proposal.key,
             value=proposal.value,
             detail=proposal.detail,
-            lifecycle=KnowledgeLifecycle.CURRENT,
-            **promoted,
+            **provenance,
         )
     elif isinstance(proposal, P.CertificationProposal):
         if not proposal.held:
@@ -356,44 +359,44 @@ async def promote_observation(
             else CompanyCertification.level == proposal.level,
             CompanyCertification.lifecycle == KnowledgeLifecycle.CURRENT,
         ):
-            raise conflict(proposal.standard_code)
+            raise _conflict("certification", proposal.standard_code)
         entity = CompanyCertification(
             company_id=company_id,
             name=proposal.name or " ".join(filter(None, (proposal.standard_code, proposal.level))),
             standard_code=proposal.standard_code,
             level=proposal.level,
             scope_service_lines=proposal.scope_service_lines,
-            lifecycle=KnowledgeLifecycle.CURRENT,
             created_by=user.id,
             updated_by=user.id,
-            **promoted,
+            **{k: v for k, v in provenance.items() if k != "valid_until"},
+            expires_at=provenance.get("valid_until"),
         )
     elif isinstance(proposal, P.ServiceProposal):
         if await _exists(session, CompanyService, company_id, CompanyService.name == proposal.name):
-            raise conflict(proposal.name)
+            raise _conflict("service", proposal.name)
         entity = CompanyService(
             company_id=company_id,
             name=proposal.name,
             service_line_code=proposal.service_line_code,
             delivery_mode=proposal.delivery_mode,
-            active=True,
+            active=provenance.get("lifecycle", KnowledgeLifecycle.CURRENT)
+            == KnowledgeLifecycle.CURRENT,
             created_by=user.id,
             updated_by=user.id,
-            **promoted,
+            **{k: v for k, v in provenance.items() if k != "lifecycle"},
         )
     elif isinstance(proposal, P.SolutionProposal):
         if await _exists(
             session, CompanySolution, company_id, CompanySolution.name == proposal.name
         ):
-            raise conflict(proposal.name)
+            raise _conflict("solution", proposal.name)
         entity = CompanySolution(
             company_id=company_id,
             name=proposal.name,
             service_line_code=proposal.service_line_code,
             vendor=proposal.vendor,
             edition=proposal.edition,
-            lifecycle=KnowledgeLifecycle.CURRENT,
-            **promoted,
+            **provenance,
         )
     elif isinstance(proposal, P.ProductProposal):
         if await _exists(
@@ -403,24 +406,23 @@ async def promote_observation(
             CompanyProduct.manufacturer == proposal.manufacturer,
             CompanyProduct.model == proposal.model,
         ):
-            raise conflict(f"{proposal.manufacturer} {proposal.model}")
+            raise _conflict("product", f"{proposal.manufacturer} {proposal.model}")
         entity = CompanyProduct(
             company_id=company_id,
             manufacturer=proposal.manufacturer,
             model=proposal.model,
             service_line_code=proposal.service_line_code,
-            lifecycle=KnowledgeLifecycle.CURRENT,
-            **promoted,
+            **provenance,
         )
     else:
         assert isinstance(proposal, P.PartnerProposal)
         if await _exists(session, CompanyPartner, company_id, CompanyPartner.name == proposal.name):
-            raise conflict(proposal.name)
+            raise _conflict("partner", proposal.name)
         entity = CompanyPartner(
             company_id=company_id,
             name=proposal.name,
-            lifecycle=KnowledgeLifecycle.CURRENT,
-            **promoted,
+            tax_id=getattr(proposal, "tax_id", None),
+            **provenance,
         )
     session.add(entity)
     await session.flush()
@@ -433,10 +435,33 @@ async def promote_observation(
                     role=role.role,
                     service_line_code=role.service_line_code,
                     territory=role.territory,
-                    lifecycle=KnowledgeLifecycle.CURRENT,
-                    **promoted,
+                    **provenance,
                 )
             )
+        await session.flush()
+    return entity
+
+
+async def promote_observation(
+    session: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    observation_id: uuid.UUID,
+    user: User,
+    note: str | None = None,
+) -> KnowledgeObservation:
+    """Una persona valida l'observacio: en neix coneixement actual declarat i traçable."""
+    observation = await _candidate(session, company_id, observation_id)
+    subject = ObservationSubject(observation.subject)
+    proposal = _validated(subject, observation.proposal)
+    promoted = {
+        "knowledge_origin": KnowledgeOrigin.PROMOTED_OBSERVATION,
+        "as_of": date.today(),
+        "valid_until": None,
+        "verification_status": VerificationStatus.PENDING_VERIFICATION,
+        "lifecycle": KnowledgeLifecycle.CURRENT,
+    }
+    entity = await _new_entity(session, company_id, proposal, promoted, user)
 
     observation.status = ObservationStatus.PROMOTED
     observation.reviewed_by = user.id
@@ -487,6 +512,215 @@ async def verify_record(
     await knowledge_evidence.verify(session, company_id, entity_type, record)
     await session.flush()
     return record
+
+
+# --------------------------------------------------------------------------- #
+# Declaracio directa (fets, solucions, capacitats, productes, tercers)         #
+# --------------------------------------------------------------------------- #
+#
+# Les certificacions i els serveis tenen els seus CRUD. La resta de coneixement
+# actual entra per aqui: neix `declared` i `pending_verification`, sempre.
+
+#: Tipus declarables: el que no te CRUD propi.
+DECLARABLE_KINDS = frozenset(
+    {
+        "operating_fact",
+        "solution",
+        "solution_capability",
+        "product",
+        "solution_product",
+        "partner",
+        "partner_role",
+    }
+)
+
+_PROVENANCE_FIELDS = ("as_of", "valid_until", "lifecycle")
+
+
+def _declared_provenance(payload: BaseModel) -> dict[str, Any]:
+    return {
+        "knowledge_origin": KnowledgeOrigin.DECLARED,
+        "as_of": getattr(payload, "as_of", None) or date.today(),
+        "valid_until": getattr(payload, "valid_until", None),
+        "lifecycle": getattr(payload, "lifecycle", None) or KnowledgeLifecycle.CURRENT,
+        "verification_status": VerificationStatus.PENDING_VERIFICATION,
+    }
+
+
+def _kind_model(kind: str) -> tuple[LinkedEntityType, Any]:
+    if kind not in DECLARABLE_KINDS:
+        raise NotFoundError("Tipus de coneixement desconegut.")
+    return knowledge_evidence.KNOWLEDGE_KINDS[kind]
+
+
+async def _owned(session: AsyncSession, model: Any, record_id: uuid.UUID, company_id: uuid.UUID):
+    record = await session.scalar(
+        sa.select(model).where(model.id == record_id, model.company_id == company_id)
+    )
+    if record is None:
+        raise NotFoundError("Dada de coneixement no trobada.")
+    return record
+
+
+async def _flush_or_conflict(session: AsyncSession, what: str) -> None:
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise KnowledgeAlreadyDeclaredError(
+            f"Ja hi ha una dada igual sobre {what}.", details={"key": what}
+        ) from exc
+
+
+def _check_capability(record: SolutionCapability) -> None:
+    try:
+        validate_capability_value(record.capability_code, record.value_number, record.value_level)
+    except ValueError as exc:
+        raise InvalidKnowledgeError(str(exc), details={"field": "capability_code"}) from None
+
+
+async def declare_record(
+    session: AsyncSession, *, company_id: uuid.UUID, kind: str, payload: BaseModel, user: User
+) -> Any:
+    """Una persona declara coneixement actual. Neix declarat i pendent de verificar."""
+    _kind_model(kind)
+    provenance = _declared_provenance(payload)
+    if kind in ("operating_fact", "solution", "product", "partner"):
+        # Els esquemes d'alta d'aquests tipus SON la proposta d'una observacio.
+        assert isinstance(payload, P._Proposal), kind
+        return await _new_entity(session, company_id, payload, provenance, user)
+
+    entity: Any
+    if kind == "solution_capability":
+        solution = await _owned(session, CompanySolution, payload.solution_id, company_id)
+        entity = SolutionCapability(
+            company_id=company_id,
+            solution_id=solution.id,
+            capability_code=payload.capability_code,
+            status=payload.status,
+            value_number=payload.value_number,
+            value_level=payload.value_level,
+            limits_note=payload.limits_note,
+            **provenance,
+        )
+        _check_capability(entity)
+        what = f"{solution.name} / {payload.capability_code}"
+    elif kind == "solution_product":
+        solution = await _owned(session, CompanySolution, payload.solution_id, company_id)
+        product = await _owned(session, CompanyProduct, payload.product_id, company_id)
+        entity = SolutionProduct(
+            company_id=company_id, solution_id=solution.id, product_id=product.id, **provenance
+        )
+        what = f"{solution.name} / {product.manufacturer} {product.model}"
+    else:
+        assert kind == "partner_role", kind
+        partner = await _owned(session, CompanyPartner, payload.partner_id, company_id)
+        entity = PartnerRoleRow(
+            company_id=company_id,
+            partner_id=partner.id,
+            role=payload.role,
+            service_line_code=payload.service_line_code,
+            territory=payload.territory,
+            **provenance,
+        )
+        what = f"{partner.name} / {payload.role}"
+    session.add(entity)
+    await _flush_or_conflict(session, what)
+    return entity
+
+
+async def update_record(
+    session: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    kind: str,
+    record_id: uuid.UUID,
+    payload: BaseModel,
+) -> tuple[Any, bool]:
+    """Modifica una dada declarada o promoguda. Retorna la fila i si ha deixat
+    d'estar verificada.
+
+    La procedencia (`knowledge_origin`) no es toca. **Una modificacio material
+    d'una dada verificada n'invalida la verificacio**: torna a
+    `pending_verification` i conserva l'evidencia enllacada, a punt per tornar-la
+    a verificar."""
+    _, model = _kind_model(kind)
+    record = await _owned(session, model, record_id, company_id)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(record, field, value)
+    # Abans de qualsevol consulta: l'autoflush esborraria l'historial dels camps.
+    unverified = knowledge_evidence.unverify_if_materially_changed(record)
+    if record.valid_until is not None and record.valid_until < record.as_of:
+        raise InvalidKnowledgeError(
+            "`valid_until` no pot ser anterior a `as_of`.", details={"field": "valid_until"}
+        )
+    if isinstance(record, SolutionCapability):
+        _check_capability(record)
+    await _flush_or_conflict(session, str(record_id))
+    return record, unverified
+
+
+async def delete_record(
+    session: AsyncSession, *, company_id: uuid.UUID, kind: str, record_id: uuid.UUID
+) -> None:
+    """Esborra la dada i l'evidencia enllacada, tambe la de les seves filles
+    (capacitats i productes d'una solucio, papers d'un tercer): els enllacos son
+    polimorfics i cap FK no els neteja."""
+    entity_type, model = _kind_model(kind)
+    record = await _owned(session, model, record_id, company_id)
+    targets: list[tuple[LinkedEntityType, uuid.UUID]] = [(entity_type, record.id)]
+    children: list[tuple[LinkedEntityType, Any, Any]] = []
+    if isinstance(record, CompanySolution):
+        children = [
+            (
+                LinkedEntityType.SOLUTION_CAPABILITY,
+                SolutionCapability,
+                SolutionCapability.solution_id,
+            ),
+            (LinkedEntityType.SOLUTION_PRODUCT, SolutionProduct, SolutionProduct.solution_id),
+        ]
+    elif isinstance(record, CompanyProduct):
+        children = [
+            (LinkedEntityType.SOLUTION_PRODUCT, SolutionProduct, SolutionProduct.product_id)
+        ]
+    elif isinstance(record, CompanyPartner):
+        children = [(LinkedEntityType.PARTNER_ROLE, PartnerRoleRow, PartnerRoleRow.partner_id)]
+    for child_type, child_model, parent_column in children:
+        ids = await session.scalars(
+            sa.select(child_model.id).where(
+                parent_column == record.id, child_model.company_id == company_id
+            )
+        )
+        targets.extend((child_type, child_id) for child_id in ids)
+    for target_type, target_id in targets:
+        await delete_links_for_entity(session, target_type, target_id)
+    await session.delete(record)
+    await session.flush()
+
+
+async def list_records(session: AsyncSession, company_id: uuid.UUID) -> dict[str, list[Any]]:
+    """Totes les files declarables d'UNA empresa, per editar-les."""
+
+    async def rows(model: Any, *order: Any) -> list[Any]:
+        return list(
+            await session.scalars(
+                sa.select(model).where(model.company_id == company_id).order_by(*order)
+            )
+        )
+
+    return {
+        "operating_facts": await rows(CompanyOperatingFact, CompanyOperatingFact.key),
+        "solutions": await rows(CompanySolution, CompanySolution.name),
+        "solution_capabilities": await rows(
+            SolutionCapability, SolutionCapability.solution_id, SolutionCapability.capability_code
+        ),
+        "products": await rows(CompanyProduct, CompanyProduct.manufacturer, CompanyProduct.model),
+        "solution_products": await rows(
+            SolutionProduct, SolutionProduct.solution_id, SolutionProduct.product_id
+        ),
+        "partners": await rows(CompanyPartner, CompanyPartner.name),
+        "partner_roles": await rows(PartnerRoleRow, PartnerRoleRow.partner_id, PartnerRoleRow.role),
+    }
 
 
 # --------------------------------------------------------------------------- #

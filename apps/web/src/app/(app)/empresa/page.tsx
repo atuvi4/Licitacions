@@ -311,6 +311,17 @@ export default function ProfileHubPage() {
             />
             <ExpiryList alerts={alerts} />
           </Card>
+          <Card>
+            <CardHeader
+              title="Coneixement de l'empresa"
+              description="Què és actual, què es pot acreditar amb evidència i què ha suggerit l'històric i falta validar."
+              action={
+                <LinkButton href="/empresa/coneixement" variant="secondary" size="sm">
+                  Obre el coneixement
+                </LinkButton>
+              }
+            />
+          </Card>
           <Card className="bg-subtle">
             <p className="px-3.5 py-3 text-caption leading-5 text-muted">
               Cap dada del perfil la canvia l&apos;anàlisi: totes les escriu una persona i cada camp

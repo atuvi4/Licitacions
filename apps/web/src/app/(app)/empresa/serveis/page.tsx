@@ -24,6 +24,7 @@ import {
 import { api, cleanPayload } from "@/lib/api";
 import { optionsFrom, SPECIALIZATION_LABELS } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
+import { DELIVERY_MODE_LABELS, serviceLineLabel, type Vocabulary } from "@/lib/knowledge";
 import { activeLevel } from "@/lib/labels";
 import type { Service } from "@/lib/types";
 
@@ -34,6 +35,8 @@ const EMPTY = {
   description: "",
   notes: "",
   active: true,
+  service_line_code: "",
+  delivery_mode: "",
 };
 
 type FormState = typeof EMPTY;
@@ -42,6 +45,8 @@ export default function ServicesPage() {
   const path = useCompanyPath();
   const url = path("/services");
   const { data, loading, error, status, reload } = useResource<Service[]>(url);
+  // Les línies del vocabulari global: el que permet comparar un servei amb un plec.
+  const vocabulary = useResource<Vocabulary>(path("/knowledge/vocabulary"));
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
   const [editing, setEditing] = useState<Service | null>(null);
@@ -65,6 +70,8 @@ export default function ServicesPage() {
       description: service.description ?? "",
       notes: service.notes ?? "",
       active: service.active,
+      service_line_code: service.service_line_code ?? "",
+      delivery_mode: service.delivery_mode ?? "",
     });
     setEditing(service);
     setCreating(false);
@@ -110,6 +117,17 @@ export default function ServicesPage() {
           {service.description && <p className="mt-0.5 max-w-md truncate text-[12px] text-muted">{service.description}</p>}
         </>
       ),
+    },
+    {
+      key: "line",
+      header: "Línia de servei",
+      hideBelow: "md",
+      cell: (service) =>
+        service.service_line_code ? (
+          <span className="text-muted">{serviceLineLabel(service.service_line_code, vocabulary.data)}</span>
+        ) : (
+          <span className="text-warning">Sense línia</span>
+        ),
     },
     { key: "category", header: "Categoria", hideBelow: "lg", cell: (service) => <span className="text-muted">{service.category ?? "—"}</span> },
     {
@@ -166,7 +184,7 @@ export default function ServicesPage() {
         <LoadErrorState what="els serveis" message={error} status={status} onRetry={() => void reload()} />
       ) : loading && !data ? (
         <Card>
-          <PageSkeleton variant="table" columns={["Servei", "Categoria", "Especialització", "Estat", "Accions"]} />
+          <PageSkeleton variant="table" columns={["Servei", "Línia de servei", "Categoria", "Especialització", "Estat", "Accions"]} />
         </Card>
       ) : (
         <Card>
@@ -216,6 +234,31 @@ export default function ServicesPage() {
               placeholder="Fibra òptica"
             />
           </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              label="Línia de servei"
+              hint="Sense línia, el servei no compta al coneixement de l'empresa."
+              error={fieldErrors.service_line_code}
+            >
+              <Select
+                value={form.service_line_code}
+                placeholder="Sense línia"
+                options={(vocabulary.data?.service_lines ?? []).map((line) => ({
+                  value: line.code,
+                  label: serviceLineLabel(line.code, vocabulary.data),
+                }))}
+                onChange={(event) => setForm({ ...form, service_line_code: event.target.value })}
+              />
+            </Field>
+            <Field label="Com es presta">
+              <Select
+                value={form.delivery_mode}
+                placeholder="Sense especificar"
+                options={optionsFrom(DELIVERY_MODE_LABELS)}
+                onChange={(event) => setForm({ ...form, delivery_mode: event.target.value })}
+              />
+            </Field>
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Categoria" error={fieldErrors.category}>
               <Input

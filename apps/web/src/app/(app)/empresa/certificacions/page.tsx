@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { StatePills } from "@/components/knowledge/StatePills";
 import { ResourceTable } from "@/components/ResourceTable";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
@@ -11,6 +12,7 @@ import {
   ErrorNotice,
   Field,
   Input,
+  LinkButton,
   LoadErrorState,
   PageHeader,
   Select,
@@ -18,13 +20,17 @@ import {
   Textarea,
 } from "@/components/ui";
 import { api, cleanPayload } from "@/lib/api";
-import {
-  formatDate,
-  TEMPORAL_STATUS_LABELS,
-  VERIFICATION_STATUS_LABELS,
-} from "@/lib/format";
+import { formatDate, TEMPORAL_STATUS_LABELS } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
-import { TEMPORAL_LEVEL, VERIFICATION_LEVEL } from "@/lib/labels";
+import {
+  indexSnapshot,
+  levelLabel,
+  recordState,
+  standardLabel,
+  type KnowledgeSnapshot,
+  type Vocabulary,
+} from "@/lib/knowledge";
+import { TEMPORAL_LEVEL } from "@/lib/labels";
 import type { Certification } from "@/lib/types";
 
 const EMPTY = {
@@ -34,20 +40,32 @@ const EMPTY = {
   scope: "",
   issued_at: "",
   expires_at: "",
-  verification_status: "pending_verification",
   notes: "",
+  standard_code: "",
+  level: "",
 };
 
 export default function CertificationsPage() {
   const path = useCompanyPath();
   const url = path("/certifications");
-  const { data, loading, error, status, reload } = useResource<Certification[]>(url);
+  const { data, loading, error, status, reload: reloadRows } = useResource<Certification[]>(url);
+  // L'estat d'acreditació surt de la fotografia de coneixement, no de la fila:
+  // una certificació només és «Verificada» si té evidència enllaçada.
+  const snapshot = useResource<KnowledgeSnapshot>(path("/knowledge/snapshot"));
+  const vocabulary = useResource<Vocabulary>(path("/knowledge/vocabulary"));
+  const index = indexSnapshot(snapshot.data);
+
+  async function reload() {
+    void snapshot.reload();
+    return reloadRows();
+  }
   const { saving, error: saveError, fieldErrors, run, reset } = useMutation();
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Certification | null>(null);
   const [form, setForm] = useState(EMPTY);
   const [toDelete, setToDelete] = useState<Certification | null>(null);
+  const standard = vocabulary.data?.standards.find((item) => item.code === form.standard_code);
 
   function openCreate() {
     reset();
@@ -65,8 +83,9 @@ export default function CertificationsPage() {
       scope: certification.scope ?? "",
       issued_at: certification.issued_at ?? "",
       expires_at: certification.expires_at ?? "",
-      verification_status: certification.verification_status,
       notes: certification.notes ?? "",
+      standard_code: certification.standard_code ?? "",
+      level: certification.level ?? "",
     });
     setEditing(certification);
     setOpen(true);
@@ -103,9 +122,14 @@ export default function CertificationsPage() {
         title="Certificacions"
         description="ISO, acreditacions i certificats. L'estat de vigència es calcula sempre a partir de la data de caducitat."
         actions={
-          <Button variant="primary" onClick={openCreate}>
-            Nova certificació
-          </Button>
+          <>
+            <LinkButton href="/empresa/coneixement" variant="secondary" size="md">
+              Abast i verificació
+            </LinkButton>
+            <Button variant="primary" onClick={openCreate}>
+              Nova certificació
+            </Button>
+          </>
         }
       />
 
@@ -159,12 +183,13 @@ export default function CertificationsPage() {
                 ),
               },
               {
-                header: "Verificació",
-                cell: (certification) => (
-                  <StatusPill level={VERIFICATION_LEVEL[certification.verification_status]} size="sm">
-                    {VERIFICATION_STATUS_LABELS[certification.verification_status]}
-                  </StatusPill>
-                ),
+                header: "Acreditació",
+                cell: (certification) =>
+                  snapshot.data ? (
+                    <StatePills value={recordState(certification.id, certification.lifecycle ?? "current", index)} />
+                  ) : (
+                    <span className="text-muted">—</span>
+                  ),
               },
             ]}
           />
@@ -188,6 +213,12 @@ export default function CertificationsPage() {
       >
         <form id="certification-form" onSubmit={save} className="space-y-4">
           {saveError && <ErrorNotice message={saveError} />}
+          {editing && index.claims.get(editing.id)?.source === "current_verified" && (
+            <p role="note" className="rounded-card border border-warning/25 bg-warning-soft px-4 py-3 text-body text-ink">
+              Aquesta certificació està verificada. Si en canvies el contingut tornarà a «pendent de verificar»:
+              l&apos;evidència es conserva, però caldrà tornar-la a verificar.
+            </p>
+          )}
           <Field label="Nom" required error={fieldErrors.name}>
             <Input
               value={form.name}
@@ -230,19 +261,35 @@ export default function CertificationsPage() {
               />
             </Field>
           </div>
-          <Field label="Estat de verificació">
-            <Select
-              value={form.verification_status}
-              options={[
-                { value: "pending_verification", label: "Pendent de verificar" },
-                { value: "verified", label: "Verificat" },
-              ]}
-              onChange={(event) =>
-                setForm({ ...form, verification_status: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Abast">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Norma" hint="Permet comparar-la amb el que demana un plec.">
+              <Select
+                value={form.standard_code}
+                placeholder="Sense norma del vocabulari"
+                options={(vocabulary.data?.standards ?? []).map((item) => ({
+                  value: item.code,
+                  label: standardLabel(item.code, vocabulary.data),
+                }))}
+                onChange={(event) => setForm({ ...form, standard_code: event.target.value, level: "" })}
+              />
+            </Field>
+            {standard?.levels && (
+              <Field label="Nivell" error={fieldErrors.level}>
+                <Select
+                  value={form.level}
+                  placeholder="Sense nivell"
+                  options={standard.levels.map((level) => ({ value: level, label: levelLabel(level) }))}
+                  onChange={(event) => setForm({ ...form, level: event.target.value })}
+                />
+              </Field>
+            )}
+          </div>
+          <p className="text-caption text-muted">
+            Una certificació es verifica amb evidència: adjunta&apos;n el certificat i verifica-la des de{" "}
+            <span className="font-medium text-ink">Coneixement de l&apos;empresa</span>, on també s&apos;estructura
+            l&apos;abast.
+          </p>
+          <Field label="Abast (nota)" hint="Text lliure. No es fa servir per deduir què cobreix el certificat.">
             <Textarea
               rows={2}
               value={form.scope}

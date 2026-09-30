@@ -24,6 +24,7 @@ from app.api.v1.routers import (
     issues,
     job_requests,
     knowledge,
+    knowledge_records,
     matching,
     people,
     platform,
@@ -84,6 +85,7 @@ company_scoped.include_router(receptions.router)
 company_scoped.include_router(document_classification.router)
 # Motor d'analisi, fase 2: coneixement actual de l'empresa i historic.
 company_scoped.include_router(knowledge.router)
+company_scoped.include_router(knowledge_records.router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

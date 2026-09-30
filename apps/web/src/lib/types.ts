@@ -58,7 +58,15 @@ export type LinkedEntityType =
   | "company_insurance"
   | "company_person"
   | "person_qualification"
-  | "company_project";
+  | "company_project"
+  // Coneixement de l'empresa (fase 2 del motor).
+  | "company_operating_fact"
+  | "company_solution"
+  | "solution_capability"
+  | "company_product"
+  | "solution_product"
+  | "company_partner"
+  | "partner_role";
 export type RelationshipType =
   | "certificate"
   | "certificate_of_good_execution"
@@ -153,6 +161,9 @@ export interface Service extends Audited {
   specialization_level: SpecializationLevel | null;
   active: boolean;
   notes: string | null;
+  /** Línia del vocabulari global: sense línia, el servei no compta al coneixement. */
+  service_line_code?: string | null;
+  delivery_mode?: string | null;
 }
 
 export interface Territory extends Audited {
@@ -199,8 +210,14 @@ export interface Certification extends Audited {
   issued_at: string | null;
   expires_at: string | null;
   temporal_status: TemporalStatus;
+  /** El que diu la fila. L'estat que es mostra surt de la fotografia de coneixement. */
   verification_status: VerificationStatus;
   notes: string | null;
+  standard_code?: string | null;
+  level?: string | null;
+  /** Abast estructurat; el text de `scope` és només una nota. */
+  scope_service_lines?: string[] | null;
+  lifecycle?: "current" | "in_progress" | "retired";
 }
 
 export interface CPVPreference {

@@ -122,6 +122,13 @@ export const ENTITY_TYPE_LABELS: Record<LinkedEntityType, string> = {
   company_person: "Persona",
   person_qualification: "Titulació",
   company_project: "Projecte",
+  company_operating_fact: "Fet operatiu",
+  company_solution: "Solució",
+  solution_capability: "Capacitat d'una solució",
+  company_product: "Producte",
+  solution_product: "Producte d'una solució",
+  company_partner: "Partner",
+  partner_role: "Paper d'un partner",
 };
 
 export function optionsFrom<T extends string>(labels: Record<T, string>) {

@@ -1,8 +1,8 @@
 # Motor d'anàlisi de licitacions noves
 
 > Estat: **disseny v0 aprovat**. Fase 1 implementada ([intake.md](intake.md)).
-> Fase 2 implementada ([knowledge.md](knowledge.md)). La resta, sense
-> implementar. Data: 2026-09-30.
+> Fase 2 implementada, amb la pantalla de validació ([knowledge.md](knowledge.md)).
+> La resta, sense implementar. Data: 2026-09-30.
 > Primer client: Indaleccius. Cas pilot: Ajuntament de l'Escala, *Telecomunicacions
 > 2027* (fitxa del pilot a `var/knowledge/indaleccius/pilot_lescala_2026.md`,
 > fora de git perquè creua el plec amb dades internes de l'empresa).

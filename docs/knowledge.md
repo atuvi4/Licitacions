@@ -1,6 +1,7 @@
 # Coneixement de l'empresa
 
-> Fase 2 del [motor d'anàlisi](analysis-engine.md). Data: 2026-09-30.
+> Fase 2 del [motor d'anàlisi](analysis-engine.md): 2A, model i fotografia;
+> 2B, declaració directa i pantalla de validació. Data: 2026-09-30.
 
 Aquesta capa respon una pregunta:
 
@@ -95,6 +96,36 @@ Com que els enllaços són polimòrfics i la base no ho pot imposar, la regla é
 * **El snapshot** tampoc no es creu un `verified` sense evidència (dades
   anteriors a la regla). El compta com a declarat i ho diu a
   `pending_validation`.
+* **Una fila antiga `verified` sense evidència continua sent editable.** Si es
+  modifica per una altra cosa (l'abast, una data), el canvi es desa i la fila
+  torna a `pending_verification`, que és el que el snapshot ja en deia. Només
+  es refusa (`422`) quan la petició demana explícitament `verified`.
+
+Cada afirmació del snapshot porta `has_evidence`. Així es distingeix una dada
+declarada **sense evidència** d'una que **ja en té i només falta verificar**.
+
+#### Una verificació val per al que es va verificar
+
+```text
+verificada + evidència  ──edició material──▶  pendent de verificar + evidència
+```
+
+**Modificar materialment una dada verificada n'invalida la verificació.** Torna
+a `pending_verification` i **l'evidència es conserva**: queda «declarada,
+pendent de verificar», no «sense evidència». Per tornar-la a verificar cal
+`/verify`.
+
+* **Val per a tot el que es pot editar**: certificacions, serveis, fets,
+  solucions, capacitats, productes, tercers i els seus papers.
+* **És material qualsevol camp**, tret de `notes`. Canviar el nivell, l'abast,
+  la vigència, el valor o el nom desverifica; retocar una nota interna, no.
+* **Desar el mateix valor no és un canvi.** Un formulari que envia tots els
+  camps sense tocar-ne cap no desverifica res.
+* **Editar i demanar `verified` a la mateixa petició** no salta el pas: la dada
+  queda pendent.
+
+La regla és a `knowledge_evidence.unverify_if_materially_changed`, i la fan
+servir tant els CRUD de certificacions i serveis com `update_record`.
 
 Totes les entitats de coneixement nou (fets, solucions, capacitats, productes,
 tercers, papers) són ara `LinkedEntityType`, i s'hi poden enllaçar documents amb
@@ -192,11 +223,97 @@ Totes les rutes pengen de `/companies/{company_id}/knowledge`:
 | `POST /observations/{id}/promote` | `owner` · `admin` · `bid_manager` |
 | `POST /observations/{id}/dismiss` (amb nota) | Ídem |
 | `POST /records/{kind}/{id}/verify` | `owner` · `admin` |
+| `GET /vocabulary` | Qualsevol membre. Línies de servei, capacitats i normes, només lectura. |
+| `GET /records` | Qualsevol membre. Les files declarables, per editar-les. **No porten `verification_status`**: l'estat efectiu el diu el snapshot. |
+| `POST /records/{kind}` | `owner` · `admin` · `bid_manager` · `technical`. Declara coneixement actual. |
+| `PATCH /records/{kind}/{id}` | Ídem. Editar i retirar. |
+| `DELETE /records/{kind}/{id}` | `owner` · `admin` |
 
 Una fila o una observació d'una altra empresa dona `404`. L'auditoria porta
 identificadors i codis, mai el contingut.
 
-## 7. Dades confidencials
+### Qui pot modificar el coneixement
+
+La política és a `app/knowledge/access.py`:
+
+| Acció | Rols |
+| --- | --- |
+| Llegir | Qualsevol membre |
+| Declarar, editar, retirar, i posar o treure evidència | `owner` · `admin` · `bid_manager` · `technical` |
+| Eliminar físicament | `owner` · `admin` |
+| Confirmar o descartar l'històric | `owner` · `admin` · `bid_manager` |
+| Verificar | `owner` · `admin` |
+
+**Qui només consulta (`viewer`) no modifica res**, tampoc per les rutes que ja
+existien: els CRUD de certificacions i serveis i els enllaços d'evidència de
+qualsevol dada de coneixement apliquen la mateixa política. Treure l'última
+evidència desverifica una dada, i per això també compta com a modificar-la.
+
+Una escriptura sense permís respon `403 permission_denied`: qui pregunta és
+membre i pot llegir la dada. Confirmar, descartar i verificar continuen responent
+`404`, com a la fase 2A.
+
+### Declaració directa
+
+`{kind}` és `operating_fact`, `solution`, `solution_capability`, `product`,
+`solution_product`, `partner` o `partner_role`. Les certificacions i els serveis
+es declaren amb els seus CRUD.
+
+* **Tot el que es declara neix `declared` i `pending_verification`.** Cap
+  payload no accepta `verification_status` ni `knowledge_origin`.
+* **Una alta és la mateixa proposta que portaria una observació**, més la
+  procedència (`as_of`, `valid_until`, `lifecycle`). Promoure i declarar passen
+  pel mateix constructor (`_new_entity`): només canvia l'origen.
+* **El vocabulari mana.** Una línia, una capacitat o un valor fora del
+  vocabulari dona `422`: una capacitat booleana no porta valor, una numèrica
+  porta un nombre i una ordinal, un nivell de la seva escala.
+* **Les filles pengen del pare de la mateixa empresa** (capacitats d'una
+  solució, papers d'un tercer). Si el pare és d'una altra empresa, `404`.
+* **Declarar dues vegades la mateixa clau** dona `409 knowledge_already_declared`.
+* **Modificar** no toca l'origen. Si la dada era verificada i el canvi és
+  material, torna a pendent de verificar (§3.1). **Retirar** una dada
+  (`lifecycle = retired`) la treu del snapshot sense esborrar-la.
+* **Esborrar** una dada neteja també l'evidència enllaçada, la seva i la de les
+  seves filles.
+
+## 7. Pantalla «Coneixement de l'empresa»
+
+`/empresa/coneixement`, dins de la secció Empresa. Tres vistes sobre les
+mateixes dades:
+
+| Vista | Què hi ha |
+| --- | --- |
+| **Pendents de validar** | Les dades actuals que encara no es poden acreditar (què hi falta i com resoldre-ho) i els suggeriments de l'històric, per categoria. Els que només es poden descartar van al final. |
+| **Coneixement actual** | Certificacions, serveis, fets operatius, solucions, capacitats, productes i partners. A cada categoria hi ha el que és actual, el que només diu l'històric i el que no se sap. |
+| **Històric detectat** | Tots els candidats, per categoria. |
+
+**L'estat que es pinta surt sempre del snapshot**, mai del
+`verification_status` d'una fila (`apps/web/src/lib/knowledge.ts`):
+
+| Es mostra | Quan |
+| --- | --- |
+| Verificat | El snapshot diu `current_verified` (hi ha evidència) |
+| Declarat · Falta evidència | `current_declared` sense cap document |
+| Declarat · Pendent de verificar | `current_declared` amb evidència enllaçada |
+| Abast desconegut | Certificació sense `scope_service_lines` |
+| En tràmit · Caducat · Retirat | La fila existeix però el snapshot no la compta |
+| Històric detectat | Només en parla una observació candidata |
+| Desconegut | No hi ha res. Només per a llistes tancades: normes, fets i línies |
+
+Des de la pantalla es pot confirmar o descartar un candidat, declarar i editar
+coneixement, estructurar l'abast d'una certificació, enllaçar evidència (el
+mateix panell de documents de tota l'app) i verificar. Verificar sense evidència
+mostra el `422 evidence_required` com una explicació i obre el panell.
+
+La pantalla segueix la mateixa política de rols: qui només consulta ho veu tot,
+amb les accions desactivades i l'evidència en mode de lectura; «Elimina» només
+surt a propietari i administració. Abans d'editar una dada verificada, el diàleg
+avisa que tornarà a pendent de verificar.
+
+La pantalla de certificacions que ja existia mostra el mateix estat efectiu i ja
+no deixa triar «Verificat» a mà; la de serveis demana la línia de servei.
+
+## 8. Dades confidencials
 
 * **No hi ha cap camp** de cost, marge, tarifa, percentatge ni condició
   comercial.
@@ -208,13 +325,21 @@ identificadors i codis, mai el contingut.
   `KNOWLEDGE_GOLD_INDALECCIUS` o a `var/gold/indaleccius-knowledge.json`, i se
   salta si no hi és.
 
-## 8. Límits coneguts
+## 9. Límits coneguts
 
-* **Declarar solucions, productes, tercers, fets i capacitats** encara no té
-  API: avui entren promovent observacions o amb el servei. Certificacions i
-  serveis sí que tenen CRUD.
 * **N'hi ha prou amb qualsevol document enllaçat.** L'evidència no es
   classifica per tipus de relació ni es comprova que el document sigui vigent.
+* **Afegir un paper a un tercer verificat, o una capacitat a una solució
+  verificada, no desverifica el pare.** El paper o la capacitat són una dada
+  pròpia, que neix declarada.
+* **Les pantalles de certificacions i serveis que ja existien** no desactiven
+  els botons segons el rol: l'API respon `403` i el formulari ho mostra.
+* **Els papers d'un tercer i els productes d'una solució** no tenen evidència
+  ni verificació pròpies a la pantalla: s'editen dins del seu pare.
+* **L'històric d'una licitació concreta** (`historic_bids`) no es consulta des
+  de la pantalla: només se'n veuen les observacions.
+* **No hi ha importació des de la interfície**: l'històric hi arriba per
+  `import_knowledge`.
 * **Especificacions de producte** (PoE, ports…): les capacitats es declaren a
   nivell de solució, no de producte.
 * **No hi ha preus ni polítiques comercials**: la taula `company_policies` i

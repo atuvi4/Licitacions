@@ -17,8 +17,15 @@ from app.core.errors import (
     NotFoundError,
     PayloadTooLargeError,
 )
+from app.knowledge import access
 from app.models.documents import Document, DocumentLink
-from app.models.enums import AuditAction, DocumentCategory, LinkedEntityType, RelationshipType
+from app.models.enums import (
+    AuditAction,
+    DocumentCategory,
+    LinkedEntityType,
+    MembershipRole,
+    RelationshipType,
+)
 from app.schemas.documents import (
     DocumentLinkCreate,
     DocumentLinkRead,
@@ -36,6 +43,17 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 evidence_router = APIRouter(prefix="/evidence", tags=["documents"])
 
 _CHUNK = 1024 * 1024
+
+
+def _authorize_evidence(role: MembershipRole, entity_types) -> None:
+    """Posar o treure l'evidencia d'una dada de coneixement n'altera l'acreditacio
+    (treure l'ultim document la desverifica): demana el mateix rol que editar-la.
+    La resta d'enllacos (projectes, persones, polisses...) no canvien."""
+    if any(
+        LinkedEntityType(entity_type) in knowledge_evidence.MODEL_BY_ENTITY_TYPE
+        for entity_type in entity_types
+    ):
+        access.assert_can_edit(role)
 
 
 async def _read_upload(file: UploadFile) -> bytes:
@@ -128,6 +146,7 @@ async def upload_document(
     # Si es demana crear l'enllac d'evidencia alhora, es valida ABANS de pujar
     # el binari per no deixar fitxers orfes a l'storage.
     if entity_type is not None and entity_id is not None:
+        _authorize_evidence(ctx.membership.role, [entity_type])
         await assert_entity_in_company(session, entity_type, entity_id, ctx.company_id)
 
     storage_key = build_storage_key(ctx.company_id, extension_for(mime_type, original_filename))
@@ -216,6 +235,7 @@ async def delete_document(
     # Si aquest document era l'unica evidencia d'un coneixement verificat, deixa de
     # ser-ho: es llegeixen els enllacos abans que caiguin.
     targets = [(link.entity_type, link.entity_id) for link in document.links]
+    _authorize_evidence(ctx.membership.role, [entity_type for entity_type, _ in targets])
     await session.delete(document)  # els enllacos cauen per FK ON DELETE CASCADE
     await session.flush()
     await knowledge_evidence.revoke_unsupported_verifications(session, ctx.company_id, targets)
@@ -288,6 +308,7 @@ async def list_links(document_id: uuid.UUID, session: SessionDep, ctx: CompanyCt
 async def create_link(
     document_id: uuid.UUID, payload: DocumentLinkCreate, session: SessionDep, ctx: CompanyCtx
 ):
+    _authorize_evidence(ctx.membership.role, [payload.entity_type])
     document = await get_owned_or_404(session, Document, document_id, ctx.company_id)
     await assert_entity_in_company(session, payload.entity_type, payload.entity_id, ctx.company_id)
 
@@ -327,6 +348,7 @@ async def delete_link(
     if link is None:
         raise NotFoundError("Enllac no trobat.")
     target = (link.entity_type, link.entity_id)
+    _authorize_evidence(ctx.membership.role, [link.entity_type])
     await session.delete(link)
     await session.flush()
     # Sense cap altra evidencia, el coneixement verificat deixa de ser-ho.

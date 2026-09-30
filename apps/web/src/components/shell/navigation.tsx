@@ -39,6 +39,7 @@ export const NAVIGATION_GROUPS: NavGroup[] = [
 /** Subnavegació de la secció Empresa (barra lateral i `ProfileSubnav`). */
 export const PROFILE_SUBNAV: Array<{ href: string; label: string }> = [
   { href: "/empresa", label: "Totes les àrees" },
+  { href: "/empresa/coneixement", label: "Coneixement" },
   { href: "/documents", label: "Biblioteca de documents" },
   { href: "/experiencia", label: "Experiència" },
 ];
@@ -55,7 +56,11 @@ export function isNavigationActive(pathname: string, href: string): boolean {
   return underPrefix(pathname, href);
 }
 
-/** Dins de la secció, cada subdestí marca només el seu prefix. */
+/**
+ * Dins de la secció, cada subdestí marca només el seu prefix. «Totes les
+ * àrees» cedeix a un subdestí més concret que també penja d'`/empresa`.
+ */
 export function isSubnavActive(pathname: string, href: string): boolean {
-  return underPrefix(pathname, href);
+  if (!underPrefix(pathname, href)) return false;
+  return !PROFILE_SUBNAV.some((item) => item.href !== href && item.href.startsWith(`${href}/`) && underPrefix(pathname, item.href));
 }
