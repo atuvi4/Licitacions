@@ -268,6 +268,107 @@ class TenderDocumentType(StrEnum):
 
 
 # ---------------------------------------------------------------------------
+# Motor d'analisi, fase 1. Dues capes que no s'han de barrejar:
+#
+# * RECEPCIO: com han arribat uns documents (per quin canal, que se n'ha acceptat
+#   i que no). No sap res de rols.
+# * CLASSIFICACIO: que es cada document de la licitacio, vingui d'on vingui.
+# ---------------------------------------------------------------------------
+
+
+class ReceptionChannel(StrEnum):
+    """Per on han arribat els documents. Un canal nou es un adaptador nou.
+
+    Previstos i encara no implementats: Google Drive, plataformes de
+    contractacio, API i altres connectors. S'afegiran aqui (i al CHECK) quan
+    existeixin, no abans.
+    """
+
+    ZIP_UPLOAD = "zip_upload"
+
+
+class ReceptionStatus(StrEnum):
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    #: Hi ha hagut un error despres d'acceptar l'entrega. Els documents que ja
+    #: s'havien creat es conserven; la recepcio ho diu en comptes d'amagar-ho.
+    FAILED = "failed"
+
+
+class ReceptionItemStatus(StrEnum):
+    ACCEPTED = "accepted"
+    SKIPPED = "skipped"
+    #: Un contenidor (un ZIP dins del ZIP) que s'ha obert: els seus fitxers son
+    #: elements propis.
+    EXPANDED = "expanded"
+
+
+class ReceptionSkipReason(StrEnum):
+    SYSTEM_FILE = "system_file"            # __MACOSX, .DS_Store, ~$temporal...
+    EMPTY = "empty"
+    TOO_LARGE = "too_large"
+    UNSUPPORTED_TYPE = "unsupported_type"
+    TYPE_MISMATCH = "type_mismatch"        # els bytes contradiuen l'extensio
+    NESTED_TOO_DEEP = "nested_too_deep"
+    UNREADABLE_ARCHIVE = "unreadable_archive"  # ZIP intern corrupte
+
+
+class DocumentRole(StrEnum):
+    """Que es un document dins d'un expedient. Mes fi que `TenderDocumentType`.
+
+    Taxonomia tancada: el classificador no pot inventar rols.
+    """
+
+    PCAP = "pcap"
+    PPT = "ppt"
+    CHARACTERISTICS_TABLE = "characteristics_table"
+    OFFER_MODEL = "offer_model"
+    INVENTORY_ANNEX = "inventory_annex"
+    JUSTIFICATION_REPORT = "justification_report"
+    APPROVAL_RESOLUTION = "approval_resolution"
+    ADMINISTRATIVE_FORM = "administrative_form"
+    NOTICE = "notice"
+    OTHER = "other"
+
+
+class RoleConfidence(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class RoleSource(StrEnum):
+    CLASSIFIER = "classifier"
+    PERSON = "person"
+
+
+class ClassificationTrigger(StrEnum):
+    #: Han arribat documents nous (per qualsevol canal).
+    RECEPTION = "reception"
+    #: Algu ho ha demanat (per exemple, despres d'una pujada individual).
+    REQUEST = "request"
+
+
+class ClassificationFindingCode(StrEnum):
+    TITLE_CONTENT_MISMATCH = "title_content_mismatch"
+    DUPLICATE_BYTES = "duplicate_bytes"
+    DUPLICATE_TEXT = "duplicate_text"
+    DUPLICATE_INTERNAL_CODE = "duplicate_internal_code"
+    REFERENCED_DOCUMENT_MISSING = "referenced_document_missing"
+    REQUIRED_ROLE_MISSING = "required_role_missing"
+    NO_TEXT = "no_text"
+    FORMAT_NOT_ANALYZABLE = "format_not_analyzable"
+    ROLE_UNDETERMINED = "role_undetermined"
+
+
+class FindingSeverity(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
+
+
+# ---------------------------------------------------------------------------
 # Pre-fit: encaix calculat NOMES amb metadades publiques i preferencies de
 # l'empresa. No es una validacio del plec ni un Go/No-Go.
 # ---------------------------------------------------------------------------

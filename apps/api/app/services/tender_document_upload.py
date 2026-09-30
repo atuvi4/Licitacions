@@ -158,6 +158,48 @@ async def upload_tender_document(
     SHA-256 i la seguent pujada dels mateixos bytes el reaprofita.
     """
     mime_type = validate_tender_upload(data, declared_mime_type)
+    document, file, content = await store_uploaded_document(
+        session,
+        tender=tender,
+        user=user,
+        filename=filename,
+        declared_mime_type=declared_mime_type,
+        data=data,
+        mime_type=mime_type,
+        document_type=document_type,
+    )
+
+    extraction, _done = await _ensure_current_extraction(session, content, force=False)
+    # Un plec nou es un canvi de la licitacio, exactament igual que si hagues
+    # arribat per la font. Es la mateixa porta i el mateix `DOCUMENT_ADDED`.
+    await _record_tender_revision(session, tender.id)
+    await session.refresh(file)
+    return UploadOutcome(
+        document=document,
+        file=file,
+        content=content,
+        extraction=extraction,
+    )
+
+
+async def store_uploaded_document(
+    session: AsyncSession,
+    *,
+    tender: Tender,
+    user: User,
+    filename: str | None,
+    declared_mime_type: str | None,
+    data: bytes,
+    mime_type: str,
+    document_type: TenderDocumentType = TenderDocumentType.OTHER,
+) -> tuple[TenderDocument, TenderDocumentFile, TenderDocumentContent]:
+    """Els bytes i les dues files que hi apunten, ja desats. Sense llegir-ne el text.
+
+    Es la meitat "guardar" de `upload_tender_document`. La ingesta d'un paquet
+    la fa servir per a cada fitxer i llegeix els textos despres, tots junts: un
+    paquet de deu fitxers no ha de deixar deu revisions de la licitacio.
+    `mime_type` ja ha d'estar validat (`validate_tender_upload`).
+    """
     name = sanitize_filename(filename)
     digest = compute_sha256(data)
 
@@ -204,18 +246,7 @@ async def upload_tender_document(
     session.add(file)
     await session.commit()
     await session.refresh(file)
-
-    extraction, _done = await _ensure_current_extraction(session, content, force=False)
-    # Un plec nou es un canvi de la licitacio, exactament igual que si hagues
-    # arribat per la font. Es la mateixa porta i el mateix `DOCUMENT_ADDED`.
-    await _record_tender_revision(session, tender.id)
-    await session.refresh(file)
-    return UploadOutcome(
-        document=document,
-        file=file,
-        content=content,
-        extraction=extraction,
-    )
+    return document, file, content
 
 
 @dataclass(frozen=True, slots=True)

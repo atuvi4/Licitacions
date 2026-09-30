@@ -1,0 +1,147 @@
+{
+  "case": "lescala-2026",
+  "description": "Ajuntament de l'Escala, Telecomunicacions 2027 (servei integral de telecomunicacions, telefonia IP, electronica de xarxa i fibra municipal). Documents tal com son a la carpeta de licitacio (arrel + 'Resta Documentació/'), rebuts com un paquet ZIP. Gold de la classificacio documental (fase 1 del motor d'analisi): el resultat no ha de dependre del canal.",
+  "reviewed_by": "analisi manual del 2026-09-29 (pilot_lescala_2026.md)",
+  "classifier_version": "document-roles-v1",
+  "archive": {
+    "default_location": "var/gold/lescala-2026.zip",
+    "env": "CLASSIFICATION_GOLD_LESCALA_ZIP",
+    "note": "Els fitxers reals no son al repositori. El test corre si el ZIP hi es i se salta si no; el bessó sintetic (tests/fixtures/tender_packages.py) cobreix les mateixes asserts sempre."
+  },
+  "documents": [
+    {
+      "path": "05_Model_Oferta_Economica_i_Criteris_Automatics.pdf",
+      "sha256": "dd502a965fc6dc28ebcfbbeffc2d838167528a1ced78324e109ac930561d96f4",
+      "role": "offer_model",
+      "confidence": "high",
+      "document_type": "additional",
+      "filename_role": "offer_model",
+      "content_role": "offer_model",
+      "declared_code": "DOC-05",
+      "duplicate_of": null,
+      "needs_review": false
+    },
+    {
+      "path": "04_Annex_Mestre_Inventaris_Ubicacions_FTTH_Telefonia.pdf",
+      "sha256": "f90bd3f72d72eb756566932c6f130491a181db507f89b9e2a2ae44a3c0f6a6f7",
+      "role": "characteristics_table",
+      "confidence": "high",
+      "document_type": "other",
+      "filename_role": "inventory_annex",
+      "content_role": "characteristics_table",
+      "declared_code": "DOC-03",
+      "duplicate_of": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf",
+      "needs_review": true
+    },
+    {
+      "path": "PPT (1).pdf",
+      "sha256": "c0c5e6f4a3f9abe05a7696aa2c8d300428a50687f93e5ec3697e70df79985d22",
+      "role": "ppt",
+      "confidence": "high",
+      "document_type": "technical_terms",
+      "filename_role": "ppt",
+      "content_role": "ppt",
+      "declared_code": "DOC-02",
+      "duplicate_of": null,
+      "needs_review": false
+    },
+    {
+      "path": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf",
+      "sha256": "076bdfc91b8e3d28928f8c8f59c4eab4b91bacf77d631f76227e9bef22bb3b40",
+      "role": "characteristics_table",
+      "confidence": "high",
+      "document_type": "administrative_terms",
+      "filename_role": "characteristics_table",
+      "content_role": "characteristics_table",
+      "declared_code": "DOC-03",
+      "duplicate_of": null,
+      "needs_review": false
+    },
+    {
+      "path": "06_Plantilla_Formules_Licitacio_Telecomunicacions (Definitiu).xlsx",
+      "sha256": "996aa185dec3ff8e62d6b4b62f23c4d9e8a2adf843aefb30b506bd0056ef426c",
+      "role": "offer_model",
+      "confidence": "medium",
+      "document_type": "other",
+      "filename_role": null,
+      "content_role": "offer_model",
+      "declared_code": null,
+      "duplicate_of": null,
+      "needs_review": true
+    },
+    {
+      "path": "PCAP (1).pdf",
+      "sha256": "a6ad319eb155cb46f42d79bb0dbb69bbd2e0dc682d41d6e19d8b4247059c65df",
+      "role": "pcap",
+      "confidence": "high",
+      "document_type": "administrative_terms",
+      "filename_role": "pcap",
+      "content_role": "pcap",
+      "declared_code": null,
+      "duplicate_of": null,
+      "needs_review": false
+    },
+    {
+      "path": "Resta Documentació/Informe de necessitat.pdf",
+      "sha256": "2c0fd272c2899c074df37d387b42d1c63e455ff183ed55045625fe99249e1d78",
+      "role": "justification_report",
+      "confidence": "high",
+      "document_type": "other",
+      "filename_role": "justification_report",
+      "content_role": "justification_report",
+      "declared_code": "DOC-01",
+      "duplicate_of": null,
+      "needs_review": false
+    },
+    {
+      "path": "Resta Documentació/Acord JGL PRP2026-2261.docx",
+      "sha256": "17f5e81553456de30583d1ea9381c1350d4b93eff344699daa3baede78bbd8f1",
+      "role": "approval_resolution",
+      "confidence": "high",
+      "document_type": "other",
+      "filename_role": "approval_resolution",
+      "content_role": "approval_resolution",
+      "declared_code": null,
+      "duplicate_of": null,
+      "needs_review": false
+    }
+  ],
+  "findings": [
+    {
+      "code": "referenced_document_missing",
+      "severity": "high",
+      "path": null,
+      "related_path": null,
+      "detail": {"code": "DOC-04", "declared_codes": ["DOC-01", "DOC-02", "DOC-03", "DOC-05"]},
+      "referenced_from": "PPT (1).pdf"
+    },
+    {
+      "code": "title_content_mismatch",
+      "severity": "high",
+      "path": "04_Annex_Mestre_Inventaris_Ubicacions_FTTH_Telefonia.pdf",
+      "related_path": null,
+      "detail": {"filename_role": "inventory_annex", "content_role": "characteristics_table"}
+    },
+    {
+      "code": "duplicate_text",
+      "severity": "high",
+      "path": "04_Annex_Mestre_Inventaris_Ubicacions_FTTH_Telefonia.pdf",
+      "related_path": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf",
+      "detail": {"declared_code": "DOC-03"}
+    },
+    {
+      "code": "format_not_analyzable",
+      "severity": "low",
+      "path": "06_Plantilla_Formules_Licitacio_Telecomunicacions (Definitiu).xlsx",
+      "related_path": null,
+      "detail": {"read_for_classification": true}
+    },
+    {
+      "code": "format_not_analyzable",
+      "severity": "low",
+      "path": "Resta Documentació/Acord JGL PRP2026-2261.docx",
+      "related_path": null,
+      "detail": {"read_for_classification": true}
+    }
+  ]
+}

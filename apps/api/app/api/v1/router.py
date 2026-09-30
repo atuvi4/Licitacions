@@ -16,6 +16,7 @@ from app.api.v1.routers import (
     cpv,
     credentials,
     dimensions,
+    document_classification,
     documents,
     dossier,
     economic_offer,
@@ -28,6 +29,7 @@ from app.api.v1.routers import (
     profile,
     projects,
     readiness,
+    receptions,
     requirements,
     review,
     solution_options,
@@ -75,6 +77,10 @@ company_scoped.include_router(job_requests.router)
 company_scoped.include_router(analysis_quotes.router)
 # Revisio canonica per empresa (S-R1). No fa servir els endpoints LEGACY de revisio.
 company_scoped.include_router(review.router)
+# Motor d'analisi, fase 1: recepcio de documents (per canal) i classificacio
+# documental (independent del canal).
+company_scoped.include_router(receptions.router)
+company_scoped.include_router(document_classification.router)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

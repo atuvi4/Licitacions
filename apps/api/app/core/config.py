@@ -112,6 +112,18 @@ class Settings(BaseSettings):
     # Un processat en curs mes antic que aixo es considera mort i es pot reclamar.
     DOCUMENT_PROCESSING_STALE_SECONDS: int = 300
 
+    # --- Ingesta de paquets ZIP (fase 1 del motor d'analisi) ---
+    # Cada fitxer de dins te el limit de sempre (`DOCUMENT_MAX_SIZE_MB`). Aquests
+    # son els del paquet sencer i existeixen per aturar bombes ZIP abans de
+    # descomprimir res: es comproven sobre les mides declarades, que `zipfile`
+    # no deixa superar en llegir.
+    INTAKE_MAX_ARCHIVE_MB: int = 100
+    INTAKE_MAX_MEMBERS: int = 200
+    INTAKE_MAX_TOTAL_UNCOMPRESSED_MB: int = 500
+    # Ratio descomprimit/comprimit a partir de la qual un fitxer gran es tracta
+    # com a bomba. Un PDF o un DOCX, que ja van comprimits, no s'hi acosten mai.
+    INTAKE_MAX_COMPRESSION_RATIO: int = 200
+
     # --- Capa d'IA (extraccio de requisits) ---
     # Proveidor d'inferencia:
     #   "anthropic" -> analisi real.

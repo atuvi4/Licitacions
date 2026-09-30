@@ -3,6 +3,12 @@
 from app.db.base import Base
 from app.models.analysis_quotes import AnalysisQuote
 from app.models.audit import AuditLog
+from app.models.classification import (
+    TenderDocumentClassificationFinding,
+    TenderDocumentClassificationRun,
+    TenderDocumentRoleDecision,
+    TenderDocumentRoleSuggestion,
+)
 from app.models.compliance import (
     AssessmentEvidence,
     CompanyComplianceRun,
@@ -31,6 +37,7 @@ from app.models.profile import (
 )
 from app.models.projects import CompanyProject, ProjectCPV, project_services
 from app.models.provenance import RequirementSourceRefLink, TenderSourceRef
+from app.models.reception import TenderDocumentReception, TenderDocumentReceptionItem
 from app.models.requirements import (
     AwardCriterion,
     AwardCriterionEvidence,
@@ -136,6 +143,12 @@ __all__ = [
     "TenderDocumentExtraction",
     "TenderDocumentFile",
     "TenderDocumentPage",
+    "TenderDocumentClassificationFinding",
+    "TenderDocumentClassificationRun",
+    "TenderDocumentReception",
+    "TenderDocumentReceptionItem",
+    "TenderDocumentRoleDecision",
+    "TenderDocumentRoleSuggestion",
     "TenderLot",
     "TenderLotCPV",
     "TenderRevision",

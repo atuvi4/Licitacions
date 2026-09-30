@@ -142,6 +142,25 @@ vigent i `SourceRecord.tender_id` permet llistar-ne l'historial.
 | `tender_cpvs` / `tender_lot_cpvs` | Què **és** una licitació. No confondre amb `company_cpv_preferences`, que és què **interessa** a una empresa. Reutilitzen el catàleg `cpv_codes` existent. |
 | `tender_documents` | Únic `(tender_id, url)`. Només metadada i enllaç: en aquesta fase no es descarrega cap plec. |
 
+## Recepció de documents i classificació documental (tenant)
+
+Fase 1 del motor d'anàlisi. Són dues capes que no es coneixen: la recepció diu
+per on han arribat els documents; la classificació diu què és cada document de
+la licitació, vingui del canal que vingui. El detall és a
+[`intake.md`](intake.md).
+
+| Taula | Notes |
+| --- | --- |
+| `tender_document_receptions` | Una entrega: `channel` (avui `zip_upload`), etiqueta, referència a l'origen, contenidor original (`container_content_id` → `tender_document_contents`, `RESTRICT`), estat i comptadors. |
+| `tender_document_reception_items` | Un fitxer de l'entrega: camí, mida, SHA-256, estat, `skip_reason` (CHECK: omès ⇔ amb motiu) i el `TenderDocument` creat (`SET NULL`). Únic `(reception_id, position)` i `(reception_id, path)`. |
+| `tender_document_classification_runs` | Una passada sobre **tots** els documents de la licitació: versió, empremta, disparador (`reception` · `request`) i `trigger_reception_id` (`SET NULL`, informatiu). Una de vigent per (empresa, licitació), per índex únic parcial. |
+| `tender_document_role_suggestions` | Rol, confiança, `document_type` proposat i senyals, per document i passada. |
+| `tender_document_classification_findings` | Incoherències del conjunt: codi, gravetat, document, document relacionat i detall. |
+| `tender_document_role_decisions` | El rol fixat per una persona. Únic `(company_id, tender_document_id)`: penja del document, no de la passada, i sobreviu a les reclassificacions. |
+
+Les filles referencien el pare per `(id, company_id)`. Tots els enums d'aquestes
+taules porten CHECK a la base.
+
 ## Pre-fit (tenant)
 
 Aquí és on es creuen les dues meitats del model: el perfil corporatiu (privat) i

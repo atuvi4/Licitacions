@@ -1450,3 +1450,46 @@ def test_l_estat_del_client_es_pot_aplicar_i_desfer():
     assert "ON DELETE SET NULL" in up
     assert "DELETE" not in down.upper().replace("ON DELETE", "")
 
+
+def test_la_recepcio_i_la_classificacio_es_poden_aplicar_i_desfer():
+    """0043 -> 0044 -> 0043: sis taules noves en dues capes, i res mes.
+
+    Els enums porten CHECK (la resta del projecte encara no), la tenancy de les
+    filles la lliga la clau composta, el contenidor original no es pot esborrar
+    mentre una recepcio hi apunti, i l'unic lligam entre la recepcio i la
+    classificacio es informatiu (`SET NULL`).
+    """
+    up = _offline_sql("upgrade", "0043_company_platform_status:0044_reception_classification")
+    down = _offline_sql("downgrade", "0044_reception_classification:0043_company_platform_status")
+
+    tables = (
+        "tender_document_receptions", "tender_document_reception_items",
+        "tender_document_classification_runs", "tender_document_role_suggestions",
+        "tender_document_classification_findings", "tender_document_role_decisions",
+    )
+    for table in tables:
+        assert f"CREATE TABLE {table}" in up, table
+        assert f"DROP TABLE {table}" in down, table
+    for name in (
+        "ck_tender_document_receptions_channel_valid",
+        "ck_tender_document_reception_items_skip_reason_iff_skipped",
+        "ck_tender_document_reception_items_document_only_if_accepted",
+        "ck_tender_document_classification_runs_trigger_valid",
+        "ck_tender_document_role_suggestions_role_valid",
+        "ck_tender_document_role_suggestions_document_type_valid",
+        "ck_tender_document_classification_findings_code_valid",
+        "ck_tender_document_role_decisions_role_valid",
+    ):
+        assert name in up, name
+    assert "REFERENCES tender_document_receptions (id, company_id) ON DELETE CASCADE" in up
+    assert (
+        "REFERENCES tender_document_classification_runs (id, company_id) ON DELETE CASCADE" in up
+    )
+    assert "REFERENCES tender_document_contents (id) ON DELETE RESTRICT" in up
+    assert "REFERENCES tender_document_receptions (id) ON DELETE SET NULL" in up
+    assert "uq_tender_document_classification_runs_current" in up
+    assert "WHERE is_current" in up
+    created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
+    assert created == set(re.findall(r"DROP INDEX (\w+)", down))
+    # Cap taula existent no es toca.
+    assert "ALTER TABLE" not in up.replace("ALTER TABLE alembic_version", "")
