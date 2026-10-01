@@ -153,6 +153,28 @@ export interface Company extends Audited {
   employee_count: number | null;
 }
 
+/* ----- Cobertura territorial del coneixement (0047) ------------------------ */
+
+export type CoverageCompleteness = "complete" | "partial" | "unknown";
+export type AreaKind = "municipality" | "comarca" | "province" | "region" | "country" | "address" | "custom";
+
+export interface CoverageArea {
+  kind: AreaKind;
+  label: string;
+  code: string | null;
+  code_system: string | null;
+}
+
+/**
+ * On és certa una dada (un fet, un servei, un paper d'un partner) i si la
+ * llista és tota. `unknown` sense cap àrea és l'estat neutre: no afirma res,
+ * i és el que té tota dada anterior a la cobertura estructurada.
+ */
+export interface Coverage {
+  completeness: CoverageCompleteness;
+  areas: CoverageArea[];
+}
+
 export interface Service extends Audited {
   company_id: string;
   name: string;
@@ -164,6 +186,8 @@ export interface Service extends Audited {
   /** Línia del vocabulari global: sense línia, el servei no compta al coneixement. */
   service_line_code?: string | null;
   delivery_mode?: string | null;
+  /** Cobertura territorial (0047): on es presta. Absent en respostes antigues. */
+  coverage?: Coverage;
 }
 
 export interface Territory extends Audited {

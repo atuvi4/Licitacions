@@ -899,4 +899,140 @@ describe("Coneixement de l'empresa", () => {
     fireEvent.click(screen.getByRole("button", { name: "Torna-ho a provar" }));
     expect(await screen.findByRole("tablist")).toBeTruthy();
   });
+
+  /* ----- Cobertura territorial (0047) ------------------------------------ */
+
+  const GIRONA = { completeness: "complete" as const, areas: [{ kind: "municipality" as const, label: "Girona", code: null, code_system: null }] };
+
+  it("edita la cobertura d'un fet: s'envia estructurada, i sense tocar-la no s'envia", async () => {
+    // En desar, l'API ja torna la cobertura nova i la pàgina la rellegeix.
+    patch.mockImplementation(async () => {
+      const records = recordsFixture();
+      records.operating_facts[0] = { ...records.operating_facts[0], coverage: GIRONA };
+      respond({ [`${BASE}/knowledge/records`]: records });
+      return {};
+    });
+    const { container } = await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+
+    fireEvent.click(within(record(container, "fact-tier3")).getByRole("button", { name: "Edita" }));
+    let dialog = screen.getByRole("dialog", { name: "Edita el fet operatiu" });
+    // Una dada antiga comença sense dir res del territori.
+    expect((within(dialog).getByLabelText(/^Completesa/) as HTMLSelectElement).value).toBe("unknown");
+    fireEvent.change(within(dialog).getByLabelText(/^Completesa/), { target: { value: "complete" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Afegeix una àrea" }));
+    fireEvent.change(within(dialog).getByLabelText("Nom de l'àrea 1"), { target: { value: " Municipi  A " } });
+    fireEvent.submit(dialog.querySelector("form")!);
+    await flush();
+    expect(patch).toHaveBeenCalledWith(`${BASE}/knowledge/records/operating_fact/fact-tier3`, {
+      value: true,
+      detail: "CPD en un centre Tier-3",
+      lifecycle: "current",
+      valid_until: null,
+      coverage: { completeness: "complete", areas: [{ kind: "municipality", label: "Municipi A", code: null, code_system: null }] },
+    });
+
+    // Amb cobertura desada (la pàgina ha rellegit les dades): l'editor la mostra,
+    // i si no es toca no viatja al PATCH.
+    await within(record(container, "fact-tier3")).findByText(/Cobertura completa: Girona/);
+    patch.mockClear();
+    fireEvent.click(within(record(container, "fact-tier3")).getByRole("button", { name: "Edita" }));
+    dialog = screen.getByRole("dialog", { name: "Edita el fet operatiu" });
+    expect((within(dialog).getByLabelText(/^Completesa/) as HTMLSelectElement).value).toBe("complete");
+    expect((within(dialog).getByLabelText("Nom de l'àrea 1") as HTMLInputElement).value).toBe("Girona");
+    fireEvent.change(within(dialog).getByLabelText(/Aclariment/), { target: { value: "CPD Tier-3" } });
+    fireEvent.submit(dialog.querySelector("form")!);
+    await flush();
+    expect(patch).toHaveBeenCalledWith(`${BASE}/knowledge/records/operating_fact/fact-tier3`, {
+      value: true,
+      detail: "CPD Tier-3",
+      lifecycle: "current",
+      valid_until: null,
+    });
+    expect(patch.mock.calls[0][1]).not.toHaveProperty("coverage");
+  });
+
+  it("treure l'última àrea i tornar a «sense especificar» també s'envia: és un canvi", async () => {
+    patch.mockResolvedValue({});
+    const records = recordsFixture();
+    records.partner_roles[0] = { ...records.partner_roles[0], coverage: GIRONA };
+    respond({ [`${BASE}/knowledge/records`]: records });
+    const { container } = await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+    const partner = record(container, "partner-1");
+    expect(partner.textContent).toContain("Subcontractista · Obra civil · Girona · Cobertura completa: Girona");
+
+    fireEvent.click(within(partner).getByRole("button", { name: /Edita el paper Subcontractista/ }));
+    const dialog = screen.getByRole("dialog", { name: "Edita el paper del partner" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Treu l'àrea 1" }));
+    fireEvent.change(within(dialog).getByLabelText(/^Completesa/), { target: { value: "unknown" } });
+    fireEvent.submit(dialog.querySelector("form")!);
+    await flush();
+    expect(patch).toHaveBeenCalledWith(`${BASE}/knowledge/records/partner_role/role-1`, {
+      role: "subcontractor",
+      service_line_code: "civil_works",
+      territory: "Girona",
+      lifecycle: "current",
+      valid_until: null,
+      coverage: { completeness: "unknown", areas: [] },
+    });
+  });
+
+  it("la cobertura es veu a la fila del fet, del servei i del paper, i es rellegeix després de desar", async () => {
+    const service = {
+      id: "svc-1", company_id: "c1", name: "FTTH", category: null, description: null, specialization_level: null, active: true, notes: null,
+      service_line_code: "access_ftth", delivery_mode: "own", coverage: { completeness: "partial" as const, areas: [{ kind: "comarca" as const, label: "Baix Empordà", code: null, code_system: null }] },
+      created_at: "2026-09-29T00:00:00Z", updated_at: "2026-09-29T00:00:00Z", created_by: null, updated_by: null,
+    };
+    respond({ [`${BASE}/services`]: [service] });
+    const { container } = await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+    expect(record(container, "svc-1").textContent).toContain("Accessos FTTH · Mitjans propis · Cobertura parcial: Baix Empordà");
+    expect(record(container, "fact-tier3").textContent).not.toContain("Cobertura");
+
+    // En desar, el que torna l'API és el que es pinta.
+    patch.mockImplementation(async () => {
+      const records = recordsFixture();
+      records.operating_facts[0] = { ...records.operating_facts[0], coverage: GIRONA };
+      respond({ [`${BASE}/services`]: [service], [`${BASE}/knowledge/records`]: records });
+      return {};
+    });
+    fireEvent.click(within(record(container, "fact-tier3")).getByRole("button", { name: "Edita" }));
+    const dialog = screen.getByRole("dialog", { name: "Edita el fet operatiu" });
+    fireEvent.change(within(dialog).getByLabelText(/^Completesa/), { target: { value: "complete" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Afegeix una àrea" }));
+    fireEvent.change(within(dialog).getByLabelText("Nom de l'àrea 1"), { target: { value: "Girona" } });
+    fireEvent.submit(dialog.querySelector("form")!);
+    await flush();
+    expect(record(container, "fact-tier3").textContent).toContain("Sí · CPD en un centre Tier-3 · Cobertura completa: Girona");
+    expect(container.textContent).not.toMatch(RAW_CODES);
+  });
+
+  it("declarar un servei o un paper nou amb cobertura l'envia; sense tocar-la, no", async () => {
+    post.mockResolvedValue({});
+    const { container } = await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Declara un servei" }));
+    let dialog = screen.getByRole("dialog", { name: "Declara un servei" });
+    fireEvent.change(within(dialog).getByLabelText(/Nom del servei/), { target: { value: "FTTH" } });
+    pickLine(dialog, "ftth", "Accessos FTTH");
+    fireEvent.change(within(dialog).getByLabelText(/^Completesa/), { target: { value: "partial" } });
+    fireEvent.submit(dialog.querySelector("form")!);
+    await flush();
+    expect(post).toHaveBeenCalledWith(`${BASE}/services`, {
+      name: "FTTH",
+      service_line_code: "access_ftth",
+      delivery_mode: null,
+      coverage: { completeness: "partial", areas: [] },
+    });
+
+    post.mockClear();
+    fireEvent.click(within(record(container, "partner-1")).getByRole("button", { name: "Afegeix un paper" }));
+    dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(/^Paper/), { target: { value: "wholesale_operator" } });
+    fireEvent.submit(dialog.querySelector("form")!);
+    await flush();
+    expect(post.mock.calls[0][1]).not.toHaveProperty("coverage");
+  });
 });

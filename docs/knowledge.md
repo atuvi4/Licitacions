@@ -68,6 +68,7 @@ Totes les files de coneixement actual porten aquests camps:
 | Productes d'una solució | `solution_products` | Nova |
 | Tercers | `company_partners` | Nova. Una sola taula per a proveïdors, operadors majoristes, subcontractistes i socis. **Sense condicions econòmiques.** |
 | Papers d'un tercer | `partner_roles` | Nova (paper, línia, territori) |
+| Cobertura territorial d'un fet, d'un servei o d'un paper | `knowledge_coverage_areas` + `coverage_completeness` | `0047` (§3.3). Una fila per àrea, penjada de la dada per `entity_type` + `entity_id`. |
 
 Les filles referencien el pare per `(id, company_id)`: res d'una empresa no pot
 penjar d'una fila d'una altra. Tots els enums porten CHECK.
@@ -139,6 +140,47 @@ contra el vocabulari. El text `scope` es conserva com a nota, però **no es lleg
 mai per deduir-ne cobertura**. Sense abast estructurat, la certificació surt amb
 `scope_status = scope_unknown` i com a pendent (`scope_unknown`).
 
+### 3.3 Cobertura territorial (fase 3A, pas 1: `0047`)
+
+Un fet operatiu, un servei o un paper d'un tercer poden dir **on** són certs i
+**si la llista és tota**:
+
+* `coverage_completeness` a la fila: `complete` («aquestes són totes les
+  àrees»), `partial` («n'hi ha més que no consten») o `unknown`;
+* `knowledge_coverage_areas`: una fila per àrea, amb `kind` (`municipality`,
+  `comarca`, `province`, `region`, `country`, `address`, `custom`), el `label`
+  tal com el diu l'empresa i, opcionalment, un `code` i el seu `code_system`
+  (INE, NUTS…). Sense FK a la dada, com els enllaços d'evidència: hi penja per
+  `entity_type` (`operating_fact` · `service` · `partner_role`) + `entity_id`, i
+  esborrar la dada (o el tercer, per als seus papers) la neteja.
+
+**L'estat neutre no afirma res.** `unknown` sense cap àrea és el que té tota
+dada d'abans de la `0047`: la migració hi posa `unknown` a tot, no crea cap
+àrea i **no llegeix ni transforma cap text** (`detail` del fet, `territory` del
+paper es queden com estan). La fotografia omet aquest estat del seu payload
+canònic, de manera que **migrar no canvia cap empremta**. Qualsevol altre estat
+sí que afirma alguna cosa i hi entra, també `complete` sense àrees («enlloc»)
+i `partial` sense àrees («en algun lloc que no consta»).
+
+**Les àrees són un conjunt.** La identitat d'una àrea és `(kind, code_system,
+code, label)` amb el nom normalitzat (espais; majúscules i accents compten).
+Un payload amb la mateixa àrea dues vegades **no es refusa: es desduplica
+determinísticament** (la primera es queda), com `scope_service_lines` d'una
+certificació; la base ho garanteix amb un índex únic per dada (els NULL de
+codi compten com a cadena buida). Un duplicat no crea cap fila, no surt dues
+vegades, no canvia l'empremta i no és cap canvi material. No s'hi resol cap
+equivalència geogràfica: «Banyoles» i «17015/INE» són dues àrees.
+
+**Un canvi material de cobertura és un canvi material de la dada** (§3.1):
+canviar la completesa o afegir, treure o modificar una àrea (nom, codi o
+sistema de codis) torna una dada verificada a `pending_verification` i
+conserva l'evidència. El mateix contingut —en un altre ordre o amb espais de
+més— no és cap canvi i no desverifica res.
+
+**Conservar no és comparar.** La fotografia guarda la cobertura tal qual i no
+en dedueix res: que un municipi no hi sigui no vol dir que no es cobreixi. El
+comparador territorial (plec ↔ empresa) és d'una fase posterior.
+
 ## 4. Històric
 
 * **`historic_bids`** guarda les licitacions analitzades: referència,
@@ -209,7 +251,12 @@ que ho sostenen i les pistes de l'històric:
 i la seva procedència, en ordre canònic:
 
 * **és estable:** no depèn de l'ordre ni de les marques de temps;
-* **canvia** si canvia el coneixement actual (nivell, verificació, vigència…);
+* **canvia** si canvia el coneixement actual (nivell, verificació, vigència…),
+  també la cobertura territorial quan en diu alguna cosa (§3.3): hi entren
+  `completeness` i, per àrea, `kind`, `label` (espais normalitzats), `code` i
+  `code_system`, ordenades per (kind, code_system, code, label);
+* **omet l'estat neutre de cobertura** (`unknown` sense àrees): la `0047` no
+  mou cap empremta;
 * **no inclou l'històric:** canviar una observació no canvia el que l'empresa
   pot acreditar.
 
@@ -275,7 +322,11 @@ es declaren amb els seus CRUD.
   material, torna a pendent de verificar (§3.1). **Retirar** una dada
   (`lifecycle = retired`) la treu del snapshot sense esborrar-la.
 * **Esborrar** una dada neteja també l'evidència enllaçada, la seva i la de les
-  seves filles.
+  seves filles, i la cobertura territorial.
+* **`coverage` és opcional** a l'alta i a la modificació de fets, papers i
+  serveis (també al CRUD de serveis). Sense enviar-la, la dada es comporta com
+  abans de la `0047`; enviar-la substitueix tota la cobertura (completesa i
+  àrees). A la lectura hi és sempre, en ordre canònic, també quan és neutra.
 
 ## 7. Pantalla «Coneixement de l'empresa»
 

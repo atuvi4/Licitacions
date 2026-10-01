@@ -50,6 +50,7 @@ from app.knowledge.snapshot import (
 from app.knowledge.vocabulary import validate_capability_value, validate_level
 from app.models.credentials import CompanyCertification
 from app.models.enums import (
+    CoverageEntityType,
     HistoricBidDecision,
     HistoricBidResult,
     KnowledgeLifecycle,
@@ -72,7 +73,7 @@ from app.models.knowledge import (
     SolutionProduct,
 )
 from app.models.profile import CompanyService
-from app.services import knowledge_evidence
+from app.services import knowledge_coverage, knowledge_evidence
 from app.services.entities import delete_links_for_entity
 
 
@@ -143,7 +144,13 @@ async def load_inputs(session: AsyncSession, company_id: uuid.UUID) -> Knowledge
             for c in certifications
         ],
         facts=[
-            FactIn(prov=_prov(f, evidence), key=str(f.key), value=f.value, detail=f.detail)
+            FactIn(
+                prov=_prov(f, evidence),
+                key=str(f.key),
+                value=f.value,
+                detail=f.detail,
+                coverage=knowledge_coverage.coverage_input(f),
+            )
             for f in await _rows(session, CompanyOperatingFact, company_id)
         ],
         services=[
@@ -159,6 +166,7 @@ async def load_inputs(session: AsyncSession, company_id: uuid.UUID) -> Knowledge
                 name=s.name,
                 service_line_code=s.service_line_code,
                 delivery_mode=str(s.delivery_mode) if s.delivery_mode else None,
+                coverage=knowledge_coverage.coverage_input(s),
             )
             for s in services
         ],
@@ -211,6 +219,7 @@ async def load_inputs(session: AsyncSession, company_id: uuid.UUID) -> Knowledge
                 role=str(r.role),
                 service_line_code=r.service_line_code,
                 territory=r.territory,
+                coverage=knowledge_coverage.coverage_input(r),
             )
             for r in await _rows(session, PartnerRoleRow, company_id)
         ],
@@ -585,10 +594,16 @@ async def declare_record(
     """Una persona declara coneixement actual. Neix declarat i pendent de verificar."""
     _kind_model(kind)
     provenance = _declared_provenance(payload)
+    coverage = getattr(payload, "coverage", None)
     if kind in ("operating_fact", "solution", "product", "partner"):
         # Els esquemes d'alta d'aquests tipus SON la proposta d'una observacio.
         assert isinstance(payload, P._Proposal), kind
-        return await _new_entity(session, company_id, payload, provenance, user)
+        entity = await _new_entity(session, company_id, payload, provenance, user)
+        if coverage is not None and knowledge_coverage.supports_coverage(entity):
+            await knowledge_coverage.apply_coverage(session, entity, coverage)
+            await session.flush()
+            await knowledge_coverage.refresh_coverage(session, entity)
+        return entity
 
     entity: Any
     if kind == "solution_capability":
@@ -625,7 +640,11 @@ async def declare_record(
         )
         what = f"{partner.name} / {payload.role}"
     session.add(entity)
+    if coverage is not None and knowledge_coverage.supports_coverage(entity):
+        await knowledge_coverage.apply_coverage(session, entity, coverage)
     await _flush_or_conflict(session, what)
+    if knowledge_coverage.supports_coverage(entity):
+        await knowledge_coverage.refresh_coverage(session, entity)
     return entity
 
 
@@ -646,10 +665,19 @@ async def update_record(
     a verificar."""
     _, model = _kind_model(kind)
     record = await _owned(session, model, record_id, company_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    # La cobertura no es cap columna de la fila: s'aplica a part, com un tot.
+    coverage = getattr(payload, "coverage", None) if changes.pop("coverage", None) else None
+    for field, value in changes.items():
         setattr(record, field, value)
     # Abans de qualsevol consulta: l'autoflush esborraria l'historial dels camps.
     unverified = knowledge_evidence.unverify_if_materially_changed(record)
+    if coverage is not None and knowledge_coverage.supports_coverage(record):
+        # El mateix payload de cobertura no es cap canvi; un de diferent, si.
+        if await knowledge_coverage.apply_coverage(session, record, coverage):
+            unverified = (
+                knowledge_coverage.unverify_for_coverage_change(record, asked=False) or unverified
+            )
     if record.valid_until is not None and record.valid_until < record.as_of:
         raise InvalidKnowledgeError(
             "`valid_until` no pot ser anterior a `as_of`.", details={"field": "valid_until"}
@@ -657,6 +685,8 @@ async def update_record(
     if isinstance(record, SolutionCapability):
         _check_capability(record)
     await _flush_or_conflict(session, str(record_id))
+    if knowledge_coverage.supports_coverage(record):
+        await knowledge_coverage.refresh_coverage(session, record)
     return record, unverified
 
 
@@ -694,8 +724,19 @@ async def delete_record(
         targets.extend((child_type, child_id) for child_id in ids)
     for target_type, target_id in targets:
         await delete_links_for_entity(session, target_type, target_id)
+        coverage_type = _COVERAGE_TYPE_BY_LINK.get(target_type)
+        if coverage_type is not None:
+            await knowledge_coverage.delete_coverage_for_entity(session, coverage_type, target_id)
     await session.delete(record)
     await session.flush()
+
+
+#: Tipus d'entitat enllacable → tipus de cobertura, per a les dades que en tenen.
+_COVERAGE_TYPE_BY_LINK = {
+    LinkedEntityType.COMPANY_OPERATING_FACT: CoverageEntityType.OPERATING_FACT,
+    LinkedEntityType.COMPANY_SERVICE: CoverageEntityType.SERVICE,
+    LinkedEntityType.PARTNER_ROLE: CoverageEntityType.PARTNER_ROLE,
+}
 
 
 async def list_records(session: AsyncSession, company_id: uuid.UUID) -> dict[str, list[Any]]:

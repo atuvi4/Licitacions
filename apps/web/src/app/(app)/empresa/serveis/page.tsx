@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
+import { CoverageEditor } from "@/components/knowledge/CoverageEditor";
 import {
   Button,
   Card,
@@ -25,7 +26,16 @@ import {
 import { api, cleanPayload } from "@/lib/api";
 import { optionsFrom, SPECIALIZATION_LABELS } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
-import { DELIVERY_MODE_LABELS, serviceLineLabel, type Vocabulary } from "@/lib/knowledge";
+import {
+  DELIVERY_MODE_LABELS,
+  NEUTRAL_COVERAGE,
+  cleanCoverage,
+  coverageSummary,
+  sameCoverage,
+  serviceLineLabel,
+  type Coverage,
+  type Vocabulary,
+} from "@/lib/knowledge";
 import { activeLevel } from "@/lib/labels";
 import type { Service } from "@/lib/types";
 
@@ -53,11 +63,14 @@ export default function ServicesPage() {
   const [editing, setEditing] = useState<Service | null>(null);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY);
+  // La cobertura territorial (0047) no és cap camp de text: va a part del formulari.
+  const [coverage, setCoverage] = useState<Coverage>(NEUTRAL_COVERAGE);
   const [toDelete, setToDelete] = useState<Service | null>(null);
 
   function openCreate() {
     reset();
     setForm(EMPTY);
+    setCoverage(NEUTRAL_COVERAGE);
     setEditing(null);
     setCreating(true);
   }
@@ -74,6 +87,7 @@ export default function ServicesPage() {
       service_line_code: service.service_line_code ?? "",
       delivery_mode: service.delivery_mode ?? "",
     });
+    setCoverage(service.coverage ?? NEUTRAL_COVERAGE);
     setEditing(service);
     setCreating(false);
   }
@@ -85,7 +99,9 @@ export default function ServicesPage() {
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    const payload = cleanPayload(form);
+    // La cobertura només viatja si s'ha tocat: un servei antic no està obligat a dir-ne res.
+    const before = editing?.coverage ?? NEUTRAL_COVERAGE;
+    const payload = { ...cleanPayload(form), ...(sameCoverage(coverage, before) ? {} : { coverage: cleanCoverage(coverage) }) };
     const ok = await run(async () => {
       if (editing) {
         await api.patch(`${url}/${editing.id}`, payload);
@@ -123,12 +139,16 @@ export default function ServicesPage() {
       key: "line",
       header: "Línia de servei",
       hideBelow: "md",
-      cell: (service) =>
-        service.service_line_code ? (
-          <span className="text-muted">{serviceLineLabel(service.service_line_code, vocabulary.data)}</span>
-        ) : (
-          <span className="text-warning">Sense línia</span>
-        ),
+      cell: (service) => (
+        <>
+          {service.service_line_code ? (
+            <span className="text-muted">{serviceLineLabel(service.service_line_code, vocabulary.data)}</span>
+          ) : (
+            <span className="text-warning">Sense línia</span>
+          )}
+          {coverageSummary(service.coverage) && <p className="mt-0.5 text-[12px] text-muted">{coverageSummary(service.coverage)}</p>}
+        </>
+      ),
     },
     { key: "category", header: "Categoria", hideBelow: "lg", cell: (service) => <span className="text-muted">{service.category ?? "—"}</span> },
     {
@@ -298,6 +318,7 @@ export default function ServicesPage() {
             checked={form.active}
             onChange={(event) => setForm({ ...form, active: event.target.checked })}
           />
+          <CoverageEditor value={coverage} onChange={setCoverage} />
         </form>
       </Modal>
 

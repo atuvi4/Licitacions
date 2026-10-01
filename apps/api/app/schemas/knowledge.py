@@ -22,6 +22,7 @@ from app.models.enums import (
     PartnerRole,
 )
 from app.schemas.common import APIModel, ORMModel
+from app.schemas.coverage import CoverageIn, CoverageRead
 
 
 class ClaimRead(BaseModel):
@@ -37,6 +38,9 @@ class ClaimRead(BaseModel):
     #: `scope_unknown` (abast sense estructurar: no es dedueix del text).
     scope_service_lines: list[str] | None = None
     scope_status: str | None = None
+    #: Cobertura territorial (fets, serveis), en la forma canonica. Absent (`None`)
+    #: quan la dada no en diu res, com abans de la 0047.
+    coverage: CoverageRead | None = None
 
 
 class HintRead(BaseModel):
@@ -98,6 +102,7 @@ def _entry(entry: Entry) -> EntryRead:
                 has_evidence=c.has_evidence,
                 scope_service_lines=list(c.scope) if c.scope is not None else None,
                 scope_status=c.scope_status,
+                coverage=c.coverage,
             )
             for c in entry.claims
         ],
@@ -259,12 +264,15 @@ class _WithServiceLineIn(_ProvenanceIn):
 
 
 class OperatingFactDeclare(P.OperatingFactProposal, _ProvenanceIn):
-    pass
+    #: Opcional: sense `coverage`, el fet neix sense dir on es cert (`unknown`).
+    coverage: CoverageIn | None = None
 
 
 class OperatingFactUpdate(_ProvenanceIn):
     value: bool | None = None
     detail: str | None = Field(default=None, max_length=500)
+    #: Enviar-la substitueix tota la cobertura; no enviar-la la deixa com esta.
+    coverage: CoverageIn | None = None
 
 
 class SolutionDeclare(P.SolutionProposal, _ProvenanceIn):
@@ -331,12 +339,14 @@ class PartnerUpdate(_ProvenanceIn):
 
 class PartnerRoleDeclare(P.PartnerRoleProposal, _ProvenanceIn):
     partner_id: uuid.UUID
+    coverage: CoverageIn | None = None
 
 
 class PartnerRoleUpdate(_WithServiceLineIn):
     role: PartnerRole | None = None
     service_line_code: str | None = None
     territory: str | None = Field(default=None, max_length=160)
+    coverage: CoverageIn | None = None
 
 
 class _ProvenanceRead(ORMModel):
@@ -355,6 +365,7 @@ class OperatingFactRead(_ProvenanceRead):
     key: OperatingFactKey
     value: bool
     detail: str | None
+    coverage: CoverageRead
 
 
 class SolutionRead(_ProvenanceRead):
@@ -394,6 +405,7 @@ class PartnerRoleRead(_ProvenanceRead):
     role: PartnerRole
     service_line_code: str | None
     territory: str | None
+    coverage: CoverageRead
 
 
 class KnowledgeRecordsRead(BaseModel):

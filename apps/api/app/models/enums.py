@@ -1435,3 +1435,38 @@ class ObservationStatus(StrEnum):
     PROMOTED = "promoted"
     #: Una persona l'ha descartat (ja no es aixi, o no s'hi pot fer res).
     DISMISSED = "dismissed"
+
+
+class CoverageCompleteness(StrEnum):
+    """Si la llista d'arees de cobertura d'una dada es tota la que hi ha.
+
+    `complete` = «aquesta es tota la cobertura actual coneguda»; `partial` =
+    «algunes zones conegudes, no totes»; `unknown` = no s'ha dit res, que es
+    l'estat de tot el que existia abans de la 0047. Sense `complete`, una area
+    que no hi es no vol dir que no es cobreixi.
+    """
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    UNKNOWN = "unknown"
+
+
+class AreaKind(StrEnum):
+    """Tipus d'area de cobertura. Sense GIS ni jerarquia: un municipi i una
+    comarca son coses diferents i no es comparen entre si."""
+
+    MUNICIPALITY = "municipality"
+    COMARCA = "comarca"
+    PROVINCE = "province"
+    REGION = "region"
+    COUNTRY = "country"
+    ADDRESS = "address"
+    CUSTOM = "custom"
+
+
+class CoverageEntityType(StrEnum):
+    """Quines dades de coneixement poden portar cobertura territorial."""
+
+    OPERATING_FACT = "operating_fact"
+    SERVICE = "service"
+    PARTNER_ROLE = "partner_role"

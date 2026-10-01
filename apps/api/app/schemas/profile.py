@@ -17,6 +17,7 @@ from app.models.enums import (
     VerificationStatus,
 )
 from app.schemas.common import APIModel, AuditFields
+from app.schemas.coverage import CoverageIn, CoverageRead
 
 CURRENT_YEAR_MAX = 2200
 
@@ -34,6 +35,8 @@ class ServiceBase(APIModel):
     as_of: date | None = None
     valid_until: date | None = None
     verification_status: VerificationStatus | None = None
+    #: Cobertura territorial (0047). Opcional: sense enviar-la, res no canvia.
+    coverage: CoverageIn | None = None
 
     @field_validator("service_line_code")
     @classmethod
@@ -72,6 +75,7 @@ class ServiceRead(AuditFields):
     as_of: date
     valid_until: date | None = None
     verification_status: VerificationStatus
+    coverage: CoverageRead
 
 
 class TerritoryBase(APIModel):

@@ -1574,3 +1574,56 @@ def test_el_coneixement_de_l_empresa_es_pot_aplicar_i_desfer():
     created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
     assert created == set(re.findall(r"DROP INDEX (\w+)", down))
     assert "DELETE" not in down.upper().replace("ON DELETE", "")
+
+
+def test_la_cobertura_territorial_es_pot_aplicar_i_desfer_sense_tocar_cap_dada():
+    """0046 -> 0047 -> 0046: una taula d'arees i una columna de completesa a
+    tres taules, amb `unknown` per defecte. Cap INSERT, UPDATE ni DELETE: la
+    migracio no crea cap area ni transforma cap text (`detail`, `territory`).
+    """
+    up = _offline_sql("upgrade", "0046_mobile_telephony_line:0047_knowledge_coverage")
+    down = _offline_sql("downgrade", "0047_knowledge_coverage:0046_mobile_telephony_line")
+
+    assert "CREATE TABLE knowledge_coverage_areas" in up
+    table = up.split("CREATE TABLE knowledge_coverage_areas")[1].split("\n);")[0]
+    for column in (
+        "company_id UUID NOT NULL",
+        "entity_type VARCHAR(14) NOT NULL",
+        "entity_id UUID NOT NULL",
+        "kind VARCHAR(12) NOT NULL",
+        "label VARCHAR(200) NOT NULL",
+        "code VARCHAR(40)",
+        "code_system VARCHAR(20)",
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL",
+        "id UUID NOT NULL",
+    ):
+        assert column in table, column
+    assert "entity_type IN ('operating_fact', 'service', 'partner_role')" in table
+    assert (
+        "kind IN ('municipality', 'comarca', 'province', 'region', 'country', 'address', 'custom')"
+    ) in table
+    assert "REFERENCES companies (id) ON DELETE CASCADE" in table
+    assert "CREATE INDEX ix_knowledge_coverage_areas_entity" in up
+    # Les arees son un conjunt: la base ho garanteix, amb els NULL com a cadena buida.
+    assert (
+        "CREATE UNIQUE INDEX uq_knowledge_coverage_areas_identity ON knowledge_coverage_areas "
+        "(entity_type, entity_id, kind, coalesce(code_system, ''), coalesce(code, ''), label)"
+    ) in up
+    assert "DROP INDEX uq_knowledge_coverage_areas_identity" in down
+    for covered in ("company_operating_facts", "company_services", "partner_roles"):
+        assert (
+            f"ALTER TABLE {covered} ADD COLUMN coverage_completeness VARCHAR(8) "
+            "DEFAULT 'unknown' NOT NULL"
+        ) in up, covered
+        assert (
+            f"ALTER TABLE {covered} ADD CONSTRAINT ck_{covered}_coverage_completeness_valid "
+            "CHECK (coverage_completeness IN ('complete', 'partial', 'unknown'))"
+        ) in up, covered
+        assert f"ALTER TABLE {covered} DROP COLUMN coverage_completeness" in down, covered
+        assert f"DROP CONSTRAINT ck_{covered}_coverage_completeness_valid" in down, covered
+    statements = up.replace("UPDATE alembic_version", "")
+    for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM", "DROP"):
+        assert forbidden not in statements, forbidden
+    assert "DROP TABLE knowledge_coverage_areas" in down
+    assert "DROP INDEX ix_knowledge_coverage_areas_entity" in down
+    assert "INSERT INTO" not in down and "DELETE FROM" not in down

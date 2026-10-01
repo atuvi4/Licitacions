@@ -1,5 +1,7 @@
 import type { Level } from "@/components/ui/StatusPill";
-import type { DocumentCategory, LinkedEntityType, RelationshipType } from "@/lib/types";
+import type { AreaKind, Coverage, CoverageArea, CoverageCompleteness, DocumentCategory, LinkedEntityType, RelationshipType } from "@/lib/types";
+
+export type { AreaKind, Coverage, CoverageArea, CoverageCompleteness } from "@/lib/types";
 
 /**
  * Coneixement de l'empresa (fase 2 del motor): tipus de l'API, rètols i
@@ -41,6 +43,8 @@ export interface KnowledgeClaim {
   has_evidence: boolean;
   scope_service_lines: string[] | null;
   scope_status: "structured" | "scope_unknown" | null;
+  /** Cobertura territorial (fets, serveis). `null` o absent: no en diu res. */
+  coverage?: Coverage | null;
 }
 
 export interface KnowledgeHint {
@@ -123,6 +127,7 @@ export interface OperatingFactRecord extends RecordBase {
   key: string;
   value: boolean;
   detail: string | null;
+  coverage?: Coverage;
 }
 export interface SolutionRecord extends RecordBase {
   name: string;
@@ -152,6 +157,7 @@ export interface PartnerRoleRecord extends RecordBase {
   role: string;
   service_line_code: string | null;
   territory: string | null;
+  coverage?: Coverage;
 }
 
 export interface KnowledgeRecords {
@@ -263,6 +269,81 @@ export const LIFECYCLE_LABELS: Record<KnowledgeLifecycle, string> = {
   in_progress: "En tràmit",
   retired: "Retirat",
 };
+
+/* ----- Cobertura territorial (0047) ---------------------------------------- */
+
+export const NEUTRAL_COVERAGE: Coverage = { completeness: "unknown", areas: [] };
+
+export const COMPLETENESS_LABELS: Record<CoverageCompleteness, string> = {
+  unknown: "Sense especificar",
+  complete: "Completa: aquestes són totes les àrees",
+  partial: "Parcial: n'hi ha més que no consten",
+};
+
+export const AREA_KIND_LABELS: Record<AreaKind, string> = {
+  municipality: "Municipi",
+  comarca: "Comarca",
+  province: "Província",
+  region: "Comunitat autònoma",
+  country: "País",
+  address: "Adreça",
+  custom: "Altres",
+};
+
+export const AREA_KINDS = Object.keys(AREA_KIND_LABELS) as AreaKind[];
+
+/** Una àrea tal com s'envia: espais normalitzats, codis buits com a `null`. */
+export function cleanArea(area: CoverageArea): CoverageArea {
+  const text = (value: string | null | undefined) => {
+    const trimmed = (value ?? "").trim().replace(/\s+/g, " ");
+    return trimmed === "" ? null : trimmed;
+  };
+  return { kind: area.kind, label: text(area.label) ?? "", code: text(area.code), code_system: text(area.code_system) };
+}
+
+/** El que fa que dues àrees siguin la mateixa: tipus, sistema de codis, codi i nom normalitzat. */
+export function areaIdentity(area: CoverageArea): string {
+  const clean = cleanArea(area);
+  return [clean.kind, clean.code_system ?? "", clean.code ?? "", clean.label].join("\u0000");
+}
+
+/** La cobertura tal com s'envia: sense files sense nom i sense repeticions (la primera es queda). */
+export function cleanCoverage(coverage: Coverage): Coverage {
+  const seen = new Set<string>();
+  const areas: CoverageArea[] = [];
+  for (const raw of coverage.areas) {
+    const area = cleanArea(raw);
+    const identity = areaIdentity(area);
+    if (area.label === "" || seen.has(identity)) continue;
+    seen.add(identity);
+    areas.push(area);
+  }
+  return { completeness: coverage.completeness, areas };
+}
+
+/** La mateixa cobertura, tant se val l'ordre de les àrees (el mateix criteri que l'API). */
+export function sameCoverage(a: Coverage | null | undefined, b: Coverage | null | undefined): boolean {
+  const key = (coverage: Coverage | null | undefined) => {
+    const clean = cleanCoverage(coverage ?? NEUTRAL_COVERAGE);
+    const areas = clean.areas.map(areaIdentity).sort();
+    return [clean.completeness, ...areas].join("\u0001");
+  };
+  return key(a) === key(b);
+}
+
+export function isNeutralCoverage(coverage: Coverage | null | undefined): boolean {
+  return sameCoverage(coverage, NEUTRAL_COVERAGE);
+}
+
+/** Una línia curta per a llistes: «Cobertura completa: Girona, Palamós». `null` si no diu res. */
+export function coverageSummary(coverage: Coverage | null | undefined): string | null {
+  if (!coverage || isNeutralCoverage(coverage)) return null;
+  const head = coverage.completeness === "complete" ? "Cobertura completa" : coverage.completeness === "partial" ? "Cobertura parcial" : "Cobertura";
+  const names = cleanCoverage(coverage).areas.map((area) => area.label);
+  if (names.length === 0) return `${head}: cap àrea`;
+  const shown = names.slice(0, 4).join(", ");
+  return names.length > 4 ? `${head}: ${shown} i ${names.length - 4} més` : `${head}: ${shown}`;
+}
 
 export const SUBJECT_LABELS: Record<ObservationSubject, string> = {
   certification: "Certificacions",

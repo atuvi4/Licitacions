@@ -15,6 +15,7 @@ import {
   capabilityLabel,
   capabilityValue,
   certificationTitle,
+  coverageSummary,
   entryState,
   findEntry,
   recordState,
@@ -149,7 +150,7 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
   /* Serveis */
   const lines = vocabulary?.service_lines ?? [];
   const services = view.services.filter((item) =>
-    matches(item.name, lineLabel(item.service_line_code), item.delivery_mode ? DELIVERY_MODE_LABELS[item.delivery_mode] : null),
+    matches(item.name, lineLabel(item.service_line_code), item.delivery_mode ? DELIVERY_MODE_LABELS[item.delivery_mode] : null, coverageSummary(item.coverage)),
   );
   const served = new Set(view.services.map((item) => item.service_line_code).filter(Boolean) as string[]);
   const historicLines = lines.filter(
@@ -161,7 +162,9 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
   const unknownLines = lines.filter((item) => !served.has(item.code) && !findEntry(snapshot, "services", item.code) && matches(lineLabel(item.code)));
 
   /* Fets */
-  const facts = records.operating_facts.filter((item) => matches(FACT_LABELS[item.key] ?? item.key, item.detail, item.value ? "Sí" : "No"));
+  const facts = records.operating_facts.filter((item) =>
+    matches(FACT_LABELS[item.key] ?? item.key, item.detail, item.value ? "Sí" : "No", coverageSummary(item.coverage)),
+  );
   const factByKey = new Map(records.operating_facts.map((item) => [item.key, item]));
   const historicFacts = FACT_KEYS.filter(
     (key) =>
@@ -189,7 +192,9 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
     entryMatches(entry, entry.key),
   );
   const roleText = (role: (typeof records.partner_roles)[number]) =>
-    [PARTNER_ROLE_LABELS[role.role] ?? role.role, lineLabel(role.service_line_code), role.territory].filter(Boolean).join(" · ");
+    [PARTNER_ROLE_LABELS[role.role] ?? role.role, lineLabel(role.service_line_code), role.territory, coverageSummary(role.coverage)]
+      .filter(Boolean)
+      .join(" · ");
   const partners = records.partners.filter((partner) =>
     matches(partner.name, partner.tax_id, ...records.partner_roles.filter((role) => role.partner_id === partner.id).map(roleText)),
   );
@@ -281,7 +286,11 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
                 kind="service"
                 recordId={service.id}
                 title={service.name}
-                subtitle={[serviceLineLabel(service.service_line_code, vocabulary), service.delivery_mode ? DELIVERY_MODE_LABELS[service.delivery_mode] : null]
+                subtitle={[
+                  serviceLineLabel(service.service_line_code, vocabulary),
+                  service.delivery_mode ? DELIVERY_MODE_LABELS[service.delivery_mode] : null,
+                  coverageSummary(service.coverage),
+                ]
                   .filter(Boolean)
                   .join(" · ")}
                 state={recordState(service.id, service.active ? "current" : "retired", index)}
@@ -327,7 +336,7 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
               kind="operating_fact"
               recordId={fact.id}
               title={FACT_LABELS[fact.key] ?? fact.key}
-              subtitle={[fact.value ? "Sí" : "No", fact.detail].filter(Boolean).join(" · ")}
+              subtitle={[fact.value ? "Sí" : "No", fact.detail, coverageSummary(fact.coverage)].filter(Boolean).join(" · ")}
               state={recordState(fact.id, fact.lifecycle, index)}
               actions={
                 <Button size="sm" variant="ghost" className={ACTION} disabled={!canEdit} onClick={() => declare({ kind: "operating_fact", record: fact })}>
@@ -503,7 +512,12 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
                           className="rounded-pill border border-border-strong px-2 py-px text-[11.5px] leading-[1.5] text-neutral-600 hover:bg-subtle"
                           aria-label={`Edita el paper ${PARTNER_ROLE_LABELS[role.role] ?? role.role} de ${partner.name}`}
                         >
-                          {[PARTNER_ROLE_LABELS[role.role] ?? role.role, role.service_line_code ? serviceLineLabel(role.service_line_code, vocabulary) : null, role.territory]
+                          {[
+                            PARTNER_ROLE_LABELS[role.role] ?? role.role,
+                            role.service_line_code ? serviceLineLabel(role.service_line_code, vocabulary) : null,
+                            role.territory,
+                            coverageSummary(role.coverage),
+                          ]
                             .filter(Boolean)
                             .join(" · ")}
                         </button>

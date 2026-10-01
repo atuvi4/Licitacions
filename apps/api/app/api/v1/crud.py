@@ -40,13 +40,24 @@ async def get_owned_or_404(
     return instance
 
 
-def apply_changes(instance: Any, payload: BaseModel, actor_id: uuid.UUID | None) -> Any:
-    """Aplica nomes els camps enviats explicitament (semantica PATCH)."""
+def apply_changes(
+    instance: Any,
+    payload: BaseModel,
+    actor_id: uuid.UUID | None,
+    *,
+    skip: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Aplica nomes els camps enviats explicitament (semantica PATCH). Retorna
+    els camps de `skip` que venien al payload, sense aplicar-los."""
+    extra: dict[str, Any] = {}
     for field, value in payload.model_dump(exclude_unset=True).items():
+        if field in skip:
+            extra[field] = getattr(payload, field)
+            continue
         setattr(instance, field, value)
     if hasattr(instance, "updated_by"):
         instance.updated_by = actor_id
-    return instance
+    return extra
 
 
 def build_crud_router(
@@ -65,6 +76,8 @@ def build_crud_router(
     validate: Callable[[AsyncSession, Any, uuid.UUID], Awaitable[None]] | None = None,
     authorize_write: Callable[[MembershipRole], None] | None = None,
     authorize_delete: Callable[[MembershipRole], None] | None = None,
+    side_fields: Callable[[AsyncSession, Any, dict[str, Any]], Awaitable[None]] | None = None,
+    side_field_names: frozenset[str] = frozenset(),
 ) -> APIRouter:
     """`validate(session, instance, company_id)` s'executa abans de desar una alta o
     una modificacio, amb els canvis ja aplicats. Serveix per a regles que no es
@@ -72,7 +85,13 @@ def build_crud_router(
 
     `authorize_write(role)` i `authorize_delete(role)` limiten qui pot crear o
     modificar, i qui pot esborrar. Sense ells, n'hi ha prou amb ser membre, com
-    fins ara: nomes els posen els recursos que en tenen politica propia."""
+    fins ara: nomes els posen els recursos que en tenen politica propia.
+
+    `side_field_names` son camps del payload que no son columnes del model (la
+    cobertura territorial, que viu en una altra taula): es treuen abans de
+    construir la fila i es passen a `side_fields(session, instance, extra)`
+    abans de `validate`, amb els canvis encara sense flush (l'historial dels
+    camps es intacte)."""
     router = APIRouter(prefix=prefix, tags=[tag])
     ordering = list(order_by) if order_by is not None else [model.created_at.desc()]
 
@@ -94,13 +113,20 @@ def build_crud_router(
     async def create_item(payload: create_schema, session: SessionDep, ctx: CompanyCtx):  # type: ignore[valid-type]
         if authorize_write is not None:
             authorize_write(ctx.membership.role)
+        data = payload.model_dump(exclude_unset=True)
+        # Els camps laterals, tal com els ha validat l'esquema (no com a diccionaris).
+        extra = {name: getattr(payload, name) for name in side_field_names if name in data}
+        for name in extra:
+            data.pop(name)
         instance = model(
             company_id=ctx.company_id,
             created_by=ctx.user_id,
             updated_by=ctx.user_id,
-            **payload.model_dump(exclude_unset=True),
+            **data,
         )
         session.add(instance)
+        if side_fields is not None and extra:
+            await side_fields(session, instance, extra)
         if validate is not None:
             await validate(session, instance, ctx.company_id)
         await _commit(session, conflict_message)
@@ -130,7 +156,9 @@ def build_crud_router(
         if authorize_write is not None:
             authorize_write(ctx.membership.role)
         instance = await get_owned_or_404(session, model, item_id, ctx.company_id)
-        apply_changes(instance, payload, ctx.user_id)
+        extra = apply_changes(instance, payload, ctx.user_id, skip=side_field_names)
+        if side_fields is not None and extra:
+            await side_fields(session, instance, extra)
         if validate is not None:
             await validate(session, instance, ctx.company_id)
         await _commit(session, conflict_message)

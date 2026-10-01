@@ -27,6 +27,15 @@ lliure no es llegeix per deduir-ne cap cobertura.
 els seus valors i la seva procedencia, en ordre canonic. No inclou
 l'historic: canviar una observacio no canvia el que l'empresa pot acreditar, i
 per tant no ha de fer caducar cap avaluacio feta amb aquesta fotografia.
+
+**Cobertura territorial** (0047). Un fet, un servei o un paper de partner
+poden dir on son certs (`Coverage`: completesa + arees). L'estat neutre
+`unknown` sense cap area es el que tenia tot abans de la 0047 i **s'omet del
+payload canonic**: la migracio no canvia cap empremta. Qualsevol altre estat
+(`complete` o `partial`, amb arees o sense) hi entra, amb aquests camps i prou:
+`completeness` i, per area, `kind`, `label` (espais normalitzats), `code` i
+`code_system`, ordenades per (kind, code_system, code, label). Aqui nomes es
+conserva la dada; comparar-la amb un plec es cosa del comparador territorial.
 """
 
 from __future__ import annotations
@@ -40,6 +49,11 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
+from app.knowledge.coverage import (
+    NEUTRAL_COVERAGE,
+    CoverageIn,
+    canonical_coverage,
+)
 from app.knowledge.vocabulary import CAPABILITIES_BY_CODE, STANDARDS_BY_CODE
 from app.models.enums import (
     CapabilityComparator,
@@ -141,6 +155,7 @@ class FactIn:
     key: str
     value: bool
     detail: str | None = None
+    coverage: CoverageIn = NEUTRAL_COVERAGE
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +164,7 @@ class ServiceIn:
     name: str
     service_line_code: str | None
     delivery_mode: str | None = None
+    coverage: CoverageIn = NEUTRAL_COVERAGE
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +218,7 @@ class PartnerRoleIn:
     role: str
     service_line_code: str | None = None
     territory: str | None = None
+    coverage: CoverageIn = NEUTRAL_COVERAGE
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +269,9 @@ class Claim:
     #: Te algun document enllacat. Una dada declarada amb evidencia esta a un pas
     #: de verificar-se; sense evidencia, primer cal aportar-ne.
     has_evidence: bool = False
+    #: Cobertura territorial, en la mateixa forma canonica que l'empremta.
+    #: `None` = l'estat neutre (res dit), igual que abans de la 0047.
+    coverage: dict[str, Any] | None = None
 
     @property
     def accreditation_pending(self) -> bool:
@@ -369,6 +389,11 @@ def _claim(prov: Provenance, value: Any) -> Claim:
     )
 
 
+def _coverage_payload(coverage: dict[str, Any] | None) -> dict[str, Any]:
+    """Nomes hi ha clau `coverage` quan hi ha cobertura: l'estat neutre no deixa rastre."""
+    return {"coverage": coverage} if coverage is not None else {}
+
+
 def _level_rank(standard_code: str | None, level: str | None) -> int:
     standard = STANDARDS_BY_CODE.get(standard_code or "")
     if standard is None or standard.levels is None or level is None:
@@ -462,18 +487,32 @@ def build_snapshot(inputs: KnowledgeInputs, *, on: date) -> KnowledgeSnapshot:
 
     fact_claims: dict[str, list[tuple[Claim, int]]] = {}
     for fact in inputs.facts:
-        payload = {"value": fact.value, "detail": fact.detail}
+        coverage = canonical_coverage(fact.coverage)
+        payload = {"value": fact.value, "detail": fact.detail, **_coverage_payload(coverage)}
         if counted("operating_fact", fact.prov, fact.key, payload):
-            fact_claims.setdefault(fact.key, []).append((_claim(fact.prov, fact.value), 0))
+            fact_claims.setdefault(fact.key, []).append(
+                (replace(_claim(fact.prov, fact.value), coverage=coverage), 0)
+            )
 
     service_claims: dict[str, list[tuple[Claim, int]]] = {}
     for service in inputs.services:
         if service.service_line_code is None:
             continue
-        payload = {"name": service.name, "delivery_mode": service.delivery_mode}
+        coverage = canonical_coverage(service.coverage)
+        payload = {
+            "name": service.name,
+            "delivery_mode": service.delivery_mode,
+            **_coverage_payload(coverage),
+        }
         if counted("service", service.prov, service.service_line_code, payload):
             service_claims.setdefault(service.service_line_code, []).append(
-                (_claim(service.prov, {"name": service.name, "mode": service.delivery_mode}), 0)
+                (
+                    replace(
+                        _claim(service.prov, {"name": service.name, "mode": service.delivery_mode}),
+                        coverage=coverage,
+                    ),
+                    0,
+                )
             )
 
     solution_claims: dict[str, list[tuple[Claim, int]]] = {}
@@ -545,13 +584,19 @@ def build_snapshot(inputs: KnowledgeInputs, *, on: date) -> KnowledgeSnapshot:
         partner = live_partners.get(role.partner_id)
         if partner is None:
             continue
-        payload = {"line": role.service_line_code, "territory": role.territory}
+        coverage = canonical_coverage(role.coverage)
+        payload = {
+            "line": role.service_line_code,
+            "territory": role.territory,
+            **_coverage_payload(coverage),
+        }
         if counted("partner_role", role.prov, f"{partner.name} / {role.role}", payload):
             roles_by_partner.setdefault(role.partner_id, []).append(
                 {
                     "role": str(role.role),
                     "line": role.service_line_code,
                     "territory": role.territory,
+                    **_coverage_payload(coverage),
                 }
             )
     for record_id, partner in live_partners.items():

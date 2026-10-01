@@ -27,13 +27,16 @@ from decimal import Decimal
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, UUIDPrimaryKeyMixin, enum_column
 from app.models.enums import (
+    AreaKind,
     CapabilityComparator,
     CapabilityStatus,
     CapabilityValueType,
+    CoverageCompleteness,
+    CoverageEntityType,
     HistoricBidDecision,
     HistoricBidResult,
     KnowledgeLifecycle,
@@ -159,12 +162,62 @@ def _service_line_fk(nullable: bool) -> Any:
     )
 
 
+def coverage_completeness_column() -> Mapped[CoverageCompleteness]:
+    """`unknown` per defecte: el que hi havia abans de la 0047 no afirmava res."""
+    return mapped_column(
+        enum_column(CoverageCompleteness, "coverage_completeness"),
+        nullable=False,
+        default=CoverageCompleteness.UNKNOWN,
+        server_default=CoverageCompleteness.UNKNOWN.value,
+    )
+
+
+def coverage_completeness_check() -> sa.CheckConstraint:
+    return sa.CheckConstraint(
+        in_values("coverage_completeness", CoverageCompleteness),
+        name="coverage_completeness_valid",
+    )
+
+
+class CoverageReadMixin:
+    """`coverage` tal com la llegeix l'API: completesa i arees en ordre canonic."""
+
+    @property
+    def coverage(self) -> dict[str, Any]:
+        from app.knowledge.coverage import AreaIn, CoverageIn, coverage_dict
+
+        return coverage_dict(
+            CoverageIn(
+                completeness=self.coverage_completeness,  # type: ignore[attr-defined]
+                areas=tuple(
+                    AreaIn(a.kind, a.label, a.code, a.code_system)
+                    for a in self.coverage_areas  # type: ignore[attr-defined]
+                ),
+            )
+        )
+
+
+def coverage_areas_relationship(model_name: str, entity_type: CoverageEntityType) -> Any:
+    """Les arees d'una dada, nomes per llegir-les. L'enllac es polimorfic (sense
+    FK), com el de l'evidencia; escriure-les es cosa del servei de cobertura."""
+    return relationship(
+        "KnowledgeCoverageArea",
+        primaryjoin=(
+            f"and_(foreign(KnowledgeCoverageArea.entity_id) == {model_name}.id, "
+            f"KnowledgeCoverageArea.entity_type == '{entity_type.value}')"
+        ),
+        viewonly=True,
+        lazy="selectin",
+        order_by="KnowledgeCoverageArea.created_at",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Estat actual                                                                 #
 # --------------------------------------------------------------------------- #
 
 
-class CompanyOperatingFact(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
+class CompanyOperatingFact(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, CoverageReadMixin, Base):
     """Un fet de l'empresa que no te lloc a cap altra taula (operador CNMC, NRN...)."""
 
     __tablename__ = "company_operating_facts"
@@ -172,6 +225,7 @@ class CompanyOperatingFact(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
         *provenance_constraints(),
         sa.CheckConstraint(in_values("key", OperatingFactKey), name="key_valid"),
         sa.UniqueConstraint("company_id", "key", name="uq_company_operating_facts_key"),
+        coverage_completeness_check(),
     )
 
     company_id: Mapped[uuid.UUID] = _company_fk()
@@ -181,6 +235,11 @@ class CompanyOperatingFact(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
     value: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
     #: Aclariment curt ("CPD propi a un centre Tier-3"). Mai imports ni condicions comercials.
     detail: Mapped[str | None] = mapped_column(sa.String(500))
+    #: Cobertura territorial del fet (0047): on es cert, i si la llista es tota.
+    coverage_completeness: Mapped[CoverageCompleteness] = coverage_completeness_column()
+    coverage_areas: Mapped[list[KnowledgeCoverageArea]] = coverage_areas_relationship(
+        "CompanyOperatingFact", CoverageEntityType.OPERATING_FACT
+    )
 
 
 class CompanySolution(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
@@ -300,11 +359,12 @@ class CompanyPartner(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
     tax_id: Mapped[str | None] = mapped_column(sa.String(32))
 
 
-class PartnerRoleRow(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
+class PartnerRoleRow(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, CoverageReadMixin, Base):
     __tablename__ = "partner_roles"
     __table_args__ = (
         *provenance_constraints(),
         sa.CheckConstraint(in_values("role", PartnerRole), name="role_valid"),
+        coverage_completeness_check(),
         sa.ForeignKeyConstraint(
             ["partner_id", "company_id"],
             ["company_partners.id", "company_partners.company_id"],
@@ -318,12 +378,65 @@ class PartnerRoleRow(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Base):
         enum_column(PartnerRole, "partner_role"), nullable=False
     )
     service_line_code: Mapped[str | None] = _service_line_fk(nullable=True)
+    #: Territori en text lliure (anterior a la 0047). Es conserva tal qual.
     territory: Mapped[str | None] = mapped_column(sa.String(160))
+    #: Cobertura territorial estructurada del paper (0047).
+    coverage_completeness: Mapped[CoverageCompleteness] = coverage_completeness_column()
+    coverage_areas: Mapped[list[KnowledgeCoverageArea]] = coverage_areas_relationship(
+        "PartnerRoleRow", CoverageEntityType.PARTNER_ROLE
+    )
 
 
 # --------------------------------------------------------------------------- #
 # Historic                                                                     #
 # --------------------------------------------------------------------------- #
+
+
+class KnowledgeCoverageArea(UUIDPrimaryKeyMixin, Base):
+    """Una area on una dada de coneixement es certa: un municipi, una comarca, una
+    adreca... Penja d'un fet operatiu, d'un servei o d'un paper de partner
+    (`entity_type` + `entity_id`, sense FK, com els enllacos d'evidencia).
+
+    Es nomes estructura: `code` i `code_system` (INE, NUTS...) son opcionals i
+    no hi ha cap jerarquia ni cap GIS. Comparar arees es cosa del comparador
+    territorial (fase posterior); aqui nomes es conserva el que l'empresa diu.
+    Les arees d'una dada son un conjunt: `(kind, code_system, code, label)` es
+    unic per dada (`label` ja arriba amb els espais normalitzats).
+    """
+
+    __tablename__ = "knowledge_coverage_areas"
+    __table_args__ = (
+        sa.CheckConstraint(in_values("entity_type", CoverageEntityType), name="entity_type_valid"),
+        sa.CheckConstraint(in_values("kind", AreaKind), name="kind_valid"),
+        sa.Index("ix_knowledge_coverage_areas_entity", "company_id", "entity_type", "entity_id"),
+        # Les arees d'una dada son un conjunt: la mateixa identitat canonica, un sol cop.
+        # `coalesce` perque dos NULL no son "diferents" aqui.
+        sa.Index(
+            "uq_knowledge_coverage_areas_identity",
+            "entity_type",
+            "entity_id",
+            "kind",
+            sa.text("coalesce(code_system, '')"),
+            sa.text("coalesce(code, '')"),
+            "label",
+            unique=True,
+        ),
+    )
+
+    company_id: Mapped[uuid.UUID] = _company_fk()
+    entity_type: Mapped[CoverageEntityType] = mapped_column(
+        enum_column(CoverageEntityType, "coverage_entity_type"), nullable=False
+    )
+    entity_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    kind: Mapped[AreaKind] = mapped_column(enum_column(AreaKind, "area_kind"), nullable=False)
+    #: El nom tal com el diu l'empresa ("Banyoles"). Obligatori: una area sense nom no es res.
+    label: Mapped[str] = mapped_column(sa.String(200), nullable=False)
+    #: Codi oficial opcional ("17015") i el seu sistema ("INE", "NUTS").
+    code: Mapped[str | None] = mapped_column(sa.String(40))
+    code_system: Mapped[str | None] = mapped_column(sa.String(20))
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
 
 
 class HistoricBid(UUIDPrimaryKeyMixin, Base):

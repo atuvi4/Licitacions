@@ -15,7 +15,26 @@ from app.schemas.profile import (
     TerritoryRead,
     TerritoryUpdate,
 )
+from app.services import knowledge_coverage
 from app.services.knowledge_evidence import require_evidence_if_verified
+
+
+async def _service_coverage(session, instance, extra) -> None:
+    """La cobertura d'un servei: un canvi material la torna a pendent de verificar,
+    llevat que la mateixa peticio demani `verified` (llavors mana l'evidencia)."""
+    payload = extra.get("coverage")
+    if payload is None:
+        return
+    asked = knowledge_coverage.asked_verified(instance)
+    if await knowledge_coverage.apply_coverage(session, instance, payload):
+        knowledge_coverage.unverify_for_coverage_change(instance, asked=asked)
+
+
+async def _delete_service_coverage(session, instance) -> None:
+    await knowledge_coverage.delete_coverage_for_entity(
+        session, knowledge_coverage.ENTITY_TYPE_BY_MODEL[type(instance)], instance.id
+    )
+
 
 services_router = build_crud_router(
     model=CompanyService,
@@ -33,6 +52,10 @@ services_router = build_crud_router(
     # Qui nomes consulta no modifica coneixement; eliminar, propietari o administracio.
     authorize_write=access.assert_can_edit,
     authorize_delete=access.assert_can_delete,
+    # Cobertura territorial (0047): viu a `knowledge_coverage_areas`, no a la fila.
+    side_fields=_service_coverage,
+    side_field_names=frozenset({"coverage"}),
+    pre_delete=_delete_service_coverage,
 )
 
 territories_router = build_crud_router(

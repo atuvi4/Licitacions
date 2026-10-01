@@ -18,11 +18,20 @@ from app.db.base import (
     enum_column,
 )
 from app.models.enums import (
+    CoverageCompleteness,
+    CoverageEntityType,
     DeliveryMode,
     KnowledgeOrigin,
     SpecializationLevel,
     TerritoryType,
     VerificationStatus,
+)
+from app.models.knowledge import (
+    CoverageReadMixin,
+    KnowledgeCoverageArea,
+    coverage_areas_relationship,
+    coverage_completeness_check,
+    coverage_completeness_column,
 )
 from app.models.review import in_values
 
@@ -30,7 +39,7 @@ MONEY = sa.Numeric(18, 2)
 
 
 class CompanyService(
-    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, Base
+    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, CoverageReadMixin, Base
 ):
     """Servei o capacitat que l'empresa pot executar. Totalment configurable.
 
@@ -56,6 +65,7 @@ class CompanyService(
         sa.CheckConstraint(
             "valid_until IS NULL OR valid_until >= as_of", name="valid_until_after_as_of"
         ),
+        coverage_completeness_check(),
     )
 
     name: Mapped[str] = mapped_column(sa.String(160), nullable=False)
@@ -68,6 +78,11 @@ class CompanyService(
     notes: Mapped[str | None] = mapped_column(sa.Text)
     service_line_code: Mapped[str | None] = mapped_column(
         sa.String(40), sa.ForeignKey("service_lines.code", ondelete="RESTRICT")
+    )
+    #: Cobertura territorial estructurada del servei (0047).
+    coverage_completeness: Mapped[CoverageCompleteness] = coverage_completeness_column()
+    coverage_areas: Mapped[list[KnowledgeCoverageArea]] = coverage_areas_relationship(
+        "CompanyService", CoverageEntityType.SERVICE
     )
     delivery_mode: Mapped[DeliveryMode | None] = mapped_column(
         enum_column(DeliveryMode, "delivery_mode")

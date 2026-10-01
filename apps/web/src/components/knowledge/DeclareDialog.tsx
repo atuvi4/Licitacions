@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
+import { CoverageEditor } from "@/components/knowledge/CoverageEditor";
 import { Button, Checkbox, Combobox, ErrorNotice, Field, Input, Select, Textarea } from "@/components/ui";
 import { api } from "@/lib/api";
 import { optionsFrom } from "@/lib/format";
@@ -15,12 +16,16 @@ import {
   FACT_LABELS,
   KIND_LABELS,
   LIFECYCLE_LABELS,
+  NEUTRAL_COVERAGE,
   PARTNER_ROLE_LABELS,
   capabilityLabel,
+  cleanCoverage,
   levelLabel,
+  sameCoverage,
   serviceLineLabel,
   standardLabel,
   type CapabilityRecord,
+  type Coverage,
   type KnowledgeRecords,
   type OperatingFactRecord,
   type PartnerRecord,
@@ -59,6 +64,13 @@ interface Props {
 const OTHER = "__other__";
 /** Articles per al títol: «Declara una certificació», «Edita el fet operatiu». */
 const FEMININE = new Set(["certification", "solution", "solution_capability"]);
+/** Les dades que poden dir on són certes (0047). */
+const COVERED = new Set(["operating_fact", "service", "partner_role"]);
+
+function initialCoverage(target: DeclareTarget): Coverage {
+  const record = "record" in target ? target.record : undefined;
+  return record && "coverage" in record && record.coverage ? record.coverage : NEUTRAL_COVERAGE;
+}
 
 function initialForm(target: DeclareTarget): Form {
   const record = "record" in target ? target.record : undefined;
@@ -131,6 +143,7 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
   const { saving, error, fieldErrors, run } = useMutation();
   const [form, setForm] = useState<Form>(() => initialForm(target));
   const [scope, setScope] = useState<string[]>([]);
+  const [coverage, setCoverage] = useState<Coverage>(() => initialCoverage(target));
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const record = "record" in target ? target.record : undefined;
@@ -143,6 +156,9 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
     label: serviceLineLabel(line.code, vocabulary),
   }));
   const provenance = () => ({ lifecycle: form.lifecycle || "current", valid_until: blank(form.valid_until) });
+  // La cobertura només viatja si s'ha tocat: una dada antiga no està obligada
+  // a dir-ne res, i el mateix contingut no és cap canvi.
+  const coverageChange = () => (sameCoverage(coverage, initialCoverage(target)) ? {} : { coverage: cleanCoverage(coverage) });
 
   const solutions = records?.solutions ?? [];
   const solution = solutions.find((item) => item.id === form.solution_id);
@@ -182,10 +198,11 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
             name: form.name.trim(),
             service_line_code: form.service_line_code,
             delivery_mode: blank(form.delivery_mode),
+            ...coverageChange(),
           });
           return;
         case "operating_fact": {
-          const body = { value: form.value === "true", detail: blank(form.detail), ...provenance() };
+          const body = { value: form.value === "true", detail: blank(form.detail), ...provenance(), ...coverageChange() };
           if (record) await api.patch(`${recordsUrl}/${record.id}`, body);
           else await api.post(recordsUrl, { key: form.key, ...body });
           return;
@@ -243,6 +260,7 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
             service_line_code: blank(form.service_line_code),
             territory: blank(form.territory),
             ...provenance(),
+            ...coverageChange(),
           };
           if (record) await api.patch(`${recordsUrl}/${record.id}`, body);
           else await api.post(recordsUrl, { partner_id: target.partnerId, ...body });
@@ -530,6 +548,8 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
             </div>
           </>
         )}
+
+        {COVERED.has(target.kind) && <CoverageEditor value={coverage} onChange={setCoverage} />}
 
         {editing && !canDelete && (
           <p className="text-caption text-muted">

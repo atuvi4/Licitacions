@@ -172,6 +172,7 @@ El detall és a [`knowledge.md`](knowledge.md).
 | `company_solutions`, `solution_capabilities` | Com es dona un servei i què en fa cada capacitat del vocabulari. Sense fila = desconegut. |
 | `company_products`, `solution_products` | Productes (sense preus) i quins van amb cada solució. |
 | `company_partners`, `partner_roles` | Tercers i els seus papers (sense condicions econòmiques). |
+| `knowledge_coverage_areas` (`0047`) | On és certa una dada (fet, servei o paper): una fila per àrea (`kind`, `label`, `code` i `code_system` opcionals), penjada per `entity_type` + `entity_id` sense FK, com els enllaços d'evidència. Les tres taules cobertes guanyen `coverage_completeness` (`complete` · `partial` · `unknown`, per defecte `unknown`). |
 | `company_services` (ampliada) | `service_line_code`, `delivery_mode` i procedència; `active` fa de cicle de vida. |
 | `company_certifications` (ampliada) | `standard_code`, `level`, `scope_service_lines` (abast estructurat), `knowledge_origin`, `as_of`, `lifecycle`; `verification_status` i `expires_at` ja hi eren. `verified` només amb evidència enllaçada. |
 | `historic_bids` | Licitacions passades: només dades públiques i la decisió. |
