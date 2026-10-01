@@ -42,6 +42,7 @@ from app.models.enums import (
     RequirementScope,
     RequirementTiming,
     ReviewStatus,
+    TerritoryCompleteness,
     TerritoryMatchMode,
 )
 from app.models.review import in_values
@@ -59,6 +60,7 @@ def _timing_column() -> Mapped[RequirementTiming]:
 
 def _timing_check() -> sa.CheckConstraint:
     return sa.CheckConstraint(in_values("timing", RequirementTiming), name="timing_valid")
+
 
 # Mateixa tecnica que a la capa documental: l'index unic parcial fa de lock de
 # concurrencia sense Redis ni cua.
@@ -245,6 +247,10 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, ActorMixin, Base):
         sa.CheckConstraint(
             in_values("territory_match_mode", TerritoryMatchMode), name="territory_match_mode_valid"
         ),
+        sa.CheckConstraint(
+            in_values("territory_completeness", TerritoryCompleteness),
+            name="territory_completeness_valid",
+        ),
         # Una prova estructurada porta sempre la versio del seu esquema; NULL i
         # `[]` son dues coses: "encara no estructurat" i "cap prova identificada".
         sa.CheckConstraint(
@@ -353,9 +359,7 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, ActorMixin, Base):
     alternative_group_complete: Mapped[bool | None] = mapped_column(sa.Boolean)
     #: "ISO 9001 **o equivalent**". Quina certificacio hi equival NO ho decideix
     #: l'extractor: es una decisio de compliment o d'una persona.
-    equivalence_allowed: Mapped[bool] = mapped_column(
-        sa.Boolean, nullable=False, default=False
-    )
+    equivalence_allowed: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     #: La condicio que activa el requisit, literal ("en su caso", "si es UTE").
     condition_note: Mapped[str | None] = mapped_column(sa.String(500))
 
@@ -374,6 +378,14 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, ActorMixin, Base):
         nullable=False,
         default=TerritoryMatchMode.ANY,
         server_default=TerritoryMatchMode.ANY.value,
+    )
+    #: Si els territoris desats son els que el plec exigeix (0050). `unknown` per a tot
+    #: el que ja hi havia: 0051 no llegeix mai «cap territori» com a «cobert».
+    territory_completeness: Mapped[TerritoryCompleteness] = mapped_column(
+        enum_column(TerritoryCompleteness, "territory_completeness"),
+        nullable=False,
+        default=TerritoryCompleteness.UNKNOWN,
+        server_default=TerritoryCompleteness.UNKNOWN.value,
     )
     #: Proves exigides pel plec (`proof_v1`: llista de {kind, text, mandatory}).
     #: NULL = encara no estructurat; `[]` = cap prova identificada. `mandatory`

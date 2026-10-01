@@ -10,7 +10,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from app.models.enums import RequirementTiming, TenderSiteRole
 from app.schemas.common import ORMModel
@@ -79,17 +79,24 @@ class TenderBlockRead(ORMModel):
 class TenderSiteCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    code: str = Field(min_length=1, max_length=40)
-    name: str = Field(min_length=1, max_length=500)
+    #: Codi del document (`D02`) o nom real: almenys un dels dos. Mai l'un derivat de l'altre.
+    code: str | None = Field(default=None, min_length=1, max_length=40)
+    name: str | None = Field(default=None, min_length=1, max_length=500)
     role: TenderSiteRole
-    #: A part del paper: una seu remota pot ser critica.
-    is_critical: bool = False
+    #: Tri-estat: `true` la font ho diu, `false` diu que no, `null`/omes = no se sap.
+    is_critical: bool | None = None
     address: str | None = Field(default=None, max_length=500)
     municipality_code: str | None = Field(default=None, max_length=10)
     #: Lliure ("INE", "IDESCAT"...). No s'infereix: sense sistema, el codi no es compara.
     municipality_code_system: str | None = Field(default=None, max_length=20)
     latitude: Decimal | None = Field(default=None, ge=-90, le=90, max_digits=9, decimal_places=6)
     longitude: Decimal | None = Field(default=None, ge=-180, le=180, max_digits=9, decimal_places=6)
+
+    @model_validator(mode="after")
+    def _has_identity(self) -> TenderSiteCreate:
+        if self.code is None and self.name is None:
+            raise ValueError("Cal el codi del document o el nom real de la seu.")
+        return self
 
 
 class TenderSiteUpdate(BaseModel):
@@ -110,10 +117,11 @@ class TenderSiteUpdate(BaseModel):
 class TenderSiteRead(ORMModel):
     id: uuid.UUID
     tender_id: uuid.UUID
-    code: str
-    name: str
+    code: str | None = None
+    name: str | None = None
     role: TenderSiteRole
-    is_critical: bool
+    #: `null` = no se sap si es critica.
+    is_critical: bool | None = None
     address: str | None = None
     municipality_code: str | None = None
     municipality_code_system: str | None = None
@@ -138,7 +146,8 @@ class TenderStructureRead(BaseModel):
 
 
 class StructureCitationLink(BaseModel):
-    """Enllaça una cita JA CREADA (`tender_source_refs`) a un bloc o a una seu."""
+    """Enllaça una cita JA CREADA (`tender_source_refs`) a un bloc, a una seu o a un
+    criteri d'adjudicacio."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -171,3 +180,5 @@ class RequirementStructureRead(BaseModel):
 class AwardCriterionStructureRead(RequirementStructureRead):
     #: Els punts del criteri, sense repartir: son els mateixos a cada bloc.
     points: float | None = None
+    #: 0050: les cites del criteri, amb el mateix patro que blocs i seus.
+    citations: list[TenderSourceRefRead] = Field(default_factory=list)

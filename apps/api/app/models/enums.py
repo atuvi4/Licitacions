@@ -1483,6 +1483,8 @@ class RequirementTiming(StrEnum):
     """
 
     AT_SUBMISSION = "at_submission"
+    #: Despres de l'adjudicacio i abans de formalitzar (assegurança, garantia definitiva).
+    BEFORE_FORMALIZATION = "before_formalization"
     AT_EXECUTION = "at_execution"
     AMBIGUOUS = "ambiguous"
     UNKNOWN = "unknown"
@@ -1502,6 +1504,19 @@ class TerritoryMatchMode(StrEnum):
 
     ALL = "all"
     ANY = "any"
+
+
+class TerritoryCompleteness(StrEnum):
+    """Si el conjunt de territoris d'un requisit es el que el plec exigeix (0050).
+    `not_applicable` = cap dimensio territorial; `complete` = totes les arees conegudes
+    hi son; `partial` = n'hi ha i en falten; `unknown` = hi ha (o pot haver-hi) dimensio
+    territorial i no tenim el conjunt (p. ex. un annex absent). 0051 no pot llegir mai
+    «cap territori» com a «cobert»: primer mira aixo."""
+
+    NOT_APPLICABLE = "not_applicable"
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    UNKNOWN = "unknown"
 
 
 class ProofKind(StrEnum):

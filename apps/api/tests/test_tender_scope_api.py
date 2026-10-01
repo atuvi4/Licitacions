@@ -153,6 +153,7 @@ async def test_legacy_reads_are_neutral(client_a, tenant_a, db):
         "id": requirement["id"],
         "tender_id": tender_id,
         "territory_match_mode": "any",
+        "territory_completeness": "unknown",
         "territories": [],
         "proof_json": None,
         "proof_schema": None,

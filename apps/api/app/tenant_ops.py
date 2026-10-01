@@ -120,6 +120,7 @@ PUBLIC_TABLES = frozenset(
         "award_criterion_blocks",
         "tender_block_source_ref_links",
         "tender_site_source_ref_links",
+        "award_criterion_source_ref_links",
         # Abast i semantica del plec (0049): que es compra, territoris, proves,
         # necessitats, fets contractuals i les seves cites. Tot del plec.
         "tender_scope_items",

@@ -444,7 +444,7 @@ les altres. No s'amplien permisos. L'extracció, la revisió i 0049 tindran una
 **via interna separada** per escriure estructura global; el gold de l'Escala es
 carrega per fixture o servei intern durant el desenvolupament.
 
-**Invariant obligatòria per a 0050 (`tender_analysis_runs`).** Editar durada,
+**Invariant obligatòria per a 0051 (`tender_analysis_runs`).** Editar durada,
 pròrrogues, SARA, inici previst, blocs, seus, `timing` o enllaços amb blocs
 **no crea cap `TenderRevision`** (no són el que publica l'òrgan). Perquè això
 no sigui una font de canvis invisibles, cada run d'anàlisi haurà de fixar un
@@ -454,9 +454,9 @@ de 0049 que afecti l'anàlisi), i el seu `inputs_hash` haurà d'incloure:
 `review_revision_hash`, `tender_structure_fingerprint`,
 `knowledge_fingerprint` i `rules_version`. Canviar un bloc, una seu, un
 `timing` o una metadada estructural ⇒ fingerprint diferent ⇒ run obsolet
-(stale). El fingerprint **no** s'implementa a 0048: és feina de 0050.
+(stale). El fingerprint **no** s'implementa a 0048: és feina de 0051.
 
-**Payload canònic del `tender_structure_fingerprint` (per a 0050).** Com a
+**Payload canònic del `tender_structure_fingerprint` (per a 0051).** Com a
 mínim, i en forma canònica (ordre estable, ids substituïts per claus naturals
 on n'hi hagi):
 
@@ -471,6 +471,11 @@ on n'hi hagi):
   (capacitat o nom sense mapar, comparador, valor + esquema, tipus, punts,
   criteri); `requirement_award_links`; fets contractuals (codi, valor +
   esquema) + els seus blocs.
+* 0050: `tender_sites.is_critical` en tri-estat (`true`/`false`/`null` són tres
+  valors diferents) i `code`/`name` nul·lables (la identitat és el parell tal
+  com és); `timing` amb `before_formalization`; `territory_completeness` de cada
+  requisit; semàntica de cada criteri (nom, punts, tipus, avaluació, fórmula i
+  trams, `timing`, blocs).
 
 **Forma canònica, no llista.** Els conjunts (blocs d'un requisit o d'un
 criteri, territoris, enllaços requisit ↔ criteri, blocs d'un fet) entren al

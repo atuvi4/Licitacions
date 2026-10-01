@@ -31,6 +31,7 @@ from app.models.provenance import TenderSourceRef
 from app.models.requirements import AwardCriterion, Requirement
 from app.models.tender_structure import (
     AwardCriterionBlock,
+    AwardCriterionSourceRefLink,
     RequirementBlock,
     TenderBlock,
     TenderBlockSourceRefLink,
@@ -77,6 +78,12 @@ class BlockCodeTakenError(ConflictError):
 
 class SiteCodeTakenError(ConflictError):
     code = "tender_site_code_taken"
+
+
+class SiteIdentityError(ValidationError):
+    """Una seu sense codi ni nom no es cap referencia documental."""
+
+    code = "tender_site_identity_required"
 
 
 class LotTenderMismatchError(ValidationError):
@@ -190,8 +197,10 @@ async def delete_block(session: AsyncSession, block: TenderBlock) -> None:
 
 
 async def _assert_site_code_free(
-    session: AsyncSession, tender_id: uuid.UUID, code: str, *, except_id: uuid.UUID | None
+    session: AsyncSession, tender_id: uuid.UUID, code: str | None, *, except_id: uuid.UUID | None
 ) -> None:
+    if code is None:  # dues seus sense codi no col·lisionen
+        return
     query = sa.select(TenderSite.id).where(
         TenderSite.tender_id == tender_id, TenderSite.code == code
     )
@@ -210,11 +219,16 @@ async def load_site(session: AsyncSession, tender: Tender, site_id: uuid.UUID) -
     return site
 
 
+def _check_site_identity(code: str | None, name: str | None) -> None:
+    if code is None and name is None:
+        raise SiteIdentityError("Una seu necessita el codi del document o el nom real.")
+
+
 async def create_site(session: AsyncSession, tender: Tender, fields: dict[str, Any]) -> TenderSite:
-    await _assert_site_code_free(session, tender.id, fields["code"], except_id=None)
+    """`is_critical` es tri-estat i NO es coacciona: `None` es «no se sap»."""
+    _check_site_identity(fields.get("code"), fields.get("name"))
+    await _assert_site_code_free(session, tender.id, fields.get("code"), except_id=None)
     site = TenderSite(tender_id=tender.id, **{k: fields.get(k) for k in SITE_FIELDS})
-    if site.is_critical is None:
-        site.is_critical = False
     session.add(site)
     await session.flush()
     return site
@@ -223,14 +237,14 @@ async def create_site(session: AsyncSession, tender: Tender, fields: dict[str, A
 async def update_site(
     session: AsyncSession, tender: Tender, site: TenderSite, fields: dict[str, Any]
 ) -> bool:
+    _check_site_identity(fields.get("code", site.code), fields.get("name", site.name))
     if "code" in fields and fields["code"] != site.code:
         await _assert_site_code_free(session, tender.id, fields["code"], except_id=site.id)
     changed = False
     for name, value in fields.items():
         if name not in SITE_FIELDS:  # pragma: no cover - el schema ja ho impedeix
             raise ValidationError(f"Camp no editable: {name}")
-        if name == "is_critical" and value is None:
-            continue
+        # `is_critical = None` es un valor (no se sap), no una omissio: s'aplica.
         if getattr(site, name) != value:
             setattr(site, name, value)
             changed = True
@@ -359,17 +373,22 @@ async def set_criterion_blocks(
 _LINKS = {
     TenderBlock: (TenderBlockSourceRefLink, TenderBlockSourceRefLink.block_id),
     TenderSite: (TenderSiteSourceRefLink, TenderSiteSourceRefLink.site_id),
+    AwardCriterion: (
+        AwardCriterionSourceRefLink,
+        AwardCriterionSourceRefLink.award_criterion_id,
+    ),
 }
 
 
 async def link_source_ref(
     session: AsyncSession,
     *,
-    entity: TenderBlock | TenderSite,
+    entity: TenderBlock | TenderSite | AwardCriterion,
     source_ref_id: uuid.UUID,
-    user: User,
+    user: User | None = None,
 ) -> Any:
-    """Enllaça una cita existent. Ha de ser de la MATEIXA licitacio."""
+    """Enllaça una cita existent. Ha de ser de la MATEIXA licitacio. Sense
+    `user` (via interna: fixtures, gold) l'enllac queda sense autor."""
     ref = await session.get(TenderSourceRef, source_ref_id)
     if ref is None:
         raise NotFoundError("Cita no trobada.")
@@ -381,7 +400,7 @@ async def link_source_ref(
     )
     if existing is not None:
         return existing
-    link = link_model(source_ref_id=ref.id, created_by=user.id)
+    link = link_model(source_ref_id=ref.id, created_by=user.id if user else None)
     setattr(link, column.key, entity.id)
     session.add(link)
     await session.flush()
@@ -389,7 +408,10 @@ async def link_source_ref(
 
 
 async def unlink_source_ref(
-    session: AsyncSession, *, entity: TenderBlock | TenderSite, source_ref_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    entity: TenderBlock | TenderSite | AwardCriterion,
+    source_ref_id: uuid.UUID,
 ) -> bool:
     """Treu l'enllac. La cita no s'esborra."""
     link_model, column = _LINKS[type(entity)]

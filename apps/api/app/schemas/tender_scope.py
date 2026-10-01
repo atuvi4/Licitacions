@@ -20,6 +20,7 @@ from app.models.enums import (
     NeedComparator,
     NeedType,
     ProofKind,
+    TerritoryCompleteness,
     TerritoryMatchMode,
 )
 from app.schemas.common import ORMModel
@@ -319,6 +320,7 @@ class RequirementSemanticsRead(BaseModel):
     id: uuid.UUID
     tender_id: uuid.UUID
     territory_match_mode: TerritoryMatchMode
+    territory_completeness: TerritoryCompleteness
     territories: list[RequirementTerritoryRead] = Field(default_factory=list)
     proof_json: list[Any] | None = None
     proof_schema: str | None = None
@@ -334,6 +336,8 @@ class RequirementSemanticsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     territory_match_mode: TerritoryMatchMode | None = None
+    #: Es comprova amb els territoris sobre l'estat final de la peticio.
+    territory_completeness: TerritoryCompleteness | None = None
     territories: list[RequirementTerritoryIn] | None = Field(default=None, max_length=500)
     proof: list[ProofItem] | None = Field(default=None, max_length=100)
     award_criterion_ids: list[uuid.UUID] | None = Field(default=None, max_length=200)

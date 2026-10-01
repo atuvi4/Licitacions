@@ -355,7 +355,7 @@ async def link_source_ref(
     *,
     requirement: Requirement,
     source_ref_id: uuid.UUID,
-    user: User,
+    user: User | None = None,
 ) -> RequirementSourceRefLink:
     """Enllaça una cita existent a un requisit.
 
@@ -380,7 +380,7 @@ async def link_source_ref(
         return existing
 
     link = RequirementSourceRefLink(
-        requirement_id=requirement.id, source_ref_id=ref.id, created_by=user.id
+        requirement_id=requirement.id, source_ref_id=ref.id, created_by=user.id if user else None
     )
     session.add(link)
     await session.flush()

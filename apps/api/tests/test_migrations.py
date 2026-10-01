@@ -1726,3 +1726,66 @@ def test_l_abast_del_plec_es_pot_aplicar_i_desfer_sense_tocar_cap_fila():
     assert "INSERT INTO" not in down and "DELETE FROM" not in down
     created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\\w+)", up))
     assert created == set(re.findall(r"DROP INDEX (\\w+)", down))
+
+
+def test_la_semantica_del_plec_es_pot_aplicar_i_desfer_sense_reinterpretar_cap_fila():
+    """0049 -> 0050 -> 0049: `before_formalization` a `timing`, seus amb critica en
+    tri-estat i identitat parcial, `territory_completeness` i les cites dels criteris.
+    L'upgrade no fa cap INSERT, UPDATE ni DELETE; el downgrade tampoc: si hi ha files
+    que 0049 no pot guardar, s'atura abans de cap DDL (la precondicio es un bloc DO al
+    SQL offline).
+    """
+    up = _offline_sql("upgrade", "0049_tender_scope:0050_tender_semantics")
+    down = _offline_sql("downgrade", "0050_tender_semantics:0049_tender_scope")
+
+    for timed in ("requirements", "award_criteria"):
+        assert f"ALTER TABLE {timed} DROP CONSTRAINT ck_{timed}_timing_valid;" in up
+        assert f"ALTER TABLE {timed} ALTER COLUMN timing TYPE VARCHAR(20);" in up
+        assert (
+            f"CONSTRAINT ck_{timed}_timing_valid CHECK (timing IN ('at_submission', "
+            "'before_formalization', 'at_execution', 'ambiguous', 'unknown'))"
+        ) in up
+        assert f"ALTER TABLE {timed} ALTER COLUMN timing TYPE VARCHAR(13);" in down
+        assert f"UPDATE {timed}" not in down, "cap reinterpretacio de timing"
+    for column in ("is_critical", "code", "name"):
+        assert f"ALTER TABLE tender_sites ALTER COLUMN {column} DROP NOT NULL;" in up
+        assert f"ALTER TABLE tender_sites ALTER COLUMN {column} SET NOT NULL;" in down
+    assert (
+        "CONSTRAINT ck_tender_sites_site_has_identity CHECK (code IS NOT NULL OR name IS NOT NULL)"
+    ) in up
+    assert "DEFAULT false" not in up.lower() and "default 'false'" not in up.lower()
+    assert (
+        "ALTER TABLE requirements ADD COLUMN territory_completeness VARCHAR(14) "
+        "DEFAULT 'unknown' NOT NULL"
+    ) in up
+    assert (
+        "CHECK (territory_completeness IN ('not_applicable', 'complete', 'partial', 'unknown'))"
+    ) in up
+    assert "ALTER TABLE requirements DROP COLUMN territory_completeness;" in down
+    links = up.split("CREATE TABLE award_criterion_source_ref_links (")[1].split("\n);")[0]
+    assert "REFERENCES award_criteria (id) ON DELETE CASCADE" in links
+    assert "REFERENCES tender_source_refs (id) ON DELETE RESTRICT" in links
+    assert "REFERENCES users (id) ON DELETE SET NULL" in links
+    assert (
+        "CONSTRAINT uq_award_criterion_source_ref UNIQUE (award_criterion_id, source_ref_id)"
+    ) in links
+    assert "DROP TABLE award_criterion_source_ref_links;" in down
+    statements = up.replace("UPDATE alembic_version", "")
+    for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM", "DROP TABLE", "DROP COLUMN"):
+        assert forbidden not in statements, forbidden
+    # El downgrade no reinterpreta ni esborra: refusa. La precondicio es al SQL mateix,
+    # abans de qualsevol DDL.
+    for forbidden in ("INSERT INTO", "UPDATE tender_sites", "DELETE FROM", "COALESCE"):
+        assert forbidden not in down, forbidden
+    guard = down.split("DO $$")[1].split("END $$")[0]
+    assert down.index("DO $$") < down.index("DROP INDEX"), "la guarda va abans de cap DDL"
+    assert guard.count("RAISE EXCEPTION 'downgrade_0050_incompatible_rows") == 4
+    for condition in (
+        "FROM requirements WHERE timing = 'before_formalization'",
+        "FROM award_criteria WHERE timing = 'before_formalization'",
+        "FROM tender_sites WHERE is_critical IS NULL",
+        "FROM tender_sites WHERE code IS NULL OR name IS NULL",
+    ):
+        assert condition in guard, condition
+    created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
+    assert created == set(re.findall(r"DROP INDEX (\w+)", down))

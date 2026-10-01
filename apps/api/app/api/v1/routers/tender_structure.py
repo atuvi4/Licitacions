@@ -22,6 +22,7 @@ from fastapi import APIRouter, Response, status
 from app.api.deps import CompanyCtx, SessionDep
 from app.core.errors import NotFoundError
 from app.models.audit import AuditAction
+from app.models.requirements import AwardCriterion
 from app.models.tender_structure import TenderBlock, TenderSite
 from app.models.tenders import Tender
 from app.schemas.provenance import read_of
@@ -83,6 +84,23 @@ async def _site_read(session, site: TenderSite) -> TenderSiteRead:
     refs = (await structure.source_refs_of(session, TenderSite, [site.id])).get(site.id, [])
     read.citations = [read_of(await resolve_source_ref(session, ref)) for ref in refs]
     return read
+
+
+async def _criterion_structure_read(
+    session, criterion: AwardCriterion
+) -> AwardCriterionStructureRead:
+    await session.refresh(criterion, attribute_names=["block_links"])
+    refs = (await structure.source_refs_of(session, AwardCriterion, [criterion.id])).get(
+        criterion.id, []
+    )
+    return AwardCriterionStructureRead(
+        id=criterion.id,
+        tender_id=criterion.tender_id,
+        timing=criterion.timing,
+        block_ids=criterion.block_ids,
+        points=criterion.points,
+        citations=[read_of(await resolve_source_ref(session, ref)) for ref in refs],
+    )
 
 
 async def _structure_read(session, tender: Tender) -> TenderStructureRead:
@@ -497,11 +515,60 @@ async def update_criterion_structure(
             f"criteri={criterion.id} {' '.join(touched)}",
         )
     await session.commit()
-    await session.refresh(criterion, attribute_names=["block_links"])
-    return AwardCriterionStructureRead(
-        id=criterion.id,
-        tender_id=criterion.tender_id,
-        timing=criterion.timing,
-        block_ids=criterion.block_ids,
-        points=criterion.points,
+    return await _criterion_structure_read(session, criterion)
+
+
+@router.post(
+    "/award-criteria/{criterion_id}/citations",
+    response_model=AwardCriterionStructureRead,
+    summary="Enllaça una cita a un criteri d'adjudicacio",
+)
+async def link_criterion_citation(
+    tender_id: uuid.UUID,
+    criterion_id: uuid.UUID,
+    payload: StructureCitationLink,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    tender = await _annotatable(session, ctx, tender_id)
+    criterion = await structure.load_criterion(session, tender, criterion_id)
+    await structure.link_source_ref(
+        session, entity=criterion, source_ref_id=payload.source_ref_id, user=ctx.user
     )
+    await _audit(
+        session,
+        ctx,
+        AuditAction.UPDATE,
+        "award_criterion",
+        criterion.id,
+        f"criteri={criterion.id} cita+={payload.source_ref_id}",
+    )
+    await session.commit()
+    return await _criterion_structure_read(session, criterion)
+
+
+@router.delete(
+    "/award-criteria/{criterion_id}/citations/{source_ref_id}",
+    response_model=AwardCriterionStructureRead,
+    summary="Treu una cita d'un criteri d'adjudicacio",
+)
+async def unlink_criterion_citation(
+    tender_id: uuid.UUID,
+    criterion_id: uuid.UUID,
+    source_ref_id: uuid.UUID,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    tender = await _annotatable(session, ctx, tender_id)
+    criterion = await structure.load_criterion(session, tender, criterion_id)
+    if await structure.unlink_source_ref(session, entity=criterion, source_ref_id=source_ref_id):
+        await _audit(
+            session,
+            ctx,
+            AuditAction.UPDATE,
+            "award_criterion",
+            criterion.id,
+            f"criteri={criterion.id} cita-={source_ref_id}",
+        )
+    await session.commit()
+    return await _criterion_structure_read(session, criterion)

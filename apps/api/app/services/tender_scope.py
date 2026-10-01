@@ -27,7 +27,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError, ValidationError
-from app.models.enums import ContractFactCode, TerritoryMatchMode
+from app.models.enums import ContractFactCode, TerritoryCompleteness, TerritoryMatchMode
 from app.models.requirements import AwardCriterion, Requirement
 from app.models.tender_scope import (
     ContractFactBlock,
@@ -124,6 +124,12 @@ class ContractFactScopeConflictError(ValidationError):
     """Ja hi ha un fet del mateix codi amb exactament el mateix abast de blocs."""
 
     code = "contract_fact_scope_conflict"
+
+
+class TerritoryCompletenessConflictError(ValidationError):
+    """La completesa declarada no quadra amb el nombre de territoris."""
+
+    code = "territory_completeness_conflict"
 
 
 # --------------------------------------------------------------------------- #
@@ -286,6 +292,35 @@ def dedupe_territories(territories: list[dict[str, Any]]) -> dict[tuple, dict[st
     return unique
 
 
+def check_territory_completeness(
+    completeness: TerritoryCompleteness | str, territory_count: int
+) -> None:
+    """Regles minimes (0050): `not_applicable` = 0 territoris; `complete` i
+    `partial` = almenys 1; `unknown` = 0..N. Res mes: ni GIS ni comparacio."""
+    value = str(completeness)
+    if value == TerritoryCompleteness.NOT_APPLICABLE.value and territory_count:
+        raise TerritoryCompletenessConflictError(
+            "Un requisit sense dimensio territorial no pot tenir territoris."
+        )
+    if value in (TerritoryCompleteness.COMPLETE.value, TerritoryCompleteness.PARTIAL.value):
+        if not territory_count:
+            raise TerritoryCompletenessConflictError(
+                f"`{value}` vol dir que hi ha territoris: en cal almenys un."
+            )
+
+
+async def set_territory_completeness(
+    session: AsyncSession, requirement: Requirement, completeness: TerritoryCompleteness
+) -> bool:
+    """Canvia nomes la completesa; es comprova contra els territoris que hi ha."""
+    await session.refresh(requirement, attribute_names=["territories"])
+    check_territory_completeness(completeness, len(requirement.territories))
+    if requirement.territory_completeness == completeness:
+        return False
+    requirement.territory_completeness = completeness
+    return True
+
+
 async def set_territories(
     session: AsyncSession,
     tender: Tender,
@@ -295,11 +330,13 @@ async def set_territories(
     """Substitueix els territoris del requisit. **Son un conjunt**: la mateixa
     identitat nomes hi es una vegada, l'ordre no compta i el mateix contingut no
     es cap canvi. Els textos es desen amb els espais normalitzats. Nomes
-    s'emmagatzema: cap comparacio amb cap cobertura."""
+    s'emmagatzema: cap comparacio amb cap cobertura. La completesa declarada
+    del requisit ha de quadrar amb el resultat."""
     for territory in territories:
         await _assert_site(session, tender, territory.get("site_id"))
     await session.refresh(requirement, attribute_names=["territories"])
     wanted = dedupe_territories(territories)
+    check_territory_completeness(requirement.territory_completeness, len(wanted))
     current: dict[tuple, RequirementTerritory] = {}
     stale: list[RequirementTerritory] = []
     for row in requirement.territories:
@@ -330,6 +367,36 @@ async def set_territories(
             )
     await session.flush()
     return True
+
+
+async def set_territory_semantics(
+    session: AsyncSession,
+    tender: Tender,
+    requirement: Requirement,
+    *,
+    completeness: TerritoryCompleteness | None = None,
+    territories: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Completesa i territoris alhora: la regla es comprova sobre l'estat FINAL
+    (canviar a `not_applicable` i buidar la llista en una sola peticio es valid)
+    i, si no quadra, no es toca res. Retorna que ha canviat."""
+    await session.refresh(requirement, attribute_names=["territories"])
+    final_completeness = (
+        requirement.territory_completeness if completeness is None else completeness
+    )
+    final_count = (
+        len(requirement.territories)
+        if territories is None
+        else len(dedupe_territories(territories))
+    )
+    check_territory_completeness(final_completeness, final_count)
+    touched: list[str] = []
+    if completeness is not None and requirement.territory_completeness != completeness:
+        requirement.territory_completeness = completeness
+        touched.append(f"completesa={completeness}")
+    if territories is not None and await set_territories(session, tender, requirement, territories):
+        touched.append(f"territoris={final_count}")
+    return touched
 
 
 def set_proof(requirement: Requirement, proof: list[Any] | None) -> bool:

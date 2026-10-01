@@ -156,7 +156,8 @@ async def test_site_role_and_critical_are_independent_and_location_is_optional(d
     await db.refresh(critical_remote)
     await db.refresh(central)
     assert (critical_remote.role, critical_remote.is_critical) == (TenderSiteRole.REMOTE, True)
-    assert (central.role, central.is_critical) == (TenderSiteRole.CENTRAL, False)
+    # Tri-estat (0050): sense font que ho digui, `None`.
+    assert (central.role, central.is_critical) == (TenderSiteRole.CENTRAL, None)
     # Ubicacio desconeguda: cap deduccio, cap geocodificacio.
     assert central.municipality_code_system is None
     assert (central.address, central.municipality_code, central.latitude, central.longitude) == (

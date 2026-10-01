@@ -36,6 +36,7 @@ from app.models.enums import (
     RequirementScope,
     RequirementTiming,
     ReviewStatus,
+    TerritoryCompleteness,
     TerritoryMatchMode,
 )
 from app.schemas.provenance import TenderSourceRefRead
@@ -125,6 +126,7 @@ class RequirementRead(ORMModel):
     #: tecniques i criteris dels quals es la cara exigible. Tot neutre a les
     #: files antigues: `any`, `None`, llistes buides.
     territory_match_mode: TerritoryMatchMode = TerritoryMatchMode.ANY
+    territory_completeness: TerritoryCompleteness = TerritoryCompleteness.UNKNOWN
     territories: list[RequirementTerritoryRead] = Field(default_factory=list)
     proof_json: list[Any] | None = None
     proof_schema: str | None = None

@@ -400,7 +400,8 @@ async def test_sites_crud_role_and_critical_independent_location_optional(client
         latitude="42.123456",
         longitude="3.1",
     )
-    assert (central["role"], central["is_critical"]) == ("central", False)
+    # Sense dir-ho, no se sap: `null`, mai `false` (0050).
+    assert (central["role"], central["is_critical"]) == ("central", None)
     assert (remote["role"], remote["is_critical"]) == ("remote", True)
     # Ubicacio: el que no es diu queda a null; res no es dedueix.
     assert (central["municipality_code"], central["latitude"], central["longitude"]) == (

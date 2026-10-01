@@ -92,6 +92,7 @@ async def _semantics_read(session, requirement: Requirement) -> RequirementSeman
         id=requirement.id,
         tender_id=requirement.tender_id,
         territory_match_mode=requirement.territory_match_mode,
+        territory_completeness=requirement.territory_completeness,
         territories=requirement.territories,
         proof_json=requirement.proof_json,
         proof_schema=requirement.proof_schema,
@@ -382,10 +383,15 @@ async def update_requirement_semantics(
         requirement, payload.territory_match_mode
     ):
         touched.append(f"mode={payload.territory_match_mode}")
-    if payload.territories is not None and await scope.set_territories(
-        session, tender, requirement, [t.model_dump() for t in payload.territories]
-    ):
-        touched.append(f"territoris={len(payload.territories)}")
+    touched += await scope.set_territory_semantics(
+        session,
+        tender,
+        requirement,
+        completeness=payload.territory_completeness,
+        territories=(
+            None if payload.territories is None else [t.model_dump() for t in payload.territories]
+        ),
+    )
     if "proof" in payload.model_fields_set and scope.set_proof(
         requirement, None if payload.proof is None else [p.model_dump() for p in payload.proof]
     ):

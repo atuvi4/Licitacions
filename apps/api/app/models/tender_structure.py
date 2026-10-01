@@ -94,6 +94,8 @@ class TenderSite(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.UniqueConstraint("tender_id", "code", name="uq_tender_sites_tender_code"),
         sa.Index("ix_tender_sites_tender_id", "tender_id"),
         sa.CheckConstraint(in_values("role", TenderSiteRole), name="role_valid"),
+        # Identitat parcial: un ramal nomes amb codi, una seu critica nomes amb nom.
+        sa.CheckConstraint("code IS NOT NULL OR name IS NOT NULL", name="site_has_identity"),
         sa.CheckConstraint(
             "latitude IS NULL OR (latitude >= -90 AND latitude <= 90)", name="site_latitude_range"
         ),
@@ -106,13 +108,16 @@ class TenderSite(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     tender_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False
     )
-    code: Mapped[str] = mapped_column(sa.String(40), nullable=False)
-    name: Mapped[str] = mapped_column(sa.String(500), nullable=False)
+    #: Codi del document (p. ex. el ramal `D02`) o nom real: almenys un dels dos (CHECK).
+    #: Mai un codi sintetic a partir del nom, ni un nom copiat del codi.
+    code: Mapped[str | None] = mapped_column(sa.String(40))
+    name: Mapped[str | None] = mapped_column(sa.String(500))
     role: Mapped[TenderSiteRole] = mapped_column(
         enum_column(TenderSiteRole, "tender_site_role"), nullable=False
     )
-    #: A part del paper: una seu remota pot ser critica.
-    is_critical: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
+    #: Tri-estat: `True` la font diu que es critica, `False` diu que no, `NULL` no se
+    #: sap. Sense valor per defecte: «no se sap» no es converteix mai en «no».
+    is_critical: Mapped[bool | None] = mapped_column(sa.Boolean)
     #: `NULL` = encara no se sap. No es dedueix de res.
     address: Mapped[str | None] = mapped_column(sa.String(500))
     municipality_code: Mapped[str | None] = mapped_column(sa.String(10))
@@ -226,6 +231,41 @@ class TenderSiteSourceRefLink(UUIDPrimaryKeyMixin, Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="SET NULL", name="fk_site_source_ref_author"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
+
+class AwardCriterionSourceRefLink(UUIDPrimaryKeyMixin, Base):
+    """Quines cites sostenen un criteri d'adjudicacio (0050). Mateix patro."""
+
+    __tablename__ = "award_criterion_source_ref_links"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "award_criterion_id", "source_ref_id", name="uq_award_criterion_source_ref"
+        ),
+        sa.Index("ix_award_criterion_source_ref_links_criterion", "award_criterion_id"),
+        sa.Index("ix_award_criterion_source_ref_links_source_ref", "source_ref_id"),
+    )
+
+    award_criterion_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "award_criteria.id", ondelete="CASCADE", name="fk_criterion_source_ref_criterion"
+        ),
+        nullable=False,
+    )
+    source_ref_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "tender_source_refs.id", ondelete="RESTRICT", name="fk_criterion_source_ref_source"
+        ),
+        nullable=False,
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey("users.id", ondelete="SET NULL", name="fk_criterion_source_ref_author"),
     )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
