@@ -86,6 +86,9 @@ async def _site_read(session, site: TenderSite) -> TenderSiteRead:
 
 
 async def _structure_read(session, tender: Tender) -> TenderStructureRead:
+    # Importacio local: el router d'abast (0049) reutilitza els ajudants d'aquest.
+    from app.api.v1.routers.tender_scope import contract_facts_read, scope_items_read
+
     await session.refresh(tender, attribute_names=["blocks", "sites"])
     return TenderStructureRead(
         tender_id=tender.id,
@@ -95,6 +98,8 @@ async def _structure_read(session, tender: Tender) -> TenderStructureRead:
         planned_start_date=tender.planned_start_date,
         blocks=[await _block_read(session, block) for block in tender.blocks],
         sites=[await _site_read(session, site) for site in tender.sites],
+        scope_items=await scope_items_read(session, tender.id),
+        contract_facts=await contract_facts_read(session, tender.id),
     )
 
 

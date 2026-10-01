@@ -390,6 +390,52 @@ mateixes autoritzacions que la resta de dades d'una licitació oberta a mà.
 Cap d'aquestes dades crea abast, necessitats, fets de contracte ni resultats:
 això és 0049/0050.
 
+### 6.1.2 Abast i semàntica del plec (`0049`, fase 3A pas 3)
+
+Completa la representació del **costat plec**, sense respondre encara res de
+l'empresa:
+
+* **Què es compra** (`tender_scope_items`): línia del vocabulari, quantitat
+  decimal, unitat, especificacions versionades i preu unitari; de tot el
+  contracte, d'un bloc o d'un lot (mai de tots dos), i opcionalment d'una seu.
+* **Requisits territorials** (`requirement_territories` + `territory_match_mode`):
+  el mateix vocabulari d'àrea que la cobertura d'una empresa (0047), amb un
+  matís literal i, si cal, la seu del plec. `any` = n'hi ha prou amb un, `all` =
+  calen tots. **Són un conjunt**: identitat `(kind, site_id, code_system, code,
+  label, qualifier)` amb els textos normalitzats; el servei desdublica (cap
+  índex únic: `site_id` i els NULL ho complicarien sense guanyar res) i un
+  duplicat no compta dues vegades a `all`/`any`. **Només s'emmagatzema**: cap
+  *matched*, cap GIS, cap deducció que dos noms són el mateix municipi.
+* **Proves exigides** (`proof_json`/`proof_schema`): la llista `proof_v1`;
+  `null` = no estructurat, `[]` = cap prova identificada. Cap `proof_status`.
+* **Necessitats tècniques** (`requirement_capability_needs`): capacitat del
+  vocabulari o nom sense mapar (mai se'n crea cap de global), comparador tancat,
+  valor versionat, tipus (`minimum` · `scored_improvement` · `demo`) i punts
+  que **no se sumen ni puntuen**.
+* **Requisit ↔ criteri** (`requirement_award_links`): "el plec demana X i X és
+  la cara exigible del criteri C". Res no es copia.
+* **Fets contractuals** (`tender_contract_facts` + `contract_fact_blocks`): el
+  que no té columna pròpia, versionat; `billing_terms` és només facturació
+  general (invariant de servei: cap enllaç amb blocs). **Una font per abast
+  exacte** (invariant de servei, no UNIQUE SQL): per expedient, un mateix
+  `fact_code` amb exactament el mateix conjunt de blocs només existeix una
+  vegada (`contract_fact_scope_conflict`); `penalties → B1` i `penalties → B3`
+  conviuen, `penalties → B1+B3` i `penalties → B3+B1` no; `billing_terms`, com
+  que no té blocs, és com a màxim un per expedient.
+* **Cites** per a elements d'abast, necessitats i fets: el patró de
+  `tender_source_refs`.
+
+**No confondre nivells.** Un element d'abast no crea cap servei, producte ni
+línia de proposta; una necessitat no crea cap capacitat d'empresa ni de
+fabricant; un territori no llegeix cap cobertura; una prova no busca cap
+document d'empresa; un fet no crea cap blocador, troballa ni avaluació.
+
+**Via interna d'escriptura.** `app.services.tender_scope` (i
+`tender_structure`) persisteixen sense cap política d'accés; els routers de
+tenant hi apliquen la política de la licitació oberta a mà. L'extracció, la
+revisió i les fixtures que carreguin una licitació pública faran servir
+directament el servei; cap empresa tenant hi arriba.
+
 **Decisió tancada: qui escriu estructura.** L'API de tenant edita només la
 **licitació oberta a mà i pròpia**, amb els permisos que ja existien. Una
 licitació **pública o global** es llegeix però **no s'edita per aquesta via**:
@@ -409,6 +455,37 @@ de 0049 que afecti l'anàlisi), i el seu `inputs_hash` haurà d'incloure:
 `knowledge_fingerprint` i `rules_version`. Canviar un bloc, una seu, un
 `timing` o una metadada estructural ⇒ fingerprint diferent ⇒ run obsolet
 (stale). El fingerprint **no** s'implementa a 0048: és feina de 0050.
+
+**Payload canònic del `tender_structure_fingerprint` (per a 0050).** Com a
+mínim, i en forma canònica (ordre estable, ids substituïts per claus naturals
+on n'hi hagi):
+
+* 0048: `duration_months`, `extension_months`, `regulated_harmonised`,
+  `planned_start_date`; blocs (codi, nom, lot, preu base, punts, adjudicable a
+  part, facturació del bloc); seus (codi, nom, paper, crítica, adreça, municipi
+  + sistema, coordenades); `timing` de cada requisit i criteri; enllaços
+  requisit ↔ bloc i criteri ↔ bloc.
+* 0049: elements d'abast (línia, bloc/lot/seu, quantitat, unitat,
+  especificacions + esquema, preu unitari); territoris de cada requisit +
+  `territory_match_mode`; `proof_json` + `proof_schema`; necessitats
+  (capacitat o nom sense mapar, comparador, valor + esquema, tipus, punts,
+  criteri); `requirement_award_links`; fets contractuals (codi, valor +
+  esquema) + els seus blocs.
+
+**Forma canònica, no llista.** Els conjunts (blocs d'un requisit o d'un
+criteri, territoris, enllaços requisit ↔ criteri, blocs d'un fet) entren al
+fingerprint com a conjunts: **l'ordre no l'altera** i **un duplicat semàntic
+tampoc** (un territori repetit, un enllaç repetit). Els textos hi entren amb
+els espais normalitzats. Per això els serveis ja desen aquests conjunts sense
+repeticions: territoris per identitat `(kind, site, code_system, code, label,
+qualifier)`, fets per `(fact_code + conjunt exacte de blocs)` únic per
+expedient.
+
+**La provenance queda fora del fingerprint tècnic.** Canviar només una cita
+(una altra pàgina, un altre fitxer) amb el mateix valor estructurat no canvia
+el significat i no ha de fer obsoleta cap anàlisi. Una run conserva, a part,
+els ids de les cites i les revisions de document que va veure, per poder
+auditar-la; però no entren al hash semàntic.
 
 ### 6.2 Anàlisi (tenant)
 

@@ -1673,3 +1673,56 @@ def test_l_estructura_del_plec_es_pot_aplicar_i_desfer_sense_tocar_cap_fila():
     assert "INSERT INTO" not in down and "DELETE FROM" not in down
     created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
     assert created == set(re.findall(r"DROP INDEX (\w+)", down))
+
+
+def test_l_abast_del_plec_es_pot_aplicar_i_desfer_sense_tocar_cap_fila():
+    """0048 -> 0049 -> 0048: nou taules noves buides i tres columnes neutres a
+    `requirements` (`territory_match_mode = 'any'`, `proof_json`/`proof_schema`
+    NULL). Cap INSERT, UPDATE ni DELETE; cap gold carregat.
+    """
+    up = _offline_sql("upgrade", "0048_tender_structure:0049_tender_scope")
+    down = _offline_sql("downgrade", "0049_tender_scope:0048_tender_structure")
+
+    tables = (
+        "tender_scope_items", "tender_scope_item_source_ref_links", "requirement_territories",
+        "requirement_capability_needs", "requirement_capability_need_source_ref_links",
+        "requirement_award_links", "tender_contract_facts", "contract_fact_blocks",
+        "tender_contract_fact_source_ref_links",
+    )
+    for table in tables:
+        assert f"CREATE TABLE {table} (" in up, table
+        assert f"DROP TABLE {table};" in down, table
+    assert (
+        "ALTER TABLE requirements ADD COLUMN territory_match_mode VARCHAR(3) "
+        "DEFAULT 'any' NOT NULL"
+    ) in up
+    assert "ALTER TABLE requirements ADD COLUMN proof_json JSON;" in up
+    assert "ALTER TABLE requirements ADD COLUMN proof_schema VARCHAR(50);" in up
+    assert "CHECK (territory_match_mode IN ('all', 'any'))" in up
+    assert "CONSTRAINT ck_requirements_proof_json_versioned CHECK" in up
+    scope = up.split("CREATE TABLE tender_scope_items (")[1].split("\
+);")[0]
+    assert "quantity NUMERIC(14, 3)" in scope and "service_line_code VARCHAR(40) NOT NULL" in scope
+    assert (
+        "CONSTRAINT ck_tender_scope_items_scope_block_xor_lot "
+        "CHECK (block_id IS NULL OR tender_lot_id IS NULL)"
+    ) in scope
+    assert "REFERENCES service_lines (code) ON DELETE RESTRICT" in scope
+    assert "REFERENCES tender_blocks (id) ON DELETE CASCADE" in scope
+    needs = up.split("CREATE TABLE requirement_capability_needs (")[1].split("\
+);")[0]
+    assert "CHECK ((capability_code IS NULL) <> (unmapped_capability IS NULL))" in needs
+    assert "REFERENCES capability_definitions (code) ON DELETE RESTRICT" in needs
+    assert (
+        "CONSTRAINT pk_requirement_award_links PRIMARY KEY (requirement_id, award_criterion_id)"
+    ) in up
+    assert "CONSTRAINT pk_contract_fact_blocks PRIMARY KEY (fact_id, block_id)" in up
+    assert up.count("REFERENCES tender_source_refs (id) ON DELETE RESTRICT") == 3
+    for timed in ("territory_match_mode", "proof_json", "proof_schema"):
+        assert f"ALTER TABLE requirements DROP COLUMN {timed};" in down
+    statements = up.replace("UPDATE alembic_version", "")
+    for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM", "DROP"):
+        assert forbidden not in statements, forbidden
+    assert "INSERT INTO" not in down and "DELETE FROM" not in down
+    created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\\w+)", up))
+    assert created == set(re.findall(r"DROP INDEX (\\w+)", down))

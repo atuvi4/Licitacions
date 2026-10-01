@@ -1493,3 +1493,68 @@ class TenderSiteRole(StrEnum):
 
     CENTRAL = "central"
     REMOTE = "remote"
+
+
+class TerritoryMatchMode(StrEnum):
+    """Com s'han de llegir els territoris d'un requisit (0049): n'hi ha prou amb un
+    (`any`) o cal cobrir-los tots (`all`). Nomes s'emmagatzema: comparar-ho amb la
+    cobertura d'una empresa es cosa de 0050."""
+
+    ALL = "all"
+    ANY = "any"
+
+
+class ProofKind(StrEnum):
+    """Quina prova o documentacio exigeix el plec per a un requisit (0049)."""
+
+    RESPONSIBLE_DECLARATION = "responsible_declaration"
+    COVERAGE_MAP = "coverage_map"
+    OWNERSHIP_DOCUMENT = "ownership_document"
+    CERTIFICATE = "certificate"
+    ANNUAL_ACCOUNTS = "annual_accounts"
+    EXECUTION_CERTIFICATES = "execution_certificates"
+    INSURANCE_POLICY = "insurance_policy"
+    CALIBRATION_CERTIFICATE = "calibration_certificate"
+    TECHNICAL_SHEET = "technical_sheet"
+    REGISTRY_INSCRIPTION = "registry_inscription"
+    STAFF_COMMITMENT = "staff_commitment"
+    OTHER = "other"
+
+
+class NeedType(StrEnum):
+    """Quina mena de necessitat tecnica es (0049)."""
+
+    MINIMUM = "minimum"
+    SCORED_IMPROVEMENT = "scored_improvement"
+    DEMO = "demo"
+
+
+class NeedComparator(StrEnum):
+    """Com es llegeix el valor d'una necessitat. Tancat: no es cap llenguatge de regles."""
+
+    PRESENT = "present"
+    EQ = "eq"
+    GTE = "gte"
+    LTE = "lte"
+    CONTAINS = "contains"
+
+
+class ContractFactCode(StrEnum):
+    """Fets contractuals heterogenis sense columna propia (0049). El que ja te
+    columna (PBL, VEC, organ, termini, durada, SARA, inici) NO hi va."""
+
+    ENVELOPES = "envelopes"
+    PAGE_LIMITS = "page_limits"
+    DEFINITIVE_GUARANTEE = "definitive_guarantee"
+    LIABILITY_INSURANCE = "liability_insurance"
+    SUBCONTRACTING = "subcontracting"
+    ABNORMAL_OFFER_PARAMS = "abnormal_offer_params"
+    PENALTIES = "penalties"
+    LIVE_DEMO = "live_demo"
+    SITE_VISIT = "site_visit"
+    VARIANTS_POLICY = "variants_policy"
+    BILLING_TERMS = "billing_terms"
+    MAX_MODIFICATION = "max_modification"
+    REVERSIBILITY = "reversibility"
+    DATA_PROTECTION = "data_protection"
+    ESSENTIAL_OBLIGATIONS = "essential_obligations"

@@ -132,6 +132,9 @@ class TenderStructureRead(BaseModel):
     planned_start_date: date | None = None
     blocks: list[TenderBlockRead] = Field(default_factory=list)
     sites: list[TenderSiteRead] = Field(default_factory=list)
+    #: 0049: que es compra i els fets contractuals sense columna propia.
+    scope_items: list[Any] = Field(default_factory=list)
+    contract_facts: list[Any] = Field(default_factory=list)
 
 
 class StructureCitationLink(BaseModel):

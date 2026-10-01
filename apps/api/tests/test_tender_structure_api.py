@@ -60,14 +60,10 @@ ANALYSIS = "/api/v1/tenders/{tender}/analysis/requirements"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 XLSX_BYTES = b"PK\x03\x04" + b"\x01" * 64
 
-#: Taules que 0049/0050 encara no han creat: res del que fa 0048 les pot necessitar.
+#: Taules que 0050 encara no ha creat: res del que fa l'estructura les pot necessitar.
+#: (Les de 0049 —abast, territoris, necessitats, fets— ja existeixen i son del plec.)
 NOT_YET = (
-    "tender_scope_items",
-    "requirement_capability_needs",
-    "requirement_award_links",
-    "requirement_territories",
-    "tender_contract_facts",
-    "contract_fact_blocks",
+    "tender_analysis_runs",
     "analysis_runs",
     "analysis_findings",
     "findings",
@@ -237,6 +233,9 @@ async def test_a_tender_without_structure_reads_unknown_everywhere(client_a, ten
         "planned_start_date": None,
         "blocks": [],
         "sites": [],
+        # 0049 hi afegeix l'abast i els fets, buits a les licitacions que no en tenen.
+        "scope_items": [],
+        "contract_facts": [],
     }
 
     analysis = (await client_a.get(ANALYSIS.format(tender=tender_id))).json()

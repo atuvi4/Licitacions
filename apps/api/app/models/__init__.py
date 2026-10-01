@@ -82,6 +82,17 @@ from app.models.tender_documents import (
     TenderDocumentPage,
 )
 from app.models.tender_lifecycle import TenderChangeEvent, TenderRevision
+from app.models.tender_scope import (
+    ContractFactBlock,
+    RequirementAwardLink,
+    RequirementCapabilityNeed,
+    RequirementCapabilityNeedSourceRefLink,
+    RequirementTerritory,
+    TenderContractFact,
+    TenderContractFactSourceRefLink,
+    TenderScopeItem,
+    TenderScopeItemSourceRefLink,
+)
 from app.models.tender_structure import (
     AwardCriterionBlock,
     RequirementBlock,
@@ -132,6 +143,7 @@ __all__ = [
     "AuditLog",
     "AwardCriterion",
     "AwardCriterionBlock",
+    "ContractFactBlock",
     "AwardCriterionEvidence",
     "Base",
     "BidWorkspace",
@@ -164,7 +176,11 @@ __all__ = [
     "PersonQualification",
     "ProjectCPV",
     "Requirement",
+    "RequirementAwardLink",
     "RequirementBlock",
+    "RequirementCapabilityNeed",
+    "RequirementCapabilityNeedSourceRefLink",
+    "RequirementTerritory",
     "RequirementEvidence",
     "RequirementExtractionRun",
     "ServiceCPV",
@@ -190,6 +206,10 @@ __all__ = [
     "TenderLot",
     "TenderBlock",
     "TenderBlockSourceRefLink",
+    "TenderContractFact",
+    "TenderContractFactSourceRefLink",
+    "TenderScopeItem",
+    "TenderScopeItemSourceRefLink",
     "TenderSite",
     "TenderSiteSourceRefLink",
     "TenderLotCPV",

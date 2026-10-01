@@ -42,6 +42,7 @@ from app.models.enums import (
     RequirementScope,
     RequirementTiming,
     ReviewStatus,
+    TerritoryMatchMode,
 )
 from app.models.review import in_values
 
@@ -241,6 +242,16 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, ActorMixin, Base):
         ),
         sa.Index("ix_requirements_origin_archived", "tender_id", "origin", "archived_at"),
         _timing_check(),
+        sa.CheckConstraint(
+            in_values("territory_match_mode", TerritoryMatchMode), name="territory_match_mode_valid"
+        ),
+        # Una prova estructurada porta sempre la versio del seu esquema; NULL i
+        # `[]` son dues coses: "encara no estructurat" i "cap prova identificada".
+        sa.CheckConstraint(
+            "(proof_json IS NULL AND proof_schema IS NULL)"
+            " OR (proof_json IS NOT NULL AND proof_schema IS NOT NULL)",
+            name="proof_json_versioned",
+        ),
     )
 
     #: NUL nomes per als manuals. Un requisit extret sense run no podria dir
@@ -355,6 +366,21 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, ActorMixin, Base):
     #: QUAN s'ha de complir (0048). `unknown` fins que algu ho digui; cap
     #: resultat de compliment se'n deriva encara.
     timing: Mapped[RequirementTiming] = _timing_column()
+    # --- 0049: territori, proves i semantica del requisit --------------------
+    #: Com es llegeixen els territoris: n'hi ha prou amb un (`any`) o calen tots
+    #: (`all`). Nomes s'emmagatzema; sense territoris no canvia res.
+    territory_match_mode: Mapped[TerritoryMatchMode] = mapped_column(
+        enum_column(TerritoryMatchMode, "territory_match_mode"),
+        nullable=False,
+        default=TerritoryMatchMode.ANY,
+        server_default=TerritoryMatchMode.ANY.value,
+    )
+    #: Proves exigides pel plec (`proof_v1`: llista de {kind, text, mandatory}).
+    #: NULL = encara no estructurat; `[]` = cap prova identificada. `mandatory`
+    #: descriu el plec, no es l'`obligation` del requisit. Cap `proof_status`:
+    #: aixo depen de l'evidencia de l'empresa (0050).
+    proof_json: Mapped[list[Any] | None] = mapped_column(sa.JSON(none_as_null=True))
+    proof_schema: Mapped[str | None] = mapped_column(sa.String(50))
 
     run: Mapped[RequirementExtractionRun | None] = relationship(back_populates="requirements")
     evidence: Mapped[list[RequirementEvidence]] = relationship(
@@ -368,6 +394,24 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, ActorMixin, Base):
     @property
     def block_ids(self) -> list[uuid.UUID]:
         return [link.block_id for link in self.block_links]
+
+    #: 0049: on aplica, quines necessitats tecniques en surten i de quin criteri
+    #: es la cara exigible. Tot nomes emmagatzemat.
+    territories: Mapped[list[RequirementTerritory]] = relationship(  # noqa: F821
+        cascade="all, delete-orphan", lazy="selectin", order_by="RequirementTerritory.created_at"
+    )
+    capability_needs: Mapped[list[RequirementCapabilityNeed]] = relationship(  # noqa: F821
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="RequirementCapabilityNeed.created_at",
+    )
+    award_links: Mapped[list[RequirementAwardLink]] = relationship(  # noqa: F821
+        cascade="all, delete-orphan", lazy="selectin", order_by="RequirementAwardLink.created_at"
+    )
+
+    @property
+    def award_criterion_ids(self) -> list[uuid.UUID]:
+        return [link.award_criterion_id for link in self.award_links]
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Requirement {self.category} {self.title[:40]}>"
@@ -519,6 +563,16 @@ class AwardCriterion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     @property
     def block_ids(self) -> list[uuid.UUID]:
         return [link.block_id for link in self.block_links]
+
+    #: 0049: quins requisits en son la cara exigible. Nomes la relacio: ni
+    #: punts ni text es copien.
+    requirement_links: Mapped[list[RequirementAwardLink]] = relationship(  # noqa: F821
+        cascade="all, delete-orphan", lazy="selectin", order_by="RequirementAwardLink.created_at"
+    )
+
+    @property
+    def requirement_ids(self) -> list[uuid.UUID]:
+        return [link.requirement_id for link in self.requirement_links]
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<AwardCriterion {self.name[:40]} {self.points}>"

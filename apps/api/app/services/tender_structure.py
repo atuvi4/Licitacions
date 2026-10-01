@@ -313,6 +313,7 @@ async def set_requirement_blocks(
 ) -> bool:
     """Substitueix el conjunt de blocs. Buit = a tot el contracte. Cert si canvia."""
     wanted = await _blocks_of_tender(session, tender, block_ids)
+    await session.refresh(requirement, attribute_names=["block_links"])
     current = {link.block_id: link for link in requirement.block_links}
     if set(current) == set(wanted):
         return False
@@ -334,6 +335,7 @@ async def set_criterion_blocks(
     """Igual que per a un requisit. **Els punts no es toquen**: un criteri de 6
     punts enllacat a dos blocs continua valent 6, no 3 + 3."""
     wanted = await _blocks_of_tender(session, tender, block_ids)
+    await session.refresh(criterion, attribute_names=["block_links"])
     current = {link.block_id: link for link in criterion.block_links}
     if set(current) == set(wanted):
         return False

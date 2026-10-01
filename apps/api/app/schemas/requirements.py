@@ -36,8 +36,10 @@ from app.models.enums import (
     RequirementScope,
     RequirementTiming,
     ReviewStatus,
+    TerritoryMatchMode,
 )
 from app.schemas.provenance import TenderSourceRefRead
+from app.schemas.tender_scope import CapabilityNeedRead, RequirementTerritoryRead
 from app.workspace.requirement_routing import RequirementRouting, route_requirement
 
 
@@ -119,6 +121,15 @@ class RequirementRead(ORMModel):
     #: blocs aplica (buit = a tot el contracte).
     timing: RequirementTiming = RequirementTiming.UNKNOWN
     block_ids: list[uuid.UUID] = Field(default_factory=list)
+    #: 0049: territoris (nomes emmagatzemats), proves exigides, necessitats
+    #: tecniques i criteris dels quals es la cara exigible. Tot neutre a les
+    #: files antigues: `any`, `None`, llistes buides.
+    territory_match_mode: TerritoryMatchMode = TerritoryMatchMode.ANY
+    territories: list[RequirementTerritoryRead] = Field(default_factory=list)
+    proof_json: list[Any] | None = None
+    proof_schema: str | None = None
+    capability_needs: list[CapabilityNeedRead] = Field(default_factory=list)
+    award_criterion_ids: list[uuid.UUID] = Field(default_factory=list)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -193,6 +204,8 @@ class AwardCriterionRead(ORMModel):
     #: contracte). `points` NO es reparteix entre blocs.
     timing: RequirementTiming = RequirementTiming.UNKNOWN
     block_ids: list[uuid.UUID] = Field(default_factory=list)
+    #: 0049: requisits que en son la cara exigible. Nomes identificadors.
+    requirement_ids: list[uuid.UUID] = Field(default_factory=list)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
