@@ -292,13 +292,38 @@ export const AREA_KIND_LABELS: Record<AreaKind, string> = {
 
 export const AREA_KINDS = Object.keys(AREA_KIND_LABELS) as AreaKind[];
 
-/** Una àrea tal com s'envia: espais normalitzats, codis buits com a `null`. */
+/** Els municipis es codifiquen sempre amb l'INE: l'usuari no escriu mai el sistema. */
+export const MUNICIPALITY_CODE_SYSTEM = "INE";
+
+/**
+ * Una àrea tal com s'envia: espais normalitzats, codis buits com a `null` i,
+ * per a un municipi, `code_system = "INE"` sempre (amb codi o sense). Un
+ * municipi antic sense sistema es normalitza aquí, en enviar-lo; no cal
+ * tocar-lo només per obrir el formulari.
+ */
 export function cleanArea(area: CoverageArea): CoverageArea {
   const text = (value: string | null | undefined) => {
     const trimmed = (value ?? "").trim().replace(/\s+/g, " ");
     return trimmed === "" ? null : trimmed;
   };
-  return { kind: area.kind, label: text(area.label) ?? "", code: text(area.code), code_system: text(area.code_system) };
+  const municipality = area.kind === "municipality";
+  return {
+    kind: area.kind,
+    label: text(area.label) ?? "",
+    code: text(area.code),
+    code_system: municipality ? MUNICIPALITY_CODE_SYSTEM : text(area.code_system),
+  };
+}
+
+/**
+ * La mateixa fila amb un altre tipus. El codi i el sistema es buiden: un codi
+ * només té sentit dins del seu sistema (un INE no és cap NUTS, i al revés), i
+ * un municipi que passa a un altre tipus no es pot quedar amb l'INE amagat. El
+ * nom es conserva. Un municipi nou neix amb l'INE com a sistema.
+ */
+export function retypeArea(area: CoverageArea, kind: AreaKind): CoverageArea {
+  if (kind === area.kind) return area;
+  return { kind, label: area.label, code: null, code_system: kind === "municipality" ? MUNICIPALITY_CODE_SYSTEM : null };
 }
 
 /** El que fa que dues àrees siguin la mateixa: tipus, sistema de codis, codi i nom normalitzat. */

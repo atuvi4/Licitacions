@@ -92,8 +92,9 @@ describe("Serveis: cobertura territorial", () => {
     fireEvent.change(within(dialog).getByLabelText(/^Completesa/), { target: { value: "partial" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Afegeix una àrea" }));
     fireEvent.change(within(dialog).getByLabelText("Nom de l'àrea 1"), { target: { value: "Palamós" } });
-    fireEvent.change(within(dialog).getByLabelText("Codi de l'àrea 1"), { target: { value: "17118" } });
-    fireEvent.change(within(dialog).getByLabelText("Sistema de codis de l'àrea 1"), { target: { value: "INE" } });
+    // Municipi: només el codi INE; el sistema l'hi posa el formulari.
+    fireEvent.change(within(dialog).getByLabelText("Codi INE de l'àrea 1"), { target: { value: "17118" } });
+    expect(within(dialog).queryByLabelText(/Sistema de codi/)).toBeNull();
     fireEvent.submit(dialog.querySelector("form")!);
     await flush();
     expect(patch.mock.calls[0][1]).toMatchObject({

@@ -929,7 +929,7 @@ describe("Coneixement de l'empresa", () => {
       detail: "CPD en un centre Tier-3",
       lifecycle: "current",
       valid_until: null,
-      coverage: { completeness: "complete", areas: [{ kind: "municipality", label: "Municipi A", code: null, code_system: null }] },
+      coverage: { completeness: "complete", areas: [{ kind: "municipality", label: "Municipi A", code: null, code_system: "INE" }] },
     });
 
     // Amb cobertura desada (la pàgina ha rellegit les dades): l'editor la mostra,

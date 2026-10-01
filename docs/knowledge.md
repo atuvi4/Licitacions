@@ -171,6 +171,15 @@ codi compten com a cadena buida). Un duplicat no crea cap fila, no surt dues
 vegades, no canvia l'empremta i no és cap canvi material. No s'hi resol cap
 equivalència geogràfica: «Banyoles» i «17015/INE» són dues àrees.
 
+**Municipis = INE (convenció de la UI).** L'editor mostra, per a un municipi,
+«Tipus | Nom | Codi INE» i cap camp de sistema: en enviar, `code_system` és
+sempre `"INE"` (amb codi o sense; el codi continua sent opcional). Un municipi
+antic sense sistema es mostra igual i només es normalitza a `INE` quan es desa
+un canvi material. Canviar el tipus d'una fila buida el codi i el sistema (un
+codi INE no és cap NUTS); la resta de tipus conserven el sistema lliure.
+L'API no ho imposa: és la UI qui ho fa, i el model continua acceptant qualsevol
+`code_system`.
+
 **Un canvi material de cobertura és un canvi material de la dada** (§3.1):
 canviar la completesa o afegir, treure o modificar una àrea (nom, codi o
 sistema de codis) torna una dada verificada a `pending_verification` i
