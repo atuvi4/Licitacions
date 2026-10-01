@@ -84,6 +84,14 @@ INDIRECT_TABLES: dict[str, tuple[str, str, str]] = {
     # Les cites d'un dubte pengen del dubte, que porta el `company_id`. La cita
     # en si (`tender_source_refs`) no: es de la licitacio i es publica.
     "workspace_issue_source_refs": ("issue_id", "workspace_issues", "id"),
+    # Analisi d'un plec per a una empresa (0051): la run porta `company_id`; els
+    # resultats derivats pengen de la run i cauen amb ella.
+    "tender_fit_assessments": ("run_id", "tender_analysis_runs", "id"),
+    "capability_need_assessments": ("run_id", "tender_analysis_runs", "id"),
+    "criterion_assessments": ("run_id", "tender_analysis_runs", "id"),
+    "delivery_candidates": ("run_id", "tender_analysis_runs", "id"),
+    "analysis_findings": ("run_id", "tender_analysis_runs", "id"),
+    "analysis_questions": ("run_id", "tender_analysis_runs", "id"),
 }
 
 # Taules publiques i globals: no pertanyen a cap tenant i no s'han de tocar mai.

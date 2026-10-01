@@ -79,15 +79,21 @@ CRITICAL_SITES = {
     "Turisme — Plaça de les escoles",
 }
 
-#: Taules que 0051 encara no ha creat.
+#: Taules que la fase 3B encara no ha creat.
 NOT_YET = (
-    "tender_analysis_runs",
-    "analysis_runs",
-    "analysis_findings",
-    "findings",
-    "assessments",
-    "delivery_candidates",
+    "proposal_drafts",
     "proposal_lines",
+    "delivery_plans",
+)
+#: Taules de l'analisi (0051): existeixen, pero carregar o editar un plec no hi escriu res.
+DERIVED_0051 = (
+    "tender_analysis_runs",
+    "tender_fit_assessments",
+    "capability_need_assessments",
+    "criterion_assessments",
+    "delivery_candidates",
+    "analysis_findings",
+    "analysis_questions",
 )
 #: Res de l'EMPRESA pot apareixer per carregar un plec: ni coneixement, ni
 #: resultats, ni propostes. Tota taula amb aquests prefixos ha de quedar buida.
@@ -497,6 +503,8 @@ async def test_the_lescala_tender_is_representable_without_inventing(db, dataset
     tables = await _table_names(db)
     for name in NOT_YET:
         assert name not in tables, f"{name} no hauria d'existir encara"
+    for name in DERIVED_0051:
+        assert name in tables and await _rows(db, name) == 0, f"{name}: el gold no analitza"
     company_side = [t for t in tables if t.startswith(COMPANY_SIDE_PREFIXES) or "proposal" in t]
     assert company_side, "la llista de taules del costat empresa no pot ser buida"
     assert {t: await _rows(db, t) for t in company_side} == {t: 0 for t in company_side}

@@ -37,6 +37,7 @@ from app.api.v1.routers import (
     solution_options,
     submission,
     technical_solutions,
+    tender_analysis,
     tender_documents,
     tender_scope,
     tender_structure,
@@ -106,6 +107,8 @@ api_router.include_router(requirements.router)
 api_router.include_router(tender_structure.router)
 # Abast i semantica del plec (0049): mateixa politica que l'estructura.
 api_router.include_router(tender_scope.router)
+# Analisi del plec per a una empresa (0051): dades derivades, nomes lectura.
+api_router.include_router(tender_analysis.router)
 # Pre-fit: dada de tenant, penja de /companies/{company_id}.
 api_router.include_router(matching.router)
 api_router.include_router(company_scoped)

@@ -1789,3 +1789,59 @@ def test_la_semantica_del_plec_es_pot_aplicar_i_desfer_sense_reinterpretar_cap_f
         assert condition in guard, condition
     created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
     assert created == set(re.findall(r"DROP INDEX (\w+)", down))
+
+
+def test_l_analisi_es_pot_aplicar_i_desfer_perque_son_dades_derivades():
+    """0050 -> 0051 -> 0050: set taules noves, buides, que pengen de la run amb
+    CASCADE. Cap INSERT ni backfill. El downgrade les elimina: a diferencia de 0050,
+    aqui no hi ha cap font de veritat, nomes resultats reproduibles.
+    """
+    up = _offline_sql("upgrade", "0050_tender_semantics:0051_tender_analysis")
+    down = _offline_sql("downgrade", "0051_tender_analysis:0050_tender_semantics")
+
+    tables = (
+        "tender_analysis_runs", "tender_fit_assessments", "capability_need_assessments",
+        "criterion_assessments", "delivery_candidates", "analysis_findings",
+        "analysis_questions",
+    )
+    for table in tables:
+        assert f"CREATE TABLE {table} (" in up, table
+        assert f"DROP TABLE {table};" in down, table
+    runs = up.split("CREATE TABLE tender_analysis_runs (")[1].split("\n);")[0]
+    for column in ("tender_structure_fingerprint VARCHAR(64) NOT NULL",
+                   "knowledge_fingerprint VARCHAR(64) NOT NULL",
+                   "rules_version VARCHAR(40) NOT NULL",
+                   "inputs_hash VARCHAR(64) NOT NULL", "review_revision_hash VARCHAR(64),",
+                   "is_current BOOLEAN NOT NULL"):
+        assert column in runs, column
+    assert "DEFAULT" not in runs.split("created_at")[0], "cap valor per defecte"
+    assert (
+        "CONSTRAINT uq_tender_analysis_runs_inputs UNIQUE (company_id, tender_id, inputs_hash)"
+    ) in runs
+    assert (
+        "CREATE UNIQUE INDEX uq_tender_analysis_runs_current ON tender_analysis_runs "
+        "(company_id, tender_id) WHERE is_current"
+    ) in up
+    assert up.count("REFERENCES tender_analysis_runs (id) ON DELETE CASCADE") == 6
+    assert "REFERENCES companies (id) ON DELETE CASCADE" in runs
+    assert "REFERENCES tenders (id) ON DELETE CASCADE" in runs
+    for optional in ("tender_revisions", "requirement_extraction_runs",
+                     "tender_document_classification_runs"):
+        assert f"REFERENCES {optional} (id) ON DELETE SET NULL" in runs, optional
+    findings = up.split("CREATE TABLE analysis_findings (")[1].split("\n);")[0]
+    assert "blocker_confirmed" not in findings, "el motor no pot escriure cap bloqueig confirmat"
+    assert ("CHECK (finding_type IN ('blocker_potential', 'review_required', "
+            "'missing_information', 'evidence_gap', 'territory_gap', 'delivery_gap', "
+            "'warning'))") in findings
+    criteria = up.split("CREATE TABLE criterion_assessments (")[1].split("\n);")[0]
+    assert "max_points FLOAT NOT NULL" in criteria
+    assert "not_assessable_points FLOAT NOT NULL" in criteria
+    candidates = up.split("CREATE TABLE delivery_candidates (")[1].split("\n);")[0]
+    assert "CHECK (candidate_type <> 'own_future' OR origin = 'hypothesis')" in candidates
+    assert "CONSTRAINT uq_analysis_questions_dedupe UNIQUE (run_id, dedupe_key)" in up
+    statements = up.replace("UPDATE alembic_version", "")
+    for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM", "DROP", "ALTER TABLE"):
+        assert forbidden not in statements, forbidden
+    assert "INSERT INTO" not in down and "UPDATE " not in down.replace("UPDATE alembic_version", "")
+    created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
+    assert created == set(re.findall(r"DROP INDEX (\w+)", down))

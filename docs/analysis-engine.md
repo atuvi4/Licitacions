@@ -494,6 +494,31 @@ auditar-la; però no entren al hash semàntic.
 
 ### 6.2 Anàlisi (tenant)
 
+**Fet a 0051 (`tender_analysis_runs` i sis taules de resultats; vegeu
+[data-model.md](data-model.md)).** El que hi ha implementat compara el plec
+estructurat (0048–0050) amb el coneixement actual (fase 2) i només respon: què
+sabem que compleix, què no, què continua `unknown`, què només està declarat i
+demana revisió, quina prova falta, quin territori encaixa, quins punts estan
+`secured` / `at_risk` / `lost` / `not_assessable`, quines vies de prestació
+actuals hi ha i quines preguntes falten. **No** decideix si presentar-se, no
+puntua globalment, no crea cap proposta ni tria cap producte. Les regles
+viuen a `app/analysis/registry.py` (`rules_version = phase3a-analysis-v1`); el
+motor és pur (`app/analysis/engine.py`) i la via d'entrada és
+`app.services.tender_analysis.analyze_tender`. Regles que condicionen la
+lectura: un requisit amb `territory_completeness = unknown` i cap territori dona
+`unknown`, mai `matched`; l'historic mai és `satisfies`; una dada declarada
+satisfà però queda `not_verified` amb `review_required`; `unknown` mai és
+`lost`; un compromís automàtic sense dada actual és `at_risk` (mai `secured`,
+mai `lost`: només una incompatibilitat actual explícita, com C1 territorial o
+una capacitat declarada `not_supported`, perd punts); un requisit obligatori
+contradit només és `blocker_potential` si s'exigeix `at_submission` (amb
+qualsevol altre `timing` és `review_required`); el territori d'una via de
+prestació només ve d'un requisit amb necessitats mapades a la mateixa línia de
+servei (compartir bloc no basta; `requirement_scope_links` seria l'extensió);
+el motor no escriu mai `blocker_confirmed`. La taula de sota és el
+disseny original de la fase: FitScore, `ProposalDraft` i la síntesi són 3B.
+
+
 | Entitat demanada | Taula | Contingut |
 | --- | --- | --- |
 | **TenderAnalysis** | `tender_analysis_runs` | Una fila per execució (empresa, licitació). Fixa les versions de tot el que ha llegit: `extraction_run_id`, `compliance_run_id`, `knowledge_fingerprint`, `rules_version`, `prompt_versions`, `provider`/`model`. Estats `pending · running · completed · partial · failed`. **Immutable**, amb `is_current` protegit per un índex únic parcial, com la resta de runs. |

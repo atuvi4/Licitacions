@@ -75,6 +75,15 @@ from app.models.submission import (
     SubmissionPackageApproval,
     SubmissionPackageItem,
 )
+from app.models.tender_analysis import (
+    AnalysisFinding,
+    AnalysisQuestion,
+    CapabilityNeedAssessment,
+    CriterionAssessment,
+    DeliveryCandidate,
+    TenderAnalysisRun,
+    TenderFitAssessment,
+)
 from app.models.tender_documents import (
     TenderDocumentContent,
     TenderDocumentExtraction,
@@ -120,6 +129,13 @@ from app.models.workspace import (
 )
 
 __all__ = [
+    "AnalysisFinding",
+    "AnalysisQuestion",
+    "CapabilityNeedAssessment",
+    "CriterionAssessment",
+    "DeliveryCandidate",
+    "TenderAnalysisRun",
+    "TenderFitAssessment",
     "CapabilityDefinitionRow",
     "CertificationStandardRow",
     "CompanyOperatingFact",

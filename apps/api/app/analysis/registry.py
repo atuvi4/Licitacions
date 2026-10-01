@@ -1,0 +1,295 @@
+"""Registre unic de regles, explicacions i preguntes del motor d'analisi (0051).
+
+Tres coses viuen aqui i enlloc mes: la versio de les regles, els codis de regla,
+els codis d'explicacio i els codis de pregunta amb la seva plantilla. Son
+identificadors **tancats i estables**: cada fila que el motor escriu en porta un,
+i la interficie en deriva el text. Cap cadena arbitraria pel motor.
+
+Canviar el significat d'una regla obliga a pujar `RULES_VERSION`: entra a
+l'`inputs_hash` de cada run, de manera que un resultat calculat amb regles
+diferents no es confon mai amb un d'actual.
+"""
+
+from __future__ import annotations
+
+RULES_VERSION = "phase3a-analysis-v1"
+
+
+class RuleCode:
+    """Quina regla ha produit una fila. Una per familia, versionada."""
+
+    #: Requisit que es llegeix d'un fet operatiu de l'empresa (`value_json.operating_fact`).
+    FACT_REQUIREMENT = "fact_requirement_v1"
+    #: Requisit de certificacio amb norma (`value_json.standard`) i nivell opcional.
+    CERTIFICATION_REQUIREMENT = "certification_requirement_v1"
+    #: Requisit tecnic avaluat per les seves necessitats estructurades.
+    CAPABILITY_NEEDS_REQUIREMENT = "capability_needs_requirement_v1"
+    #: Requisit que depen de dades del perfil que la fotografia no te (solvencia, RC...).
+    PROFILE_DATA_REQUIREMENT = "profile_data_requirement_v1"
+    #: Condicio contractual, formal o de termini: no es compara amb cap dada d'empresa.
+    CONTRACT_CONDITION_REQUIREMENT = "contract_condition_requirement_v1"
+    #: Requisit sense cap estructura comparable.
+    UNSTRUCTURED_REQUIREMENT = "unstructured_requirement_v1"
+    #: Territori del requisit contra la cobertura: nomes identitat explicita.
+    TERRITORY_IDENTITY = "territory_identity_v1"
+    #: Proves exigides contra el que el model pot demostrar.
+    PROOF_ITEMS = "proof_items_v1"
+    #: Necessitat mapada al vocabulari contra les capacitats de les solucions actuals.
+    NEED_CAPABILITY = "need_capability_v1"
+    #: Necessitat sense codi global: no s'interpreta.
+    NEED_UNMAPPED = "need_unmapped_v1"
+    #: Criteri automatic avaluat per les seves necessitats puntuades (amb trams o sense).
+    CRITERION_FROM_NEEDS = "criterion_from_needs_v1"
+    #: Criteri automatic avaluat per la seva cara exigible (requisit enllacat).
+    CRITERION_FROM_REQUIREMENT = "criterion_from_requirement_v1"
+    #: Criteri de judici de valor o demostracio: la qualitat no s'avalua.
+    CRITERION_JUDGEMENT = "criterion_judgement_v1"
+    #: Criteri de preu: l'economia no es cosa d'aquest pas.
+    CRITERION_PRICE = "criterion_price_v1"
+    #: Criteri automatic sense cap estructura comparable.
+    CRITERION_UNSTRUCTURED = "criterion_unstructured_v1"
+    #: Vies de prestacio nomes des dels serveis actuals.
+    DELIVERY_FROM_SERVICES = "delivery_from_services_v1"
+    #: Troballes.
+    BLOCKER_POTENTIAL = "blocker_potential_v1"
+    REVIEW_REQUIRED = "review_required_v1"
+    MISSING_INFORMATION = "missing_information_v1"
+    EVIDENCE_GAP = "evidence_gap_v1"
+    TERRITORY_GAP = "territory_gap_v1"
+    DELIVERY_GAP = "delivery_gap_v1"
+    DEMO_DEPENDENCY = "demo_dependency_warning_v1"
+
+
+class ExplanationCode:
+    """Per que una fila diu el que diu. Tancat; la interficie en deriva el text."""
+
+    FACT_TRUE_VERIFIED = "FACT_TRUE_VERIFIED"
+    FACT_TRUE_DECLARED = "FACT_TRUE_DECLARED"
+    FACT_CONTRADICTS = "FACT_CONTRADICTS"
+    FACT_UNKNOWN = "FACT_UNKNOWN"
+    FACT_HISTORIC_ONLY = "FACT_HISTORIC_ONLY"
+    FACT_TRUE_TERRITORY_UNMATCHED = "FACT_TRUE_TERRITORY_UNMATCHED"
+    CERT_CURRENT_VERIFIED = "CERT_CURRENT_VERIFIED"
+    CERT_CURRENT_DECLARED = "CERT_CURRENT_DECLARED"
+    CERT_LEVEL_BELOW = "CERT_LEVEL_BELOW"
+    CERT_UNKNOWN = "CERT_UNKNOWN"
+    CERT_HISTORIC_ONLY = "CERT_HISTORIC_ONLY"
+    CERT_STANDARD_NOT_STRUCTURED = "CERT_STANDARD_NOT_STRUCTURED"
+    NEEDS_ALL_SATISFIED = "NEEDS_ALL_SATISFIED"
+    NEEDS_CONTRADICTED = "NEEDS_CONTRADICTED"
+    NEEDS_UNKNOWN = "NEEDS_UNKNOWN"
+    NEEDS_NONE_MINIMUM = "NEEDS_NONE_MINIMUM"
+    PROFILE_DATA_NOT_IN_SNAPSHOT = "PROFILE_DATA_NOT_IN_SNAPSHOT"
+    CONTRACT_CONDITION_NOT_COMPARABLE = "CONTRACT_CONDITION_NOT_COMPARABLE"
+    NO_STRUCTURE_TO_COMPARE = "NO_STRUCTURE_TO_COMPARE"
+    PROOF_MISSING_FOR_CLAIM = "PROOF_MISSING_FOR_CLAIM"
+    CAPABILITY_SUPPORTED = "CAPABILITY_SUPPORTED"
+    CAPABILITY_SUPPORTED_WITH_LIMITS = "CAPABILITY_SUPPORTED_WITH_LIMITS"
+    CAPABILITY_NOT_SUPPORTED = "CAPABILITY_NOT_SUPPORTED"
+    CAPABILITY_BELOW_REQUIRED = "CAPABILITY_BELOW_REQUIRED"
+    CAPABILITY_UNKNOWN = "CAPABILITY_UNKNOWN"
+    CAPABILITY_HISTORIC_ONLY = "CAPABILITY_HISTORIC_ONLY"
+    CAPABILITY_UNMAPPED = "CAPABILITY_UNMAPPED"
+    NEED_VALUE_NOT_COMPARABLE = "NEED_VALUE_NOT_COMPARABLE"
+    CRITERION_SECURED = "CRITERION_SECURED"
+    CRITERION_AT_RISK = "CRITERION_AT_RISK"
+    CRITERION_LOST = "CRITERION_LOST"
+    CRITERION_MIXED = "CRITERION_MIXED"
+    CRITERION_NOT_ASSESSABLE_UNKNOWN = "CRITERION_NOT_ASSESSABLE_UNKNOWN"
+    CRITERION_NOT_ASSESSABLE_JUDGEMENT = "CRITERION_NOT_ASSESSABLE_JUDGEMENT"
+    CRITERION_NOT_ASSESSABLE_PRICE = "CRITERION_NOT_ASSESSABLE_PRICE"
+    CRITERION_OPEN_COMMITMENT = "CRITERION_OPEN_COMMITMENT"
+    CRITERION_TIMING_NOT_CONCLUSIVE = "CRITERION_TIMING_NOT_CONCLUSIVE"
+    TERRITORY_MATCHED = "TERRITORY_MATCHED"
+    TERRITORY_UNMATCHED = "TERRITORY_UNMATCHED"
+    TERRITORY_UNKNOWN = "TERRITORY_UNKNOWN"
+    TERRITORY_LIST_UNAVAILABLE = "TERRITORY_LIST_UNAVAILABLE"
+    TERRITORY_NOT_APPLICABLE = "TERRITORY_NOT_APPLICABLE"
+    DELIVERY_OWN_CURRENT = "DELIVERY_OWN_CURRENT"
+    DELIVERY_PARTNER_CURRENT = "DELIVERY_PARTNER_CURRENT"
+    DELIVERY_NO_PARTNER_ROLE = "DELIVERY_NO_PARTNER_ROLE"
+    DELIVERY_MODE_UNKNOWN = "DELIVERY_MODE_UNKNOWN"
+    DELIVERY_NO_SERVICE = "DELIVERY_NO_SERVICE"
+    MANDATORY_DOES_NOT_SATISFY = "MANDATORY_DOES_NOT_SATISFY"
+    MANDATORY_DOES_NOT_SATISFY_LATER = "MANDATORY_DOES_NOT_SATISFY_LATER"
+    DECLARED_NOT_VERIFIED = "DECLARED_NOT_VERIFIED"
+    DATA_MISSING = "DATA_MISSING"
+    PROOF_MISSING = "PROOF_MISSING"
+    NO_AVAILABLE_DELIVERY = "NO_AVAILABLE_DELIVERY"
+    DEMO_DEPENDS_ON_UNKNOWN_CAPABILITIES = "DEMO_DEPENDS_ON_UNKNOWN_CAPABILITIES"
+
+
+#: Text de cada explicacio, per a la interficie. Cap LLM: plantilles.
+EXPLANATIONS: dict[str, str] = {
+    ExplanationCode.FACT_TRUE_VERIFIED: "El fet consta com a actual i verificat.",
+    ExplanationCode.FACT_TRUE_DECLARED: (
+        "El fet consta com a actual, declarat i pendent de verificar."
+    ),
+    ExplanationCode.FACT_CONTRADICTS: (
+        "La dada actual de l'empresa contradiu el que el plec exigeix."
+    ),
+    ExplanationCode.FACT_UNKNOWN: "L'empresa no ha declarat aquest fet: no se sap.",
+    ExplanationCode.FACT_HISTORIC_ONLY: "Nomes hi ha pistes historiques: no acrediten res.",
+    ExplanationCode.FACT_TRUE_TERRITORY_UNMATCHED: (
+        "El fet consta, pero la seva cobertura declarada no inclou el territori exigit."
+    ),
+    ExplanationCode.CERT_CURRENT_VERIFIED: "Certificacio actual i verificada.",
+    ExplanationCode.CERT_CURRENT_DECLARED: "Certificacio actual, declarada i pendent de verificar.",
+    ExplanationCode.CERT_LEVEL_BELOW: "La certificacio actual es d'un nivell inferior a l'exigit.",
+    ExplanationCode.CERT_UNKNOWN: "Cap certificacio actual d'aquesta norma: no se sap.",
+    ExplanationCode.CERT_HISTORIC_ONLY: "Nomes hi ha pistes historiques sobre la norma.",
+    ExplanationCode.CERT_STANDARD_NOT_STRUCTURED: "El requisit no diu quina norma: no es compara.",
+    ExplanationCode.NEEDS_ALL_SATISFIED: (
+        "Totes les necessitats minimes es cobreixen amb dades actuals."
+    ),
+    ExplanationCode.NEEDS_CONTRADICTED: (
+        "Una dada actual diu que una necessitat minima no es cobreix."
+    ),
+    ExplanationCode.NEEDS_UNKNOWN: "Alguna necessitat minima no te dada actual: no se sap.",
+    ExplanationCode.NEEDS_NONE_MINIMUM: "Cap necessitat minima estructurada: no se sap.",
+    ExplanationCode.PROFILE_DATA_NOT_IN_SNAPSHOT: (
+        "Depen de dades del perfil (solvencia, assegurança, personal...) que aquest pas no llegeix."
+    ),
+    ExplanationCode.CONTRACT_CONDITION_NOT_COMPARABLE: (
+        "Condicio del contracte o de l'oferta: no es compara amb cap dada d'empresa."
+    ),
+    ExplanationCode.NO_STRUCTURE_TO_COMPARE: "El requisit no te cap estructura comparable.",
+    ExplanationCode.PROOF_MISSING_FOR_CLAIM: (
+        "La dada consta, pero la prova exigida no es pot demostrar."
+    ),
+    ExplanationCode.CAPABILITY_SUPPORTED: "Una solucio actual cobreix la necessitat.",
+    ExplanationCode.CAPABILITY_SUPPORTED_WITH_LIMITS: "Una solucio actual la cobreix amb limits.",
+    ExplanationCode.CAPABILITY_NOT_SUPPORTED: "La solucio actual declara que no ho fa.",
+    ExplanationCode.CAPABILITY_BELOW_REQUIRED: (
+        "La solucio actual ho fa, pero per sota del valor exigit."
+    ),
+    ExplanationCode.CAPABILITY_UNKNOWN: "Cap capacitat actual declarada per a aquest codi.",
+    ExplanationCode.CAPABILITY_HISTORIC_ONLY: "Nomes pistes historiques sobre la capacitat.",
+    ExplanationCode.CAPABILITY_UNMAPPED: "Necessitat sense codi del vocabulari: no s'interpreta.",
+    ExplanationCode.NEED_VALUE_NOT_COMPARABLE: (
+        "El valor exigit no es pot comparar amb el vocabulari."
+    ),
+    ExplanationCode.CRITERION_SECURED: "Punts assegurats amb dades actuals verificades.",
+    ExplanationCode.CRITERION_AT_RISK: (
+        "Punts d'un compromis encara obert: dades declarades sense verificar o sense dada actual."
+    ),
+    ExplanationCode.CRITERION_LOST: "Una dada actual demostra que el criteri no es pot assolir.",
+    ExplanationCode.CRITERION_MIXED: "Els punts es reparteixen entre mes d'un estat.",
+    ExplanationCode.CRITERION_NOT_ASSESSABLE_UNKNOWN: "Sense dada actual suficient: no s'avalua.",
+    ExplanationCode.CRITERION_NOT_ASSESSABLE_JUDGEMENT: (
+        "Judici de valor o demostracio: la qualitat no s'avalua en aquest pas."
+    ),
+    ExplanationCode.CRITERION_NOT_ASSESSABLE_PRICE: (
+        "Criteri de preu: l'economia no es cosa d'aquest pas."
+    ),
+    ExplanationCode.CRITERION_OPEN_COMMITMENT: (
+        "Compromis automatic sense cap dada actual que l'asseguri ni el contradigui: en risc."
+    ),
+    ExplanationCode.CRITERION_TIMING_NOT_CONCLUSIVE: (
+        "La temporalitat del criteri no permet concloure que els punts es perden."
+    ),
+    ExplanationCode.TERRITORY_MATCHED: "El territori exigit es a la cobertura declarada.",
+    ExplanationCode.TERRITORY_UNMATCHED: (
+        "La cobertura declarada es completa i no inclou el territori."
+    ),
+    ExplanationCode.TERRITORY_UNKNOWN: "No es pot demostrar que el territori sigui cobert.",
+    ExplanationCode.TERRITORY_LIST_UNAVAILABLE: (
+        "El plec no dona la llista de territoris (document absent)."
+    ),
+    ExplanationCode.TERRITORY_NOT_APPLICABLE: "Sense dimensio territorial.",
+    ExplanationCode.DELIVERY_OWN_CURRENT: "Servei actual amb mitjans propis.",
+    ExplanationCode.DELIVERY_PARTNER_CURRENT: (
+        "Servei actual a traves d'un tercer amb paper compatible."
+    ),
+    ExplanationCode.DELIVERY_NO_PARTNER_ROLE: (
+        "Servei actual per tercers, sense cap tercer compatible declarat."
+    ),
+    ExplanationCode.DELIVERY_MODE_UNKNOWN: "Servei actual sense dir com es presta.",
+    ExplanationCode.DELIVERY_NO_SERVICE: "Cap servei actual d'aquesta linia.",
+    ExplanationCode.MANDATORY_DOES_NOT_SATISFY: (
+        "Requisit obligatori exigit en presentar que una dada actual contradiu."
+    ),
+    ExplanationCode.MANDATORY_DOES_NOT_SATISFY_LATER: (
+        "Requisit obligatori que una dada actual contradiu, pero exigit despres de presentar: "
+        "cal revisar-ho, no es cap bloqueig a la presentacio."
+    ),
+    ExplanationCode.DECLARED_NOT_VERIFIED: "Es compleix amb dades declarades: cal verificar-les.",
+    ExplanationCode.DATA_MISSING: "Falta una dada de l'empresa per decidir.",
+    ExplanationCode.PROOF_MISSING: "Falta la prova exigida.",
+    ExplanationCode.NO_AVAILABLE_DELIVERY: (
+        "Cap via de prestacio disponible amb el coneixement actual."
+    ),
+    ExplanationCode.DEMO_DEPENDS_ON_UNKNOWN_CAPABILITIES: (
+        "La demostracio depen de capacitats que l'empresa no ha declarat."
+    ),
+}
+
+
+class QuestionCode:
+    """Que cal preguntar, a qui. El text surt de `QUESTIONS`."""
+
+    COMPANY_CONFIRM_FACT = "company.confirm_fact"
+    COMPANY_DECLARE_CAPABILITY = "company.declare_capability"
+    COMPANY_PROVIDE_PROOF = "company.provide_proof"
+    COMPANY_PROVIDE_PROFILE_DATA = "company.provide_profile_data"
+    COMPANY_DECLARE_CERTIFICATION = "company.declare_certification"
+    COMPANY_DECLARE_DELIVERY_MODE = "company.declare_delivery_mode"
+    COMPANY_DECLARE_PARTNER = "company.declare_partner"
+    COMPANY_CONFIRM_COVERAGE = "company.confirm_coverage"
+    BUYER_PROVIDE_TERRITORY_LIST = "buyer.provide_territory_list"
+    BUYER_CLARIFY_CRITERION_TIMING = "buyer.clarify_criterion_timing"
+    BUYER_CLARIFY_REQUIREMENT_TIMING = "buyer.clarify_requirement_timing"
+
+
+#: Plantilles de pregunta. `{...}` son `params_json`.
+QUESTIONS: dict[str, str] = {
+    QuestionCode.COMPANY_CONFIRM_FACT: (
+        "Confirmeu si l'empresa compleix «{fact}» (requisit «{title}»)."
+    ),
+    QuestionCode.COMPANY_DECLARE_CAPABILITY: (
+        "Declareu si la solucio actual de «{service_line}» cobreix «{capability}»."
+    ),
+    QuestionCode.COMPANY_PROVIDE_PROOF: "Aporteu la prova «{proof_kind}» del requisit «{title}».",
+    QuestionCode.COMPANY_PROVIDE_PROFILE_DATA: (
+        "Informeu les dades de «{category}» per al requisit «{title}»."
+    ),
+    QuestionCode.COMPANY_DECLARE_CERTIFICATION: "Declareu si l'empresa te la norma «{standard}».",
+    QuestionCode.COMPANY_DECLARE_DELIVERY_MODE: "Digueu com es presta el servei «{service_line}».",
+    QuestionCode.COMPANY_DECLARE_PARTNER: "Declareu un tercer per prestar «{service_line}».",
+    QuestionCode.COMPANY_CONFIRM_COVERAGE: (
+        "Confirmeu la cobertura de «{service_line}» als territoris del plec."
+    ),
+    QuestionCode.BUYER_PROVIDE_TERRITORY_LIST: (
+        "Demaneu a l'organ la llista de territoris del requisit «{title}»."
+    ),
+    QuestionCode.BUYER_CLARIFY_CRITERION_TIMING: (
+        "Demaneu a l'organ quan s'ha de complir el criteri «{name}»."
+    ),
+    QuestionCode.BUYER_CLARIFY_REQUIREMENT_TIMING: (
+        "Demaneu a l'organ quan s'ha de complir el requisit «{title}»."
+    ),
+}
+
+
+def _codes(cls: type) -> frozenset[str]:
+    return frozenset(v for k, v in vars(cls).items() if k.isupper() and isinstance(v, str))
+
+
+RULE_CODES: frozenset[str] = _codes(RuleCode)
+EXPLANATION_CODES: frozenset[str] = _codes(ExplanationCode)
+QUESTION_CODES: frozenset[str] = _codes(QuestionCode)
+
+assert EXPLANATION_CODES == frozenset(EXPLANATIONS), "cada explicacio te text"
+assert QUESTION_CODES == frozenset(QUESTIONS), "cada pregunta te plantilla"
+
+
+def explanation_text(code: str) -> str:
+    return EXPLANATIONS[code]
+
+
+def question_text(code: str, params: dict | None = None) -> str:
+    template = QUESTIONS[code]
+    try:
+        return template.format(**(params or {}))
+    except KeyError:
+        return template

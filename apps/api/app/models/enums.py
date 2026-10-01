@@ -1573,3 +1573,106 @@ class ContractFactCode(StrEnum):
     REVERSIBILITY = "reversibility"
     DATA_PROTECTION = "data_protection"
     ESSENTIAL_OBLIGATIONS = "essential_obligations"
+
+
+# --------------------------------------------------------------------------- #
+# Vocabulari de l'analisi (0051): cada eix es independent dels altres.          #
+# --------------------------------------------------------------------------- #
+
+
+class AnalysisKnowledgeSource(StrEnum):
+    """D'on surt la dada d'empresa que sosté una avaluacio."""
+
+    CURRENT_VERIFIED = "current_verified"
+    CURRENT_DECLARED = "current_declared"
+    #: Nomes pistes historiques: donen context, mai `satisfies`.
+    HISTORICAL = "historical"
+    NONE = "none"
+    MIXED = "mixed"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class ProofStatus(StrEnum):
+    """Si la prova exigida es pot demostrar. Independent de la verificacio."""
+
+    SUFFICIENT = "sufficient"
+    PARTIAL = "partial"
+    MISSING = "missing"
+    UNKNOWN = "unknown"
+    NOT_REQUIRED = "not_required"
+
+
+class FitResult(StrEnum):
+    SATISFIES = "satisfies"
+    DOES_NOT_SATISFY = "does_not_satisfy"
+    UNKNOWN = "unknown"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class TerritoryVerdict(StrEnum):
+    MATCHED = "matched"
+    UNMATCHED = "unmatched"
+    UNKNOWN = "unknown"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class CriterionResult(StrEnum):
+    ACHIEVABLE = "achievable"
+    NOT_ACHIEVABLE = "not_achievable"
+    NEEDS_REVIEW = "needs_review"
+    NOT_ASSESSABLE = "not_assessable"
+
+
+class PointsStatus(StrEnum):
+    SECURED = "secured"
+    AT_RISK = "at_risk"
+    LOST = "lost"
+    MIXED = "mixed"
+    NOT_ASSESSABLE = "not_assessable"
+
+
+class AssessmentVerification(StrEnum):
+    """Si la dada que sosté l'avaluacio esta verificada. NO es `FitResult`."""
+
+    VERIFIED = "verified"
+    NOT_VERIFIED = "not_verified"
+    UNKNOWN = "unknown"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class CandidateType(StrEnum):
+    OWN_CURRENT = "own_current"
+    PARTNER_CURRENT = "partner_current"
+    SUBCONTRACT_UNKNOWN = "subcontract_unknown"
+    #: Nomes des d'una hipotesi explicita; mai compta com a cobertura actual.
+    OWN_FUTURE = "own_future"
+
+
+class CandidateOrigin(StrEnum):
+    CURRENT_KNOWLEDGE = "current_knowledge"
+    HYPOTHESIS = "hypothesis"
+
+
+class CandidateReadiness(StrEnum):
+    AVAILABLE = "available"
+    PENDING_COVERAGE = "pending_coverage"
+    PENDING_PARTNER = "pending_partner"
+    PENDING_VALIDATION = "pending_validation"
+    UNAVAILABLE = "unavailable"
+
+
+class FindingType(StrEnum):
+    """Cap `blocker_confirmed`: aixo es una decisio humana, mai del motor."""
+
+    BLOCKER_POTENTIAL = "blocker_potential"
+    REVIEW_REQUIRED = "review_required"
+    MISSING_INFORMATION = "missing_information"
+    EVIDENCE_GAP = "evidence_gap"
+    TERRITORY_GAP = "territory_gap"
+    DELIVERY_GAP = "delivery_gap"
+    WARNING = "warning"
+
+
+class QuestionAudience(StrEnum):
+    BUYER = "buyer"
+    COMPANY = "company"

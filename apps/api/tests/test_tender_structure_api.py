@@ -63,12 +63,19 @@ XLSX_BYTES = b"PK\x03\x04" + b"\x01" * 64
 #: Taules que 0050 encara no ha creat: res del que fa l'estructura les pot necessitar.
 #: (Les de 0049 —abast, territoris, necessitats, fets— ja existeixen i son del plec.)
 NOT_YET = (
+    "proposal_drafts",
+    "proposal_lines",
+    "delivery_plans",
+)
+#: Taules de l'analisi (0051): existeixen, pero carregar o editar un plec no hi escriu res.
+DERIVED_0051 = (
     "tender_analysis_runs",
-    "analysis_runs",
-    "analysis_findings",
-    "findings",
-    "assessments",
+    "tender_fit_assessments",
+    "capability_need_assessments",
+    "criterion_assessments",
     "delivery_candidates",
+    "analysis_findings",
+    "analysis_questions",
 )
 
 
