@@ -34,6 +34,7 @@ from app.models.enums import (
     RequirementOperator,
     RequirementOrigin,
     RequirementScope,
+    RequirementTiming,
     ReviewStatus,
 )
 from app.schemas.provenance import TenderSourceRefRead
@@ -114,6 +115,10 @@ class RequirementRead(ORMModel):
     #: llistes i no una d'unida perque son dos emmagatzematges amb garanties
     #: diferents, i `RequirementEvidence` no s'ha tocat.
     citations: list[TenderSourceRefRead] = Field(default_factory=list)
+    #: 0048: quan s'ha de complir (`unknown` fins que algu ho digui) i a quins
+    #: blocs aplica (buit = a tot el contracte).
+    timing: RequirementTiming = RequirementTiming.UNKNOWN
+    block_ids: list[uuid.UUID] = Field(default_factory=list)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -184,6 +189,10 @@ class AwardCriterionRead(ORMModel):
     #: criteri. Nomes codis. `None` per a les files v1/v2.
     adjudication_basis_json: dict[str, Any] | None = None
     evidence: list[EvidenceRead] = Field(default_factory=list)
+    #: 0048: quan s'ha de complir i a quins blocs aplica (buit = tot el
+    #: contracte). `points` NO es reparteix entre blocs.
+    timing: RequirementTiming = RequirementTiming.UNKNOWN
+    block_ids: list[uuid.UUID] = Field(default_factory=list)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

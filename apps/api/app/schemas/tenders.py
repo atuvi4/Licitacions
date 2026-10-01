@@ -26,6 +26,7 @@ from app.models.enums import (
     TenderStatus,
 )
 from app.schemas.common import ORMModel
+from app.schemas.tender_structure import TenderBlockRead, TenderSiteRead
 
 T = TypeVar("T")
 
@@ -256,6 +257,14 @@ class TenderDetail(ORMModel):
     lots: list[TenderLotRead] = []
     documents: list[TenderDocumentRead] = []
     traceability: TenderTraceability | None = None
+    # --- Estructura del contracte (0048). `None` = no se sap; llistes buides
+    # --- a les licitacions que no en tenen: cap canvi per a qui ja llegia aixo.
+    duration_months: int | None = None
+    extension_months: int | None = None
+    regulated_harmonised: bool | None = None
+    planned_start_date: date | None = None
+    blocks: list[TenderBlockRead] = []
+    sites: list[TenderSiteRead] = []
 
 
 class IngestionRunRead(ORMModel):

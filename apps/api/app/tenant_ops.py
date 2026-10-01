@@ -111,6 +111,15 @@ PUBLIC_TABLES = frozenset(
         # licitacio. Cap empresa n'es propietaria i per tant no s'esborren en
         # destruir un tenant.
         "requirement_source_ref_links",
+        # Estructura del plec (0048): blocs, seus, a que aplica cada requisit o
+        # criteri i les seves cites. Es del plec, com els requisits: cap
+        # empresa n'es propietaria.
+        "tender_blocks",
+        "tender_sites",
+        "requirement_blocks",
+        "award_criterion_blocks",
+        "tender_block_source_ref_links",
+        "tender_site_source_ref_links",
         "tender_cpvs",
         "tender_documents",
         # La capa documental dels plecs es publica i global: els mateixos bytes

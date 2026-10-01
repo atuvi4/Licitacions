@@ -1470,3 +1470,26 @@ class CoverageEntityType(StrEnum):
     OPERATING_FACT = "operating_fact"
     SERVICE = "service"
     PARTNER_ROLE = "partner_role"
+
+
+class RequirementTiming(StrEnum):
+    """QUAN s'ha de complir un requisit o un criteri, segons el plec (0048).
+
+    `at_submission`: ha d'existir o complir-se en presentar l'oferta.
+    `at_execution`: pot satisfer-se durant l'execucio, segons el plec.
+    `ambiguous`: el plec dona peu real a mes d'una lectura temporal.
+    `unknown`: encara no ho sabem. Es el valor de tot el que hi havia abans de
+    la 0048, i no se'n deriva cap resultat de compliment.
+    """
+
+    AT_SUBMISSION = "at_submission"
+    AT_EXECUTION = "at_execution"
+    AMBIGUOUS = "ambiguous"
+    UNKNOWN = "unknown"
+
+
+class TenderSiteRole(StrEnum):
+    """Que hi fa una seu del plec. Ser critica es una marca a part (`is_critical`)."""
+
+    CENTRAL = "central"
+    REMOTE = "remote"

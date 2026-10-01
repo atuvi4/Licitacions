@@ -40,8 +40,24 @@ from app.models.enums import (
     RequirementOperator,
     RequirementOrigin,
     RequirementScope,
+    RequirementTiming,
     ReviewStatus,
 )
+from app.models.review import in_values
+
+
+def _timing_column() -> Mapped[RequirementTiming]:
+    """`unknown` per defecte: el que hi havia abans de la 0048 no diu quan."""
+    return mapped_column(
+        enum_column(RequirementTiming, "requirement_timing"),
+        nullable=False,
+        default=RequirementTiming.UNKNOWN,
+        server_default=RequirementTiming.UNKNOWN.value,
+    )
+
+
+def _timing_check() -> sa.CheckConstraint:
+    return sa.CheckConstraint(in_values("timing", RequirementTiming), name="timing_valid")
 
 # Mateixa tecnica que a la capa documental: l'index unic parcial fa de lock de
 # concurrencia sense Redis ni cua.
@@ -224,6 +240,7 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, ActorMixin, Base):
             name="requirement_origin_matches_run",
         ),
         sa.Index("ix_requirements_origin_archived", "tender_id", "origin", "archived_at"),
+        _timing_check(),
     )
 
     #: NUL nomes per als manuals. Un requisit extret sense run no podria dir
@@ -335,11 +352,22 @@ class Requirement(UUIDPrimaryKeyMixin, TimestampMixin, ActorMixin, Base):
     dedup_key: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     #: Quin chunk l'ha produit. Util per diagnosticar l'extractor.
     source_chunk_index: Mapped[int | None] = mapped_column(sa.Integer)
+    #: QUAN s'ha de complir (0048). `unknown` fins que algu ho digui; cap
+    #: resultat de compliment se'n deriva encara.
+    timing: Mapped[RequirementTiming] = _timing_column()
 
     run: Mapped[RequirementExtractionRun | None] = relationship(back_populates="requirements")
     evidence: Mapped[list[RequirementEvidence]] = relationship(
         back_populates="requirement", cascade="all, delete-orphan", lazy="selectin"
     )
+    #: A quins blocs aplica (0048). Cap = a tot el contracte.
+    block_links: Mapped[list[RequirementBlock]] = relationship(  # noqa: F821
+        cascade="all, delete-orphan", lazy="selectin", order_by="RequirementBlock.created_at"
+    )
+
+    @property
+    def block_ids(self) -> list[uuid.UUID]:
+        return [link.block_id for link in self.block_links]
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Requirement {self.category} {self.title[:40]}>"
@@ -411,6 +439,7 @@ class AwardCriterion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.Index("ix_award_criteria_run_id", "run_id"),
         sa.Index("ix_award_criteria_tender_id", "tender_id"),
         sa.UniqueConstraint("run_id", "dedup_key", name="uq_award_criteria_run_dedup"),
+        _timing_check(),
     )
 
     run_id: Mapped[uuid.UUID] = mapped_column(
@@ -474,11 +503,22 @@ class AwardCriterion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: cites s'hi referencien per id, sense text. `NULL` = criteri anterior a la
     #: v3, base desconeguda; no vol dir "sense base".
     adjudication_basis_json: Mapped[dict[str, Any] | None] = mapped_column(sa.JSON)
+    #: QUAN s'ha de complir el que el criteri valora (0048). `unknown` per defecte.
+    timing: Mapped[RequirementTiming] = _timing_column()
 
     run: Mapped[RequirementExtractionRun] = relationship(back_populates="award_criteria")
     evidence: Mapped[list[AwardCriterionEvidence]] = relationship(
         back_populates="criterion", cascade="all, delete-orphan", lazy="selectin"
     )
+    #: A quins blocs aplica (0048). Cap = a tot el contracte. Els punts no es
+    #: reparteixen entre blocs: `points` es el del criteri, sigui on sigui.
+    block_links: Mapped[list[AwardCriterionBlock]] = relationship(  # noqa: F821
+        cascade="all, delete-orphan", lazy="selectin", order_by="AwardCriterionBlock.created_at"
+    )
+
+    @property
+    def block_ids(self) -> list[uuid.UUID]:
+        return [link.block_id for link in self.block_links]
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<AwardCriterion {self.name[:40]} {self.points}>"

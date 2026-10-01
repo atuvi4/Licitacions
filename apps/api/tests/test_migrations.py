@@ -1627,3 +1627,49 @@ def test_la_cobertura_territorial_es_pot_aplicar_i_desfer_sense_tocar_cap_dada()
     assert "DROP TABLE knowledge_coverage_areas" in down
     assert "DROP INDEX ix_knowledge_coverage_areas_entity" in down
     assert "INSERT INTO" not in down and "DELETE FROM" not in down
+
+
+def test_l_estructura_del_plec_es_pot_aplicar_i_desfer_sense_tocar_cap_fila():
+    """0047 -> 0048 -> 0047: columnes nul·lables a `tenders`, `timing = unknown` a
+    requisits i criteris, i sis taules noves buides. Cap INSERT, UPDATE ni DELETE.
+    """
+    up = _offline_sql("upgrade", "0047_knowledge_coverage:0048_tender_structure")
+    down = _offline_sql("downgrade", "0048_tender_structure:0047_knowledge_coverage")
+
+    for column in ("duration_months INTEGER", "extension_months INTEGER",
+                   "regulated_harmonised BOOLEAN", "planned_start_date DATE"):
+        assert f"ALTER TABLE tenders ADD COLUMN {column};" in up, column
+    assert "DEFAULT" not in up.split("CREATE TABLE tender_blocks")[0].replace(
+        "DEFAULT 'unknown'", "")  # cap valor per defecte a les quatre columnes
+    assert "CHECK (duration_months IS NULL OR duration_months >= 0)" in up
+    assert "CHECK (extension_months IS NULL OR extension_months >= 0)" in up
+    for table in ("tender_blocks", "tender_sites", "requirement_blocks", "award_criterion_blocks",
+                  "tender_block_source_ref_links", "tender_site_source_ref_links"):
+        assert f"CREATE TABLE {table} (" in up, table
+        assert f"DROP TABLE {table};" in down, table
+    for timed in ("requirements", "award_criteria"):
+        assert (
+            f"ALTER TABLE {timed} ADD COLUMN timing VARCHAR(13) DEFAULT 'unknown' NOT NULL"
+        ) in up
+        assert (f"CONSTRAINT ck_{timed}_timing_valid CHECK (timing IN ('at_submission', "
+                "'at_execution', 'ambiguous', 'unknown'))") in up
+        assert f"ALTER TABLE {timed} DROP COLUMN timing;" in down
+    assert "CONSTRAINT uq_tender_blocks_tender_code UNIQUE (tender_id, code)" in up
+    assert "CONSTRAINT uq_tender_sites_tender_code UNIQUE (tender_id, code)" in up
+    assert "CONSTRAINT ck_tender_sites_role_valid CHECK (role IN ('central', 'remote'))" in up
+    sites = up.split("CREATE TABLE tender_sites (")[1].split("\n);")[0]
+    assert "municipality_code VARCHAR(10)," in sites
+    # El sistema del codi municipal: lliure i nul·lable, sense cap valor per defecte.
+    assert "municipality_code_system VARCHAR(20)," in sites and "DEFAULT" not in sites.split(
+        "created_at"
+    )[0]
+    assert "CONSTRAINT pk_requirement_blocks PRIMARY KEY (requirement_id, block_id)" in up
+    assert "CONSTRAINT pk_award_criterion_blocks PRIMARY KEY (award_criterion_id, block_id)" in up
+    assert "REFERENCES tender_source_refs (id) ON DELETE RESTRICT" in up
+    assert up.count("REFERENCES tenders (id) ON DELETE CASCADE") == 2
+    statements = up.replace("UPDATE alembic_version", "")
+    for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM", "DROP"):
+        assert forbidden not in statements, forbidden
+    assert "INSERT INTO" not in down and "DELETE FROM" not in down
+    created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
+    assert created == set(re.findall(r"DROP INDEX (\w+)", down))

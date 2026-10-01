@@ -38,6 +38,7 @@ from app.api.v1.routers import (
     submission,
     technical_solutions,
     tender_documents,
+    tender_structure,
     tenders,
     workspaces,
 )
@@ -100,6 +101,8 @@ api_router.include_router(tenders.router)
 api_router.include_router(tender_documents.router)
 # Analisi de plecs: derivada de documents publics, tambe global.
 api_router.include_router(requirements.router)
+# Estructura del plec (0048): escriure-la es editar la licitacio oberta a ma.
+api_router.include_router(tender_structure.router)
 # Pre-fit: dada de tenant, penja de /companies/{company_id}.
 api_router.include_router(matching.router)
 api_router.include_router(company_scoped)

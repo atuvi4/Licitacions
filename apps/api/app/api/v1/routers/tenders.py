@@ -36,6 +36,7 @@ from app.models.tender_documents import (
 )
 from app.models.tender_lifecycle import TenderChangeEvent, TenderRevision
 from app.models.tenders import Buyer, Tender, TenderLot
+from app.schemas.tender_structure import TenderBlockRead, TenderSiteRead
 from app.schemas.tenders import (
     BuyerRead,
     BuyerSummary,
@@ -689,6 +690,12 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
             parser_version=record.parser_version if record else None,
             raw_hash=record.raw_hash if record else None,
         ),
+        duration_months=tender.duration_months,
+        extension_months=tender.extension_months,
+        regulated_harmonised=tender.regulated_harmonised,
+        planned_start_date=tender.planned_start_date,
+        blocks=[TenderBlockRead.model_validate(block) for block in tender.blocks],
+        sites=[TenderSiteRead.model_validate(site) for site in tender.sites],
     )
 
 

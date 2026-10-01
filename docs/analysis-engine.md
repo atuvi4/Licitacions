@@ -360,6 +360,56 @@ context:        comprador i històric similar
 | | `tender_document_receptions` + `_items` | **Fet** (capa 2): l'entrega, el canal i cada fitxer |
 | | `tender_document_classification_runs`, `_role_suggestions`, `_classification_findings`, `_role_decisions` | **Fet** (capa 3): rols, troballes i decisions humanes, per document |
 
+### 6.1.1 Estructura del plec (`0048`, fase 3A pas 2)
+
+Abans de comparar res, el plec ha de poder dir **què** es contracta i **on**:
+
+* **Dades estructurals amb columna pròpia** a `tenders`: durada, pròrrogues,
+  regulació harmonitzada (SARA, tri-estat) i inici previst. `null` = no se sap.
+  Una dada, un lloc: no es dupliquen a cap taula de fets (`tender_contract_facts`
+  arriba a 0049 només per a fets heterogenis).
+* **Blocs** (`tender_blocks`): unitats econòmiques o tècniques que no són
+  necessàriament lots. L'Escala en té quatre i un sol adjudicatari.
+* **Seus** (`tender_sites`): les ubicacions del plec, amb `role` i `is_critical`
+  separats. El municipi porta codi **i sistema** (`municipality_code_system`,
+  lliure, nul·lable, mai inferit): 0049 compara codis per `(code, code_system)`.
+  Sense GIS ni deducció de municipis.
+* **A què aplica** cada requisit o criteri: N:M amb blocs
+  (`requirement_blocks`, `award_criterion_blocks`). Cap enllaç = tot el
+  contracte; N enllaços = aquells N blocs. Un criteri de 6 punts sobre dos blocs
+  continua sent un criteri de 6 punts.
+* **Quan** s'ha de complir: `timing` a requisits i criteris
+  (`at_submission` · `at_execution` · `ambiguous` · `unknown`).
+* **Cites**: blocs i seus són citables amb el patró de `tender_source_refs`
+  (taules d'enllaç pròpies), com els requisits escrits a mà.
+
+L'extracció automàtica **no** escriu res d'això encara; s'escriu amb l'API
+d'estructura (`/companies/{c}/tenders/{t}/structure`, `/blocks`, `/sites`,
+`/requirements/{r}/structure`, `/award-criteria/{a}/structure`) amb les
+mateixes autoritzacions que la resta de dades d'una licitació oberta a mà.
+Cap d'aquestes dades crea abast, necessitats, fets de contracte ni resultats:
+això és 0049/0050.
+
+**Decisió tancada: qui escriu estructura.** L'API de tenant edita només la
+**licitació oberta a mà i pròpia**, amb els permisos que ja existien. Una
+licitació **pública o global** es llegeix però **no s'edita per aquesta via**:
+blocs i seus són globals, i una empresa tenant no pot modificar el que veuen
+les altres. No s'amplien permisos. L'extracció, la revisió i 0049 tindran una
+**via interna separada** per escriure estructura global; el gold de l'Escala es
+carrega per fixture o servei intern durant el desenvolupament.
+
+**Invariant obligatòria per a 0050 (`tender_analysis_runs`).** Editar durada,
+pròrrogues, SARA, inici previst, blocs, seus, `timing` o enllaços amb blocs
+**no crea cap `TenderRevision`** (no són el que publica l'òrgan). Perquè això
+no sigui una font de canvis invisibles, cada run d'anàlisi haurà de fixar un
+`tender_structure_fingerprint` canònic (com a mínim l'estructura de 0048 i la
+de 0049 que afecti l'anàlisi), i el seu `inputs_hash` haurà d'incloure:
+`tender_revision_id`, `extraction_run_id`, `classification_run_id`,
+`review_revision_hash`, `tender_structure_fingerprint`,
+`knowledge_fingerprint` i `rules_version`. Canviar un bloc, una seu, un
+`timing` o una metadada estructural ⇒ fingerprint diferent ⇒ run obsolet
+(stale). El fingerprint **no** s'implementa a 0048: és feina de 0050.
+
 ### 6.2 Anàlisi (tenant)
 
 | Entitat demanada | Taula | Contingut |

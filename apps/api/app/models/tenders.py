@@ -97,6 +97,13 @@ class Tender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.CheckConstraint(
             "estimated_value IS NULL OR estimated_value >= 0", name="tender_estimated_value_positive"
         ),
+        sa.CheckConstraint(
+            "duration_months IS NULL OR duration_months >= 0", name="tender_duration_not_negative"
+        ),
+        sa.CheckConstraint(
+            "extension_months IS NULL OR extension_months >= 0",
+            name="tender_extension_not_negative",
+        ),
     )
 
     source_id: Mapped[uuid.UUID] = mapped_column(
@@ -171,6 +178,17 @@ class Tender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     last_changed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
+    # --- Estructura del contracte (0048). Tot `NULL` = no se sap. ------------
+    #: Durada del contracte en mesos, sense prorrogues.
+    duration_months: Mapped[int | None] = mapped_column(sa.Integer)
+    #: Prorrogues previstes, en mesos.
+    extension_months: Mapped[int | None] = mapped_column(sa.Integer)
+    #: Tri-estat: `True` = regulacio harmonitzada (SARA), `False` = el plec diu
+    #: expressament que no, `NULL` = no se sap. Sense cap `False` per defecte.
+    regulated_harmonised: Mapped[bool | None] = mapped_column(sa.Boolean)
+    #: Inici previst de l'execucio, si el plec el dona.
+    planned_start_date: Mapped[date | None] = mapped_column(sa.Date)
+
     buyer: Mapped[Buyer | None] = relationship(lazy="joined")
     lots: Mapped[list[TenderLot]] = relationship(
         back_populates="tender",
@@ -183,6 +201,19 @@ class Tender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     documents: Mapped[list[TenderDocument]] = relationship(
         back_populates="tender", cascade="all, delete-orphan", lazy="selectin"
+    )
+    #: Estructura del plec (0048): blocs no necessariament adjudicables i seus.
+    blocks: Mapped[list[TenderBlock]] = relationship(  # noqa: F821
+        back_populates="tender",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="TenderBlock.code",
+    )
+    sites: Mapped[list[TenderSite]] = relationship(  # noqa: F821
+        back_populates="tender",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="TenderSite.code",
     )
 
     def __repr__(self) -> str:  # pragma: no cover

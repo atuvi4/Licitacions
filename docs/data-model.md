@@ -141,6 +141,12 @@ vigent i `SourceRecord.tender_id` permet llistar-ne l'historial.
 | `tender_lots` | Únic `(tender_id, external_lot_id)`. Entitats consultables, no un JSON dins de `Tender`: el matching futur sovint serà per lot. |
 | `tender_cpvs` / `tender_lot_cpvs` | Què **és** una licitació. No confondre amb `company_cpv_preferences`, que és què **interessa** a una empresa. Reutilitzen el catàleg `cpv_codes` existent. |
 | `tender_documents` | Únic `(tender_id, url)`. Només metadada i enllaç: en aquesta fase no es descarrega cap plec. |
+| `tenders` (ampliada, `0048`) | `duration_months`, `extension_months` (enters ≥ 0), `regulated_harmonised` (tri-estat: `true` SARA, `false` expressament no, `null` no se sap) i `planned_start_date`. Tot `null` per defecte; cap backfill. Fora de la fotografia de `tender_lifecycle`. |
+| `tender_blocks` (`0048`) | Unitats econòmiques o tècniques del contracte que **no** són necessàriament lots (l'Escala: 4 blocs, 1 adjudicatari). `code` únic per licitació; `tender_lot_id` opcional i del mateix expedient; `base_price_ex_vat` decimal; `price_points` com `award_criteria.points`; `separately_awardable` tri-estat; `billing_terms_json`/`billing_schema` només per a condicions pròpies del bloc. |
+| `tender_sites` (`0048`) | Seus del plec, exclusivament del plec: `code` únic per licitació, `role` (`central` · `remote`) i `is_critical` a part (una seu crítica no és un paper nou). Adreça, municipi (`municipality_code` + `municipality_code_system`, lliure i nul·lable: mai s'infereix INE, perquè 0049 compara codis per `(code, code_system)`) i coordenades `null` = no se sap; no es geocodifica ni es dedueix res. |
+| `requirement_blocks` · `award_criterion_blocks` (`0048`) | N:M requisit/criteri ↔ bloc, PK composta, CASCADE pels dos costats. Cap fila = aplica a tot el contracte. **Els punts d'un criteri no es reparteixen** entre els blocs que enllaça. |
+| `tender_block_source_ref_links` · `tender_site_source_ref_links` (`0048`) | Cites de blocs i seus amb el mateix patró que `requirement_source_ref_links`: l'enllaç és mutable, la cita (`tender_source_refs`) no, i RESTRICT cap a la cita. |
+| `requirements` · `award_criteria` (ampliades, `0048`) | `timing` (`at_submission` · `at_execution` · `ambiguous` · `unknown`, per defecte `unknown`): quan s'ha de complir. No se'n deriva cap resultat de compliment. |
 
 ## Recepció de documents i classificació documental (tenant)
 
