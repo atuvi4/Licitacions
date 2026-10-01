@@ -684,6 +684,16 @@ export function proposalHeadline(description: Pick<ProposalDescription, "label" 
   return `${description.label}: ${description.value}`;
 }
 
+/** Tot el text visible d'un candidat de l'històric: on busca el cercador de la pantalla. */
+export function candidateSearchText(observation: Observation, vocabulary?: Vocabulary | null): string[] {
+  return [
+    candidateTitle(observation.subject, observation.subject_key, vocabulary),
+    describeProposal(observation, vocabulary).sentence,
+    observation.statement,
+    observation.source_ref ?? "",
+  ];
+}
+
 /* ----- Evidència i rols ------------------------------------------------------ */
 
 export interface EvidenceTarget {

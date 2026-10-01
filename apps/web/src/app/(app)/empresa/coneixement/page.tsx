@@ -10,7 +10,7 @@ import { PendingTab } from "@/components/knowledge/PendingTab";
 import { ScopeDialog } from "@/components/knowledge/ScopeDialog";
 import { EMPTY_RECORDS, type KnowledgeView } from "@/components/knowledge/view";
 import { useCompanyPath, useSession } from "@/components/SessionProvider";
-import { Button, ErrorNotice, ErrorState, PageHeader, PageSkeleton, Tabs } from "@/components/ui";
+import { Button, ErrorNotice, ErrorState, Input, PageHeader, PageSkeleton, Tabs } from "@/components/ui";
 import { useResource } from "@/lib/hooks";
 import {
   WHO_CAN_DECIDE_KNOWLEDGE,
@@ -27,6 +27,7 @@ import {
   type Observation,
   type Vocabulary,
 } from "@/lib/knowledge";
+import { searchMatcher } from "@/lib/text";
 import type { Certification, Service } from "@/lib/types";
 
 /**
@@ -71,6 +72,9 @@ export default function CompanyKnowledgePage() {
   const [picked, setPicked] = useState<TabKey | null>(null);
   const [declaring, setDeclaring] = useState<DeclareTarget | null>(null);
   const [scoping, setScoping] = useState<Certification | null>(null);
+  // Cerca sobre el que ja és a la pantalla: cap crida nova per tecla.
+  const [search, setSearch] = useState("");
+  const matches = useMemo(() => searchMatcher(search), [search]);
 
   const role = membership.role;
   const canEdit = canEditKnowledge(role);
@@ -138,6 +142,8 @@ export default function CompanyKnowledgePage() {
     reload,
     declare: setDeclaring,
     editScope: setScoping,
+    search,
+    matches,
   };
 
   /** Verificada segons la fotografia: editar-la n'invalidarà la verificació. */
@@ -178,6 +184,17 @@ export default function CompanyKnowledgePage() {
           {!canVerify && `Només ${WHO_CAN_VERIFY_KNOWLEDGE} pot verificar una dada.`}
         </p>
       )}
+
+      <div className="mb-4">
+        <Input
+          type="search"
+          aria-label="Cerca al coneixement"
+          placeholder="Cerca al coneixement..."
+          className="w-full md:max-w-md"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      </div>
 
       <Tabs
         className="mb-5"

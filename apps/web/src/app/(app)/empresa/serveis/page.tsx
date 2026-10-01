@@ -7,6 +7,7 @@ import { useCompanyPath } from "@/components/SessionProvider";
 import {
   Button,
   Card,
+  Combobox,
   Checkbox,
   DataTable,
   EmptyState,
@@ -240,14 +241,14 @@ export default function ServicesPage() {
               hint="Sense línia, el servei no compta al coneixement de l'empresa."
               error={fieldErrors.service_line_code}
             >
-              <Select
+              <Combobox
                 value={form.service_line_code}
                 placeholder="Sense línia"
                 options={(vocabulary.data?.service_lines ?? []).map((line) => ({
                   value: line.code,
                   label: serviceLineLabel(line.code, vocabulary.data),
                 }))}
-                onChange={(event) => setForm({ ...form, service_line_code: event.target.value })}
+                onChange={(value) => setForm({ ...form, service_line_code: value })}
               />
             </Field>
             <Field label="Com es presta">

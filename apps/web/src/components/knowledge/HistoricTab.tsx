@@ -1,9 +1,10 @@
 "use client";
 
 import { Button, Card, CardHeader, EmptyState } from "@/components/ui";
-import { groupCandidates } from "@/lib/knowledge";
+import { candidateSearchText, groupCandidates } from "@/lib/knowledge";
 
 import { CandidateRow } from "./CandidateRow";
+import { NoResults } from "./NoResults";
 import type { KnowledgeView } from "./view";
 
 /**
@@ -12,7 +13,9 @@ import type { KnowledgeView } from "./view";
  * persona la confirma com a actual.
  */
 export function HistoricTab({ view, onShowCurrent }: { view: KnowledgeView; onShowCurrent: () => void }) {
-  const candidates = [...view.observations.values()];
+  const all = [...view.observations.values()];
+  const candidates = all.filter((observation) => view.matches(...candidateSearchText(observation, view.vocabulary)));
+  if (candidates.length === 0 && all.length > 0) return <NoResults search={view.search} />;
   if (candidates.length === 0) {
     return (
       <Card>

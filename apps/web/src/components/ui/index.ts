@@ -26,5 +26,6 @@ export {
   type RowTint,
 } from "./DataTable";
 export { Checkbox, Field, Input, Select, Textarea } from "./Form";
+export { Combobox, type ComboboxOption, type ComboboxProps } from "./Combobox";
 export { Spinner } from "./Spinner";
 export { ErrorNotice, LoadingRows, ResultNotice, Skeleton } from "./Feedback";

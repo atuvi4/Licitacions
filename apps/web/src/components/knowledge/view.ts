@@ -28,6 +28,10 @@ export interface KnowledgeView {
   reload: () => void;
   declare: (target: DeclareTarget) => void;
   editScope: (certification: Certification) => void;
+  /** El que s'ha escrit al cercador (buit: es mostra tot). */
+  search: string;
+  /** Cert si algun dels textos conté el que s'ha escrit; sense cerca, sempre cert. */
+  matches: (...texts: Array<string | null | undefined>) => boolean;
 }
 
 export const EMPTY_RECORDS: KnowledgeRecords = {

@@ -5,6 +5,7 @@ import {
   FACT_LABELS,
   FLAG_EXPLANATIONS,
   FLAG_LABELS,
+  candidateSearchText,
   capabilityLabel,
   certificationKeyTitle,
   certificationTitle,
@@ -19,6 +20,7 @@ import {
 
 import { CandidateRow } from "./CandidateRow";
 import { KnowledgeItem } from "./KnowledgeItem";
+import { NoResults } from "./NoResults";
 import type { KnowledgeView } from "./view";
 
 const ACTION = "min-h-11 md:min-h-0";
@@ -58,11 +60,19 @@ function pendingTitle(group: PendingGroup, view: KnowledgeView): { title: string
  * caducat); a sota, el que ha suggerit l'històric i ningú no ha revisat.
  */
 export function PendingTab({ view, onShowCurrent }: { view: KnowledgeView; onShowCurrent: () => void }) {
-  const groups = groupPendingRecords(view.snapshot);
-  const candidates = pendingCandidates(view.snapshot)
+  const allGroups = groupPendingRecords(view.snapshot);
+  const allCandidates = pendingCandidates(view.snapshot)
     .map((item) => (item.observation_id ? view.observations.get(item.observation_id) : undefined))
     .filter((item): item is Observation => Boolean(item));
+  const groups = allGroups.filter((group) => {
+    const { title, subtitle } = pendingTitle(group, view);
+    return view.matches(title, subtitle);
+  });
+  const candidates = allCandidates.filter((observation) => view.matches(...candidateSearchText(observation, view.vocabulary)));
 
+  if (groups.length === 0 && candidates.length === 0 && allGroups.length + allCandidates.length > 0) {
+    return <NoResults search={view.search} />;
+  }
   if (groups.length === 0 && candidates.length === 0) {
     return (
       <Card>

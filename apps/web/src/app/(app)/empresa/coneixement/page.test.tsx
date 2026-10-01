@@ -98,6 +98,14 @@ function record(container: HTMLElement, id: string): HTMLElement {
   return row;
 }
 
+/** Tria una línia de servei al combobox escrivint-hi i clicant l'opció. */
+function pickLine(dialog: HTMLElement, typed: string, optionLabel: string) {
+  const input = within(dialog).getByRole("combobox", { name: /Línia de servei/ });
+  fireEvent.change(input, { target: { value: typed } });
+  fireEvent.click(within(dialog).getByRole("option", { name: optionLabel }));
+  return input as HTMLInputElement;
+}
+
 function tile(container: HTMLElement, key: string): string {
   return container.querySelector(`[data-tile="${key}"] dd`)?.textContent ?? "";
 }
@@ -538,7 +546,7 @@ describe("Coneixement de l'empresa", () => {
     let dialog = screen.getByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText(/^Nom/), { target: { value: "Operador Demo" } });
     fireEvent.change(within(dialog).getByLabelText(/^Paper/), { target: { value: "wholesale_operator" } });
-    fireEvent.change(within(dialog).getByLabelText(/Línia de servei/), { target: { value: "access_ftth" } });
+    pickLine(dialog, "ftth", "Accessos FTTH");
     fireEvent.submit(dialog.querySelector("form")!);
     await flush();
     expect(post).toHaveBeenCalledWith(`${BASE}/knowledge/records/partner`, {
@@ -593,10 +601,9 @@ describe("Coneixement de l'empresa", () => {
     // Un segon paper sobre la línia nova, al mateix partner.
     fireEvent.click(within(record(container, "partner-1")).getByRole("button", { name: "Afegeix un paper" }));
     dialog = screen.getByRole("dialog");
-    const line = within(dialog).getByLabelText(/Línia de servei/) as HTMLSelectElement;
-    expect([...line.options].map((option) => option.textContent)).toContain("Telefonia mòbil");
     fireEvent.change(within(dialog).getByLabelText(/^Paper/), { target: { value: "wholesale_operator" } });
-    fireEvent.change(line, { target: { value: "mobile_telephony" } });
+    const line = pickLine(dialog, "mobil", "Telefonia mòbil");
+    expect(line.value).toBe("Telefonia mòbil");
     fireEvent.submit(dialog.querySelector("form")!);
     await flush();
     expect(post).toHaveBeenCalledWith(`${BASE}/knowledge/records/partner_role`, {
@@ -609,6 +616,121 @@ describe("Coneixement de l'empresa", () => {
     });
     // Cap segon partner: només s'ha creat un paper.
     expect(post.mock.calls.map(([path]) => path)).toEqual([`${BASE}/knowledge/records/partner_role`]);
+  });
+
+  describe("les línies de servei surten del vocabulari de l'API", () => {
+    const withMobile = { ...vocabularyFixture, service_lines: [...vocabularyFixture.service_lines, { code: "mobile_telephony", label: "Telefonia mobil" }] };
+
+    it("«Declara un servei»: escrivint «mobil» surt «Telefonia mòbil» i en desar s'envia mobile_telephony", async () => {
+      post.mockResolvedValue({});
+      respond({ [`${BASE}/knowledge/vocabulary`]: withMobile });
+      await renderPage();
+      fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+      fireEvent.click(screen.getByRole("button", { name: "Declara un servei" }));
+      const dialog = screen.getByRole("dialog", { name: "Declara un servei" });
+      fireEvent.change(within(dialog).getByLabelText(/Nom del servei/), { target: { value: "Línies mòbils" } });
+
+      const input = within(dialog).getByRole("combobox", { name: /Línia de servei/ });
+      fireEvent.change(input, { target: { value: "mobil" } });
+      expect(within(within(dialog).getByRole("listbox")).getAllByRole("option").map((option) => option.textContent)).toEqual(["Telefonia mòbil"]);
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect((input as HTMLInputElement).value).toBe("Telefonia mòbil");
+      // Retorn dins del combobox no ha enviat el formulari.
+      expect(post).not.toHaveBeenCalled();
+
+      fireEvent.submit(dialog.querySelector("form")!);
+      await flush();
+      expect(post).toHaveBeenCalledWith(`${BASE}/services`, { name: "Línies mòbils", service_line_code: "mobile_telephony", delivery_mode: null });
+    });
+
+    it("una línia que la web no coneix també s'ofereix, amb el rètol de l'API: cap llista estàtica la deixa fora", async () => {
+      respond({ [`${BASE}/knowledge/vocabulary`]: { ...withMobile, service_lines: [...withMobile.service_lines, { code: "linia_nova", label: "Linia nova de l'API" }] } });
+      const { container } = await renderPage();
+      fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+      // A la secció de serveis, com a línia sense cap dada.
+      expect(container.querySelector("#serveis")!.textContent).toContain("Linia nova de l'API");
+      expect(container.querySelector("#serveis")!.textContent).toContain("Telefonia mòbil");
+      // I al formulari.
+      fireEvent.click(screen.getByRole("button", { name: "Declara un servei" }));
+      const dialog = screen.getByRole("dialog", { name: "Declara un servei" });
+      const input = within(dialog).getByRole("combobox", { name: /Línia de servei/ });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      const offered = within(within(dialog).getByRole("listbox")).getAllByRole("option").map((option) => option.textContent);
+      expect(offered).toEqual([...withMobile.service_lines.map((line) => line.code), "linia_nova"].map((code) => ({ voice_pbx: "Centraleta i veu IP", civil_works: "Obra civil", access_ftth: "Accessos FTTH", mobile_telephony: "Telefonia mòbil", linia_nova: "Linia nova de l'API" })[code]));
+    });
+  });
+
+  describe("cercador", () => {
+    const search = () => screen.getByRole("searchbox", { name: "Cerca al coneixement" }) as HTMLInputElement;
+    const withMobile = { ...vocabularyFixture, service_lines: [...vocabularyFixture.service_lines, { code: "mobile_telephony", label: "Telefonia mobil" }] };
+
+    it("«Soci» troba el partner i amaga la resta; «Centraleta» troba la solució de l'històric", async () => {
+      const { container } = await renderPage();
+      expect(search().placeholder).toBe("Cerca al coneixement...");
+      fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+      const before = get.mock.calls.length;
+
+      fireEvent.change(search(), { target: { value: "soci" } });
+      expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Partners"]);
+      expect(record(container, "partner-1")).toBeTruthy();
+
+      fireEvent.change(search(), { target: { value: "CENTRALETA" } });
+      // La nota d'abast de l'ENS també en parla: compta, com tot el text visible.
+      expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Certificacions", "Serveis", "Solucions"]);
+      expect(container.querySelector("#solucions")!.textContent).toContain("Centraleta Demo");
+      // Cap crida nova per tecla: es filtra el que ja hi ha.
+      expect(get.mock.calls.length).toBe(before);
+    });
+
+    it("«mobil» troba «Telefonia mòbil», i un text que no hi és mostra el buit a cada pestanya", async () => {
+      respond({ [`${BASE}/knowledge/vocabulary`]: withMobile });
+      const { container } = await renderPage();
+      fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+      fireEvent.change(search(), { target: { value: "mobil" } });
+      expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Serveis"]);
+      expect(container.querySelector("#serveis")!.textContent).toContain("Telefonia mòbil");
+      expect(container.querySelector("#serveis")!.textContent).not.toContain("Obra civil");
+
+      fireEvent.change(search(), { target: { value: "zzzz inexistent" } });
+      expect(screen.getByRole("status").textContent).toContain("No s'ha trobat cap resultat.");
+      expect(screen.queryAllByRole("heading", { level: 2 })).toEqual([]);
+      fireEvent.click(screen.getByRole("tab", { name: /Pendents de validar/ }));
+      expect(screen.getByRole("status").textContent).toContain("No s'ha trobat cap resultat.");
+      fireEvent.click(screen.getByRole("tab", { name: /Històric detectat/ }));
+      expect(screen.getByRole("status").textContent).toContain("No s'ha trobat cap resultat.");
+    });
+
+    it("la cerca es manté en canviar de pestanya i filtra pendents, actual i històric igual", async () => {
+      const { container } = await renderPage();
+      fireEvent.change(search(), { target: { value: "24x7" } });
+      // Pendents: només el candidat de suport 24x7.
+      expect(screen.queryByRole("heading", { name: "Dades actuals per acreditar" })).toBeNull();
+      expect(container.querySelectorAll("[data-observation]").length).toBe(1);
+      expect(container.querySelector("[data-observation]")!.textContent).toContain("Suport 24x7");
+
+      fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+      expect(search().value).toBe("24x7");
+      expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Fets operatius"]);
+      expect(container.querySelector("#fets")!.textContent).toContain("Suport 24x7");
+      expect(container.querySelector("#fets")!.textContent).not.toContain("Centre de dades Tier-3");
+
+      fireEvent.click(screen.getByRole("tab", { name: /Històric detectat/ }));
+      expect(search().value).toBe("24x7");
+      expect(container.querySelectorAll("[data-observation]").length).toBe(1);
+
+      // Buidar la cerca torna a ensenyar-ho tot.
+      fireEvent.change(search(), { target: { value: "" } });
+      expect(container.querySelectorAll("[data-observation]").length).toBe(4);
+    });
+
+    it("el text dels papers d'un partner també compta", async () => {
+      const { container } = await renderPage();
+      fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+      fireEvent.change(search(), { target: { value: "girona" } });
+      expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Partners"]);
+      expect(record(container, "partner-1").textContent).toContain("Subcontractista · Obra civil · Girona");
+    });
   });
 
   it("declara una certificació amb norma, nivell i abast estructurat", async () => {

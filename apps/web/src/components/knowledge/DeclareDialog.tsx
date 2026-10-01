@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { Modal } from "@/components/Modal";
 import { useCompanyPath } from "@/components/SessionProvider";
-import { Button, Checkbox, ErrorNotice, Field, Input, Select, Textarea } from "@/components/ui";
+import { Button, Checkbox, Combobox, ErrorNotice, Field, Input, Select, Textarea } from "@/components/ui";
 import { api } from "@/lib/api";
 import { optionsFrom } from "@/lib/format";
 import { useMutation } from "@/lib/hooks";
@@ -136,6 +136,7 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
   const record = "record" in target ? target.record : undefined;
   const editing = Boolean(record);
   const set = (name: string) => (event: { target: { value: string } }) => setForm((current) => ({ ...current, [name]: event.target.value }));
+  const setValue = (name: string) => (value: string) => setForm((current) => ({ ...current, [name]: value }));
 
   const lineOptions = (vocabulary?.service_lines ?? []).map((line) => ({
     value: line.code,
@@ -372,8 +373,8 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
             <Field label="Nom del servei" required error={fieldErrors.name}>
               <Input required minLength={2} value={form.name ?? ""} onChange={set("name")} placeholder="Centraleta al núvol" />
             </Field>
-            <Field label="Línia de servei" required hint="El que permet comparar-lo amb el que demana un plec.">
-              <Select required value={form.service_line_code ?? ""} placeholder="Tria una línia" options={lineOptions} onChange={set("service_line_code")} />
+            <Field label="Línia de servei" required hint="El que permet comparar-lo amb el que demana un plec. Escriu per trobar-la.">
+              <Combobox required value={form.service_line_code ?? ""} placeholder="Tria una línia" options={lineOptions} onChange={setValue("service_line_code")} />
             </Field>
             <Field label="Com es presta">
               <Select value={form.delivery_mode ?? ""} placeholder="Sense especificar" options={optionsFrom(DELIVERY_MODE_LABELS)} onChange={set("delivery_mode")} />
@@ -408,7 +409,7 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
               <Input required value={form.name ?? ""} onChange={set("name")} placeholder="Centraleta cloud" />
             </Field>
             <Field label="Línia de servei" required>
-              <Select required value={form.service_line_code ?? ""} placeholder="Tria una línia" options={lineOptions} onChange={set("service_line_code")} />
+              <Combobox required value={form.service_line_code ?? ""} placeholder="Tria una línia" options={lineOptions} onChange={setValue("service_line_code")} />
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Fabricant">
@@ -480,7 +481,7 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
               </Field>
             </div>
             <Field label="Línia de servei">
-              <Select value={form.service_line_code ?? ""} placeholder="Sense especificar" options={lineOptions} onChange={set("service_line_code")} />
+              <Combobox value={form.service_line_code ?? ""} placeholder="Sense especificar" options={lineOptions} onChange={setValue("service_line_code")} />
             </Field>
           </>
         )}
@@ -502,7 +503,7 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
                 {form.role && (
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Línia de servei">
-                      <Select value={form.role_service_line_code ?? ""} placeholder="Totes" options={lineOptions} onChange={set("role_service_line_code")} />
+                      <Combobox value={form.role_service_line_code ?? ""} placeholder="Totes" options={lineOptions} onChange={setValue("role_service_line_code")} />
                     </Field>
                     <Field label="Territori">
                       <Input value={form.role_territory ?? ""} onChange={set("role_territory")} />
@@ -521,7 +522,7 @@ export function DeclareDialog({ target, vocabulary, records, canDelete, verified
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Línia de servei">
-                <Select value={form.service_line_code ?? ""} placeholder="Totes" options={lineOptions} onChange={set("service_line_code")} />
+                <Combobox value={form.service_line_code ?? ""} placeholder="Totes" options={lineOptions} onChange={setValue("service_line_code")} />
               </Field>
               <Field label="Territori">
                 <Input value={form.territory ?? ""} onChange={set("territory")} />
