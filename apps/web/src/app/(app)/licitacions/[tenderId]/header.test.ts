@@ -64,11 +64,12 @@ function analysis(overrides: Partial<ExtractionRun> | null): RequirementAnalysis
 }
 
 describe("pestanyes", () => {
-  it("són les quatre aprovades, en ordre, i la URL només accepta les seves claus", () => {
-    expect(TABS.map((tab) => tab.key)).toEqual(["resum", "plecs", "requisits", "historial"]);
-    expect(TABS.map((tab) => tab.label)).toEqual(["Resum", "Plecs", "Requisits extrets", "Historial"]);
+  it("són les cinc aprovades, en ordre, i la URL només accepta les seves claus", () => {
+    expect(TABS.map((tab) => tab.key)).toEqual(["resum", "plecs", "requisits", "analisi", "historial"]);
+    expect(TABS.map((tab) => tab.label)).toEqual(["Resum", "Plecs", "Requisits extrets", "Anàlisi", "Historial"]);
     expect(tabFromParam("requisits")).toBe("requisits");
     expect(tabFromParam("historial")).toBe("historial");
+    expect(tabFromParam("analisi")).toBe("analisi");
     expect(tabFromParam(null)).toBe("resum");
     expect(tabFromParam("inventada")).toBe("resum");
   });

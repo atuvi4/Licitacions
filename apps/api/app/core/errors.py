@@ -39,6 +39,18 @@ class ConflictError(AppError):
     code = "conflict"
 
 
+class AnalysisPrerequisitesMissingError(ConflictError):
+    """No hi ha res que analitzar. `details["missing"]` diu que, amb codis tancats."""
+
+    code = "analysis_prerequisites_missing"
+
+
+class AnalysisRunConflictError(ConflictError):
+    """Una altra peticio ha canviat l'analisi alhora: es pot tornar a provar."""
+
+    code = "analysis_run_conflict"
+
+
 class DuplicateDocumentError(ConflictError):
     """Ja existeix un document amb el mateix SHA-256 dins de l'empresa."""
 

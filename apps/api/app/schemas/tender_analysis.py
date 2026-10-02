@@ -127,3 +127,9 @@ class AnalysisRunRead(ORMModel):
     delivery_candidates: list[DeliveryCandidateRead] = Field(default_factory=list)
     findings: list[FindingRead] = Field(default_factory=list)
     questions: list[QuestionRead] = Field(default_factory=list)
+
+
+class AnalysisRunWriteRead(AnalysisRunRead):
+    """La resposta de `POST /analysis/runs`: l'analisi resultant i si s'ha reutilitzat."""
+
+    reused: bool

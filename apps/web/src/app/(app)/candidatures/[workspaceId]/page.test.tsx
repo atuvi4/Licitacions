@@ -6,6 +6,7 @@ import { decisionFixture, workspaceFixture } from "@/test/workspace-fixture";
 
 const get = vi.fn();
 const readiness = vi.fn();
+const analysisCurrent = vi.fn();
 const post = vi.fn();
 const push = vi.fn();
 const replace = vi.fn();
@@ -16,7 +17,11 @@ let search = "";
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   const route = (path: unknown, ...rest: unknown[]) =>
-    typeof path === "string" && path.includes("/final-readiness") ? readiness(path, ...rest) : get(path, ...rest);
+    typeof path === "string" && path.includes("/final-readiness")
+      ? readiness(path, ...rest)
+      : typeof path === "string" && path.includes("/analysis/current")
+        ? analysisCurrent(path, ...rest)
+        : get(path, ...rest);
   return { ...actual, api: { ...actual.api, get: route, post: (...args: unknown[]) => post(...args) } };
 });
 vi.mock("@/components/SessionProvider", () => ({
@@ -85,6 +90,8 @@ describe("Candidatura · stepper i Decidir", () => {
     get.mockReset();
     readiness.mockReset();
     readiness.mockResolvedValue(readinessFixture());
+    analysisCurrent.mockReset();
+    analysisCurrent.mockRejectedValue(new ApiError(404, "not_found", "Not found"));
     post.mockReset();
     push.mockClear();
     replace.mockClear();
@@ -194,6 +201,17 @@ describe("Candidatura · stepper i Decidir", () => {
     expect(container.textContent).toContain("Anna Puig");
     expect(post).not.toHaveBeenCalled();
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("Decidir: el panell de context no té cap fila «Recomanació»; Encaix i Elegibilitat hi són", async () => {
+    get.mockResolvedValue(workspaceFixture({ recommendation: "go_candidate", eligibility: "eligible" }));
+    search = "pas=decidir";
+    const { container } = render(<WorkspacePage />);
+    await flush();
+    const labels = [...container.querySelectorAll("dt")].map((dt) => dt.textContent);
+    expect(labels).toContain("Encaix");
+    expect(labels).toContain("Elegibilitat");
+    expect(labels).not.toContain("Recomanació");
   });
 
   it("termini: dies i data quan hi és; «no consta» quan és null", async () => {

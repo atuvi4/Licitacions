@@ -24,7 +24,6 @@ import { useMutation } from "@/lib/hooks";
 import {
   DECISION_LEVEL,
   DECISION_PENDING_LEVEL,
-  RECOMMENDATION_LEVEL,
   whoCanDecide,
 } from "@/lib/labels";
 import { formatDateTime } from "@/lib/tenders";
@@ -60,13 +59,6 @@ const SUBMIT_LABELS: Record<WorkspaceDecisionType, string> = {
   defer: "Registra l'ajornament",
 };
 
-const RECOMMENDATION_HEADLINES: Record<string, string> = {
-  go_candidate: "El sistema suggereix presentar-se.",
-  eligible_low_fit: "El sistema veu la candidatura elegible, però amb poc encaix.",
-  review: "El sistema suggereix revisar abans de decidir.",
-  no_go: "El sistema suggereix no presentar-se.",
-};
-
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
@@ -75,9 +67,9 @@ function plural(count: number, one: string, many: string): string {
  * L'acte de decidir (handoff L12, mockup 06 i cas 2).
  *
  * Quatre coses que mai es fusionen: el pre-fit, l'elegibilitat, la
- * recomanació automàtica i la decisió humana. Aquí només hi ha les dues
- * últimes, i la recomanació és text signat pel càlcul, mai un botó: cap
- * «accepta la recomanació», cap GO automàtic. Només un GO HUMÀ registrat fa
+ * recomanació automàtica i la decisió humana. Aquí només hi ha la decisió
+ * humana: cap recomanació del sistema, cap «accepta la recomanació», cap GO
+ * automàtic. Només un GO HUMÀ registrat fa
  * avançar el flux, i això ho decideix la pàgina a partir de la decisió desada.
  *
  * Contracte real (`POST …/decisions {decision, reason}`): el motiu només és
@@ -133,15 +125,6 @@ export function DecisionPanel({
     }
   }
 
-  const recommendationHeadline =
-    workspace.recommendation && RECOMMENDATION_HEADLINES[workspace.recommendation]
-      ? RECOMMENDATION_HEADLINES[workspace.recommendation]
-      : "El sistema no pot suggerir res: no s'ha avaluat cap requisit del plec.";
-  const unresolved = counters.mandatory_unknown + counters.mandatory_needs_review;
-  const recommendationBasis = undetermined
-    ? "«Cap bloqueig» aquí no vol dir que no n'hi hagi: vol dir que no s'ha mirat."
-    : `Calculat amb ${plural(counters.confirmed_blockers, "bloqueig confirmat", "bloqueigs confirmats")}, ${plural(counters.potential_blockers, "possible", "possibles")} i ${plural(unresolved, "obligatori sense resoldre", "obligatoris sense resoldre")}; canviarà quan es resolguin.`;
-
   const apiError = mutation.apiError;
   const reasonRequiredByBackend = apiError?.code === "decision_reason_required";
   const backendWarnings = reasonRequiredByBackend
@@ -183,7 +166,7 @@ export function DecisionPanel({
   );
 
   return (
-    <Card frame className="flex h-full flex-col">
+    <Card frame className="flex flex-col">
       <div className="flex flex-1 flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6">
         <div>
           <p className="font-heading text-kicker font-semibold tracking-[0.1em] text-brand-strong uppercase">
@@ -227,7 +210,7 @@ export function DecisionPanel({
         ) : (
           <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted">
             <StatusPill level={DECISION_PENDING_LEVEL}>Pendent</StatusPill>
-            <span>Encara no s&apos;ha pres cap decisió. La recomanació automàtica no en compta com a una.</span>
+            <span>Encara no s&apos;ha pres cap decisió. Només compta com a decisió la que registra explícitament una persona.</span>
           </div>
         )}
 
@@ -254,22 +237,6 @@ export function DecisionPanel({
             a sis mesos.
           </p>
         )}
-
-        <div className="mt-auto flex items-start gap-3 border-t border-border pt-4">
-          <div className="min-w-0 flex-1">
-            <Attribution kind="rule" label="Recomanació del sistema" />
-            <p className="mt-1.5 text-[13px] leading-5 text-muted">
-              <strong className="text-ink">{recommendationHeadline}</strong>{" "}
-              {workspace.recommendation && (
-                <StatusPill level={RECOMMENDATION_LEVEL[workspace.recommendation]} size="sm" className="mr-1 align-middle">
-                  {RECOMMENDATION_LABELS[workspace.recommendation]}
-                </StatusPill>
-              )}
-              {recommendationBasis} És un suggeriment, no una decisió: la responsabilitat i la signatura
-              són d&apos;una persona.
-            </p>
-          </div>
-        </div>
       </div>
 
       <Modal
@@ -444,7 +411,7 @@ export function DecisionHistory({ workspace }: { workspace: WorkspaceDetail }) {
       />
       {workspace.decisions.length === 0 ? (
         <p className="px-3.5 py-4 text-[13px] leading-5 text-muted">
-          Encara no s&apos;ha pres cap decisió. La recomanació automàtica no en compta com a una.
+          Encara no s&apos;ha pres cap decisió. Només compta com a decisió la que registra explícitament una persona.
         </p>
       ) : (
         <ol className="divide-y divide-border">

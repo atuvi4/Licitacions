@@ -30,19 +30,26 @@ describe("DecisionPanel · l'acte de decidir", () => {
     onDecided.mockClear();
   });
 
-  it("tres sortides reals, la recomanació és text signat pel càlcul i mai un botó", () => {
+  it("tres sortides reals i cap recomanació del sistema: només la decisió humana", () => {
     const { container } = renderPanel({ recommendation: "review", eligibility: "review_required" });
     expect(button(/Presentar-se · GO/).disabled).toBe(false);
     expect(button(/No presentar-se · NO-GO/).disabled).toBe(false);
     expect(button(/^Ajornar/).disabled).toBe(false);
     expect(container.textContent).toContain("Quedarà signada per Anna Puig");
-    const recommendation = screen.getByText(/Recomanació del sistema/).closest("div")!;
-    expect(recommendation.querySelector("[data-kind='rule']")).not.toBeNull();
-    expect(container.textContent).toContain("Revisió");
-    expect(container.textContent).not.toMatch(/Accepta la recomanació|Aplica la recomanació/);
+    expect(screen.queryByText(/Recomanació del sistema/)).toBeNull();
+    expect(container.querySelector("[data-kind='rule']")).toBeNull();
+    expect(container.textContent).not.toMatch(/Accepta la recomanació|Aplica la recomanació|El sistema suggereix/);
     expect(screen.queryByRole("button", { name: /recomanaci/i })).toBeNull();
     // Cap decisió encara: es diu, no s'omple amb la recomanació.
     expect(container.textContent).toContain("Encara no s'ha pres cap decisió");
+    expect(container.textContent).toContain("Només compta com a decisió la que registra explícitament una persona.");
+    expect(container.textContent).not.toContain("La recomanació automàtica");
+  });
+
+  it("sense recomanació tampoc no hi surt cap bloc de recomanació", () => {
+    renderPanel({ recommendation: null });
+    expect(screen.queryByText(/Recomanació del sistema/)).toBeNull();
+    expect(screen.queryByText(/El sistema no pot suggerir/)).toBeNull();
   });
 
   it("GO amb avisos oberts: el modal ensenya què quedarà registrat i exigeix el motiu; el POST és el de sempre", async () => {
@@ -150,7 +157,7 @@ describe("DecisionPanel · l'acte de decidir", () => {
       open_warnings: ["undetermined_eligibility", "missing_compliance"],
       counters: { ...workspaceFixture().counters, total: 0, mandatory_total: 0, mandatory_satisfies: 0, mandatory_unknown: 0, mandatory_needs_review: 0 },
     });
-    expect(container.textContent).toContain("no s'ha avaluat cap requisit");
+    expect(container.textContent).not.toContain("El sistema no pot suggerir");
     expect(container.querySelector("[data-level='ready']")).toBeNull();
     fireEvent.click(button(/Presentar-se · GO/));
     expect(dialog().textContent).toContain("Cap requisit avaluat");
@@ -196,6 +203,8 @@ describe("DecisionHistory", () => {
   it("buit: ho diu i no inventa res", () => {
     render(<DecisionHistory workspace={workspaceFixture()} />);
     expect(screen.getByText(/Encara no s'ha pres cap decisió/)).toBeTruthy();
+    expect(screen.getByText(/Només compta com a decisió la que registra explícitament una persona\./)).toBeTruthy();
+    expect(screen.queryByText(/La recomanació automàtica/)).toBeNull();
   });
 
   it("append-only en ordre, «Vigent» només a la primera, qui/quan/motiu i els avisos d'aleshores", () => {

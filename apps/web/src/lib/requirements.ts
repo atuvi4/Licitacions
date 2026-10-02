@@ -176,6 +176,7 @@ export interface RequirementAnalysis {
   run: ExtractionRun | null;
   requirements: Requirement[];
   award_criteria: AwardCriterion[];
+  award_candidates?: AwardCriterion[];
   /** Els documents han canviat des de l'anàlisi vigent. */
   is_stale: boolean;
 }

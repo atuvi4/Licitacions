@@ -549,6 +549,21 @@ disseny original de la fase: FitScore, `ProposalDraft` i la síntesi són 3B.
 | **FitScore** | `tender_fit_assessments` | Una per run. Vector de dimensions (§6.3) + `recommendation` + `explanation`. |
 | **ProposalDraft** | `proposal_drafts` | Una per run, editable. Línia de solució per bloc (`service_line` → `solution_id` → `product_ids` → `partner_ids`), criteris automàtics proposats (C1=No, C2a=Sí…) amb el cost, esquelet de càlcul Inversió/Recurrent amb la política aplicada i supòsits. **Confidencial.** |
 
+### 6.2b UI: pestanya «Anàlisi» (fase 3A, pas 7)
+
+- `/licitacions/{id}?tab=analisi` mostra l'anàlisi vigent: resum factual, «Què cal resoldre abans de
+  decidir», requisits, criteris i punts, execució (només `delivery_candidates`) i preguntes generades.
+  Cap score, percentatge ni recomanació: la decisió és humana, al pas Decidir de la candidatura.
+  Aquest pas mostra una targeta d'anàlisi de només lectura (mai recalcula).
+- `POST /companies/{c}/tenders/{t}/analysis/runs` executa (o reutilitza) l'anàlisi: síncron, sense LLM,
+  `reused` a la resposta, 201/200. Permís: `review_actions.assert_can_review`. 409
+  `analysis_prerequisites_missing` (`details.missing = ["requirements"]`) si no hi ha requisits efectius;
+  una anàlisi existent no es toca. Cursa: un reintent; si tampoc, 409 `analysis_run_conflict`.
+- Els textos d'explicació són els canònics d'`EXPLANATIONS` (tal com són); els valors d'enum els rotula
+  el web. Vocabulari exportat a `apps/web/src/lib/analysis-vocabulary.generated.json`. Regenerar:
+
+      apps/api/.venv/Scripts/python apps/api/scripts/export_analysis_vocabulary.py
+
 ### 6.3 FitScore: un vector, no una mitjana
 
 | Dimensió | Valor | Font |
