@@ -69,15 +69,20 @@ CITED_SECTIONS = (
     "requirements",
     "contract_facts",
 )
-CRITICAL_SITES = {
-    "Ajuntament",
-    "Can Maset",
-    "Policia Local",
-    "Piscina Municipal",
-    "Sala Polivalent",
-    "Pavelló/Àrea d'Esports",
-    "Turisme — Plaça de les escoles",
-}
+#: Les set seus critiques, pel codi del cataleg unic del DOC-04 (§1).
+CRITICAL_SITES = {"U01", "U02", "U03", "U04", "U05", "U06", "U08"}
+#: Ramals D02-D11 -> ubicacio (DOC-04 §2) i accessos F01-F15 -> ubicacio (DOC-04 §3).
+RAMAL_SITES = {
+    "D02": "U02", "D03": "U03", "D04": "U04", "D05": "U05", "D06": "U06",
+    "D07": "U07", "D08": "U08", "D09": "U09", "D10": "U24", "D11": "U25",
+}  # fmt: skip
+FTTH_SITES = {
+    "F01": "U10", "F02": "U11", "F03": "U12", "F04": "U13", "F05": "U14",
+    "F06": "U15", "F07": "U16", "F08": "U02", "F09": "U03", "F10": "U17",
+    "F11": "U18", "F12": "U19", "F13": "U20", "F14": "U21", "F15": "U22",
+}  # fmt: skip
+#: El DOC-04 real (suplementari) i el fitxer del paquet inicial que se'n feia passar.
+DOC04_SHA = "84990c5d8bfb884413d730e1f7ffa94fb1d6ad8dac3796c1504dc00d67dce537"
 
 #: Taules que la fase 3B encara no ha creat.
 NOT_YET = (
@@ -185,16 +190,28 @@ async def test_the_dataset_is_public_tender_data_only(dataset):
     for site in dataset["sites"]:
         assert site["code"] is not None or site["name"] is not None
         assert site["code"] != site["name"], "cap nom copiat del codi"
-    # La classificacio (fase 1) ja diu que el DOC-04 falta: les dues capes coincideixen.
+    # La historia no es reescriu: el gold de classificacio del paquet inicial continua dient
+    # que hi faltava el DOC-04 (el fitxer amb el seu nom era el DOC-03).
     classification = json.loads(
         (API_ROOT / "datasets" / "classification" / f"{CASE}.gold.json").read_text(encoding="utf-8")
     )
     missing = [f for f in classification["findings"] if f["code"] == "referenced_document_missing"]
     assert [f["detail"]["code"] for f in missing] == ["DOC-04"]
-    assert {d["code"] for d in dataset["missing_documents"]} >= {"DOC-04", "DOUE-ANUNCI"}
+    assert DOC04_SHA not in {d["sha256"] for d in classification["documents"]}
+    # El DOC-04 real arriba despres, com a font suplementaria: el gold del plec el cita i el
+    # fals es conserva (no citable) amb la referencia al que el substitueix.
+    by_key = {d["key"]: d for d in dataset["documents"]}
+    assert by_key["DOC04"]["sha256"] == DOC04_SHA and by_key["DOC04"]["declared_code"] == "DOC-04"
+    assert by_key["DOC04"]["received"].startswith("suplementari")
+    assert by_key["DOC04FILE"]["superseded_by"] == "DOC04" and not by_key["DOC04FILE"]["citable"]
     assert {d["sha256"] for d in dataset["documents"]} == {
         d["sha256"] for d in classification["documents"]
-    }
+    } | {DOC04_SHA}
+    missing_codes = {d["code"] for d in dataset["missing_documents"]}
+    assert "DOC-04" not in missing_codes and "DOUE-ANUNCI" in missing_codes
+    # La numeracio concreta no es cap document absent: es reservada fins a l'adjudicacio.
+    assert "INVENTARI-NUMERACIO" not in missing_codes
+    assert any("numeració concreta" in w for w in dataset["withheld"]["reserved_until_award"])
     # 0050 ja ho representa: cap timing retingut.
     assert dataset["withheld"]["timing"] == []
 
@@ -282,41 +299,87 @@ async def test_the_lescala_tender_is_representable_without_inventing(db, dataset
         for i, b in enumerate(sorted(blocks.values(), key=lambda b: b.code), 1)
     )
 
-    # --- Seus: nomes les que els documents identifiquen, tal com les identifiquen.
+    # --- Seus: les 25 ubicacions fisiques del cataleg del DOC-04 (§1), pel codi Uxx. Els Dxx
+    # i Fxx son identificadors funcionals, no seus.
     sites = list(await db.scalars(sa.select(TenderSite)))
-    assert len(sites) == len(dataset["sites"]) == 11
-    ramals = {s.code: s for s in sites if s.code}
-    assert set(ramals) == {f"D{n:02d}" for n in range(2, 12)}
-    assert all(s.name is None for s in ramals.values()), "cap nom sintetic a partir del codi"
-    (town_hall,) = [s for s in sites if s.code is None]
-    assert (town_hall.name, town_hall.role.value, town_hall.is_critical) == (
-        "Ajuntament",
-        "central",
-        True,
+    assert len(sites) == len(dataset["sites"]) == 25
+    by_site = {s.code: s for s in sites}
+    assert set(by_site) == {f"U{n:02d}" for n in range(1, 26)}
+    assert all(s.name and s.address for s in sites)
+    assert [s.code for s in sites if s.role.value == "central"] == ["U01"]
+    town_hall = by_site["U01"]
+    assert town_hall.name == "Ajuntament"
+    assert {c for c, s in by_site.items() if s.is_critical is True} == CRITICAL_SITES
+    assert all(s.is_critical is False for c, s in by_site.items() if c not in CRITICAL_SITES)
+    assert all(s.municipality_code is None and s.municipality_code_system is None for s in sites)
+    # Coordenades indicatives, a 6 decimals; el valor complet i la qualitat A/R/P, al gold.
+    assert all(s.latitude is not None and s.longitude is not None for s in sites)
+    spec_u01 = next(x for x in dataset["sites"] if x["code"] == "U01")
+    assert (spec_u01["location_quality"], spec_u01["wgs84"]) == (
+        "R",
+        "42.12486103647484, 3.132287615058149",
     )
-    assert all(s.is_critical is None for s in ramals.values()), "no se sap: null, no false"
-    assert all(s.address is None and s.municipality_code is None for s in sites)
-    assert all(s.latitude is None and s.longitude is None for s in sites)
-    assert not ({s.name for s in sites} & (CRITICAL_SITES - {"Ajuntament"})), (
-        "les seus critiques del DOC-03 no es converteixen en seus del ramal"
-    )
+    assert town_hall.latitude == Decimal("42.124861")
+    assert {x["location_quality"] for x in dataset["sites"]} == {"A", "R", "P"}
+    ramals = {d: by_site[u] for d, u in RAMAL_SITES.items()}
 
-    # --- Abast: els 15 FTTH son una QUANTITAT, no quinze adreces.
+    # --- Abast: els 15 FTTH son quinze elements d'una unitat, un per adreca (DOC-04 §3), i cap
+    # agregat que els compti dues vegades.
     items = list(await db.scalars(sa.select(TenderScopeItem)))
-    assert len(items) == len(dataset["scope_items"]) == 10
+    assert len(items) == len(dataset["scope_items"]) == 25
     ftth = [i for i in items if i.service_line_code == "access_ftth"]
-    assert len(ftth) == 1 and ftth[0].quantity == Decimal("15") and ftth[0].site_id is None
-    assert ftth[0].block_id == blocks["B1"].id
-    assert ftth[0].specs_json["addresses_in"].startswith("DOC-04")
-    assert all(i.site_id is None for i in items), "cap element d'abast s'ancora a una seu inventada"
+    assert len(ftth) == 15 and all(i.quantity == Decimal("1") for i in ftth)
+    assert all(i.block_id == blocks["B1"].id for i in ftth)
+    assert all(i.unit_base_price_ex_vat == Decimal("45.00") for i in ftth)
+    assert {i.specs_json["ftth_id"]: i.site_id for i in ftth} == {
+        f: by_site[u].id for f, u in FTTH_SITES.items()
+    }
+    assert sum(1 for i in ftth if i.specs_json["vpn"]) == 13
+    assert {i.specs_json["ftth_id"] for i in ftth if not i.specs_json["vpn"]} == {"F08", "F10"}
+    radios = sorted(
+        (i for i in items if i.unit == "radioenllaç"), key=lambda i: i.specs_json["path"]
+    )
+    assert [i.site_id for i in radios] == [by_site["U03"].id, by_site["U05"].id]
+    wimax = next(i for i in items if (i.specs_json or {}).get("technology") == "WiMAX")
+    assert wimax.site_id == by_site["U23"].id
+    ramal_item = next(i for i in items if i.service_line_code == "dedicated_network")
+    assert ramal_item.site_id is None and ramal_item.quantity == Decimal("10")
+    assert {r["id"]: r["site"] for r in ramal_item.specs_json["ramals"]} == RAMAL_SITES
+    assert ramal_item.specs_json["central"] == {"id": "D01", "site": "U01"}
     per_block = {code: sum(1 for i in items if i.block_id == b.id) for code, b in blocks.items()}
-    assert per_block == {"B1": 4, "B2": 1, "B3": 3, "B4": 2}
+    assert per_block == {"B1": 19, "B2": 1, "B3": 3, "B4": 2}
     assert {i.service_line_code for i in items} <= vocabulary.SERVICE_LINE_CODES
     assert "network_electronics" not in {i.service_line_code for i in items}
     switches = next(i for i in items if i.service_line_code == "network_switching")
     assert switches.quantity == Decimal("27") and switches.specs_json["sfp_plus_10gbase_lr"] == 44
+    placed = [n for row in switches.specs_json["by_site"] for n in row["units"].values()]
+    assert sum(placed) == 27, "la distribucio per ubicacio conserva les 27 unitats"
+    assert sum(row.get("sfp_plus", 0) for row in switches.specs_json["by_site"]) == 40
+    assert (switches.specs_json["sfp_plus_in_service"], switches.specs_json["sfp_plus_spare"]) == (
+        40,
+        4,
+    )
+    assert all(t["reference_model"].endswith("o equivalent") for t in switches.specs_json["types"])
+    extensions = next(i for i in items if i.unit == "extensió")
+    rows = extensions.specs_json["by_site"]
+    assert [sum(r[k] for r in rows) for k in ("normal", "dect", "operator", "analog")] == [
+        103,
+        14,
+        2,
+        4,
+    ]
+    assert [r["label"] for r in rows if r["site"] is None] == ["Turisme"], "U08 o U23: no se sap"
     fibre = next(i for i in items if i.service_line_code == "fiber_deployment")
     assert (fibre.quantity, fibre.unit, fibre.specs_json["splices"]) == (Decimal("4206"), "m", 243)
+    assert sum(r["metres_indicative"] for r in fibre.specs_json["ramals"]) == 4206
+    assert {r["id"]: r["site"] for r in fibre.specs_json["ramals"]} == RAMAL_SITES
+    assert fibre.specs_json["allocation_is_unit_price"] is False
+    assert fibre.unit_base_price_ex_vat is None, "les imputacions no son preus unitaris"
+    assert sum(Decimal(r["indicative_allocation_ex_vat"]) for r in fibre.specs_json["ramals"]) == (
+        Decimal(fibre.specs_json["closed_max_price_ex_vat"])
+    )
+    trunk = next(i for i in items if i.service_line_code == "voice_trunk")
+    assert trunk.specs_json["concrete_numbers_status"] == "reserved_until_award"
 
     # --- Requisits: atomics, manuals, sense lot, un per codi del gold.
     requirements = {r.dedup_key: r for r in await db.scalars(sa.select(Requirement))}
@@ -362,7 +425,7 @@ async def test_the_lescala_tender_is_representable_without_inventing(db, dataset
 
     # --- Completesa territorial: el que el plec dona, tal com ho dona; el que no, `unknown`.
     territories = list(await db.scalars(sa.select(RequirementTerritory)))
-    assert len(territories) == sum(len(r["territories"]) for r in dataset["requirements"]) == 30
+    assert len(territories) == sum(len(r["territories"]) for r in dataset["requirements"]) == 64
     assert rq["R1"].territory_completeness == TerritoryCompleteness.NOT_APPLICABLE
     assert rq["R1"].territories == []
     # C1: trama urbana de l'Escala, completa, sense cap codi ni cap dada d'empresa.
@@ -382,22 +445,27 @@ async def test_the_lescala_tender_is_representable_without_inventing(db, dataset
         "ownership_document",
     }
     assert all(p["mandatory"] for p in rq["C1R"].proof_json)
-    # 15 FTTH: quantitat coneguda, llista desconeguda (DOC-04): unknown + 0, mai «cobert».
-    assert rq["R8b"].territory_completeness == TerritoryCompleteness.UNKNOWN
-    assert rq["R8b"].territories == [] and rq["R8b"].territory_match_mode == TerritoryMatchMode.ANY
-    assert expected_requirements["R8b"]["territories_pending_document"] == "DOC-04"
-    # SLA critic: les set seus critiques del DOC-03 pel nom, sense cap mapping inventat als ramals.
+    # 15 FTTH: llista completa (DOC-04 §3), ancorada a les ubicacions; cap adreca inventada.
+    assert rq["R8b"].territory_completeness == TerritoryCompleteness.COMPLETE
+    assert {t.site_id for t in rq["R8b"].territories} == {
+        by_site[u].id for u in FTTH_SITES.values()
+    }
+    assert rq["R8b"].territory_match_mode == TerritoryMatchMode.ANY
+    assert "territories_pending_document" not in expected_requirements["R8b"]
+    # SLA critic i no critic: les set critiques i les divuit restants, per site_id.
     critical = rq["R8e"]
     assert critical.territory_completeness == TerritoryCompleteness.COMPLETE
-    assert {t.label for t in critical.territories} == CRITICAL_SITES
-    assert all(t.kind.value == "custom" and t.code is None for t in critical.territories)
-    anchored = {t.label: t.site_id for t in critical.territories if t.site_id is not None}
-    assert anchored == {"Ajuntament": town_hall.id}, "nomes l'Ajuntament es lliga amb certesa"
-    assert not any(t.site_id in {s.id for s in ramals.values()} for t in critical.territories)
-    # SLA no critic: la resta de seus depenen de l'inventari absent.
-    assert rq["R8f"].territory_completeness == TerritoryCompleteness.UNKNOWN
-    assert rq["R8f"].territories == []
-    # Ramals: el conjunt dels deu es coneix pel codi; els territoris s'hi ancoren sense adreca.
+    assert {t.site_id for t in critical.territories} == {by_site[c].id for c in CRITICAL_SITES}
+    assert all(t.kind.value == "address" and t.code is None for t in critical.territories)
+    assert rq["R8f"].territory_completeness == TerritoryCompleteness.COMPLETE
+    assert {t.site_id for t in rq["R8f"].territories} == {
+        s.id for c, s in by_site.items() if c not in CRITICAL_SITES
+    }
+    # Contingencies: radioenllacos a U03 i U05, WiMAX a U23 (DOC-04 §4).
+    assert {t.site_id for t in rq["R8d"].territories} == {
+        by_site[c].id for c in ("U03", "U05", "U23")
+    }
+    # Ramals: els deu destins del DOC-04 §2, per ubicacio.
     for code in ("R8a", "R11a"):
         assert rq[code].territory_completeness == TerritoryCompleteness.COMPLETE
         assert {t.site_id for t in rq[code].territories} == {s.id for s in ramals.values()}
@@ -468,6 +536,9 @@ async def test_the_lescala_tender_is_representable_without_inventing(db, dataset
     assert {r.content_sha256 for r in refs} <= real_hashes and fake_doc04 not in {
         r.content_sha256 for r in refs
     }
+    # El DOC-04 es cita per apartats, no amb una cita generica.
+    doc04_sections = {r.location_label for r in refs if r.content_sha256 == DOC04_SHA}
+    assert doc04_sections == {f"DOC-04 §{n}" for n in range(1, 13)}, doc04_sections
     assert all(r.location_label for r in refs)
     quoted = [r for r in refs if r.quote]
     assert quoted and all(len(r.quote) < 120 for r in quoted), "cites breus, no paragrafs"
@@ -491,13 +562,14 @@ async def test_the_lescala_tender_is_representable_without_inventing(db, dataset
         cited = set(await db.scalars(sa.select(column).distinct()))
         assert {e.id for e in entities} <= cited, f"{link_model.__tablename__}: entitats sense cita"
 
-    # --- El DOC-04 continua absent: vuit fitxers, cap d'ells es l'annex d'inventaris.
+    # --- Els vuit fitxers del paquet inicial (amb el fals DOC-04) i el DOC-04 real.
     documents = list(await db.scalars(sa.select(TenderDocument)))
-    assert len(documents) == 8
-    assert not any("DOC-04" in (d.name or "") and "conte" not in d.name.lower() for d in documents)
-    assert "DOC-04" in [m["code"] for m in dataset["missing_documents"]]
-    assert any("15 adreces" in w for w in dataset["withheld"]["because_documents_are_missing"])
-    assert any("D02–D11" in w for w in dataset["withheld"]["because_documents_are_missing"])
+    assert len(documents) == 9
+    real = [d for d in documents if "DOC-04" in (d.name or "")]
+    assert [d.name for d in real] == ["Annex mestre d'inventaris (DOC-04)"]
+    assert any("conte el DOC-03" in (d.name or "") for d in documents), "el fals es conserva"
+    assert "DOC-04" not in [m["code"] for m in dataset["missing_documents"]]
+    assert not any("DOC-04" in w for w in dataset["withheld"]["because_documents_are_missing"])
 
     # --- Cap fila del costat empresa, cap taula de 0051, cap proposta.
     tables = await _table_names(db)

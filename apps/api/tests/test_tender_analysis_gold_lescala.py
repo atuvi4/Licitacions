@@ -1,10 +1,11 @@
 """Gold end-to-end de 0051: el plec public de l'Escala (v2) contra el besso sintetic
 del coneixement de l'empresa pilot.
 
-El que es protegeix: cap informacio inventada, el DOC-04 absent continua donant
-`unknown` on toca, els 15 FTTH no tenen adreces, C1 es `unmatched` territorialment
-(i perd 5 punts sense bloquejar), quatre vies `partner_current` per als accessos
-FTTH i cap `own_current`, la centraleta sense capacitats es `unknown`, J6 no es
+El que es protegeix: cap informacio inventada; amb el DOC-04 real (font suplementaria)
+els 15 FTTH tenen ubicacio pero la cobertura dels majoristes continua `unknown`, sense
+cap pregunta al comprador; C1 es `unmatched` territorialment (i perd 5 punts sense
+bloquejar), quatre vies `partner_current` per a cada accés FTTH i cap `own_current`,
+la centraleta sense capacitats es `unknown`, J6 no es
 perd, l'ENS declarat amb evidencia demana revisio i no bloqueja, R1/R2 son
 `unknown` i no bloquegen, cap bloqueig confirmat, cap proposta, cap producte, i
 ni el coneixement ni el plec canvien.
@@ -28,9 +29,19 @@ from app.models.tender_structure import TenderSite
 from app.services import tender_analysis as analysis
 from tests.fixtures.company_twin import build_company_twin
 from tests.test_company_knowledge_records_api import _link_evidence
-from tests.test_tender_gold_lescala import CASE, COMPANY_SIDE_PREFIXES, _rows, _table_names
+from tests.test_tender_gold_lescala import (
+    CASE,
+    COMPANY_SIDE_PREFIXES,
+    FTTH_SITES,
+    _rows,
+    _table_names,
+)
 
 pytestmark = pytest.mark.asyncio
+
+#: Empremta d'estructura del gold de l'Escala ABANS del DOC-04 real (93827c9). Natural i
+#: determinista: el DOC-04 ha de canviar-la (una run anterior queda desfasada).
+PRE_DOC04_STRUCTURE_FINGERPRINT = "645c2b701969889fced635dc6271f71aedcac32952f31668fe2d400e025d9fa6"
 
 
 @pytest.fixture(autouse=True)
@@ -81,26 +92,23 @@ async def test_the_lescala_analysis_invents_nothing_and_decides_nothing(db, tena
     assert (
         await analysis.load_company_view(db, company.id)
     ).knowledge_fingerprint == knowledge_before
-    assert await _count(db, TenderSite) == 11 and await _count(db, RequirementTerritory) == 30
+    assert await _count(db, TenderSite) == 25 and await _count(db, RequirementTerritory) == 64
+    # El DOC-04 canvia el plec estructurat, no el coneixement de l'empresa.
+    assert run.tender_structure_fingerprint != PRE_DOC04_STRUCTURE_FINGERPRINT
     assert await _count(db, Requirement) == 34 and await _count(db, AwardCriterion) == 28
     assert len(fits) == 34 and len(crits) == 28
 
-    # --- DOC-04 absent: els 15 FTTH son una quantitat sense adreces i el territori queda unknown.
-    ftth_item = await db.get(TenderScopeItem, items["S-B1-FTTH"])
-    assert ftth_item.quantity == 15 and ftth_item.site_id is None
+    # --- DOC-04 real: els 15 FTTH tenen ubicacio; la llista ja no falta, pero la cobertura
+    # (comparador sense GIS: un territori ancorat a una seu no es pot concloure) es unknown.
+    ftth_codes = [f"S-B1-FTTH-{f}" for f in FTTH_SITES]
+    ftth_items = [await db.get(TenderScopeItem, items[c]) for c in ftth_codes]
+    assert all(i.quantity == 1 and i.site_id is not None for i in ftth_items)
+    assert len({i.site_id for i in ftth_items}) == 15
     r8b = fits[rq["R8b"]]
     assert (r8b.territory_verdict, r8b.fit_result) == ("unknown", "unknown")
-    assert r8b.support_json["territory"]["reason"] == "list_unavailable"
-    assert any(
-        f.finding_type == FindingType.MISSING_INFORMATION
-        and f.requirement_id == rq["R8b"]
-        and f.explanation_code == X.TERRITORY_LIST_UNAVAILABLE
-        for f in findings
-    )
-    assert any(
-        q.question_code == Q.BUYER_PROVIDE_TERRITORY_LIST and q.requirement_id == rq["R8b"]
-        for q in run.questions
-    )
+    assert r8b.support_json["territory"]["reason"] != "list_unavailable"
+    assert not any(f.explanation_code == X.TERRITORY_LIST_UNAVAILABLE for f in findings)
+    assert not any(q.question_code == Q.BUYER_PROVIDE_TERRITORY_LIST for q in run.questions)
 
     # --- C1: FTTH propia a la trama urbana -> unmatched (no unknown), 5 punts perduts, cap
     # bloqueig.
@@ -127,15 +135,21 @@ async def test_the_lescala_analysis_invents_nothing_and_decides_nothing(db, tena
         for f in findings
     )
 
-    # --- 15 FTTH de servei: exactament 4 partner_current, cap own_current, territori unknown.
-    ftth = [c for c in run.delivery_candidates if c.scope_item_id == items["S-B1-FTTH"]]
-    assert sorted(c.candidate_type for c in ftth) == ["partner_current"] * 4
-    assert {c.partner_role_id for c in ftth} == {
-        rows["roles"][n].id for n in ("Adamo", "Sewan", "Vera", "Cablemóvil")
-    }
+    # --- 15 FTTH x 4 majoristes = 60 partner_current, cap own_current, cap operador triat:
+    # saber ON son els accessos no diu que cap majorista hi tingui cobertura.
+    ftth_ids = {items[c] for c in ftth_codes}
+    ftth = [c for c in run.delivery_candidates if c.scope_item_id in ftth_ids]
+    assert sorted(c.candidate_type for c in ftth) == ["partner_current"] * 60
+    wholesalers = {rows["roles"][n].id for n in ("Adamo", "Sewan", "Vera", "Cablemóvil")}
+    for item_id in ftth_ids:
+        assert {c.partner_role_id for c in ftth if c.scope_item_id == item_id} == wholesalers
     assert {c.readiness for c in ftth} == {"pending_coverage"} and {
         c.territory_verdict for c in ftth
     } == {"unknown"}
+    confirm = {
+        q.scope_item_id for q in run.questions if q.question_code == Q.COMPANY_CONFIRM_COVERAGE
+    }
+    assert ftth_ids <= confirm, "una pregunta de cobertura majorista per adreca"
     assert not any(c.candidate_type == "own_current" for c in ftth), (
         "el fet de FTTH propia no crea cap via"
     )
@@ -165,6 +179,10 @@ async def test_the_lescala_analysis_invents_nothing_and_decides_nothing(db, tena
         if q.question_code == Q.COMPANY_DECLARE_CAPABILITY
     }
     assert {"pbx.queue_callback_keep_position", "pbx.hot_desking", "pbx.concurrent_calls"} <= asked
+    for code in ("C2b", "C4a", "C4b"):
+        assert (crits[crit[code]].points_status, crits[crit[code]].lost_points) == ("at_risk", 0.0)
+    j4 = crits[crit["J4"]]
+    assert (j4.criterion_result, j4.not_assessable_points) == ("not_assessable", 3.0)
     t1 = crits[crit["T1"]]
     assert (t1.at_risk_points, t1.lost_points, t1.not_assessable_points) == (2.0, 0.0, 0.0)
 

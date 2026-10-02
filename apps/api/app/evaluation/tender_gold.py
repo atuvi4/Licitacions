@@ -76,6 +76,7 @@ _DOCUMENT_LABELS = {
     "PCAP": "PCAP",
     "PPT": "PPT (DOC-02)",
     "DOC03": "DOC-03",
+    "DOC04": "DOC-04",
     "DOC05": "DOC-05",
     "DOC01": "DOC-01",
     "XLSX06": "Plantilla XLSX",
@@ -333,8 +334,9 @@ class _Loader:
                     "address": spec.get("address"),
                     "municipality_code": spec.get("municipality_code"),
                     "municipality_code_system": spec.get("municipality_code_system"),
-                    "latitude": spec.get("latitude"),
-                    "longitude": spec.get("longitude"),
+                    # Indicatives (DOC-04): es desen, pero cap regla les fa servir.
+                    "latitude": _money(spec.get("latitude")),
+                    "longitude": _money(spec.get("longitude")),
                 },
             )
             loaded.sites[spec["key"]] = site
