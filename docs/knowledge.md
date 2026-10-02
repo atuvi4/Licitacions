@@ -69,6 +69,13 @@ Totes les files de coneixement actual porten aquests camps:
 | Tercers | `company_partners` | Nova. Una sola taula per a proveïdors, operadors majoristes, subcontractistes i socis. **Sense condicions econòmiques.** |
 | Papers d'un tercer | `partner_roles` | Nova (paper, línia, territori) |
 | Cobertura territorial d'un fet, d'un servei o d'un paper | `knowledge_coverage_areas` + `coverage_completeness` | `0047` (§3.3). Una fila per àrea, penjada de la dada per `entity_type` + `entity_id`. |
+| Solvència econòmica (volum de negoci per exercici) | `company_financial_years` | Ampliada a `0052` (§3.4): origen, `as_of`, verificació i cicle de vida. Import `Decimal` i moneda; l'any fa de vigència. |
+| Referències d'execució | `company_projects` + `company_project_annual_amounts` | Ampliada a `0052`. Un projecte `completed` amb import i data; les línies de servei són les dels serveis vinculats. **No és cap `historic_bid`**: una oferta presentada no acredita execució. Els imports **executats per any** (una fila per projecte i any, nova a `0052`) són el que es compara amb «l'any de major execució»; sense desglossament, l'import d'un projecte plurianual no s'imputa a cap any. |
+| Assegurances | `company_insurances` + `company_insurance_limits` | Ampliada a `0052`: origen i verificació; `expires_at` fa de vigència. Límits estructurats per tipus (`per_claim`, `annual_aggregate`, `per_victim`, `employer_per_victim` = RC patronal per víctima, …). Cap número de compte ni dada bancària. |
+| Registres i habilitacions | `company_registrations` | Ampliada a `0052`: origen, verificació, tipus `sector_operator_registry` (l'emissor és a `issuer`, cap registre concret al codi) i **abast estructurat** `scope_service_lines`. Sense abast estructurat, `scope_unknown`. |
+| Persones i perfils | `company_people` | Ampliada a `0052`: origen, verificació i `profile_codes` (perfils del vocabulari, una persona en pot cobrir diversos). Dades personals mínimes; la fotografia no porta noms. **Disponible no vol dir adscrit.** |
+| Equips i instruments | `company_equipment` | Nova a `0052`: tipus tancat (`otdr`, `olts`, `fusion_splicer`, …), fabricant, model, sèrie, mode d'accés, unitats, `calibration_required` (nul = no consta) i `calibration_valid_until`, amb procedència completa. **No és cap producte que es vengui.** |
+| Fets quantitatius | `company_operating_facts.value_number` | `0052`: només a les claus numèriques del vocabulari (`ipv4_assignable_count`); el CHECK ho imposa. Un fet booleà no porta nombre. |
 
 Les filles referencien el pare per `(id, company_id)`: res d'una empresa no pot
 penjar d'una fila d'una altra. Tots els enums porten CHECK.
@@ -76,6 +83,36 @@ penjar d'una fila d'una altra. Tots els enums porten CHECK.
 Certificacions i serveis es declaren amb els CRUD que ja existien. Ara accepten
 norma i nivell (validats contra el vocabulari), abast estructurat i línia de
 servei.
+
+### 3.4 Qualificació i mitjans (fase 3A, pas 5: `0052`)
+
+El que un plec demana per qualificar una empresa ja tenia taula al perfil, però
+fora del coneixement actual. A `0052` en forma part, amb el mínim de canvis:
+
+* **Mateixa procedència.** Exercicis, projectes, pòlisses, registres i persones
+  porten `knowledge_origin`, `as_of`, `verification_status` i `lifecycle`; els
+  equips, també `valid_until`. Una alta neix `declared` i pendent; `verified` només
+  amb evidència enllaçada (§3.1), als CRUD de sempre (`/financial-years`,
+  `/projects`, `/insurances`, `/registrations`, `/people`) i, per als equips i els
+  fets, a `/knowledge/records/{kind}`. Tots tenen `/verify`.
+* **Una edició material desverifica.** També quan canvia una filla que forma part
+  del que es va verificar: un límit d'una pòlissa o els serveis d'un projecte.
+* **Vocabularis tancats.** Perfils professionals i tipus d'equip viuen a
+  `app/knowledge/vocabulary.py` (`PROFESSIONAL_PROFILES`, `EquipmentType`) i es
+  llegeixen a `/knowledge/vocabulary`. El tipus de valor de cada fet operatiu
+  (booleà o numèric) també (`OPERATING_FACT_VALUE_TYPES`).
+* **Què no s'hi guarda.** Ni imports de pòlisses que no siguin límits, ni números
+  de compte, ni dades personals que no calguin (DNI, adreça, salut), ni preus
+  d'equips.
+
+Les files que ja hi havia queden `declared`, `current` i pendents de verificar.
+`as_of` és **explícit** en aquestes cinc taules: nul vol dir que ningú no ha dit
+de quan és la dada (totes les files anteriors i les que no la informen), i la
+fotografia hi posa la data de creació en UTC. Cap backfill ni cap valor per
+defecte: així el downgrade decideix per valors explícits, sense comparar dates
+ni dependre de cap zona horària. **Entren a la fotografia**: una empresa que ja
+tenia exercicis, projectes, pòlisses, registres o persones canvia d'empremta;
+una que no en tenia, no.
 
 ### 3.1 Verificat vol dir amb evidència
 
@@ -267,7 +304,41 @@ i la seva procedència, en ordre canònic:
 * **omet l'estat neutre de cobertura** (`unknown` sense àrees): la `0047` no
   mou cap empremta;
 * **no inclou l'històric:** canviar una observació no canvia el que l'empresa
-  pot acreditar.
+  pot acreditar;
+* **inclou la qualificació** (`0052`): cada exercici, referència, pòlissa (amb
+  els límits), registre (amb l'abast), persona (amb els perfils, sense el nom) i
+  equip (amb el calibratge) que compta. Un fet booleà sense nombre deixa la
+  mateixa empremta que abans de `0052`.
+
+Les avaluacions de qualificació (`evaluate_turnover`, `evaluate_execution`,
+`evaluate_insurance`, `evaluate_registration`, `evaluate_profiles`,
+`evaluate_equipment`, `evaluate_numeric_fact`) segueixen la mateixa regla:
+`does_not_satisfy` només quan la dada actual és completa i no hi arriba (tots
+els exercicis de la finestra per sota, un límit declarat per sota, un calibratge
+caducat, un fet quantitatiu inferior). Un exercici que falta, un límit que no
+consta, un abast sense estructurar o que no cobreix tots els serveis (ampliar
+una inscripció és un tràmit), una persona que no hi és (es pot contractar) o una
+pòlissa caducada són `unknown`.
+
+**Cap finestra temporal depèn del rellotge.**
+
+* **Volum de negoci («el millor dels 3 últims exercicis»).** «Últims» és relatiu
+  al plec: sense termini de presentació (`tenders.deadline_at`), `unknown`. Mai
+  «els més recents que hi ha a la base»: un plec antic no es pot satisfer amb
+  exercicis posteriors. Un exercici és una fila de `company_financial_years`;
+  compten els 3 més recents ANTERIORS a l'any del termini, consecutius. Si no n'hi
+  ha 3 de consecutius, `unknown` encara que algun hi arribi. Un exercici antic,
+  fora d'aquests 3, no satisfà mai.
+* **Execució («l'any de major execució dels darrers 3 anys»).** La finestra són
+  els 3 anys naturals anteriors a l'any del termini de presentació del plec.
+  Sense termini, `unknown`. La unitat és l'import EXECUTAT en un any, no l'estat
+  del projecte: un projecte en curs compta pels anys que ja ha executat. Per any se
+  sumen els imports executats d'aquell any dels projectes rellevants (el
+  desglossament anual i, si un projecte acabat cau sencer dins d'un sol any i no
+  té desglossament, el seu import). No compten l'import contractat d'un projecte
+  en curs sense execució anual, ni un projecte `planned`. Si cap any
+  hi arriba però hi ha imports plurianuals sense desglossar que podrien tocar la
+  finestra, `unknown`; només amb el conjunt complet és `does_not_satisfy`.
 
 ## 6. API
 
@@ -403,5 +474,21 @@ no deixa triar «Verificat» a mà; la de serveis demana la línia de servei.
   `import_knowledge`.
 * **Especificacions de producte** (PoE, ports…): les capacitats es declaren a
   nivell de solució, no de producte.
+* **Qualificació (`0052`)**: les pantalles del perfil no mostren encara
+  l'origen, la verificació, els perfils estructurats ni l'abast dels registres
+  (l'API sí); els equips no tenen pantalla. Una pòlissa d'un tipus es compara per
+  tipus, no per objecte assegurat. La «similitud» d'una referència d'execució
+  només es llegeix per línies de servei. Les finestres són per anys naturals
+  (l'exercici és l'any de la fila), no per dates exactes, i la d'execució
+  necessita el termini de presentació del plec.
+* **Permisos (anterior a `0052`).** Els CRUD de coneixement que ja existien
+  (certificacions, serveis) accepten `verification_status = verified` amb
+  evidència a qualsevol rol d'edició, mentre que `/verify` només el permet a
+  propietari i administració: és un deute anterior a `0052`. Les cinc taules de
+  `0052` NO hi afegeixen cap via: els seus CRUD no accepten `verification_status`
+  (ni a l'alta ni al PATCH) i verificar-les només es pot per `/verify`.
+* **L'empremta del coneixement porta els identificadors de les files**: és
+  estable dins d'una mateixa base, però no es pot comparar entre dues bases
+  independents amb les mateixes dades. Deute anterior a `0052`.
 * **No hi ha preus ni polítiques comercials**: la taula `company_policies` i
   `product_prices` queden per a quan calgui calcular economia.

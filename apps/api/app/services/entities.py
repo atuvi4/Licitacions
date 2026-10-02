@@ -29,6 +29,7 @@ from app.models.knowledge import (
 from app.models.people import CompanyPerson, PersonQualification
 from app.models.profile import CompanyFinancialYear, CompanyService
 from app.models.projects import CompanyProject
+from app.models.resources import CompanyEquipment
 
 # Entitats que tenen `company_id` directament.
 _DIRECT_MODELS = {
@@ -47,6 +48,8 @@ _DIRECT_MODELS = {
     LinkedEntityType.SOLUTION_PRODUCT: SolutionProduct,
     LinkedEntityType.COMPANY_PARTNER: CompanyPartner,
     LinkedEntityType.PARTNER_ROLE: PartnerRoleRow,
+    # Mitjans operatius (0052).
+    LinkedEntityType.COMPANY_EQUIPMENT: CompanyEquipment,
 }
 
 

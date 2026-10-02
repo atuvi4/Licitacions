@@ -12,11 +12,12 @@ guarda certificacions que no es tenen, i l'absencia ja vol dir "desconegut".
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.knowledge.vocabulary import SERVICE_LINE_CODES, validate_level
+from app.knowledge.vocabulary import SERVICE_LINE_CODES, validate_fact_value, validate_level
 from app.models.enums import (
     DeliveryMode,
     ObservationSubject,
@@ -46,6 +47,13 @@ class OperatingFactProposal(_Proposal):
     key: OperatingFactKey
     value: bool
     detail: str | None = Field(default=None, max_length=500)
+    #: Nomes als fets quantitatius (0052): quants. El vocabulari diu quines claus.
+    value_number: Decimal | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _value_of_fact(self):
+        validate_fact_value(self.key, self.value, self.value_number)
+        return self
 
 
 class CertificationProposal(_Proposal):

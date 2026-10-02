@@ -12,6 +12,7 @@ from fastapi import APIRouter, Response, status
 
 from app.api.deps import CompanyCtx, SessionDep
 from app.api.v1.crud import apply_changes, build_crud_router, get_owned_or_404
+from app.knowledge import access
 from app.models.enums import AuditAction, LinkedEntityType
 from app.models.people import CompanyPerson, PersonQualification
 from app.schemas.people import (
@@ -24,6 +25,7 @@ from app.schemas.people import (
 )
 from app.services import audit
 from app.services.entities import delete_links_for_entity, delete_links_for_person_qualifications
+from app.services.knowledge_evidence import require_evidence_if_verified
 
 
 async def _cleanup_person(session, person: CompanyPerson) -> None:
@@ -41,6 +43,11 @@ people_router = build_crud_router(
     order_by=[CompanyPerson.last_name, CompanyPerson.first_name],
     entity_type=LinkedEntityType.COMPANY_PERSON,
     pre_delete=_cleanup_person,
+    # Coneixement actual (0052): verificat nomes amb evidencia; qui nomes consulta no
+    # el modifica.
+    validate=require_evidence_if_verified,
+    authorize_write=access.assert_can_edit,
+    authorize_delete=access.assert_can_delete,
 )
 
 qualifications_router = APIRouter(prefix="/people/{person_id}/qualifications", tags=["equip"])

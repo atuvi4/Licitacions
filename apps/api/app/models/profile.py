@@ -29,9 +29,11 @@ from app.models.enums import (
 from app.models.knowledge import (
     CoverageReadMixin,
     KnowledgeCoverageArea,
+    KnowledgeOriginMixin,
     coverage_areas_relationship,
     coverage_completeness_check,
     coverage_completeness_column,
+    origin_constraints,
 )
 from app.models.review import in_values
 
@@ -132,14 +134,20 @@ class CompanyTerritory(
 
 
 class CompanyFinancialYear(
-    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, Base
+    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, KnowledgeOriginMixin, Base
 ):
-    """Facturacio anual. Un unic registre per empresa i any."""
+    """Facturacio anual. Un unic registre per empresa i any.
+
+    Tambe es coneixement actual (0052): la solvencia economica es compara amb el
+    plec («millor dels tres ultims exercicis»). Porta origen, data, verificacio i
+    cicle de vida; la vigencia la dona el mateix `year`.
+    """
 
     __tablename__ = "company_financial_years"
     __table_args__ = (
         sa.UniqueConstraint("company_id", "year", name="uq_company_financial_years_company_year"),
         sa.CheckConstraint("year >= 1900 AND year <= 2200", name="financial_year_range"),
+        *origin_constraints(),
     )
 
     year: Mapped[int] = mapped_column(sa.Integer, nullable=False)

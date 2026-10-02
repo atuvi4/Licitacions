@@ -19,7 +19,8 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -40,11 +41,23 @@ from app.knowledge.snapshot import (
     EvaluationResult,
     KnowledgeSnapshot,
     KnowledgeSource,
+    PendingKind,
     evaluate_capability,
     evaluate_certification,
+    evaluate_equipment,
+    evaluate_execution,
     evaluate_fact,
+    evaluate_insurance,
+    evaluate_numeric_fact,
+    evaluate_profiles,
+    evaluate_registration,
+    evaluate_turnover,
 )
-from app.knowledge.vocabulary import CAPABILITIES_BY_CODE, STANDARDS_BY_CODE
+from app.knowledge.vocabulary import (
+    CAPABILITIES_BY_CODE,
+    NUMERIC_FACT_KEYS,
+    STANDARDS_BY_CODE,
+)
 from app.models.enums import (
     AnalysisKnowledgeSource as KS,
 )
@@ -91,8 +104,30 @@ CONTRACT_CATEGORIES = frozenset(
         RequirementCategory.DEADLINE.value,
     }
 )
+#: Proves de qualificacio (0052): l'evidencia enllacada a les files que el requisit
+#: ha fet servir (exercicis, projectes, polisses, equips).
+QUALIFICATION_PROOFS = frozenset(
+    {
+        ProofKind.ANNUAL_ACCOUNTS.value,
+        ProofKind.EXECUTION_CERTIFICATES.value,
+        ProofKind.INSURANCE_POLICY.value,
+        ProofKind.CALIBRATION_CERTIFICATE.value,
+    }
+)
 #: Proves que el model pot demostrar; la resta queden `unknown`.
-EVALUABLE_PROOFS = frozenset({ProofKind.CERTIFICATE.value, ProofKind.REGISTRY_INSCRIPTION.value})
+EVALUABLE_PROOFS = frozenset(
+    {ProofKind.CERTIFICATE.value, ProofKind.REGISTRY_INSCRIPTION.value, *QUALIFICATION_PROOFS}
+)
+#: Regles de qualificacio (0052): una dada que falta es pregunta a l'empresa.
+QUALIFICATION_RULES = frozenset(
+    {
+        R.TURNOVER_REQUIREMENT,
+        R.EXECUTION_REQUIREMENT,
+        R.INSURANCE_REQUIREMENT,
+        R.REGISTRATION_REQUIREMENT,
+        R.RESOURCES_REQUIREMENT,
+    }
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -365,9 +400,66 @@ def _need_required(need: NeedView) -> Decimal | str | None:
 # --------------------------------------------------------------------------- #
 
 
+def _assess_fact_need(
+    need: NeedView, requirement: RequirementView, company: CompanyView, key: str
+) -> NeedAssessmentOut:
+    """Una necessitat sense capacitat del vocabulari que es llegeix d'un fet
+    QUANTITATIU de l'empresa (0052): `value_json = {"operating_fact": ..., "count": N}`."""
+    required = _single_number(need.value_json)
+    support: dict[str, Any] = {
+        "operating_fact": key,
+        "required": str(required) if required is not None else None,
+        "comparator": need.comparator,
+    }
+    if required is None or need.comparator not in ("gte", "lte", "eq"):
+        return NeedAssessmentOut(
+            need_id=need.id,
+            requirement_id=requirement.id,
+            fit_result=FitResult.UNKNOWN.value,
+            knowledge_source=KS.NONE.value,
+            verification_status=V.UNKNOWN.value,
+            rule_code=R.NEED_OPERATING_FACT,
+            explanation_code=X.NEED_VALUE_NOT_COMPARABLE,
+            support=support,
+        )
+    evaluation = evaluate_numeric_fact(company.snapshot, key, need.comparator, required)
+    source = _source(evaluation.source)
+    if evaluation.result == EvaluationResult.SATISFIES:
+        fit, explanation = FitResult.SATISFIES.value, X.FACT_NUMBER_MEETS
+    elif evaluation.result == EvaluationResult.DOES_NOT_SATISFY:
+        entry = company.snapshot.facts.get(key)
+        negated = bool(entry and entry.effective and entry.effective.value is False)
+        fit = FitResult.DOES_NOT_SATISFY.value
+        explanation = X.FACT_CONTRADICTS if negated else X.FACT_NUMBER_BELOW
+    else:
+        fit, explanation = FitResult.UNKNOWN.value, X.FACT_UNKNOWN
+    return NeedAssessmentOut(
+        need_id=need.id,
+        requirement_id=requirement.id,
+        fit_result=fit,
+        knowledge_source=source,
+        verification_status=_verification(source)
+        if fit != FitResult.UNKNOWN.value
+        else V.UNKNOWN.value,
+        rule_code=R.NEED_OPERATING_FACT,
+        explanation_code=explanation,
+        support={**support, "record_ids": list(evaluation.record_ids), "reason": evaluation.reason},
+    )
+
+
+def _fact_need_key(need: NeedView) -> str | None:
+    key = (need.value_json or {}).get("operating_fact")
+    if need.capability_code is None and key in NUMERIC_FACT_KEYS:
+        return str(key)
+    return None
+
+
 def assess_need(
     need: NeedView, requirement: RequirementView, company: CompanyView
 ) -> NeedAssessmentOut:
+    fact_key = _fact_need_key(need)
+    if fact_key is not None:
+        return _assess_fact_need(need, requirement, company, fact_key)
     if need.capability_code is None:
         return NeedAssessmentOut(
             need_id=need.id,
@@ -448,10 +540,37 @@ def assess_need(
 # --------------------------------------------------------------------------- #
 
 
-def _proof_evidence(kind: str, requirement: RequirementView, company: CompanyView) -> bool | None:
+def _records_evidence(pool: dict[str, Any], record_ids: Iterable[str]) -> bool | None:
+    """Cert si TOTES les files usades d'aquest tipus tenen evidencia; `None` si cap."""
+    wanted = set(record_ids)
+    claims = [c for e in pool.values() for c in e.claims if c.record_id in wanted]
+    if not claims:
+        return None
+    return all(c.has_evidence for c in claims)
+
+
+def _proof_evidence(
+    kind: str,
+    requirement: RequirementView,
+    company: CompanyView,
+    record_ids: Iterable[str] = (),
+) -> bool | None:
     """Cert/fals si el model pot demostrar la prova; `None` si no pot."""
     snapshot = company.snapshot
     value = requirement.value_json or {}
+    record_ids = tuple(record_ids)
+    if kind in QUALIFICATION_PROOFS:
+        pool = {
+            ProofKind.ANNUAL_ACCOUNTS.value: snapshot.financial_years,
+            ProofKind.EXECUTION_CERTIFICATES.value: snapshot.execution_references,
+            ProofKind.INSURANCE_POLICY.value: snapshot.insurances,
+            ProofKind.CALIBRATION_CERTIFICATE.value: snapshot.equipment,
+        }[kind]
+        return _records_evidence(pool, record_ids)
+    if kind == ProofKind.REGISTRY_INSCRIPTION.value and value.get("registration_type"):
+        found = _records_evidence(snapshot.registrations, record_ids)
+        if found is not None:
+            return found
     if kind == ProofKind.CERTIFICATE.value:
         standard = value.get("standard")
         entry = snapshot.certifications.get(standard) if standard else None
@@ -467,7 +586,10 @@ def _proof_evidence(kind: str, requirement: RequirementView, company: CompanyVie
     return None
 
 
-def assess_proof(requirement: RequirementView, company: CompanyView) -> tuple[str, dict[str, Any]]:
+def assess_proof(
+    requirement: RequirementView, company: CompanyView, record_ids: Iterable[str] = ()
+) -> tuple[str, dict[str, Any]]:
+    record_ids = tuple(record_ids)
     if requirement.proof_json is None:
         return ProofStatus.UNKNOWN.value, {"items": None}
     if not requirement.proof_json:
@@ -478,7 +600,7 @@ def assess_proof(requirement: RequirementView, company: CompanyView) -> tuple[st
     verdicts: list[dict[str, Any]] = []
     for item in items:
         kind = str(item.get("kind"))
-        evidence = _proof_evidence(kind, requirement, company)
+        evidence = _proof_evidence(kind, requirement, company, record_ids)
         if kind not in EVALUABLE_PROOFS or evidence is None:
             status = ProofStatus.UNKNOWN.value
         else:
@@ -580,8 +702,32 @@ class _Core:
     support: dict[str, Any] = field(default_factory=dict)
 
 
+def _numeric_fact_core(requirement: RequirementView, company: CompanyView, key: str) -> _Core:
+    value = requirement.value_json or {}
+    comparator = str(value.get("comparator", "gte"))
+    required = _decimal(value.get("value", value.get("count")))
+    support = {"operating_fact": key, "comparator": comparator, "required": str(required)}
+    if required is None or comparator not in ("gte", "lte", "eq"):
+        return _Core(
+            FitResult.UNKNOWN.value,
+            KS.NONE.value,
+            R.FACT_REQUIREMENT,
+            X.QUALIFICATION_THRESHOLD_NOT_COMPARABLE,
+            support,
+        )
+    evaluation = evaluate_numeric_fact(company.snapshot, key, comparator, required)
+    return _qualification_core(
+        R.FACT_REQUIREMENT,
+        evaluation,
+        (X.FACT_NUMBER_MEETS, X.FACT_NUMBER_BELOW, X.FACT_UNKNOWN),
+        support,
+    )
+
+
 def _fact_core(requirement: RequirementView, company: CompanyView) -> _Core:
     key = requirement.value_json["operating_fact"]
+    if key in NUMERIC_FACT_KEYS:
+        return _numeric_fact_core(requirement, company, key)
     expected = bool(requirement.value_json.get("expected", True))
     evaluation = evaluate_fact(company.snapshot, key, expected)
     source = _source(evaluation.source)
@@ -607,6 +753,306 @@ def _fact_core(requirement: RequirementView, company: CompanyView) -> _Core:
         X.FACT_HISTORIC_ONLY if evaluation.source == KnowledgeSource.HISTORIC else X.FACT_UNKNOWN
     )
     return _Core(FitResult.UNKNOWN.value, source, R.FACT_REQUIREMENT, explanation, support)
+
+
+# --------------------------------------------------------------------------- #
+# Qualificacio i mitjans (0052)                                                 #
+# --------------------------------------------------------------------------- #
+#
+# Cada familia es dispara per una clau ESTRUCTURADA del `value_json` del requisit
+# (lectura del plec amb vocabulari global), mai pel text ni pel nom d'un plec:
+#
+# * `turnover_min_eur` (+ `years`, 3 per defecte): volum de negoci, millor exercici.
+# * `execution_min_eur` (+ `years`, `service_lines`, `client_types`): any de major
+#   execucio amb projectes completats. Les ofertes historiques no hi compten.
+# * `insurance_type` + `insurance_limits_eur` ({tipus de limit: import}).
+# * `registration_type` (+ `registration_service_lines`, `registration_issuer`).
+# * `required_profiles` ({perfil: persones}) i/o `required_equipment` ({tipus:
+#   unitats}) amb `calibration_required`.
+
+
+def _decimal(value: Any) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value))
+    except InvalidOperation:
+        return None
+    return number if number.is_finite() and number >= 0 else None
+
+
+def _counts(value: Any) -> dict[str, int] | None:
+    """`{codi: n}` amb n >= 1; una llista de codis val 1 per codi."""
+    if isinstance(value, list):
+        value = {str(code): 1 for code in value}
+    if not isinstance(value, dict) or not value:
+        return None
+    out: dict[str, int] = {}
+    for code, n in value.items():
+        if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+            return None
+        out[str(code)] = n
+    return out
+
+
+def _qualification_core(
+    rule: str,
+    evaluation: Any,
+    explanations: tuple[str, str, str],
+    support: dict[str, Any],
+) -> _Core:
+    met, below, unknown = explanations
+    source = _source(evaluation.source)
+    support = {
+        **support,
+        "record_ids": list(evaluation.record_ids),
+        "reason": evaluation.reason,
+    }
+    if evaluation.result == EvaluationResult.SATISFIES:
+        return _Core(FitResult.SATISFIES.value, source, rule, met, support)
+    if evaluation.result == EvaluationResult.DOES_NOT_SATISFY:
+        return _Core(FitResult.DOES_NOT_SATISFY.value, source, rule, below, support)
+    return _Core(FitResult.UNKNOWN.value, source, rule, unknown, support)
+
+
+def _not_comparable(rule: str, support: dict[str, Any]) -> _Core:
+    return _Core(
+        FitResult.UNKNOWN.value,
+        KS.NONE.value,
+        rule,
+        X.QUALIFICATION_THRESHOLD_NOT_COMPARABLE,
+        support,
+    )
+
+
+def _turnover_core(
+    requirement: RequirementView, company: CompanyView, reference: date | None
+) -> _Core:
+    value = requirement.value_json or {}
+    minimum = _decimal(value.get("turnover_min_eur"))
+    years = value.get("years", 3)
+    support = {
+        "turnover_min_eur": value.get("turnover_min_eur"),
+        "years": years,
+        "reference_date": reference.isoformat() if reference else None,
+    }
+    if minimum is None or not isinstance(years, int) or years < 1:
+        return _not_comparable(R.TURNOVER_REQUIREMENT, support)
+    evaluation = evaluate_turnover(company.snapshot, minimum, years, reference_date=reference)
+    core = _qualification_core(
+        R.TURNOVER_REQUIREMENT,
+        evaluation,
+        (X.TURNOVER_MET, X.TURNOVER_BELOW, X.TURNOVER_UNKNOWN),
+        support,
+    )
+    if evaluation.reason == "reference_date_missing":
+        # «Els 3 ultims exercicis» es relatiu al plec: sense termini, no se sap quins.
+        return replace(core, explanation=X.QUALIFICATION_REFERENCE_DATE_MISSING)
+    return core
+
+
+def _execution_core(
+    requirement: RequirementView, company: CompanyView, reference: date | None
+) -> _Core:
+    value = requirement.value_json or {}
+    minimum = _decimal(value.get("execution_min_eur"))
+    years = value.get("years", 3)
+    lines = value.get("service_lines")
+    clients = value.get("client_types")
+    support = {
+        "execution_min_eur": value.get("execution_min_eur"),
+        "years": years,
+        "service_lines": lines,
+        "client_types": clients,
+        "reference_date": reference.isoformat() if reference else None,
+    }
+    if minimum is None or not isinstance(years, int) or years < 1:
+        return _not_comparable(R.EXECUTION_REQUIREMENT, support)
+    evaluation = evaluate_execution(
+        company.snapshot,
+        minimum,
+        years,
+        service_lines=lines,
+        client_types=clients,
+        reference_date=reference,
+    )
+    core = _qualification_core(
+        R.EXECUTION_REQUIREMENT,
+        evaluation,
+        (X.EXECUTION_MET, X.EXECUTION_BELOW, X.EXECUTION_UNKNOWN),
+        support,
+    )
+    if evaluation.reason == "reference_date_missing":
+        # Sense termini de presentacio no se sap quins son «els darrers anys».
+        return replace(core, explanation=X.QUALIFICATION_REFERENCE_DATE_MISSING)
+    return core
+
+
+def _insurance_core(requirement: RequirementView, company: CompanyView) -> _Core:
+    value = requirement.value_json or {}
+    insurance_type = str(value["insurance_type"])
+    raw = value.get("insurance_limits_eur")
+    support = {"insurance_type": insurance_type, "insurance_limits_eur": raw}
+    limits = (
+        {str(k): _decimal(v) for k, v in raw.items()} if isinstance(raw, dict) and raw else None
+    )
+    if not limits or any(v is None for v in limits.values()):
+        return _not_comparable(R.INSURANCE_REQUIREMENT, support)
+    evaluation = evaluate_insurance(company.snapshot, insurance_type, limits)  # type: ignore[arg-type]
+    core = _qualification_core(
+        R.INSURANCE_REQUIREMENT,
+        evaluation,
+        (X.INSURANCE_MET, X.INSURANCE_BELOW, X.INSURANCE_UNKNOWN),
+        support,
+    )
+    expired = any(
+        p.kind == PendingKind.EXPIRED and p.subject == "insurance" and p.key == insurance_type
+        for p in company.snapshot.pending_validation
+    )
+    if core.fit == FitResult.UNKNOWN.value and not evaluation.record_ids and expired:
+        # Hi havia una polissa d'aquest tipus, pero ja no es vigent: no se sap si es
+        # renovara (no es cap «no»), i es diu per que.
+        return replace(core, explanation=X.INSURANCE_EXPIRED)
+    return core
+
+
+def _registration_core(requirement: RequirementView, company: CompanyView) -> _Core:
+    value = requirement.value_json or {}
+    registration_type = str(value["registration_type"])
+    lines = value.get("registration_service_lines")
+    issuer = value.get("registration_issuer")
+    support = {
+        "registration_type": registration_type,
+        "registration_service_lines": lines,
+        "registration_issuer": issuer,
+    }
+    evaluation = evaluate_registration(
+        company.snapshot, registration_type, service_lines=lines, issuer=issuer
+    )
+    core = _qualification_core(
+        R.REGISTRATION_REQUIREMENT,
+        evaluation,
+        (X.REGISTRATION_MET, X.REGISTRATION_UNKNOWN, X.REGISTRATION_UNKNOWN),
+        support,
+    )
+    if evaluation.reason == "scope_unknown":
+        return replace(core, explanation=X.REGISTRATION_SCOPE_UNKNOWN)
+    if evaluation.reason == "scope_not_covered":
+        return replace(core, explanation=X.REGISTRATION_SCOPE_NOT_COVERED)
+    fact_key = value.get("operating_fact")
+    if core.fit == FitResult.UNKNOWN.value and not evaluation.record_ids and fact_key:
+        # L'empresa diu que es operadora, pero no hi ha cap inscripcio amb abast: el
+        # fet no diu quins serveis te inscrits. Es revisa; no se'n dedueix res.
+        entry = company.snapshot.facts.get(str(fact_key))
+        claim = entry.effective if entry else None
+        if claim is not None and claim.value is True:
+            return _Core(
+                FitResult.UNKNOWN.value,
+                _source(claim.source),
+                R.REGISTRATION_REQUIREMENT,
+                X.REGISTRATION_ONLY_OPERATOR_FACT,
+                {**core.support, "operating_fact": fact_key, "fact_record_id": claim.record_id},
+            )
+    return core
+
+
+def _resources_core(requirement: RequirementView, company: CompanyView) -> _Core:
+    value = requirement.value_json or {}
+    profiles = _counts(value.get("required_profiles")) if "required_profiles" in value else {}
+    equipment = _counts(value.get("required_equipment")) if "required_equipment" in value else {}
+    calibration = bool(value.get("calibration_required", False))
+    support: dict[str, Any] = {
+        "required_profiles": profiles,
+        "required_equipment": equipment,
+        "calibration_required": calibration,
+    }
+    if profiles is None or equipment is None:
+        return _not_comparable(R.RESOURCES_REQUIREMENT, support)
+    parts: list[tuple[Any, str]] = []
+    if profiles:
+        evaluation = evaluate_profiles(company.snapshot, profiles)
+        parts.append((evaluation, X.PROFILES_MISSING))
+    if equipment:
+        evaluation = evaluate_equipment(
+            company.snapshot, equipment, calibration_required=calibration
+        )
+        unknown = (
+            X.EQUIPMENT_CALIBRATION_UNKNOWN
+            if evaluation.reason == "calibration_unknown"
+            else X.EQUIPMENT_MISSING
+        )
+        parts.append((evaluation, unknown))
+    record_ids = [r for evaluation, _ in parts for r in evaluation.record_ids]
+    support = {
+        **support,
+        "record_ids": record_ids,
+        "reasons": [evaluation.reason for evaluation, _ in parts],
+    }
+    sources = [_source(evaluation.source) for evaluation, _ in parts]
+    failing = [e for e, _ in parts if e.result == EvaluationResult.DOES_NOT_SATISFY]
+    if failing:
+        return _Core(
+            FitResult.DOES_NOT_SATISFY.value,
+            _source(failing[0].source),
+            R.RESOURCES_REQUIREMENT,
+            X.EQUIPMENT_CALIBRATION_EXPIRED,
+            support,
+        )
+    if all(e.result == EvaluationResult.SATISFIES for e, _ in parts):
+        return _Core(
+            FitResult.SATISFIES.value,
+            _combine_sources(sources),
+            R.RESOURCES_REQUIREMENT,
+            X.RESOURCES_MET,
+            support,
+        )
+    first_unknown = next(x for e, x in parts if e.result == EvaluationResult.UNKNOWN)
+    known = [s for s in sources if s != KS.NONE.value]
+    return _Core(
+        FitResult.UNKNOWN.value,
+        _combine_sources(known) if known else KS.NONE.value,
+        R.RESOURCES_REQUIREMENT,
+        first_unknown,
+        support,
+    )
+
+
+def _with_minimum_needs(core: _Core, needs_core: _Core) -> _Core:
+    """Un requisit de mitjans amb necessitats minimes: compleix si totes dues parts
+    compleixen; una contradiccio de qualsevol part el contradiu; si no, `unknown`."""
+    support = {**core.support, "needs": needs_core.support.get("needs", [])}
+    if core.fit == FitResult.DOES_NOT_SATISFY.value:
+        return replace(core, support=support)
+    if needs_core.fit == FitResult.DOES_NOT_SATISFY.value:
+        return replace(needs_core, support={**needs_core.support, **core.support})
+    if core.fit == needs_core.fit == FitResult.SATISFIES.value:
+        return replace(
+            core, source=_combine_sources([core.source, needs_core.source]), support=support
+        )
+    if core.fit == FitResult.UNKNOWN.value:
+        return replace(core, support=support)
+    return replace(needs_core, support={**needs_core.support, **core.support})
+
+
+def qualification_core(
+    requirement: RequirementView, company: CompanyView, tender: TenderStructureView
+) -> _Core | None:
+    """El nucli d'un requisit de qualificacio, si el `value_json` en porta l'estructura.
+    Les finestres temporals es resolen amb el termini de presentacio del plec, mai
+    amb el rellotge."""
+    value = requirement.value_json or {}
+    reference = tender.submission_deadline
+    if value.get("registration_type"):
+        return _registration_core(requirement, company)
+    if "turnover_min_eur" in value:
+        return _turnover_core(requirement, company, reference)
+    if "execution_min_eur" in value:
+        return _execution_core(requirement, company, reference)
+    if value.get("insurance_type"):
+        return _insurance_core(requirement, company)
+    if "required_profiles" in value or "required_equipment" in value:
+        return _resources_core(requirement, company)
+    return None
 
 
 def _certification_core(requirement: RequirementView, company: CompanyView) -> _Core:
@@ -698,8 +1144,14 @@ def assess_requirement(
 ) -> tuple[FitAssessmentOut, list[NeedAssessmentOut], terr.TerritoryComparison]:
     needs = [assess_need(n, requirement, company) for n in requirement.needs]
     value = requirement.value_json or {}
+    qualification = qualification_core(requirement, company, tender)
 
-    if value.get("operating_fact"):
+    if qualification is not None:
+        core = qualification
+        minimum = [n for n in requirement.needs if n.need_type == NeedType.MINIMUM.value]
+        if core.rule == R.RESOURCES_REQUIREMENT and minimum:
+            core = _with_minimum_needs(core, _needs_core(requirement, needs))
+    elif value.get("operating_fact"):
         core = _fact_core(requirement, company)
     elif requirement.category == RequirementCategory.CERTIFICATION.value:
         core = _certification_core(requirement, company)
@@ -728,7 +1180,7 @@ def assess_requirement(
         )
 
     comparison, basis = assess_territory(requirement, tender, company)
-    proof, proof_support = assess_proof(requirement, company)
+    proof, proof_support = assess_proof(requirement, company, core.support.get("record_ids") or ())
 
     fit, explanation = core.fit, core.explanation
     if fit == FitResult.SATISFIES.value and comparison.verdict == TerritoryVerdict.UNMATCHED.value:
@@ -1337,12 +1789,54 @@ def requirement_findings(
                     )
                 )
 
+    if fit.explanation_code in (
+        X.REGISTRATION_SCOPE_UNKNOWN,
+        X.REGISTRATION_SCOPE_NOT_COVERED,
+        X.REGISTRATION_ONLY_OPERATOR_FACT,
+    ):
+        # Operador declarat sense abast suficient: es revisa, no es dedueix res.
+        findings.append(
+            FindingOut(
+                FindingType.REVIEW_REQUIRED.value,
+                R.REVIEW_REQUIRED,
+                fit.explanation_code,
+                requirement_id=rid,
+                details=details,
+            )
+        )
+        questions.append(
+            QuestionOut(
+                QuestionAudience.COMPANY.value,
+                Q.COMPANY_REVIEW_REGISTRATION_SCOPE,
+                R.REGISTRATION_REQUIREMENT,
+                requirement_id=rid,
+                params={
+                    "registration_type": (requirement.value_json or {}).get("registration_type"),
+                    "title": requirement.title,
+                },
+            )
+        )
+    if fit.explanation_code in (
+        X.EQUIPMENT_CALIBRATION_EXPIRED,
+        X.EQUIPMENT_CALIBRATION_UNKNOWN,
+    ):
+        questions.append(
+            QuestionOut(
+                QuestionAudience.COMPANY.value,
+                Q.COMPANY_RENEW_CALIBRATION,
+                R.RESOURCES_REQUIREMENT,
+                requirement_id=rid,
+                params={"title": requirement.title},
+            )
+        )
+
     if fit.fit_result == FitResult.UNKNOWN.value:
         actionable = fit.rule_code in (
             R.FACT_REQUIREMENT,
             R.CERTIFICATION_REQUIREMENT,
             R.PROFILE_DATA_REQUIREMENT,
             R.CAPABILITY_NEEDS_REQUIREMENT,
+            *QUALIFICATION_RULES,
         )
         if actionable:
             findings.append(
@@ -1383,6 +1877,24 @@ def requirement_findings(
                     params={"standard": (requirement.value_json or {}).get("standard")},
                 )
             )
+        elif fit.rule_code in QUALIFICATION_RULES and fit.explanation_code in (
+            X.TURNOVER_UNKNOWN,
+            X.EXECUTION_UNKNOWN,
+            X.INSURANCE_UNKNOWN,
+            X.INSURANCE_EXPIRED,
+            X.REGISTRATION_UNKNOWN,
+            X.PROFILES_MISSING,
+            X.EQUIPMENT_MISSING,
+        ):
+            questions.append(
+                QuestionOut(
+                    QuestionAudience.COMPANY.value,
+                    Q.COMPANY_PROVIDE_PROFILE_DATA,
+                    R.MISSING_INFORMATION,
+                    requirement_id=rid,
+                    params={"category": requirement.category, "title": requirement.title},
+                )
+            )
         elif fit.rule_code == R.PROFILE_DATA_REQUIREMENT:
             questions.append(
                 QuestionOut(
@@ -1395,6 +1907,17 @@ def requirement_findings(
             )
 
     for need, out in zip(requirement.needs, needs, strict=True):
+        fact_key = _fact_need_key(need)
+        if out.fit_result == FitResult.UNKNOWN.value and fact_key is not None:
+            questions.append(
+                QuestionOut(
+                    QuestionAudience.COMPANY.value,
+                    Q.COMPANY_CONFIRM_FACT,
+                    R.NEED_OPERATING_FACT,
+                    requirement_id=rid,
+                    params={"fact": fact_key, "title": requirement.title},
+                )
+            )
         if out.fit_result == FitResult.UNKNOWN.value and need.capability_code:
             line = CAPABILITIES_BY_CODE[need.capability_code].service_line_code
             questions.append(

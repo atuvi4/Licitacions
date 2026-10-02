@@ -25,6 +25,7 @@ from app.db.base import (
 )
 from app.models.cpv import CPVCode
 from app.models.enums import ClientType, ProjectStatus
+from app.models.knowledge import KnowledgeOriginMixin, origin_constraints
 from app.models.profile import CompanyService
 
 MONEY = sa.Numeric(18, 2)
@@ -50,10 +51,17 @@ project_services = sa.Table(
 
 
 class CompanyProject(
-    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, Base
+    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, KnowledgeOriginMixin, Base
 ):
+    """Un projecte executat: una referencia d'execucio. Tambe es coneixement actual
+    (0052). NO es cap `historic_bid`: una oferta presentada no acredita res; un
+    projecte `completed` amb import i data, si. L'any d'execucio es el de la data
+    de fi (o d'inici si no n'hi ha); les linies de servei son les dels serveis
+    vinculats."""
+
     __tablename__ = "company_projects"
     __table_args__ = (
+        *origin_constraints(),
         sa.CheckConstraint(
             "end_date IS NULL OR start_date IS NULL OR end_date >= start_date",
             name="project_dates_order",
@@ -89,6 +97,40 @@ class CompanyProject(
     cpvs: Mapped[list[ProjectCPV]] = relationship(
         back_populates="project", cascade="all, delete-orphan", lazy="selectin"
     )
+    #: Imports EXECUTATS per any (0052). Sense files, l'import d'un projecte plurianual
+    #: no es pot imputar a cap any concret.
+    annual_amounts: Mapped[list[CompanyProjectAnnualAmount]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="CompanyProjectAnnualAmount.year",
+    )
+
+
+class CompanyProjectAnnualAmount(
+    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, Base
+):
+    """Import executat d'un projecte en un any (0052). Font de veritat de l'empresa,
+    acreditada amb l'evidencia del projecte (el certificat que en dona el
+    desglossament). La moneda es la del projecte."""
+
+    __tablename__ = "company_project_annual_amounts"
+    __table_args__ = (
+        sa.UniqueConstraint("project_id", "year", name="uq_company_project_annual_amounts_year"),
+        sa.CheckConstraint("amount >= 0", name="annual_amount_not_negative"),
+        sa.CheckConstraint("year >= 1900 AND year <= 2200", name="annual_amount_year_range"),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey("company_projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    year: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+
+    project: Mapped[CompanyProject] = relationship(back_populates="annual_amounts")
 
 
 class ProjectCPV(TimestampMixin, Base):

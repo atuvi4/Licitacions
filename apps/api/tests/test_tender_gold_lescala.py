@@ -171,7 +171,7 @@ def _citations(dataset: dict) -> set[tuple]:
 
 
 async def test_the_dataset_is_public_tender_data_only(dataset):
-    assert dataset["schema"] == "tender-gold-v2"
+    assert dataset["schema"] == "tender-gold-v3"
     text = json.dumps(dataset, ensure_ascii=False).lower()
     leaked = [word for word in PRIVATE_WORDS if word in text]
     assert leaked == [], f"el gold public porta dades o llenguatge d'empresa: {leaked}"

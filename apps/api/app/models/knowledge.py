@@ -98,8 +98,8 @@ class CertificationStandardRow(Base):
 # --------------------------------------------------------------------------- #
 
 
-def provenance_constraints() -> tuple[sa.CheckConstraint, ...]:
-    """Els CHECK de la procedencia, un joc nou per taula."""
+def origin_constraints() -> tuple[sa.CheckConstraint, ...]:
+    """Els CHECK de l'origen (`KnowledgeOriginMixin`), un joc nou per taula."""
     return (
         sa.CheckConstraint(
             in_values("knowledge_origin", KnowledgeOrigin), name="knowledge_origin_valid"
@@ -108,18 +108,23 @@ def provenance_constraints() -> tuple[sa.CheckConstraint, ...]:
             in_values("verification_status", VerificationStatus), name="verification_valid"
         ),
         sa.CheckConstraint(in_values("lifecycle", KnowledgeLifecycle), name="lifecycle_valid"),
+    )
+
+
+def provenance_constraints() -> tuple[sa.CheckConstraint, ...]:
+    """Els CHECK de la procedencia completa (`KnowledgeProvenanceMixin`)."""
+    return (
+        *origin_constraints(),
         sa.CheckConstraint(
             "valid_until IS NULL OR valid_until >= as_of", name="valid_until_after_as_of"
         ),
     )
 
 
-class KnowledgeProvenanceMixin:
-    """D'on surt una dada actual i si encara val.
+class _OriginStatusMixin:
+    """Origen, verificacio i cicle de vida d'una dada actual.
 
     * `knowledge_origin`: declarada per una persona o promoguda des de l'historic.
-    * `as_of`: de quan es la dada.
-    * `valid_until`: fins quan val (una tarifa, un certificat). Nul = sense data.
     * `verification_status`: si hi ha evidencia verificada (decisio humana).
     * `lifecycle`: `current` compta; `in_progress` i `retired`, no.
     """
@@ -130,10 +135,6 @@ class KnowledgeProvenanceMixin:
         default=KnowledgeOrigin.DECLARED,
         server_default=KnowledgeOrigin.DECLARED.value,
     )
-    as_of: Mapped[date] = mapped_column(
-        sa.Date, nullable=False, default=date.today, server_default=sa.text("CURRENT_DATE")
-    )
-    valid_until: Mapped[date | None] = mapped_column(sa.Date)
     verification_status: Mapped[VerificationStatus] = mapped_column(
         enum_column(VerificationStatus, "verification_status"),
         nullable=False,
@@ -146,6 +147,30 @@ class KnowledgeProvenanceMixin:
         default=KnowledgeLifecycle.CURRENT,
         server_default=KnowledgeLifecycle.CURRENT.value,
     )
+
+
+class KnowledgeOriginMixin(_OriginStatusMixin):
+    """Les taules del perfil que, a 0052, passen a ser coneixement actual (solvencia,
+    experiencia, assegurances, registres i persones). Tenen la seva propia vigencia
+    (l'any, la data de fi, `expires_at`) o cap.
+
+    `as_of` es EXPLICIT: nul = ningu no ha dit de quan es la dada (totes les files
+    anteriors a 0052 i les que no la informen). La fotografia hi posa la data de
+    creacio en UTC. Cap valor per defecte: un valor per defecte no es distingiria
+    d'una data dita per una persona.
+    """
+
+    as_of: Mapped[date | None] = mapped_column(sa.Date)
+
+
+class KnowledgeProvenanceMixin(_OriginStatusMixin):
+    """La procedencia completa del coneixement de 0045 en endavant: de quan es la dada
+    (`as_of`, obligatoria) i fins quan val (`valid_until`; nul = sense data)."""
+
+    as_of: Mapped[date] = mapped_column(
+        sa.Date, nullable=False, default=date.today, server_default=sa.text("CURRENT_DATE")
+    )
+    valid_until: Mapped[date | None] = mapped_column(sa.Date)
 
 
 def _company_fk() -> Mapped[uuid.UUID]:
@@ -226,6 +251,15 @@ class CompanyOperatingFact(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Covera
         sa.CheckConstraint(in_values("key", OperatingFactKey), name="key_valid"),
         sa.UniqueConstraint("company_id", "key", name="uq_company_operating_facts_key"),
         coverage_completeness_check(),
+        # 0052: un nombre nomes als fets quantitatius, i mai negatiu. Que un fet
+        # quantitatiu afirmat porti el nombre ho imposa el servei (vocabulari).
+        sa.CheckConstraint(
+            "value_number IS NULL OR value_number >= 0", name="value_number_non_negative"
+        ),
+        sa.CheckConstraint(
+            "value_number IS NULL OR key IN ('ipv4_assignable_count')",
+            name="value_number_numeric_key",
+        ),
     )
 
     company_id: Mapped[uuid.UUID] = _company_fk()
@@ -233,6 +267,9 @@ class CompanyOperatingFact(UUIDPrimaryKeyMixin, KnowledgeProvenanceMixin, Covera
         enum_column(OperatingFactKey, "operating_fact_key"), nullable=False
     )
     value: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    #: Nomes als fets quantitatius (0052; `vocabulary.OPERATING_FACT_VALUE_TYPES`):
+    #: quants (p. ex. adreces IPv4 assignables). Als booleans es sempre nul.
+    value_number: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 4))
     #: Aclariment curt ("CPD propi a un centre Tier-3"). Mai imports ni condicions comercials.
     detail: Mapped[str | None] = mapped_column(sa.String(500))
     #: Cobertura territorial del fet (0047): on es cert, i si la llista es tota.

@@ -21,18 +21,29 @@ from app.db.base import (
     enum_column,
 )
 from app.models.enums import AvailabilityStatus, QualificationType
+from app.models.knowledge import KnowledgeOriginMixin, origin_constraints
+from app.models.review import JSONDocument
 
 
 class CompanyPerson(
-    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, Base
+    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, KnowledgeOriginMixin, Base
 ):
+    """Una persona de l'equip. Tambe es coneixement actual (0052): els perfils
+    ESTRUCTURATS (`profile_codes`, del vocabulari) i la disponibilitat son el que el
+    motor compara amb un plec. Disponible no vol dir adscrit: el motor no assigna
+    ningu a cap contracte. `professional_profile` es text i no es llegeix."""
+
     __tablename__ = "company_people"
+    __table_args__ = (*origin_constraints(),)
 
     first_name: Mapped[str] = mapped_column(sa.String(120), nullable=False)
     last_name: Mapped[str | None] = mapped_column(sa.String(160))
     role: Mapped[str | None] = mapped_column(sa.String(160))
     department: Mapped[str | None] = mapped_column(sa.String(160))
     professional_profile: Mapped[str | None] = mapped_column(sa.Text)
+    #: Perfils del vocabulari (`vocabulary.PROFESSIONAL_PROFILES`). Nul = sense
+    #: estructurar. Una persona en pot cobrir mes d'un.
+    profile_codes: Mapped[list[str] | None] = mapped_column(JSONDocument)
     years_experience: Mapped[int | None] = mapped_column(sa.Integer)
     availability_status: Mapped[AvailabilityStatus] = mapped_column(
         enum_column(AvailabilityStatus, "availability_status"),

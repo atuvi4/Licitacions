@@ -30,6 +30,7 @@ from app.models.enums import (
     RegistrationType,
     VerificationStatus,
 )
+from app.models.knowledge import KnowledgeOriginMixin, origin_constraints
 from app.models.review import JSONDocument, in_values
 
 MONEY = sa.Numeric(18, 2)
@@ -107,9 +108,15 @@ class CompanyCertification(
 
 
 class CompanyRegistration(
-    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, Base
+    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, KnowledgeOriginMixin, Base
 ):
-    """ROLECE, RELI, classificacions empresarials, registres professionals..."""
+    """ROLECE, RELI, classificacions empresarials, registres professionals, registres
+    sectorials d'operadors (`sector_operator_registry`, amb l'emissor a `issuer`).
+
+    Tambe es coneixement actual (0052). L'abast ESTRUCTURAT (`scope_service_lines`)
+    es l'unic que el motor compara: sense estructurar, l'abast es desconegut i el
+    text de `notes` no es llegeix. `expires_at` fa de vigencia.
+    """
 
     __tablename__ = "company_registrations"
     __table_args__ = (
@@ -117,6 +124,7 @@ class CompanyRegistration(
             "expires_at IS NULL OR issued_at IS NULL OR expires_at >= issued_at",
             name="registration_dates_order",
         ),
+        *origin_constraints(),
     )
 
     name: Mapped[str] = mapped_column(sa.String(200), nullable=False)
@@ -130,17 +138,25 @@ class CompanyRegistration(
     issued_at: Mapped[date | None] = mapped_column(sa.Date)
     expires_at: Mapped[date | None] = mapped_column(sa.Date)
     notes: Mapped[str | None] = mapped_column(sa.Text)
+    #: Abast estructurat (0052): linies de servei del vocabulari que la inscripcio
+    #: cobreix. Nul = no estructurat (desconegut), que no es «cap».
+    scope_service_lines: Mapped[list[str] | None] = mapped_column(JSONDocument)
 
 
 class CompanyInsurance(
-    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, Base
+    UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, ActorMixin, KnowledgeOriginMixin, Base
 ):
+    """Una polissa. Tambe es coneixement actual (0052): el motor compara els seus
+    `limits` estructurats amb el plec; `expires_at` fa de vigencia. Un canvi als
+    limits es un canvi material de la polissa (en desfa la verificacio)."""
+
     __tablename__ = "company_insurances"
     __table_args__ = (
         sa.CheckConstraint(
             "expires_at IS NULL OR starts_at IS NULL OR expires_at >= starts_at",
             name="insurance_dates_order",
         ),
+        *origin_constraints(),
     )
 
     type: Mapped[InsuranceType] = mapped_column(

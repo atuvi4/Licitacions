@@ -44,6 +44,11 @@ registrations_router = build_crud_router(
     resource_name="registre",
     order_by=[CompanyRegistration.name],
     entity_type=LinkedEntityType.COMPANY_REGISTRATION,
+    # Coneixement actual (0052): verificat nomes amb evidencia; qui nomes consulta no
+    # el modifica.
+    validate=require_evidence_if_verified,
+    authorize_write=access.assert_can_edit,
+    authorize_delete=access.assert_can_delete,
 )
 
 insurances_router = build_crud_router(
@@ -56,4 +61,7 @@ insurances_router = build_crud_router(
     resource_name="assegurança",
     order_by=[CompanyInsurance.expires_at.desc()],
     entity_type=LinkedEntityType.COMPANY_INSURANCE,
+    validate=require_evidence_if_verified,
+    authorize_write=access.assert_can_edit,
+    authorize_delete=access.assert_can_delete,
 )

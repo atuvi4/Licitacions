@@ -14,6 +14,8 @@ from app.knowledge import vocabulary
 from app.knowledge.snapshot import Entry, KnowledgeSnapshot
 from app.models.enums import (
     CapabilityStatus,
+    EquipmentAccessMode,
+    EquipmentType,
     KnowledgeLifecycle,
     KnowledgeOrigin,
     ObservationStatus,
@@ -81,6 +83,14 @@ class KnowledgeSnapshotRead(BaseModel):
     capabilities: list[EntryRead]
     products: list[EntryRead]
     partners: list[EntryRead]
+    #: Qualificacio i mitjans (0052): per any, per projecte, per tipus de polissa, per
+    #: tipus de registre, per perfil professional i per tipus d'equip.
+    financial_years: list[EntryRead] = []
+    execution_references: list[EntryRead] = []
+    insurances: list[EntryRead] = []
+    registrations: list[EntryRead] = []
+    profiles: list[EntryRead] = []
+    equipment: list[EntryRead] = []
     #: Que falta validar: dades declarades sense evidencia, en tramit, caducades i
     #: suggeriments de l'historic que ningu no ha revisat.
     pending_validation: list[PendingItemRead]
@@ -130,6 +140,12 @@ def snapshot_read(snapshot: KnowledgeSnapshot) -> KnowledgeSnapshotRead:
         capabilities=[_entry(e) for e in snapshot.capabilities.values()],
         products=[_entry(e) for e in snapshot.products.values()],
         partners=[_entry(e) for e in snapshot.partners.values()],
+        financial_years=[_entry(e) for e in snapshot.financial_years.values()],
+        execution_references=[_entry(e) for e in snapshot.execution_references.values()],
+        insurances=[_entry(e) for e in snapshot.insurances.values()],
+        registrations=[_entry(e) for e in snapshot.registrations.values()],
+        profiles=[_entry(e) for e in snapshot.profiles.values()],
+        equipment=[_entry(e) for e in snapshot.equipment.values()],
         pending_validation=[
             PendingItemRead(
                 kind=str(p.kind),
@@ -201,10 +217,18 @@ class CertificationStandardRead(BaseModel):
     levels: list[str] | None
 
 
+class CodeLabelRead(BaseModel):
+    code: str
+    label: str
+
+
 class VocabularyRead(BaseModel):
     service_lines: list[ServiceLineRead]
     capabilities: list[CapabilityDefinitionRead]
     standards: list[CertificationStandardRead]
+    #: Qualificacio i mitjans (0052).
+    professional_profiles: list[CodeLabelRead] = []
+    equipment_types: list[CodeLabelRead] = []
 
 
 def vocabulary_read() -> VocabularyRead:
@@ -229,6 +253,13 @@ def vocabulary_read() -> VocabularyRead:
                 code=s.code, label=s.label, levels=list(s.levels) if s.levels else None
             )
             for s in vocabulary.CERTIFICATION_STANDARDS
+        ],
+        professional_profiles=[
+            CodeLabelRead(code=p.code, label=p.label) for p in vocabulary.PROFESSIONAL_PROFILES
+        ],
+        equipment_types=[
+            CodeLabelRead(code=code, label=label)
+            for code, label in vocabulary.EQUIPMENT_TYPE_LABELS.items()
         ],
     )
 
@@ -270,6 +301,7 @@ class OperatingFactDeclare(P.OperatingFactProposal, _ProvenanceIn):
 
 class OperatingFactUpdate(_ProvenanceIn):
     value: bool | None = None
+    value_number: Decimal | None = Field(default=None, ge=0)
     detail: str | None = Field(default=None, max_length=500)
     #: Enviar-la substitueix tota la cobertura; no enviar-la la deixa com esta.
     coverage: CoverageIn | None = None
@@ -364,6 +396,7 @@ class _ProvenanceRead(ORMModel):
 class OperatingFactRead(_ProvenanceRead):
     key: OperatingFactKey
     value: bool
+    value_number: Decimal | None = None
     detail: str | None
     coverage: CoverageRead
 
@@ -408,6 +441,53 @@ class PartnerRoleRead(_ProvenanceRead):
     coverage: CoverageRead
 
 
+class EquipmentDeclare(_ProvenanceIn):
+    """Un equip o instrument adscrivible (0052). No es cap producte que es vengui."""
+
+    equipment_type: EquipmentType
+    manufacturer: str | None = Field(default=None, max_length=160)
+    model: str | None = Field(default=None, max_length=160)
+    serial_reference: str | None = Field(default=None, max_length=120)
+    access_mode: EquipmentAccessMode | None = None
+    quantity: int = Field(default=1, ge=1)
+    #: `None` = no consta. Una data de calibratge demana `true`.
+    calibration_required: bool | None = None
+    calibration_valid_until: date | None = None
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _calibration_consistent(self):
+        if self.calibration_valid_until is not None and self.calibration_required is not True:
+            raise ValueError(
+                "Una data de calibratge nomes te sentit amb `calibration_required = true`."
+            )
+        return self
+
+
+class EquipmentUpdate(_ProvenanceIn):
+    equipment_type: EquipmentType | None = None
+    manufacturer: str | None = Field(default=None, max_length=160)
+    model: str | None = Field(default=None, max_length=160)
+    serial_reference: str | None = Field(default=None, max_length=120)
+    access_mode: EquipmentAccessMode | None = None
+    quantity: int | None = Field(default=None, ge=1)
+    calibration_required: bool | None = None
+    calibration_valid_until: date | None = None
+    notes: str | None = None
+
+
+class EquipmentRead(_ProvenanceRead):
+    equipment_type: EquipmentType
+    manufacturer: str | None
+    model: str | None
+    serial_reference: str | None
+    access_mode: EquipmentAccessMode | None
+    quantity: int
+    calibration_required: bool | None
+    calibration_valid_until: date | None
+    notes: str | None
+
+
 class KnowledgeRecordsRead(BaseModel):
     operating_facts: list[OperatingFactRead]
     solutions: list[SolutionRead]
@@ -416,6 +496,7 @@ class KnowledgeRecordsRead(BaseModel):
     solution_products: list[SolutionProductRead]
     partners: list[PartnerRead]
     partner_roles: list[PartnerRoleRead]
+    equipment: list[EquipmentRead] = []
 
 
 #: Tipus declarable → (alta, modificacio, lectura). Les certificacions i els
@@ -432,4 +513,5 @@ RECORD_SCHEMAS: dict[str, tuple[type[APIModel], type[APIModel], type[_Provenance
     "solution_product": (SolutionProductDeclare, SolutionProductUpdate, SolutionProductRead),
     "partner": (PartnerDeclare, PartnerUpdate, PartnerRead),
     "partner_role": (PartnerRoleDeclare, PartnerRoleUpdate, PartnerRoleRead),
+    "equipment": (EquipmentDeclare, EquipmentUpdate, EquipmentRead),
 }

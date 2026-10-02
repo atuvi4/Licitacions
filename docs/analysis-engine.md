@@ -515,7 +515,29 @@ contradit només és `blocker_potential` si s'exigeix `at_submission` (amb
 qualsevol altre `timing` és `review_required`); el territori d'una via de
 prestació només ve d'un requisit amb necessitats mapades a la mateixa línia de
 servei (compartir bloc no basta; `requirement_scope_links` seria l'extensió);
-el motor no escriu mai `blocker_confirmed`. La taula de sota és el
+el motor no escriu mai `blocker_confirmed`.
+
+**Qualificació (`0052`, `rules_version = phase3a-analysis-v2`).** El motor llegeix
+la solvència i els mitjans només des de claus ESTRUCTURADES del `value_json` del
+requisit (lectura del plec amb vocabulari global, mai text ni el nom d'un plec):
+`turnover_min_eur` + `years` (millor dels 3 darrers exercicis consecutius
+anteriors a l'any del termini de presentació; sense termini, `unknown`),
+`execution_min_eur` + `years` + `service_lines` (any de major execució amb els
+imports EXECUTATS per any, també de projectes en curs, dins dels 3 anys anteriors
+al termini de presentació; sense termini, `unknown`; una oferta
+històrica no hi compta; un import plurianual sense desglossar no s'imputa a cap
+any), la data de referència és `tenders.deadline_at` (mai el rellotge), `insurance_type` + `insurance_limits_eur`,
+`registration_type` + `registration_service_lines` + `registration_issuer`,
+`required_profiles` + `required_equipment` + `calibration_required`, i les
+necessitats amb `operating_fact` quantitatiu (`ipv4_assignable_count`). Proves:
+comptes anuals, certificats d'execució, pòlissa, inscripció i calibratge es
+demostren amb l'evidència enllaçada a les files que la regla ha fet servir. Un
+operador declarat sense abast suficient és `unknown` amb revisió i pregunta; un
+calibratge caducat és `does_not_satisfy` (bloqueig potencial només si s'exigeix
+`at_submission`); un fet quantitatiu inferior a un tram deixa el tram `at_risk`.
+Disponible no vol dir adscrit; la política actual no és cap compromís de 48 mesos.
+
+La taula de sota és el
 disseny original de la fase: FitScore, `ProposalDraft` i la síntesi són 3B.
 
 

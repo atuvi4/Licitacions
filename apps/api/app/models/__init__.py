@@ -50,7 +50,12 @@ from app.models.profile import (
     CompanyService,
     CompanyTerritory,
 )
-from app.models.projects import CompanyProject, ProjectCPV, project_services
+from app.models.projects import (
+    CompanyProject,
+    CompanyProjectAnnualAmount,
+    ProjectCPV,
+    project_services,
+)
 from app.models.provenance import RequirementSourceRefLink, TenderSourceRef
 from app.models.reception import TenderDocumentReception, TenderDocumentReceptionItem
 from app.models.requirements import (
@@ -60,6 +65,7 @@ from app.models.requirements import (
     RequirementEvidence,
     RequirementExtractionRun,
 )
+from app.models.resources import CompanyEquipment
 from app.models.review import (
     ReviewItem,
     ReviewItemRelation,
@@ -247,4 +253,6 @@ __all__ = [
     "WorkspaceTask",
     "WorkspaceTechnicalSolution",
     "project_services",
+    "CompanyEquipment",
+    "CompanyProjectAnnualAmount",
 ]

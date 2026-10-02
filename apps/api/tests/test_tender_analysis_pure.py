@@ -156,7 +156,7 @@ def test_inputs_hash_depends_on_exactly_the_seven_inputs():
         ("review_revision_hash", "x" * 64),
         ("tender_structure_fingerprint", "t" * 64),
         ("knowledge_fingerprint", "j" * 64),
-        ("rules_version", "phase3a-analysis-v2"),
+        ("rules_version", "phase3a-analysis-v3"),
     ):
         assert inputs_hash(**{**base, key: value}) != digest, key
     assert review_revision_hash([]) is None
@@ -259,7 +259,7 @@ def test_territory_aggregation_all_and_any():
 
 
 def test_the_registry_is_closed_and_nothing_is_orphan():
-    assert registry.RULES_VERSION == "phase3a-analysis-v1"
+    assert registry.RULES_VERSION == "phase3a-analysis-v2"
     source = "\n".join(
         (API_ROOT / "app" / "analysis" / name).read_text(encoding="utf-8")
         for name in ("engine.py", "territory.py", "points.py")

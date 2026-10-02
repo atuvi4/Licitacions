@@ -12,7 +12,9 @@ diferents no es confon mai amb un d'actual.
 
 from __future__ import annotations
 
-RULES_VERSION = "phase3a-analysis-v1"
+#: v2 (0052): llegeix solvencia, referencies d'execucio, assegurances, registres amb
+#: abast, perfils, equips i fets quantitatius. Canviar-la fa caducar les runs v1.
+RULES_VERSION = "phase3a-analysis-v2"
 
 
 class RuleCode:
@@ -20,6 +22,15 @@ class RuleCode:
 
     #: Requisit que es llegeix d'un fet operatiu de l'empresa (`value_json.operating_fact`).
     FACT_REQUIREMENT = "fact_requirement_v1"
+    #: Qualificacio (0052): `value_json.turnover_min_eur`, `execution_min_eur`,
+    #: `insurance_type`, `registration_type`, `required_profiles`/`required_equipment`.
+    TURNOVER_REQUIREMENT = "turnover_requirement_v1"
+    EXECUTION_REQUIREMENT = "execution_requirement_v1"
+    INSURANCE_REQUIREMENT = "insurance_requirement_v1"
+    REGISTRATION_REQUIREMENT = "registration_requirement_v1"
+    RESOURCES_REQUIREMENT = "resources_requirement_v1"
+    #: Necessitat que es llegeix d'un fet quantitatiu (`value_json.operating_fact`).
+    NEED_OPERATING_FACT = "need_operating_fact_v1"
     #: Requisit de certificacio amb norma (`value_json.standard`) i nivell opcional.
     CERTIFICATION_REQUIREMENT = "certification_requirement_v1"
     #: Requisit tecnic avaluat per les seves necessitats estructurades.
@@ -117,6 +128,31 @@ class ExplanationCode:
     PROOF_MISSING = "PROOF_MISSING"
     NO_AVAILABLE_DELIVERY = "NO_AVAILABLE_DELIVERY"
     DEMO_DEPENDS_ON_UNKNOWN_CAPABILITIES = "DEMO_DEPENDS_ON_UNKNOWN_CAPABILITIES"
+    # Qualificacio i mitjans (0052).
+    QUALIFICATION_THRESHOLD_NOT_COMPARABLE = "QUALIFICATION_THRESHOLD_NOT_COMPARABLE"
+    QUALIFICATION_REFERENCE_DATE_MISSING = "QUALIFICATION_REFERENCE_DATE_MISSING"
+    TURNOVER_MET = "TURNOVER_MET"
+    TURNOVER_BELOW = "TURNOVER_BELOW"
+    TURNOVER_UNKNOWN = "TURNOVER_UNKNOWN"
+    EXECUTION_MET = "EXECUTION_MET"
+    EXECUTION_BELOW = "EXECUTION_BELOW"
+    EXECUTION_UNKNOWN = "EXECUTION_UNKNOWN"
+    INSURANCE_MET = "INSURANCE_MET"
+    INSURANCE_BELOW = "INSURANCE_BELOW"
+    INSURANCE_UNKNOWN = "INSURANCE_UNKNOWN"
+    INSURANCE_EXPIRED = "INSURANCE_EXPIRED"
+    REGISTRATION_MET = "REGISTRATION_MET"
+    REGISTRATION_SCOPE_UNKNOWN = "REGISTRATION_SCOPE_UNKNOWN"
+    REGISTRATION_SCOPE_NOT_COVERED = "REGISTRATION_SCOPE_NOT_COVERED"
+    REGISTRATION_UNKNOWN = "REGISTRATION_UNKNOWN"
+    REGISTRATION_ONLY_OPERATOR_FACT = "REGISTRATION_ONLY_OPERATOR_FACT"
+    RESOURCES_MET = "RESOURCES_MET"
+    PROFILES_MISSING = "PROFILES_MISSING"
+    EQUIPMENT_MISSING = "EQUIPMENT_MISSING"
+    EQUIPMENT_CALIBRATION_UNKNOWN = "EQUIPMENT_CALIBRATION_UNKNOWN"
+    EQUIPMENT_CALIBRATION_EXPIRED = "EQUIPMENT_CALIBRATION_EXPIRED"
+    FACT_NUMBER_MEETS = "FACT_NUMBER_MEETS"
+    FACT_NUMBER_BELOW = "FACT_NUMBER_BELOW"
 
 
 #: Text de cada explicacio, per a la interficie. Cap LLM: plantilles.
@@ -222,6 +258,64 @@ EXPLANATIONS: dict[str, str] = {
     ExplanationCode.DEMO_DEPENDS_ON_UNKNOWN_CAPABILITIES: (
         "La demostracio depen de capacitats que l'empresa no ha declarat."
     ),
+    ExplanationCode.QUALIFICATION_THRESHOLD_NOT_COMPARABLE: (
+        "El llindar del plec no es pot llegir com a dada estructurada: no es compara."
+    ),
+    ExplanationCode.QUALIFICATION_REFERENCE_DATE_MISSING: (
+        "El plec no dona el termini de presentacio: no se sap quins son els darrers "
+        "exercicis ni els darrers anys."
+    ),
+    ExplanationCode.TURNOVER_MET: "Algun dels darrers exercicis arriba al volum exigit.",
+    ExplanationCode.TURNOVER_BELOW: (
+        "Els darrers exercicis consten tots i cap no arriba al volum exigit."
+    ),
+    ExplanationCode.TURNOVER_UNKNOWN: (
+        "No consten els darrers exercicis consecutius (o algun import): no se sap."
+    ),
+    ExplanationCode.EXECUTION_MET: "L'import executat l'any de major execucio arriba a l'exigit.",
+    ExplanationCode.EXECUTION_BELOW: (
+        "Amb tots els imports anuals coneguts, cap any de la finestra hi arriba."
+    ),
+    ExplanationCode.EXECUTION_UNKNOWN: (
+        "Imports sense desglossar per any o cap referencia a la finestra: no se sap "
+        "(les ofertes no compten)."
+    ),
+    ExplanationCode.INSURANCE_MET: "Una polissa vigent cobreix tots els limits exigits.",
+    ExplanationCode.INSURANCE_BELOW: "Un limit declarat de la polissa vigent no hi arriba.",
+    ExplanationCode.INSURANCE_UNKNOWN: (
+        "Cap polissa vigent del tipus, o algun limit exigit no consta: no se sap."
+    ),
+    ExplanationCode.INSURANCE_EXPIRED: "La polissa d'aquest tipus ha caducat.",
+    ExplanationCode.REGISTRATION_MET: (
+        "Inscripcio vigent amb l'abast estructurat que cobreix el que es demana."
+    ),
+    ExplanationCode.REGISTRATION_SCOPE_UNKNOWN: (
+        "Inscripcio vigent amb l'abast sense estructurar: no se sap si cobreix el plec."
+    ),
+    ExplanationCode.REGISTRATION_SCOPE_NOT_COVERED: (
+        "L'abast inscrit no cobreix tots els serveis del plec: cal revisar-lo."
+    ),
+    ExplanationCode.REGISTRATION_UNKNOWN: "Cap inscripcio vigent d'aquest tipus: no se sap.",
+    ExplanationCode.REGISTRATION_ONLY_OPERATOR_FACT: (
+        "Consta el fet d'operador, pero cap inscripcio amb abast: no se sap quins serveis."
+    ),
+    ExplanationCode.RESOURCES_MET: (
+        "Hi ha persones disponibles amb els perfils i equips amb el calibratge exigits."
+    ),
+    ExplanationCode.PROFILES_MISSING: (
+        "Algun perfil exigit no te cap persona disponible declarada: no se sap."
+    ),
+    ExplanationCode.EQUIPMENT_MISSING: "Algun equip exigit no consta: no se sap.",
+    ExplanationCode.EQUIPMENT_CALIBRATION_UNKNOWN: (
+        "L'equip consta, pero sense data de calibratge: no se sap si es vigent."
+    ),
+    ExplanationCode.EQUIPMENT_CALIBRATION_EXPIRED: (
+        "L'equip exigit consta, pero amb el calibratge caducat."
+    ),
+    ExplanationCode.FACT_NUMBER_MEETS: "El fet quantitatiu actual arriba al valor exigit.",
+    ExplanationCode.FACT_NUMBER_BELOW: (
+        "El fet quantitatiu actual no arriba al valor exigit (es pot ampliar)."
+    ),
 }
 
 
@@ -239,6 +333,8 @@ class QuestionCode:
     BUYER_PROVIDE_TERRITORY_LIST = "buyer.provide_territory_list"
     BUYER_CLARIFY_CRITERION_TIMING = "buyer.clarify_criterion_timing"
     BUYER_CLARIFY_REQUIREMENT_TIMING = "buyer.clarify_requirement_timing"
+    COMPANY_REVIEW_REGISTRATION_SCOPE = "company.review_registration_scope"
+    COMPANY_RENEW_CALIBRATION = "company.renew_calibration"
 
 
 #: Plantilles de pregunta. `{...}` son `params_json`.
@@ -267,6 +363,12 @@ QUESTIONS: dict[str, str] = {
     ),
     QuestionCode.BUYER_CLARIFY_REQUIREMENT_TIMING: (
         "Demaneu a l'organ quan s'ha de complir el requisit «{title}»."
+    ),
+    QuestionCode.COMPANY_REVIEW_REGISTRATION_SCOPE: (
+        "Reviseu l'abast inscrit a «{registration_type}» per al requisit «{title}»."
+    ),
+    QuestionCode.COMPANY_RENEW_CALIBRATION: (
+        "Confirmeu o renoveu el calibratge dels equips del requisit «{title}»."
     ),
 }
 

@@ -14,14 +14,24 @@ from fastapi import APIRouter, Query, Response, status
 from app.api.deps import CompanyCtx, SessionDep
 from app.api.v1.crud import get_owned_or_404
 from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.knowledge import access
 from app.models.enums import AuditAction, LinkedEntityType
 from app.models.profile import CompanyService
-from app.models.projects import CompanyProject, ProjectCPV, project_services
+from app.models.projects import (
+    CompanyProject,
+    CompanyProjectAnnualAmount,
+    ProjectCPV,
+    project_services,
+)
 from app.schemas.cpv import ProjectCPVCreate, ProjectCPVRead
 from app.schemas.projects import ProjectCreate, ProjectRead, ProjectUpdate
 from app.services import audit
 from app.services.cpv import ensure_cpv_code
 from app.services.entities import delete_links_for_entity
+from app.services.knowledge_evidence import (
+    require_evidence_if_verified,
+    unverify_for_dependent_change,
+)
 
 router = APIRouter(prefix="/projects", tags=["experiencia"])
 
@@ -43,6 +53,55 @@ async def _resolve_services(
     if len(services) != len(unique_ids):
         raise ValidationError("Algun dels serveis indicats no existeix en aquesta empresa.")
     return list(services)
+
+
+def _check_annual_amounts(project: CompanyProject, amounts: list[dict]) -> None:
+    """El desglossament ha de cabre al projecte: cap any fora de les dates i cap
+    suma per sobre de l'import total (si es coneix)."""
+    first = project.start_date.year if project.start_date else None
+    last = project.end_date.year if project.end_date else None
+    for item in amounts:
+        if (first is not None and item["year"] < first) or (
+            last is not None and item["year"] > last
+        ):
+            raise ValidationError(
+                "Un import anual cau fora de les dates del projecte.",
+                details={"year": item["year"]},
+            )
+    total = sum((Decimal(str(item["amount"])) for item in amounts), Decimal(0))
+    if project.amount is not None and total > project.amount:
+        raise ValidationError(
+            "Els imports anuals sumen mes que l'import del projecte.",
+            details={"annual_total": str(total), "amount": str(project.amount)},
+        )
+
+
+def _set_annual_amounts(project: CompanyProject, amounts: list[dict], user_id) -> bool:
+    """Substitueix el desglossament ANY PER ANY (mai esborrar i tornar a inserir el mateix
+    any: la unicitat projecte + any ho prohibeix). Cert si ha canviat."""
+    wanted = {item["year"]: Decimal(str(item["amount"])) for item in amounts}
+    existing = {row.year: row for row in project.annual_amounts}
+    changed = False
+    for year, row in existing.items():
+        if year not in wanted:
+            project.annual_amounts.remove(row)
+            changed = True
+        elif Decimal(row.amount) != wanted[year]:
+            row.amount = wanted[year]
+            row.updated_by = user_id
+            changed = True
+    for year in sorted(set(wanted) - set(existing)):
+        project.annual_amounts.append(
+            CompanyProjectAnnualAmount(
+                company_id=project.company_id,
+                year=year,
+                amount=wanted[year],
+                created_by=user_id,
+                updated_by=user_id,
+            )
+        )
+        changed = True
+    return changed
 
 
 async def _load_project(session, project_id: uuid.UUID, company_id: uuid.UUID) -> CompanyProject:
@@ -90,15 +149,22 @@ async def list_projects(
     "", response_model=ProjectRead, status_code=status.HTTP_201_CREATED, summary="Crea projecte"
 )
 async def create_project(payload: ProjectCreate, session: SessionDep, ctx: CompanyCtx):
+    # Coneixement actual (0052): qui nomes consulta no el modifica; verificat nomes
+    # amb evidencia enllacada (una alta no en pot tenir).
+    access.assert_can_edit(ctx.membership.role)
     data = payload.model_dump(exclude_unset=True)
     service_ids = data.pop("service_ids", None) or []
+    annual = data.pop("annual_amounts", None) or []
     services = await _resolve_services(session, ctx.company_id, service_ids)
 
     project = CompanyProject(
         company_id=ctx.company_id, created_by=ctx.user_id, updated_by=ctx.user_id, **data
     )
     project.services = services
+    _check_annual_amounts(project, annual)
+    _set_annual_amounts(project, annual, ctx.user_id)
     session.add(project)
+    await require_evidence_if_verified(session, project, ctx.company_id)
     await session.commit()
     await session.refresh(project)
     await audit.record(
@@ -122,16 +188,33 @@ async def get_project(project_id: uuid.UUID, session: SessionDep, ctx: CompanyCt
 async def update_project(
     project_id: uuid.UUID, payload: ProjectUpdate, session: SessionDep, ctx: CompanyCtx
 ):
+    access.assert_can_edit(ctx.membership.role)
     project = await _load_project(session, project_id, ctx.company_id)
     data = payload.model_dump(exclude_unset=True)
     service_ids = data.pop("service_ids", None)
+    annual = data.pop("annual_amounts", None)
 
     for field, value in data.items():
         setattr(project, field, value)
     project.updated_by = ctx.user_id
+    # Abans de cap consulta: l'historial dels camps es el que diu que ha canviat.
+    await require_evidence_if_verified(session, project, ctx.company_id)
 
     if service_ids is not None:
-        project.services = await _resolve_services(session, ctx.company_id, service_ids)
+        services = await _resolve_services(session, ctx.company_id, service_ids)
+        if {s.id for s in services} != {s.id for s in project.services}:
+            # Les linies de servei son part del que es va verificar.
+            unverify_for_dependent_change(project)
+        project.services = services
+    if annual is not None:
+        _check_annual_amounts(project, annual)
+        if _set_annual_amounts(project, annual, ctx.user_id):
+            # El desglossament es part del que es va verificar.
+            unverify_for_dependent_change(project)
+    elif data.keys() & {"start_date", "end_date", "amount"}:
+        _check_annual_amounts(
+            project, [{"year": a.year, "amount": a.amount} for a in project.annual_amounts]
+        )
 
     await session.commit()
     await session.refresh(project)
@@ -153,6 +236,7 @@ async def update_project(
 async def delete_project(
     project_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx
 ) -> Response:
+    access.assert_can_delete(ctx.membership.role)
     project = await _load_project(session, project_id, ctx.company_id)
     await delete_links_for_entity(session, LinkedEntityType.COMPANY_PROJECT, project.id)
     await session.delete(project)

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date
 from typing import Any
 
 import sqlalchemy as sa
@@ -201,6 +201,11 @@ async def load_structure_view(
         extension_months=tender.extension_months,
         regulated_harmonised=tender.regulated_harmonised,
         planned_start_date=tender.planned_start_date,
+        submission_deadline=(
+            tender.deadline_at.astimezone(UTC).date()
+            if tender.deadline_at is not None and tender.deadline_at.tzinfo is not None
+            else (tender.deadline_at.date() if tender.deadline_at is not None else None)
+        ),
         blocks=tuple(
             BlockView(
                 code=b.code,

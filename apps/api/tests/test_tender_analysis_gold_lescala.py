@@ -9,6 +9,14 @@ la centraleta sense capacitats es `unknown`, J6 no es
 perd, l'ENS declarat amb evidencia demana revisio i no bloqueja, R1/R2 son
 `unknown` i no bloquegen, cap bloqueig confirmat, cap proposta, cap producte, i
 ni el coneixement ni el plec canvien.
+
+Qualificacio (0052, gold v3): l'RC satisfa amb dades declarades amb evidencia
+(revisio, cap bloqueig); R1 i R2 son `unknown` perque el plec no dona el termini de
+presentacio (cap rellotge decideix quins son els darrers exercicis o anys); el registre
+d'operadors amb abast parcial queda
+`unknown` amb revisio; els mitjans de R4a hi son pero el suport 24x7 amb escalat
+no te codi i el calibratge no te prova: `unknown`; les 20 IPv4 declarades cobreixen
+el minim de R8c i deixen els dos trams de C3 `at_risk` (no verificats).
 """
 
 from __future__ import annotations
@@ -65,6 +73,14 @@ async def test_the_lescala_analysis_invents_nothing_and_decides_nothing(db, tena
     rows = await build_company_twin(db, company)
     await db.commit()  # l'API d'evidencia va en una altra transaccio
     await _link_evidence(client_a, company, "company_certification", rows["certification"].id)
+    q = rows["qualification"]
+    best_year = max(q["years"])
+    for entity_type, entity_id in (
+        ("company_financial_year", q["years"][best_year].id),
+        ("company_project", q["projects"]["network"].id),
+        ("company_insurance", q["insurance"].id),
+    ):
+        await _link_evidence(client_a, company, entity_type, entity_id)
     await db.commit()
 
     structure_before = analysis.structure_fingerprint(
@@ -203,23 +219,69 @@ async def test_the_lescala_analysis_invents_nothing_and_decides_nothing(db, tena
         for f in findings
     )
 
-    # --- R1/R2/RC: sense dada -> unknown, cap bloqueig; CNMC sense document -> no satisfies.
-    for code in ("R1", "R2", "R5a"):
-        assert fits[rq[code]].fit_result == "unknown", code
+    # --- Qualificacio (0052): declarada amb evidencia -> satisfies, no verificada, revisio.
+    for code, explanation in (("R5a", X.INSURANCE_MET),):
+        fit = fits[rq[code]]
+        assert (fit.fit_result, fit.knowledge_source, fit.verification_status) == (
+            "satisfies",
+            "current_declared",
+            "not_verified",
+        ), code
+        assert (fit.explanation_code, fit.proof_status) == (explanation, "sufficient"), code
+        assert any(
+            f.finding_type == FindingType.REVIEW_REQUIRED
+            and f.requirement_id == rq[code]
+            and f.explanation_code == X.DECLARED_NOT_VERIFIED
+            for f in findings
+        ), code
+    # R1: «els 3 ultims exercicis» es relatiu al plec. Sense termini de presentacio, no se
+    # sap quins son: unknown, mai «els mes recents que hi ha a la base».
+    r1 = fits[rq["R1"]]
+    assert (r1.fit_result, r1.explanation_code) == (
+        "unknown",
+        X.QUALIFICATION_REFERENCE_DATE_MISSING,
+    )
+    assert r1.support_json["reference_date"] is None
+    # R2: sense termini de presentacio no se sap quins son «els darrers 3 anys». El resultat
+    # ja no ve de carregar l'import del projecte a l'any en que acaba.
+    r2 = fits[rq["R2"]]
+    assert (r2.fit_result, r2.explanation_code) == (
+        "unknown",
+        X.QUALIFICATION_REFERENCE_DATE_MISSING,
+    )
+    assert r2.support_json["reference_date"] is None
+    # R3a: operador declarat amb una inscripcio d'abast parcial -> unknown + revisio, mai
+    # satisfies ni bloqueig.
+    cnmc = fits[rq["R3a"]]
+    assert (cnmc.fit_result, cnmc.explanation_code) == (
+        "unknown",
+        X.REGISTRATION_SCOPE_NOT_COVERED,
+    )
+    assert any(
+        f.finding_type == FindingType.REVIEW_REQUIRED
+        and f.requirement_id == rq["R3a"]
+        and f.explanation_code == X.REGISTRATION_SCOPE_NOT_COVERED
+        for f in findings
+    )
+    assert any(
+        question.question_code == Q.COMPANY_REVIEW_REGISTRATION_SCOPE
+        and question.requirement_id == rq["R3a"]
+        for question in run.questions
+    )
+    # R4a: perfils i equips calibrats hi son (declarats), pero el suport 24x7 amb escalat no
+    # te codi i el calibratge no te prova: unknown, mai bloqueig. Disponible != adscrit.
+    r4a = fits[rq["R4a"]]
+    assert r4a.fit_result == "unknown" and r4a.proof_status == "missing"
+    assert r4a.support_json["reasons"] == ["satisfied_declared", "satisfied_declared"]
+    # R8c / C3: 20 IPv4 declarades -> minim de 10 cobert; els trams de 15 i 20, oberts.
+    assert fits[rq["R8c"]].fit_result == "satisfies"
+    c3 = crits[crit["C3"]]
+    assert (c3.points_status, c3.at_risk_points, c3.lost_points) == ("at_risk", 2.0, 0.0)
+    for code in ("R1", "R2", "R3a", "R4a", "R5a", "R8c"):
         assert not any(
             f.finding_type == FindingType.BLOCKER_POTENTIAL and f.requirement_id == rq[code]
             for f in findings
         ), code
-    assert fits[rq["R5a"]].proof_status == "unknown"
-    cnmc = fits[rq["R3a"]]
-    assert (cnmc.fit_result, cnmc.proof_status, cnmc.explanation_code) == (
-        "unknown",
-        "missing",
-        X.PROOF_MISSING_FOR_CLAIM,
-    )
-    # Adscripcio: les parts conegudes i desconegudes queden separades; cap bloqueig per una
-    # necessitat sense mapar.
-    assert fits[rq["R4a"]].fit_result == "unknown"
     # Bloc 4: vies des de dades actuals, sense inventar cap soci local.
     fibre = [c for c in run.delivery_candidates if c.scope_item_id == items["S-B4-FIBRE"]]
     # El requisit de certificacio OTDR (necessitat mapada a `fiber_deployment`, sense
@@ -297,7 +359,7 @@ async def test_the_lescala_analysis_invents_nothing_and_decides_nothing(db, tena
 
     # Resultat esperat, determinista i sense cap dada privada: les xifres de resum.
     expected = json.loads(
-        '{"fit": {"satisfies": 2, "does_not_satisfy": 1, "unknown": 21, "not_applicable": 10}, '
+        '{"fit": {"satisfies": 4, "does_not_satisfy": 1, "unknown": 19, "not_applicable": 10}, '
         '"blocker_potential_count": 0, "lost_points": 5.0, "not_assessable_points": 95.0}'
     )
     keys = ("fit", "blocker_potential_count", "lost_points")

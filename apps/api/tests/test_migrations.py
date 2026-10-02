@@ -1845,3 +1845,83 @@ def test_l_analisi_es_pot_aplicar_i_desfer_perque_son_dades_derivades():
     assert "INSERT INTO" not in down and "UPDATE " not in down.replace("UPDATE alembic_version", "")
     created = set(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", up))
     assert created == set(re.findall(r"DROP INDEX (\w+)", down))
+
+
+def test_la_qualificacio_s_aplica_neutra_i_el_downgrade_refusa_en_comptes_de_reinterpretar():
+    """0051 -> 0052 -> 0051. L'upgrade afegeix origen a cinc taules del perfil (les files
+    que hi ha queden declarades, vigents, pendents i datades el dia de creacio), abast
+    als registres, perfils a les persones, un nombre als fets quantitatius, el limit de
+    RC patronal, els imports executats per any i la taula d'equips. Cap INSERT, UPDATE ni
+    DELETE (`as_of` es explicit i neix nul: cap backfill). El downgrade comprova primer
+    que no hi hagi res que 0051 no pugui guardar, per valors explicits i sense cap
+    comparacio de dates (cap zona horaria), i no reinterpreta ni esborra res.
+    """
+    up = _offline_sql("upgrade", "0051_tender_analysis:0052_company_qualification")
+    down = _offline_sql("downgrade", "0052_company_qualification:0051_tender_analysis")
+
+    tables = ("company_financial_years", "company_projects", "company_insurances",
+              "company_registrations", "company_people")  # fmt: skip
+    for table in tables:
+        assert (
+            f"ALTER TABLE {table} ADD COLUMN knowledge_origin VARCHAR(20) "
+            "DEFAULT 'declared' NOT NULL"
+        ) in up, table
+        assert (
+            f"ALTER TABLE {table} ADD COLUMN verification_status VARCHAR(20) "
+            "DEFAULT 'pending_verification' NOT NULL"
+        ) in up, table
+        assert (
+            f"ALTER TABLE {table} ADD COLUMN lifecycle VARCHAR(11) DEFAULT 'current' NOT NULL"
+        ) in up, table
+        assert f"ALTER TABLE {table} ADD COLUMN as_of DATE;" in up, table
+        assert f"ALTER TABLE {table} DROP COLUMN knowledge_origin;" in down, table
+    assert "ALTER TABLE company_registrations ADD COLUMN scope_service_lines JSONB" in up
+    assert "ALTER TABLE company_people ADD COLUMN profile_codes JSONB" in up
+    assert "ALTER TABLE company_operating_facts ADD COLUMN value_number NUMERIC(18, 4)" in up
+    assert (
+        "CHECK (value_number IS NULL OR key IN ('ipv4_assignable_count'))" in up
+        and "CHECK (value_number IS NULL OR value_number >= 0)" in up
+    )
+    assert "ALTER TABLE company_insurance_limits ALTER COLUMN kind TYPE VARCHAR(19);" in up
+    assert "ALTER TABLE company_insurance_limits ALTER COLUMN kind TYPE VARCHAR(16);" in down
+    equipment = up.split("CREATE TABLE company_equipment (")[1].split("\n);")[0]
+    for clause in (
+        "REFERENCES companies (id) ON DELETE CASCADE",
+        "CHECK (calibration_valid_until IS NULL OR calibration_required IS TRUE)",
+        "CHECK (quantity >= 1)",
+        "CONSTRAINT uq_company_equipment_serial UNIQUE (company_id, serial_reference)",
+        "CHECK (valid_until IS NULL OR valid_until >= as_of)",
+    ):
+        assert clause in equipment, clause
+    assert "price" not in equipment and "cost" not in equipment, "un equip no te preu"
+    annual = up.split("CREATE TABLE company_project_annual_amounts (")[1].split("\n);")[0]
+    for clause in (
+        "REFERENCES company_projects (id) ON DELETE CASCADE",
+        "CONSTRAINT uq_company_project_annual_amounts_year UNIQUE (project_id, year)",
+        "CHECK (amount >= 0)",
+    ):
+        assert clause in annual, clause
+    # Neutralitat: cap fila es toca en pujar.
+    statements = up.replace("UPDATE alembic_version", "")
+    assert "UPDATE " not in statements
+    for forbidden in ("INSERT INTO", "DELETE FROM", "DROP TABLE", "DROP COLUMN"):
+        assert forbidden not in statements, forbidden
+    # Downgrade: la guarda va abans de cap DDL i no reinterpreta res.
+    guard = down.split("DO $$")[1].split("END $$")[0]
+    assert down.index("DO $$") < down.index("DROP TABLE company_equipment")
+    assert guard.count("RAISE EXCEPTION 'downgrade_0052_incompatible_rows") == len(tables) + 6
+    assert "created_at" not in guard and "TIME ZONE" not in guard.upper(), "cap data a la guarda"
+    for condition in (
+        "FROM company_registrations WHERE scope_service_lines IS NOT NULL",
+        "FROM company_people WHERE profile_codes IS NOT NULL",
+        "FROM company_operating_facts WHERE value_number IS NOT NULL",
+        "FROM company_insurance_limits WHERE kind = 'employer_per_victim'",
+        "FROM company_equipment WHERE TRUE",
+        "FROM company_project_annual_amounts WHERE TRUE",
+        "as_of IS NOT NULL",
+        "verification_status <> 'pending_verification'",
+    ):
+        assert condition in guard, condition
+    for forbidden in ("INSERT INTO", "DELETE FROM", "COALESCE"):
+        assert forbidden not in down, forbidden
+    assert "UPDATE " not in down.replace("UPDATE alembic_version", "")

@@ -237,6 +237,8 @@ async def test_everything_declared_by_hand_is_declared_and_pending(client_a, ten
         "solution_products": 1,
         "partners": 1,
         "partner_roles": 2,
+        # 0052: equips, cap en aquest test.
+        "equipment": 0,
     }
 
 

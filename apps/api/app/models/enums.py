@@ -74,6 +74,9 @@ class RegistrationType(StrEnum):
     BUSINESS_CLASSIFICATION = "business_classification"
     PROFESSIONAL_REGISTRY = "professional_registry"
     ADMINISTRATIVE_ACCREDITATION = "administrative_accreditation"
+    #: Registre sectorial d'operadors (p. ex. el Registre d'Operadors de la CNMC);
+    #: l'emissor es a `issuer` i els serveis inscrits a `scope_service_lines` (0052).
+    SECTOR_OPERATOR_REGISTRY = "sector_operator_registry"
     OTHER = "other"
 
 
@@ -153,6 +156,8 @@ class LinkedEntityType(StrEnum):
     SOLUTION_PRODUCT = "solution_product"
     COMPANY_PARTNER = "company_partner"
     PARTNER_ROLE = "partner_role"
+    # Mitjans operatius (0052): equips i instruments que l'empresa pot adscriure.
+    COMPANY_EQUIPMENT = "company_equipment"
 
 
 class RelationshipType(StrEnum):
@@ -1007,6 +1012,8 @@ class InsuranceLimitKind(StrEnum):
     PER_CLAIM = "per_claim"
     PER_VICTIM = "per_victim"
     ANNUAL_AGGREGATE = "annual_aggregate"
+    #: RC patronal per victima (0052): diferent del sublimit general per victima.
+    EMPLOYER_PER_VICTIM = "employer_per_victim"
     SUBLIMIT = "sublimit"
     UNKNOWN = "unknown"
 
@@ -1379,6 +1386,33 @@ class OperatingFactKey(StrEnum):
     DATACENTER_TIER3 = "datacenter_tier3"
     OWN_FTTH_INFRASTRUCTURE = "own_ftth_infrastructure"
     SUPPORT_24X7 = "support_24x7"
+    #: Fet quantitatiu (0052): `value` diu si l'empresa en te i `value_number` quantes.
+    #: El tipus de valor de cada clau es a `app/knowledge/vocabulary.py`.
+    IPV4_ASSIGNABLE_COUNT = "ipv4_assignable_count"
+
+
+class EquipmentType(StrEnum):
+    """Tipus d'equip o instrument adscrivible (0052). Tancat; s'amplia aqui i a una
+    migracio del CHECK. No es cap producte que l'empresa vengui."""
+
+    OTDR = "otdr"
+    OLTS = "olts"
+    FUSION_SPLICER = "fusion_splicer"
+    OPTICAL_POWER_METER = "optical_power_meter"
+    LIGHT_SOURCE = "light_source"
+    CABLE_CERTIFIER = "cable_certifier"
+    SPECTRUM_ANALYZER = "spectrum_analyzer"
+    OTHER = "other"
+
+
+class EquipmentAccessMode(StrEnum):
+    """Com l'empresa disposa de l'equip. Nul = no consta."""
+
+    OWNED = "owned"
+    LEASED = "leased"
+    RENTED = "rented"
+    PARTNER_PROVIDED = "partner_provided"
+    OTHER = "other"
 
 
 class CapabilityStatus(StrEnum):

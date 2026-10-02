@@ -32,7 +32,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
-from app.models.credentials import CompanyCertification
+from app.models.credentials import CompanyCertification, CompanyInsurance, CompanyRegistration
 from app.models.documents import DocumentLink
 from app.models.enums import LinkedEntityType, VerificationStatus
 from app.models.knowledge import (
@@ -44,7 +44,10 @@ from app.models.knowledge import (
     SolutionCapability,
     SolutionProduct,
 )
-from app.models.profile import CompanyService
+from app.models.people import CompanyPerson
+from app.models.profile import CompanyFinancialYear, CompanyService
+from app.models.projects import CompanyProject
+from app.models.resources import CompanyEquipment
 
 
 class EvidenceRequiredError(ValidationError):
@@ -62,6 +65,13 @@ KNOWLEDGE_KINDS: dict[str, tuple[LinkedEntityType, Any]] = {
     "solution_product": (LinkedEntityType.SOLUTION_PRODUCT, SolutionProduct),
     "partner": (LinkedEntityType.COMPANY_PARTNER, CompanyPartner),
     "partner_role": (LinkedEntityType.PARTNER_ROLE, PartnerRoleRow),
+    # Qualificacio i mitjans (0052): les taules del perfil que ara son coneixement.
+    "financial_year": (LinkedEntityType.COMPANY_FINANCIAL_YEAR, CompanyFinancialYear),
+    "project": (LinkedEntityType.COMPANY_PROJECT, CompanyProject),
+    "insurance": (LinkedEntityType.COMPANY_INSURANCE, CompanyInsurance),
+    "registration": (LinkedEntityType.COMPANY_REGISTRATION, CompanyRegistration),
+    "person": (LinkedEntityType.COMPANY_PERSON, CompanyPerson),
+    "equipment": (LinkedEntityType.COMPANY_EQUIPMENT, CompanyEquipment),
 }
 MODEL_BY_ENTITY_TYPE = {entity_type: model for entity_type, model in KNOWLEDGE_KINDS.values()}
 ENTITY_TYPE_BY_MODEL = {model: entity_type for entity_type, model in KNOWLEDGE_KINDS.values()}
@@ -127,6 +137,16 @@ def material_changes(instance: Any) -> list[str]:
         if column.key not in EDITORIAL_FIELDS | _BOOKKEEPING_FIELDS
         and state.attrs[column.key].history.has_changes()
     )
+
+
+def unverify_for_dependent_change(instance: Any) -> bool:
+    """Una dada verificada que canvia per una filla seva (un limit d'una polissa,
+    els serveis d'un projecte) torna a `pending_verification`: el document
+    acreditava el conjunt. Cert si l'ha desverificada."""
+    if instance.verification_status != VerificationStatus.VERIFIED:
+        return False
+    instance.verification_status = VerificationStatus.PENDING_VERIFICATION
+    return True
 
 
 def unverify_if_materially_changed(instance: Any) -> bool:

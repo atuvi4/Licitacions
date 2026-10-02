@@ -81,4 +81,9 @@ financial_years_router = build_crud_router(
     order_by=[CompanyFinancialYear.year.desc()],
     entity_type=LinkedEntityType.COMPANY_FINANCIAL_YEAR,
     conflict_message="Ja hi ha un exercici registrat per a aquest any.",
+    # Coneixement actual (0052): verificat nomes amb evidencia; qui nomes consulta no
+    # el modifica.
+    validate=require_evidence_if_verified,
+    authorize_write=access.assert_can_edit,
+    authorize_delete=access.assert_can_delete,
 )

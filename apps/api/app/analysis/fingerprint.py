@@ -284,6 +284,9 @@ class TenderStructureView:
     extension_months: int | None = None
     regulated_harmonised: bool | None = None
     planned_start_date: date | None = None
+    #: Data de referencia de les finestres temporals de la qualificacio (0052): el
+    #: termini de presentacio (`tenders.deadline_at`, en UTC). Nul = el plec no la dona.
+    submission_deadline: date | None = None
     blocks: tuple[BlockView, ...] = ()
     sites: tuple[SiteView, ...] = ()
     scope_items: tuple[ScopeItemView, ...] = ()
@@ -298,7 +301,7 @@ class TenderStructureView:
             unique = {canonical_json(item.canonical()): item.canonical() for item in items}
             return [unique[k] for k in sorted(unique)]
 
-        return {
+        canonical = {
             "duration_months": self.duration_months,
             "extension_months": self.extension_months,
             "regulated_harmonised": self.regulated_harmonised,
@@ -310,6 +313,10 @@ class TenderStructureView:
             "criteria": as_set(self.criteria),
             "facts": as_set(self.facts),
         }
+        # Nomes quan hi es: un plec sense termini conserva l'empremta d'abans.
+        if self.submission_deadline is not None:
+            canonical["submission_deadline"] = self.submission_deadline
+        return canonical
 
 
 def structure_fingerprint(view: TenderStructureView) -> str:

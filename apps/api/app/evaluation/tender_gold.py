@@ -199,7 +199,7 @@ class _Loader:
             tender_id=tender.id,
             status=AnalysisRunStatus.COMPLETED,
             input_fingerprint=dataset_fingerprint(self.dataset),
-            extractor_version="tender-gold-v2",
+            extractor_version="tender-gold-v3",
             prompt_version="none",
             schema_version=self.dataset["schema"],
             provider="gold",

@@ -11,6 +11,7 @@ from pydantic import Field, field_validator, model_validator
 from app.knowledge.vocabulary import SERVICE_LINE_CODES
 from app.models.enums import (
     DeliveryMode,
+    KnowledgeLifecycle,
     KnowledgeOrigin,
     SpecializationLevel,
     TerritoryType,
@@ -112,6 +113,10 @@ class FinancialYearBase(APIModel):
     revenue: Decimal | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     notes: str | None = None
+    #: Procedencia (0052). Sense `verification_status`: verificar nomes es pot per
+    #: `/knowledge/records/{kind}/{id}/verify` (propietari o administracio).
+    as_of: date | None = None
+    lifecycle: KnowledgeLifecycle | None = None
 
 
 class FinancialYearCreate(FinancialYearBase):
@@ -128,3 +133,7 @@ class FinancialYearRead(AuditFields):
     revenue: Decimal | None = None
     currency: str
     notes: str | None = None
+    knowledge_origin: KnowledgeOrigin
+    as_of: date | None = None
+    verification_status: VerificationStatus
+    lifecycle: KnowledgeLifecycle

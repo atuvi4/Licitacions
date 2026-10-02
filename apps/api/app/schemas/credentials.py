@@ -17,7 +17,7 @@ from app.models.enums import (
     RegistrationType,
     VerificationStatus,
 )
-from app.schemas.common import APIModel, AuditFields, ExpirableMixin
+from app.schemas.common import APIModel, AuditFields, ExpirableMixin, ORMModel
 
 
 class _DateOrderMixin(APIModel):
@@ -92,7 +92,29 @@ class CertificationRead(AuditFields, ExpirableMixin):
     lifecycle: KnowledgeLifecycle
 
 
-class RegistrationBase(_DateOrderMixin):
+class _KnowledgeOriginIn(APIModel):
+    as_of: date | None = None
+    lifecycle: KnowledgeLifecycle | None = None
+
+
+class _KnowledgeOriginRead(ORMModel):
+    knowledge_origin: KnowledgeOrigin
+    #: Nul = ningu no ha dit de quan es la dada (0052).
+    as_of: date | None = None
+    verification_status: VerificationStatus
+    lifecycle: KnowledgeLifecycle
+
+
+def _known_service_lines(value: list[str] | None) -> list[str] | None:
+    if value is None:
+        return None
+    unknown = sorted(set(value) - SERVICE_LINE_CODES)
+    if unknown:
+        raise ValueError(f"Linies de servei desconegudes: {', '.join(unknown)}.")
+    return sorted(set(value))
+
+
+class RegistrationBase(_DateOrderMixin, _KnowledgeOriginIn):
     name: str | None = Field(default=None, min_length=2, max_length=200)
     type: RegistrationType | None = None
     registration_number: str | None = Field(default=None, max_length=120)
@@ -100,6 +122,14 @@ class RegistrationBase(_DateOrderMixin):
     issued_at: date | None = None
     expires_at: date | None = None
     notes: str | None = None
+    #: Abast ESTRUCTURAT (0052): linies de servei que la inscripcio cobreix. El
+    #: text de `notes` no es llegeix per deduir-ne cap.
+    scope_service_lines: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("scope_service_lines")
+    @classmethod
+    def _scope_lines(cls, value: list[str] | None) -> list[str] | None:
+        return _known_service_lines(value)
 
 
 class RegistrationCreate(RegistrationBase):
@@ -111,16 +141,17 @@ class RegistrationUpdate(RegistrationBase):
     pass
 
 
-class RegistrationRead(AuditFields, ExpirableMixin):
+class RegistrationRead(AuditFields, ExpirableMixin, _KnowledgeOriginRead):
     name: str
     type: RegistrationType
     registration_number: str | None = None
     issuer: str | None = None
     issued_at: date | None = None
     notes: str | None = None
+    scope_service_lines: list[str] | None = None
 
 
-class InsuranceBase(_DateOrderMixin):
+class InsuranceBase(_DateOrderMixin, _KnowledgeOriginIn):
     type: InsuranceType | None = None
     provider: str | None = Field(default=None, max_length=200)
     policy_number: str | None = Field(default=None, max_length=120)
@@ -144,7 +175,7 @@ class InsuranceUpdate(InsuranceBase):
     pass
 
 
-class InsuranceRead(AuditFields, ExpirableMixin):
+class InsuranceRead(AuditFields, ExpirableMixin, _KnowledgeOriginRead):
     type: InsuranceType
     provider: str | None = None
     policy_number: str | None = None

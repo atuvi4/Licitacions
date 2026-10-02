@@ -20,7 +20,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models.enums import CapabilityComparator, CapabilityValueType
+from app.models.enums import (
+    CapabilityComparator,
+    CapabilityValueType,
+    EquipmentType,
+    OperatingFactKey,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +159,85 @@ CERTIFICATION_STANDARDS: tuple[CertificationStandard, ...] = (
 SERVICE_LINE_CODES = frozenset(s.code for s in SERVICE_LINES)
 CAPABILITIES_BY_CODE = {c.code: c for c in CAPABILITIES}
 STANDARDS_BY_CODE = {s.code: s for s in CERTIFICATION_STANDARDS}
+
+
+# --- Qualificacio i mitjans (0052) -------------------------------------------------
+#
+# Perfils professionals i tipus d'equip son codis tancats, com les linies de servei:
+# una persona en pot cobrir diversos; un plec en demana per codi. Cap taula propia:
+# viuen en llistes JSON validades aqui (`profile_codes`) o en un enum amb CHECK
+# (`EquipmentType`). Res d'una empresa concreta.
+
+
+@dataclass(frozen=True, slots=True)
+class ProfessionalProfile:
+    code: str
+    label: str
+
+
+PROFESSIONAL_PROFILES: tuple[ProfessionalProfile, ...] = (
+    ProfessionalProfile("project_manager", "Cap de projecte"),
+    ProfessionalProfile("network_security_specialist", "Especialista de xarxa i seguretat"),
+    ProfessionalProfile("voip_specialist", "Especialista VoIP"),
+    ProfessionalProfile("fiber_certification_specialist", "Responsable de fibra i certificacio"),
+    ProfessionalProfile("network_engineer", "Enginyer de xarxa"),
+    ProfessionalProfile("radio_link_specialist", "Especialista en radioenllacos"),
+    ProfessionalProfile("field_technician", "Tecnic de camp"),
+    ProfessionalProfile("service_desk_agent", "Agent de suport i atencio"),
+    ProfessionalProfile("data_center_operator", "Operador de CPD"),
+)
+PROFESSIONAL_PROFILE_CODES = frozenset(p.code for p in PROFESSIONAL_PROFILES)
+PROFILES_BY_CODE = {p.code: p for p in PROFESSIONAL_PROFILES}
+
+EQUIPMENT_TYPE_LABELS: dict[str, str] = {
+    EquipmentType.OTDR.value: "Reflectometre optic (OTDR)",
+    EquipmentType.OLTS.value: "Equip de perdues optiques (OLTS)",
+    EquipmentType.FUSION_SPLICER.value: "Fusionadora de fibra",
+    EquipmentType.OPTICAL_POWER_METER.value: "Mesurador de potencia optica",
+    EquipmentType.LIGHT_SOURCE.value: "Font de llum",
+    EquipmentType.CABLE_CERTIFIER.value: "Certificador de cablejat",
+    EquipmentType.SPECTRUM_ANALYZER.value: "Analitzador d'espectre",
+    EquipmentType.OTHER.value: "Altres",
+}
+assert set(EQUIPMENT_TYPE_LABELS) == {t.value for t in EquipmentType}
+
+#: Quin valor porta cada fet operatiu: un boolea (`value`) o, a mes, un nombre
+#: (`value_number`). Un fet numeric amb `value = true` ha de dir quants.
+OPERATING_FACT_VALUE_TYPES: dict[str, CapabilityValueType] = {
+    OperatingFactKey.TELECOM_OPERATOR_CNMC.value: _B,
+    OperatingFactKey.OWN_NUMBER_RANGE_NRN.value: _B,
+    OperatingFactKey.DATACENTER_TIER3.value: _B,
+    OperatingFactKey.OWN_FTTH_INFRASTRUCTURE.value: _B,
+    OperatingFactKey.SUPPORT_24X7.value: _B,
+    OperatingFactKey.IPV4_ASSIGNABLE_COUNT.value: _N,
+}
+assert set(OPERATING_FACT_VALUE_TYPES) == {k.value for k in OperatingFactKey}
+NUMERIC_FACT_KEYS = frozenset(key for key, kind in OPERATING_FACT_VALUE_TYPES.items() if kind == _N)
+
+
+def fact_value_type(key: str) -> CapabilityValueType:
+    return OPERATING_FACT_VALUE_TYPES[str(key)]
+
+
+def validate_fact_value(key: str, value: bool, value_number) -> None:
+    """`ValueError` si el valor no te la forma que demana el fet.
+
+    Un fet boolea no porta nombre. Un fet numeric afirmat (`value = true`) porta
+    el nombre, mai negatiu; negat (`value = false`) no en porta cap.
+    """
+    kind = OPERATING_FACT_VALUE_TYPES.get(str(key))
+    if kind is None:
+        raise ValueError(f"Fet operatiu desconegut: {key}.")
+    if kind == CapabilityValueType.BOOLEAN:
+        if value_number is not None:
+            raise ValueError(f"{key} es un fet de si o no: no porta nombre.")
+        return
+    if value and value_number is None:
+        raise ValueError(f"{key} es un fet quantitatiu: cal `value_number`.")
+    if not value and value_number is not None:
+        raise ValueError(f"{key} negat no porta cap nombre.")
+    if value_number is not None and value_number < 0:
+        raise ValueError(f"{key} no pot ser negatiu.")
 
 
 def validate_level(standard_code: str | None, level: str | None) -> None:

@@ -34,21 +34,31 @@ from app.knowledge import proposals as P
 from app.knowledge.snapshot import (
     CapabilityIn,
     CertificationIn,
+    EquipmentIn,
+    ExecutionReferenceIn,
     FactIn,
+    FinancialYearIn,
+    InsuranceIn,
     KnowledgeInputs,
     KnowledgeSnapshot,
     ObservationIn,
     PartnerIn,
     PartnerRoleIn,
+    PersonIn,
     ProductIn,
     Provenance,
+    RegistrationIn,
     ServiceIn,
     SolutionIn,
     SolutionProductIn,
     build_snapshot,
 )
-from app.knowledge.vocabulary import validate_capability_value, validate_level
-from app.models.credentials import CompanyCertification
+from app.knowledge.vocabulary import (
+    validate_capability_value,
+    validate_fact_value,
+    validate_level,
+)
+from app.models.credentials import CompanyCertification, CompanyInsurance, CompanyRegistration
 from app.models.enums import (
     CoverageEntityType,
     HistoricBidDecision,
@@ -72,7 +82,10 @@ from app.models.knowledge import (
     SolutionCapability,
     SolutionProduct,
 )
-from app.models.profile import CompanyService
+from app.models.people import CompanyPerson
+from app.models.profile import CompanyFinancialYear, CompanyService
+from app.models.projects import CompanyProject
+from app.models.resources import CompanyEquipment
 from app.services import knowledge_coverage, knowledge_evidence
 from app.services.entities import delete_links_for_entity
 
@@ -113,12 +126,21 @@ def _prov(
     return Provenance(
         record_id=str(row.id),
         origin=KnowledgeOrigin(row.knowledge_origin),
-        as_of=row.as_of,
+        as_of=row.as_of if row.as_of is not None else _created_on(row),
         valid_until=valid_until if valid_until is not None else getattr(row, "valid_until", None),
         verification=VerificationStatus(row.verification_status),
         lifecycle=KnowledgeLifecycle(lifecycle or row.lifecycle),
         has_evidence=(str(entity_type), str(row.id)) in evidence,
     )
+
+
+def _created_on(row: Any) -> date:
+    """La data de creacio en UTC: el `as_of` d'una dada que no en diu cap (0052).
+    Mai la zona horaria de la sessio ni del servidor."""
+    created = row.created_at
+    if created.tzinfo is not None:
+        created = created.astimezone(UTC)
+    return created.date()
 
 
 async def _rows(session: AsyncSession, model: Any, company_id: uuid.UUID) -> list[Any]:
@@ -150,6 +172,7 @@ async def load_inputs(session: AsyncSession, company_id: uuid.UUID) -> Knowledge
                 value=f.value,
                 detail=f.detail,
                 coverage=knowledge_coverage.coverage_input(f),
+                value_number=f.value_number,
             )
             for f in await _rows(session, CompanyOperatingFact, company_id)
         ],
@@ -222,6 +245,77 @@ async def load_inputs(session: AsyncSession, company_id: uuid.UUID) -> Knowledge
                 coverage=knowledge_coverage.coverage_input(r),
             )
             for r in await _rows(session, PartnerRoleRow, company_id)
+        ],
+        # Qualificacio i mitjans (0052): les taules del perfil que ara son coneixement.
+        financial_years=[
+            FinancialYearIn(
+                prov=_prov(y, evidence), year=y.year, revenue=y.revenue, currency=y.currency
+            )
+            for y in await _rows(session, CompanyFinancialYear, company_id)
+        ],
+        execution_references=[
+            ExecutionReferenceIn(
+                prov=_prov(p, evidence),
+                name=p.name,
+                status=str(p.status),
+                amount=p.amount,
+                currency=p.currency,
+                client_type=str(p.client_type),
+                start_date=p.start_date,
+                end_date=p.end_date,
+                service_lines=tuple(
+                    sorted({s.service_line_code for s in p.services if s.service_line_code})
+                ),
+                annual_amounts=tuple((a.year, a.amount) for a in p.annual_amounts),
+            )
+            for p in await _rows(session, CompanyProject, company_id)
+        ],
+        insurances=[
+            InsuranceIn(
+                # `expires_at` fa de `valid_until` en aquesta taula.
+                prov=_prov(i, evidence, valid_until=i.expires_at),
+                insurance_type=str(i.type),
+                provider=i.provider,
+                currency=i.currency,
+                limits=tuple(sorted((str(limit.kind), limit.amount) for limit in i.limits)),
+                additional_insured=i.additional_insured,
+            )
+            for i in await _rows(session, CompanyInsurance, company_id)
+        ],
+        registrations=[
+            RegistrationIn(
+                prov=_prov(r, evidence, valid_until=r.expires_at),
+                name=r.name,
+                registration_type=str(r.type),
+                issuer=r.issuer,
+                registration_number=r.registration_number,
+                scope=tuple(r.scope_service_lines) if r.scope_service_lines else None,
+            )
+            for r in await _rows(session, CompanyRegistration, company_id)
+        ],
+        people=[
+            PersonIn(
+                prov=_prov(p, evidence),
+                availability=str(p.availability_status),
+                profile_codes=tuple(p.profile_codes) if p.profile_codes else None,
+                years_experience=p.years_experience,
+                role=p.role,
+            )
+            for p in await _rows(session, CompanyPerson, company_id)
+        ],
+        equipment=[
+            EquipmentIn(
+                prov=_prov(e, evidence),
+                equipment_type=str(e.equipment_type),
+                quantity=e.quantity,
+                manufacturer=e.manufacturer,
+                model=e.model,
+                serial_reference=e.serial_reference,
+                access_mode=str(e.access_mode) if e.access_mode else None,
+                calibration_required=e.calibration_required,
+                calibration_valid_until=e.calibration_valid_until,
+            )
+            for e in await _rows(session, CompanyEquipment, company_id)
         ],
         observations=[
             ObservationIn(
@@ -348,9 +442,11 @@ async def _new_entity(
             company_id=company_id,
             key=proposal.key,
             value=proposal.value,
+            value_number=proposal.value_number,
             detail=proposal.detail,
             **provenance,
         )
+        _check_fact(entity)
     elif isinstance(proposal, P.CertificationProposal):
         if not proposal.held:
             raise ObservationNotPromotableError(
@@ -540,6 +636,9 @@ DECLARABLE_KINDS = frozenset(
         "solution_product",
         "partner",
         "partner_role",
+        # Mitjans operatius (0052). La resta de la qualificacio (exercicis, projectes,
+        # assegurances, registres, persones) te el seu CRUD.
+        "equipment",
     }
 )
 
@@ -579,6 +678,24 @@ async def _flush_or_conflict(session: AsyncSession, what: str) -> None:
         raise KnowledgeAlreadyDeclaredError(
             f"Ja hi ha una dada igual sobre {what}.", details={"key": what}
         ) from exc
+
+
+def _check_fact(record: CompanyOperatingFact) -> None:
+    try:
+        validate_fact_value(record.key, record.value, record.value_number)
+    except ValueError as exc:
+        raise InvalidKnowledgeError(str(exc), details={"field": "value_number"}) from None
+
+
+def _check_equipment(record: CompanyEquipment) -> None:
+    if record.calibration_valid_until is not None and record.calibration_required is not True:
+        raise InvalidKnowledgeError(
+            "Una data de calibratge nomes te sentit si l'equip en necessita "
+            "(`calibration_required = true`).",
+            details={"field": "calibration_valid_until"},
+        )
+    if record.quantity is None or record.quantity < 1:
+        raise InvalidKnowledgeError("Cal almenys una unitat.", details={"field": "quantity"})
 
 
 def _check_capability(record: SolutionCapability) -> None:
@@ -627,6 +744,22 @@ async def declare_record(
             company_id=company_id, solution_id=solution.id, product_id=product.id, **provenance
         )
         what = f"{solution.name} / {product.manufacturer} {product.model}"
+    elif kind == "equipment":
+        entity = CompanyEquipment(
+            company_id=company_id,
+            equipment_type=payload.equipment_type,
+            manufacturer=payload.manufacturer,
+            model=payload.model,
+            serial_reference=payload.serial_reference,
+            access_mode=payload.access_mode,
+            quantity=payload.quantity,
+            calibration_required=payload.calibration_required,
+            calibration_valid_until=payload.calibration_valid_until,
+            notes=payload.notes,
+            **provenance,
+        )
+        _check_equipment(entity)
+        what = f"{payload.equipment_type} / {payload.serial_reference or payload.model or '-'}"
     else:
         assert kind == "partner_role", kind
         partner = await _owned(session, CompanyPartner, payload.partner_id, company_id)
@@ -684,6 +817,10 @@ async def update_record(
         )
     if isinstance(record, SolutionCapability):
         _check_capability(record)
+    elif isinstance(record, CompanyOperatingFact):
+        _check_fact(record)
+    elif isinstance(record, CompanyEquipment):
+        _check_equipment(record)
     await _flush_or_conflict(session, str(record_id))
     if knowledge_coverage.supports_coverage(record):
         await knowledge_coverage.refresh_coverage(session, record)
@@ -761,6 +898,9 @@ async def list_records(session: AsyncSession, company_id: uuid.UUID) -> dict[str
         ),
         "partners": await rows(CompanyPartner, CompanyPartner.name),
         "partner_roles": await rows(PartnerRoleRow, PartnerRoleRow.partner_id, PartnerRoleRow.role),
+        "equipment": await rows(
+            CompanyEquipment, CompanyEquipment.equipment_type, CompanyEquipment.serial_reference
+        ),
     }
 
 

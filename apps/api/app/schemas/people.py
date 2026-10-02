@@ -5,9 +5,16 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
-from app.models.enums import AvailabilityStatus, QualificationType
+from app.knowledge.vocabulary import PROFESSIONAL_PROFILE_CODES
+from app.models.enums import (
+    AvailabilityStatus,
+    KnowledgeLifecycle,
+    KnowledgeOrigin,
+    QualificationType,
+    VerificationStatus,
+)
 from app.schemas.common import APIModel, AuditFields, ExpirableMixin
 
 
@@ -20,6 +27,23 @@ class PersonBase(APIModel):
     years_experience: int | None = Field(default=None, ge=0, le=80)
     availability_status: AvailabilityStatus | None = None
     notes: str | None = None
+    #: Perfils ESTRUCTURATS del vocabulari (0052). `professional_profile` es text i no
+    #: es llegeix. Una persona en pot cobrir mes d'un.
+    profile_codes: list[str] | None = Field(default=None, min_length=1)
+    #: Procedencia (0052). Sense `verification_status`: verificar nomes es pot per
+    #: `/knowledge/records/{kind}/{id}/verify` (propietari o administracio).
+    as_of: date | None = None
+    lifecycle: KnowledgeLifecycle | None = None
+
+    @field_validator("profile_codes")
+    @classmethod
+    def _known_profiles(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        unknown = sorted(set(value) - PROFESSIONAL_PROFILE_CODES)
+        if unknown:
+            raise ValueError(f"Perfils desconeguts: {', '.join(unknown)}.")
+        return sorted(set(value))
 
 
 class PersonCreate(PersonBase):
@@ -40,6 +64,11 @@ class PersonRead(AuditFields):
     years_experience: int | None = None
     availability_status: AvailabilityStatus
     notes: str | None = None
+    profile_codes: list[str] | None = None
+    knowledge_origin: KnowledgeOrigin
+    as_of: date | None = None
+    verification_status: VerificationStatus
+    lifecycle: KnowledgeLifecycle
 
 
 class QualificationBase(APIModel):

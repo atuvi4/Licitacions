@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from app.api.deps import CompanyCtx, SessionDep
 from app.api.v1.crud import apply_changes, get_owned_or_404
 from app.core.errors import ConflictError, NotFoundError
+from app.knowledge import access
 from app.models.credentials import CompanyInsurance, CompanyInsuranceLimit
 from app.models.enums import AuditAction
 from app.schemas.credentials import (
@@ -34,6 +35,7 @@ from app.schemas.credentials import (
     InsuranceLimitUpdate,
 )
 from app.services import audit
+from app.services.knowledge_evidence import unverify_for_dependent_change
 
 router = APIRouter(prefix="/insurances/{insurance_id}/limits", tags=["assegurances"])
 
@@ -85,7 +87,10 @@ async def create_limit(
     session: SessionDep,
     ctx: CompanyCtx,
 ):
+    access.assert_can_edit(ctx.membership.role)
     insurance = await _owned_insurance(session, insurance_id, ctx.company_id)
+    # Un limit nou canvia el que la polissa afirma: la verificacio ja no val (0052).
+    unverify_for_dependent_change(insurance)
     limit = CompanyInsuranceLimit(
         company_id=ctx.company_id,
         insurance_id=insurance.id,
@@ -122,8 +127,10 @@ async def update_limit(
     session: SessionDep,
     ctx: CompanyCtx,
 ):
+    access.assert_can_edit(ctx.membership.role)
     insurance = await _owned_insurance(session, insurance_id, ctx.company_id)
     limit = await _owned_limit(session, insurance, limit_id)
+    unverify_for_dependent_change(insurance)
     apply_changes(limit, payload, ctx.user_id)
     try:
         await session.flush()
@@ -149,8 +156,10 @@ async def update_limit(
 async def delete_limit(
     insurance_id: uuid.UUID, limit_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx
 ):
+    access.assert_can_edit(ctx.membership.role)
     insurance = await _owned_insurance(session, insurance_id, ctx.company_id)
     limit = await _owned_limit(session, insurance, limit_id)
+    unverify_for_dependent_change(insurance)
     await session.delete(limit)
     await audit.record(
         session,
