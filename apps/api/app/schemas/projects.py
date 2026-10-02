@@ -6,8 +6,9 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
+from app.knowledge.vocabulary import SERVICE_LINE_CODES
 from app.models.enums import (
     ClientType,
     KnowledgeLifecycle,
@@ -51,8 +52,25 @@ class ProjectBase(APIModel):
     status: ProjectStatus | None = None
     reference_contact: str | None = Field(default=None, max_length=255)
     notes: str | None = None
-    # Substitueix el conjunt complet de serveis vinculats quan s'informa.
-    service_ids: list[uuid.UUID] | None = None
+    #: LEGACY (UI 4C antiga): serveis del cataleg actual. Substitueix el conjunt de
+    #: `project_services`, que des de 0053 ja no llegeix ni la qualificacio ni l'analisi.
+    service_ids: list[uuid.UUID] | None = Field(
+        default=None,
+        description=(
+            "LEGACY (UI 4C antiga). Serveis del cataleg actual vinculats al projecte. NO "
+            "modifica les linies que la referencia acredita ni la qualificacio: aixo es "
+            "`service_line_codes`. No hi ha cap sincronitzacio entre els dos."
+        ),
+    )
+    #: Linies de servei del vocabulari que la referencia ACREDITA (0053). Enviar-les
+    #: substitueix el conjunt sencer (llista buida = cap); no enviar-les el deixa igual.
+    service_line_codes: list[str] | None = Field(
+        default=None,
+        description=(
+            "Linies de servei del vocabulari que la referencia ACREDITA (font de veritat de "
+            "la qualificacio, 0053). Substitueix el conjunt sencer; llista buida = cap."
+        ),
+    )
     #: Imports executats per any (0052). Enviar-los substitueix el desglossament
     #: sencer; una llista buida l'esborra. Sense desglossament, l'import d'un
     #: projecte plurianual no s'imputa a cap any.
@@ -61,6 +79,16 @@ class ProjectBase(APIModel):
     #: `/knowledge/records/{kind}/{id}/verify` (propietari o administracio).
     as_of: date | None = None
     lifecycle: KnowledgeLifecycle | None = None
+
+    @field_validator("service_line_codes")
+    @classmethod
+    def _known_service_lines(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        unknown = sorted(set(value) - SERVICE_LINE_CODES)
+        if unknown:
+            raise ValueError(f"Linies de servei desconegudes: {', '.join(unknown)}.")
+        return sorted(set(value))
 
     @model_validator(mode="after")
     def _check_dates(self):
@@ -99,7 +127,16 @@ class ProjectRead(AuditFields):
     status: ProjectStatus
     reference_contact: str | None = None
     notes: str | None = None
-    services: list[ProjectServiceRef] = []
+    #: LEGACY: serveis del cataleg vinculats (UI 4C antiga).
+    services: list[ProjectServiceRef] = Field(
+        default=[],
+        description="LEGACY: serveis del cataleg vinculats. No son les linies acreditades.",
+    )
+    #: Linies de servei que la referencia acredita (0053): les que llegeix la qualificacio.
+    service_line_codes: list[str] = Field(
+        default=[],
+        description="Linies de servei que la referencia acredita (font de veritat, 0053).",
+    )
     cpvs: list[ProjectCPVRead] = []
     annual_amounts: list[AnnualAmountRead] = []
     knowledge_origin: KnowledgeOrigin

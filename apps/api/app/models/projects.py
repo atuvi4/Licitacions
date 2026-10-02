@@ -9,7 +9,8 @@ amb serveis son columnes de primera classe i estan indexades.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from collections.abc import Iterable
+from datetime import date, datetime
 from decimal import Decimal
 
 import sqlalchemy as sa
@@ -31,6 +32,11 @@ from app.models.profile import CompanyService
 MONEY = sa.Numeric(18, 2)
 
 
+#: LEGACY (des de 0053). Els serveis del cataleg ACTUAL de l'empresa vinculats a un
+#: projecte. Nomes l'escriuen la UI 4C antiga i el seu `service_ids`: la qualificacio,
+#: la fotografia i l'analisi llegeixen `company_project_service_lines`. No hi ha
+#: sincronitzacio entre les dues: canviar els serveis d'un projecte des de la UI antiga
+#: no canvia les linies que acredita.
 project_services = sa.Table(
     "project_services",
     Base.metadata,
@@ -56,8 +62,9 @@ class CompanyProject(
     """Un projecte executat: una referencia d'execucio. Tambe es coneixement actual
     (0052). NO es cap `historic_bid`: una oferta presentada no acredita res; un
     projecte `completed` amb import i data, si. L'any d'execucio es el de la data
-    de fi (o d'inici si no n'hi ha); les linies de servei son les dels serveis
-    vinculats."""
+    de fi (o d'inici si no n'hi ha). Les linies de servei que ACREDITA son les de
+    `company_project_service_lines` (0053), directament del vocabulari: no depenen de
+    cap servei actual de l'empresa (`services` es legacy)."""
 
     __tablename__ = "company_projects"
     __table_args__ = (
@@ -91,8 +98,16 @@ class CompanyProject(
     reference_contact: Mapped[str | None] = mapped_column(sa.String(255))
     notes: Mapped[str | None] = mapped_column(sa.Text)
 
+    #: LEGACY (des de 0053): vegeu `project_services`.
     services: Mapped[list[CompanyService]] = relationship(
         secondary=project_services, lazy="selectin"
+    )
+    #: Linies de servei que aquesta referencia acredita (0053). Font de veritat.
+    service_lines: Mapped[list[CompanyProjectServiceLine]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="CompanyProjectServiceLine.service_line_code",
     )
     cpvs: Mapped[list[ProjectCPV]] = relationship(
         back_populates="project", cascade="all, delete-orphan", lazy="selectin"
@@ -105,6 +120,50 @@ class CompanyProject(
         lazy="selectin",
         order_by="CompanyProjectAnnualAmount.year",
     )
+
+
+    @property
+    def service_line_codes(self) -> list[str]:
+        return sorted(line.service_line_code for line in self.service_lines)
+
+    def replace_service_lines(self, codes: Iterable[str]) -> bool:
+        """Substitueix el conjunt de linies codi per codi (mai esborrar i tornar a
+        inserir el mateix: la clau primaria ho prohibiria). Cert si ha canviat."""
+        wanted = set(codes)
+        changed = False
+        for line in list(self.service_lines):
+            if line.service_line_code not in wanted:
+                self.service_lines.remove(line)
+                changed = True
+        present = {line.service_line_code for line in self.service_lines}
+        for code in sorted(wanted - present):
+            self.service_lines.append(CompanyProjectServiceLine(service_line_code=code))
+            changed = True
+        return changed
+
+
+class CompanyProjectServiceLine(Base):
+    """Una linia de servei del vocabulari que una referencia d'execucio acredita (0053).
+
+    Es una dada HISTORICA del projecte: «aquest contracte era de veu IP», encara que
+    avui l'empresa no tingui cap servei de veu IP. Per aixo no passa pel cataleg de
+    serveis (`project_services`, legacy). Sense `company_id`: el projecte ja el porta."""
+
+    __tablename__ = "company_project_service_lines"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey("company_projects.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    service_line_code: Mapped[str] = mapped_column(
+        sa.String(40), sa.ForeignKey("service_lines.code", ondelete="RESTRICT"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
+    project: Mapped[CompanyProject] = relationship(back_populates="service_lines")
 
 
 class CompanyProjectAnnualAmount(

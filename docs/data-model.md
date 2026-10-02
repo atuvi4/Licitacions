@@ -68,7 +68,8 @@ sempre a partir d'aquesta taula, mai d'un valor guardat a la sessió.
 | Taula | Notes |
 | --- | --- |
 | `company_projects` | `amount`, `currency`, `start_date`, `end_date`, `client_type`, `status`, `reference_contact`. Índexs `(company_id, end_date)` i `(company_id, amount)`. |
-| `project_services` | N:M projecte↔servei. PK composta. |
+| `project_services` | N:M projecte↔servei. PK composta. **Legacy des de `0053`**: només per a la UI 4C antiga; la qualificació no la llegeix. |
+| `company_project_service_lines` (`0053`) | Línies del vocabulari que una referència ACREDITA. PK `(project_id, service_line_code)`, CASCADE amb el projecte, RESTRICT amb `service_lines`, sense `company_id`. Font de veritat per a la fotografia i l'anàlisi; backfill des de `project_services` JOIN `company_services`. Downgrade: `downgrade_0053_incompatible_rows` si `0052` no ho pot representar. |
 | `project_cpvs` | N:M projecte↔CPV. És una taula pont amb entitat pròpia (no un `secondary`) perquè hi haurà d'anar informació addicional: CPV principal o secundari, import imputat, etc. |
 
 Aquesta forma permet respondre directament la consulta que motiva el mòdul:

@@ -18,6 +18,7 @@ export type RegistrationType =
   | "business_classification"
   | "professional_registry"
   | "administrative_accreditation"
+  | "sector_operator_registry"
   | "other";
 export type InsuranceType =
   | "civil_liability"
@@ -66,7 +67,9 @@ export type LinkedEntityType =
   | "company_product"
   | "solution_product"
   | "company_partner"
-  | "partner_role";
+  | "partner_role"
+  // Mitjans operatius (0052).
+  | "company_equipment";
 export type RelationshipType =
   | "certificate"
   | "certificate_of_good_execution"
@@ -199,7 +202,19 @@ export interface Territory extends Audited {
   notes: string | null;
 }
 
-export interface FinancialYear extends Audited {
+/**
+ * Procedencia del coneixement de les taules del perfil (0052). `as_of` es nul quan
+ * ningu no ha dit de quan es la dada. `verification_status` nomes es llegeix: es
+ * verifica per `/knowledge/records/{kind}/{id}/verify`.
+ */
+export interface KnowledgeOrigin {
+  knowledge_origin: "declared" | "promoted_observation";
+  as_of: string | null;
+  verification_status: "pending_verification" | "verified";
+  lifecycle: "current" | "in_progress" | "retired";
+}
+
+export interface FinancialYear extends Audited, Partial<KnowledgeOrigin> {
   year: number;
   revenue: string | null;
   currency: string;
@@ -260,7 +275,7 @@ export interface ProjectCPV {
   description: string | null;
 }
 
-export interface Registration extends Audited {
+export interface Registration extends Audited, Partial<KnowledgeOrigin> {
   name: string;
   type: RegistrationType;
   registration_number: string | null;
@@ -269,6 +284,8 @@ export interface Registration extends Audited {
   expires_at: string | null;
   temporal_status: TemporalStatus;
   notes: string | null;
+  /** Abast estructurat (0052): linies de servei. Nul = sense estructurar. */
+  scope_service_lines?: string[] | null;
 }
 
 /** Els tipus de limit que una polissa pot declarar.
@@ -283,6 +300,8 @@ export type InsuranceLimitKind =
   | "per_victim"
   | "annual_aggregate"
   | "sublimit"
+  /** RC patronal per victima (0052): no es el sublimit general per victima. */
+  | "employer_per_victim"
   | "unknown";
 
 export interface InsuranceLimit extends Audited {
@@ -293,7 +312,7 @@ export interface InsuranceLimit extends Audited {
   notes: string | null;
 }
 
-export interface Insurance extends Audited {
+export interface Insurance extends Audited, Partial<KnowledgeOrigin> {
   type: InsuranceType;
   provider: string | null;
   policy_number: string | null;
@@ -306,9 +325,11 @@ export interface Insurance extends Audited {
   /** `null` vol dir que no consta, que no es el mateix que `false`. */
   additional_insured: boolean | null;
   notes: string | null;
+  /** El conjunt de límits de la pòlissa (pas 6): es llegeix i es desa amb la fitxa. */
+  limits?: InsuranceLimit[];
 }
 
-export interface Person extends Audited {
+export interface Person extends Audited, Partial<KnowledgeOrigin> {
   first_name: string;
   last_name: string | null;
   role: string | null;
@@ -317,6 +338,8 @@ export interface Person extends Audited {
   years_experience: number | null;
   availability_status: AvailabilityStatus;
   notes: string | null;
+  /** Perfils del vocabulari (0052). Nul = sense estructurar. */
+  profile_codes?: string[] | null;
 }
 
 export interface Qualification extends Audited {
@@ -337,7 +360,12 @@ export interface ProjectServiceRef {
   category: string | null;
 }
 
-export interface Project extends Audited {
+export interface ProjectAnnualAmount {
+  year: number;
+  amount: string;
+}
+
+export interface Project extends Audited, Partial<KnowledgeOrigin> {
   company_id: string;
   name: string;
   client_name: string | null;
@@ -352,8 +380,13 @@ export interface Project extends Audited {
   status: ProjectStatus;
   reference_contact: string | null;
   notes: string | null;
+  /** LEGACY: serveis del catàleg vinculats (UI 4C antiga). */
   services: ProjectServiceRef[];
+  /** Línies de servei que la referència acredita (0053): les que llegeix la qualificació. */
+  service_line_codes?: string[];
   cpvs: ProjectCPV[];
+  /** Imports EXECUTATS per exercici (0052). */
+  annual_amounts?: ProjectAnnualAmount[];
 }
 
 export interface DocumentLink {

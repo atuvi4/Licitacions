@@ -344,8 +344,15 @@ async def test_children_changes_unverify_the_policy_and_the_project(client_a, te
     await _link_evidence(client_a, company, "company_project", project["id"])
     verify = f"{base}/knowledge/records/project/{project['id']}/verify"
     assert (await client_a.post(verify)).status_code == 200
-    moved = await client_a.patch(
+    # Els serveis del cataleg son legacy des de 0053: canviar-los no desverifica res.
+    legacy = await client_a.patch(
         f"{base}/projects/{project['id']}", json={"service_ids": [services[1]["id"]]}
+    )
+    assert legacy.json()["verification_status"] == "verified"
+    assert legacy.json()["service_line_codes"] == []
+    # Les linies acreditades si.
+    moved = await client_a.patch(
+        f"{base}/projects/{project['id']}", json={"service_line_codes": ["voice_pbx"]}
     )
     assert moved.json()["verification_status"] == "pending_verification"
 

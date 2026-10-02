@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Card, CardHeader, EmptyState } from "@/components/ui";
+import { INSURANCE_TYPE_LABELS, REGISTRATION_TYPE_LABELS } from "@/lib/format";
 import {
   FACT_LABELS,
   FLAG_EXPLANATIONS,
@@ -19,11 +20,20 @@ import {
 } from "@/lib/knowledge";
 
 import { CandidateRow } from "./CandidateRow";
+import { equipmentTypeLabel } from "./qualification/labels";
 import { KnowledgeItem } from "./KnowledgeItem";
 import { NoResults } from "./NoResults";
 import type { KnowledgeView } from "./view";
 
 const ACTION = "min-h-11 md:min-h-0";
+
+/** Un camp de text del valor que la fotografia diu d'una dada (p. ex. el nom d'una referència). */
+function claimText(view: KnowledgeView, recordId: string, field: string): string | undefined {
+  const value = view.index.claims.get(recordId)?.value;
+  if (!value || typeof value !== "object") return undefined;
+  const text = (value as Record<string, unknown>)[field];
+  return typeof text === "string" && text ? text : undefined;
+}
 
 function pendingTitle(group: PendingGroup, view: KnowledgeView): { title: string; subtitle?: string } {
   const { records, vocabulary } = view;
@@ -49,6 +59,29 @@ function pendingTitle(group: PendingGroup, view: KnowledgeView): { title: string
       return { title: group.key, subtitle: "Producte" };
     case "partner":
       return { title: group.key, subtitle: "Partner" };
+    case "financial_year":
+      return { title: `Exercici ${group.key}`, subtitle: "Solvència econòmica" };
+    case "project": {
+      const project = view.qualification.projects.find((item) => item.id === group.recordId);
+      const name = project?.name ?? claimText(view, group.recordId, "name");
+      return { title: name ?? "Referència d'execució", subtitle: "Experiència" };
+    }
+    case "insurance": {
+      const insurance = view.qualification.insurances.find((item) => item.id === group.recordId);
+      const type = INSURANCE_TYPE_LABELS[group.key as keyof typeof INSURANCE_TYPE_LABELS] ?? "Assegurança";
+      return { title: [type, insurance?.provider].filter(Boolean).join(" · "), subtitle: "Assegurança" };
+    }
+    case "registration": {
+      const registration = view.qualification.registrations.find((item) => item.id === group.recordId);
+      const type = REGISTRATION_TYPE_LABELS[group.key as keyof typeof REGISTRATION_TYPE_LABELS];
+      return { title: registration?.name ?? claimText(view, group.recordId, "name") ?? type ?? "Registre", subtitle: type ? `Registre · ${type}` : "Registre" };
+    }
+    case "person": {
+      const person = view.qualification.people.find((item) => item.id === group.recordId);
+      return { title: person ? [person.first_name, person.last_name].filter(Boolean).join(" ") : "Persona", subtitle: "Persona" };
+    }
+    case "equipment":
+      return { title: equipmentTypeLabel(group.key, view.vocabulary), subtitle: "Equip" };
     default:
       return { title: group.key };
   }

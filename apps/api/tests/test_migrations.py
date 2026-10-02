@@ -1925,3 +1925,49 @@ def test_la_qualificacio_s_aplica_neutra_i_el_downgrade_refusa_en_comptes_de_rei
     for forbidden in ("INSERT INTO", "DELETE FROM", "COALESCE"):
         assert forbidden not in down, forbidden
     assert "UPDATE " not in down.replace("UPDATE alembic_version", "")
+
+
+def test_les_linies_directes_dels_projectes_es_copien_i_el_downgrade_no_inventa_res():
+    """0052 -> 0053 -> 0052. L'upgrade crea `company_project_service_lines` (PK projecte +
+    linia, FK al projecte en CASCADE i al vocabulari en RESTRICT, sense `company_id`) i hi
+    copia, sense duplicats, les linies que 0052 llegia dels serveis vinculats. No toca
+    `project_services` (legacy). El downgrade nomes passa si, a cada projecte, les linies
+    directes i les dels enllacos legacy existents son el mateix conjunt, i aleshores
+    nomes elimina l'estructura de 0053: mai crea, canvia ni esborra cap enllac.
+    """
+    up = _offline_sql("upgrade", "0052_company_qualification:0053_project_service_lines")
+    down = _offline_sql("downgrade", "0053_project_service_lines:0052_company_qualification")
+
+    table = up.split("CREATE TABLE company_project_service_lines (")[1].split("\n);")[0]
+    for clause in (
+        "CONSTRAINT pk_company_project_service_lines PRIMARY KEY (project_id, service_line_code)",
+        "REFERENCES company_projects (id) ON DELETE CASCADE",
+        "REFERENCES service_lines (code) ON DELETE RESTRICT",
+    ):
+        assert clause in table, clause
+    assert "company_id" not in table
+    backfill = (
+        "INSERT INTO company_project_service_lines (project_id, service_line_code, created_at) "
+        "SELECT DISTINCT ps.project_id, s.service_line_code"
+    )
+    assert backfill in up and "WHERE s.service_line_code IS NOT NULL" in up
+    statements = up.replace("UPDATE alembic_version", "")
+    for forbidden in ("UPDATE ", "DELETE FROM", "DROP ", "project_services ADD", "ALTER TABLE"):
+        assert forbidden not in statements, forbidden
+
+    # Downgrade: guarda de conjunts exactes (A - B i B - A) abans del primer DDL, i
+    # despres nomes cau l'estructura de 0053. Res no es crea, canvia ni esborra.
+    guard = down.split("DO $$")[1].split("END $$")[0]
+    assert guard.count("RAISE EXCEPTION 'downgrade_0053_incompatible_rows") == 2
+    body = down.split("Running downgrade 0053_project_service_lines")[1]
+    assert body.index("DO $$") < body.index("DROP TABLE company_project_service_lines")
+    for ddl in ("DROP ", "ALTER TABLE", "CREATE "):
+        assert body.split("DO $$")[0].count(ddl) == 0, ddl
+    a_minus_b = (
+        "FROM company_project_service_lines l WHERE NOT EXISTS (SELECT 1 FROM project_services"
+    )
+    assert a_minus_b in guard
+    assert "FROM project_services ps WHERE EXISTS" in guard
+    statements = down.replace("UPDATE alembic_version", "")
+    for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM", "company_services ADD"):
+        assert forbidden not in statements, forbidden

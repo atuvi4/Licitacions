@@ -263,9 +263,8 @@ async def load_inputs(session: AsyncSession, company_id: uuid.UUID) -> Knowledge
                 client_type=str(p.client_type),
                 start_date=p.start_date,
                 end_date=p.end_date,
-                service_lines=tuple(
-                    sorted({s.service_line_code for s in p.services if s.service_line_code})
-                ),
+                # Directes del projecte (0053), no del cataleg de serveis d'avui.
+                service_lines=tuple(p.service_line_codes),
                 annual_amounts=tuple((a.year, a.amount) for a in p.annual_amounts),
             )
             for p in await _rows(session, CompanyProject, company_id)

@@ -5,11 +5,28 @@ import type {
   SnapshotIndex,
   Vocabulary,
 } from "@/lib/knowledge";
-import type { Certification, Service } from "@/lib/types";
+import type { Certification, FinancialYear, Insurance, Person, Project, Registration, Service } from "@/lib/types";
 
 import type { DeclareTarget } from "./DeclareDialog";
 
 /** Tot el que necessiten les tres vistes de l'àrea, ja carregat i indexat. */
+/** Les fitxes de «Qualificació i mitjans» (0052), de les seves pròpies API. */
+export interface QualificationRecords {
+  financialYears: FinancialYear[];
+  projects: Project[];
+  insurances: Insurance[];
+  registrations: Registration[];
+  people: Person[];
+}
+
+export const EMPTY_QUALIFICATION: QualificationRecords = {
+  financialYears: [],
+  projects: [],
+  insurances: [],
+  registrations: [],
+  people: [],
+};
+
 export interface KnowledgeView {
   snapshot: KnowledgeSnapshot;
   index: SnapshotIndex;
@@ -20,11 +37,14 @@ export interface KnowledgeView {
   records: KnowledgeRecords;
   certifications: Certification[];
   services: Service[];
+  qualification: QualificationRecords;
   vocabulary: Vocabulary | null;
   /** Declarar, editar, retirar i tocar l'evidència. */
   canEdit: boolean;
   canDecide: boolean;
   canVerify: boolean;
+  /** Eliminar del tot: propietari/ària o administració. */
+  canDelete: boolean;
   reload: () => void;
   declare: (target: DeclareTarget) => void;
   editScope: (certification: Certification) => void;
@@ -42,4 +62,5 @@ export const EMPTY_RECORDS: KnowledgeRecords = {
   solution_products: [],
   partners: [],
   partner_roles: [],
+  equipment: [],
 };

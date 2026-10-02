@@ -151,6 +151,15 @@ class RegistrationRead(AuditFields, ExpirableMixin, _KnowledgeOriginRead):
     scope_service_lines: list[str] | None = None
 
 
+class InsuranceLimitIn(APIModel):
+    """Un limit dins del conjunt complet d'una polissa (`limits` de la fitxa)."""
+
+    kind: InsuranceLimitKind
+    amount: Decimal = Field(ge=0, max_digits=18, decimal_places=2)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    notes: str | None = None
+
+
 class InsuranceBase(_DateOrderMixin, _KnowledgeOriginIn):
     type: InsuranceType | None = None
     provider: str | None = Field(default=None, max_length=200)
@@ -164,6 +173,20 @@ class InsuranceBase(_DateOrderMixin, _KnowledgeOriginIn):
     #: una afirmacio, i el compliment la llegiria com a incompliment.
     additional_insured: bool | None = None
     notes: str | None = None
+    #: El CONJUNT COMPLET de limits (0053, pas 6): s'aplica en la mateixa transaccio
+    #: que la polissa. Enviar-lo substitueix els que hi havia (llista buida = cap);
+    #: no enviar-lo els deixa com estan. Un tipus nomes hi pot sortir una vegada.
+    limits: list[InsuranceLimitIn] | None = None
+
+    @field_validator("limits")
+    @classmethod
+    def _one_limit_per_kind(cls, value: list[InsuranceLimitIn] | None):
+        if value is None:
+            return None
+        kinds = [item.kind for item in value]
+        if len(set(kinds)) != len(kinds):
+            raise ValueError("Un tipus de limit nomes pot sortir una vegada a la polissa.")
+        return value
 
 
 class InsuranceCreate(InsuranceBase):
@@ -185,6 +208,7 @@ class InsuranceRead(AuditFields, ExpirableMixin, _KnowledgeOriginRead):
     starts_at: date | None = None
     additional_insured: bool | None = None
     notes: str | None = None
+    limits: list[InsuranceLimitRead] = []
 
 
 class InsuranceLimitBase(APIModel):
@@ -213,3 +237,7 @@ class InsuranceLimitRead(AuditFields):
     amount: Decimal
     currency: str
     notes: str | None = None
+
+
+# `InsuranceRead.limits` es declara abans que `InsuranceLimitRead`.
+InsuranceRead.model_rebuild()

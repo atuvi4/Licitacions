@@ -10,6 +10,7 @@ import {
   FACT_KEYS,
   FACT_LABELS,
   PARTNER_ROLE_LABELS,
+  isNumericFact,
   STANDARD_DESCRIPTIONS,
   candidateSearchText,
   capabilityLabel,
@@ -78,7 +79,7 @@ function HistoricRows({ entries, title, view }: { entries: KnowledgeEntry[]; tit
 }
 
 function historicOnly(view: KnowledgeView, section: SnapshotSection, taken: Set<string>): KnowledgeEntry[] {
-  return view.snapshot[section].filter((entry) => entry.claims.length === 0 && entry.hints.length > 0 && !taken.has(entry.key));
+  return (view.snapshot[section] ?? []).filter((entry) => entry.claims.length === 0 && entry.hints.length > 0 && !taken.has(entry.key));
 }
 
 function ScopeLine({ certification, view }: { certification: Certification; view: KnowledgeView }) {
@@ -162,10 +163,12 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
   const unknownLines = lines.filter((item) => !served.has(item.code) && !findEntry(snapshot, "services", item.code) && matches(lineLabel(item.code)));
 
   /* Fets */
-  const facts = records.operating_facts.filter((item) =>
+  // Els fets quantitatius (IPv4…) es gestionen a «Qualificació i mitjans».
+  const booleanFacts = records.operating_facts.filter((item) => !isNumericFact(item.key));
+  const facts = booleanFacts.filter((item) =>
     matches(FACT_LABELS[item.key] ?? item.key, item.detail, item.value ? "Sí" : "No", coverageSummary(item.coverage)),
   );
-  const factByKey = new Map(records.operating_facts.map((item) => [item.key, item]));
+  const factByKey = new Map(booleanFacts.map((item) => [item.key, item]));
   const historicFacts = FACT_KEYS.filter(
     (key) =>
       !factByKey.has(key) &&

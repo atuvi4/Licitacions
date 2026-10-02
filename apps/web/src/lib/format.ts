@@ -23,6 +23,26 @@ export function formatDate(value: string | null | undefined): string {
   return new Intl.DateTimeFormat(LOCALE, { dateStyle: "medium" }).format(date);
 }
 
+/**
+ * Una data de calendari (`AAAA-MM-DD`) en format europeu, sense passar per UTC:
+ * `new Date("2026-03-01")` és la mitjanit UTC, i a l'oest de Greenwich seria el 28.
+ */
+export function formatDay(value: string | null | undefined): string {
+  if (!value) return "—";
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return formatDate(value);
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return new Intl.DateTimeFormat(LOCALE, { dateStyle: "medium" }).format(date);
+}
+
+/** Un import amb cèntims si en té (els imports executats no s'arrodoneixen). */
+export function formatAmount(value: string | number | null | undefined, currency = "EUR"): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const amount = typeof value === "string" ? Number(value) : value;
+  if (Number.isNaN(amount)) return "—";
+  return new Intl.NumberFormat(LOCALE, { style: "currency", currency, maximumFractionDigits: 2 }).format(amount);
+}
+
 export function formatMoney(value: string | number | null | undefined, currency = "EUR"): string {
   if (value === null || value === undefined || value === "") return "—";
   const amount = typeof value === "string" ? Number(value) : value;
@@ -129,6 +149,7 @@ export const ENTITY_TYPE_LABELS: Record<LinkedEntityType, string> = {
   solution_product: "Producte d'una solució",
   company_partner: "Partner",
   partner_role: "Paper d'un partner",
+  company_equipment: "Equip",
 };
 
 export function optionsFrom<T extends string>(labels: Record<T, string>) {
@@ -141,15 +162,17 @@ export const REGISTRATION_TYPE_LABELS: Record<RegistrationType, string> = {
   business_classification: "Classificació empresarial",
   professional_registry: "Registre professional",
   administrative_accreditation: "Acreditació administrativa",
+  sector_operator_registry: "Registre sectorial d'operadors",
   other: "Altres",
 };
 
 export const INSURANCE_LIMIT_KIND_LABELS: Record<string, string> = {
   total: "Cobertura total",
   per_claim: "Per sinistre",
-  per_victim: "Per victima",
+  per_victim: "Per víctima",
   annual_aggregate: "Agregat anual",
   sublimit: "Sublimit",
+  employer_per_victim: "RC patronal per víctima",
   unknown: "Sense especificar",
 };
 
@@ -164,6 +187,7 @@ export const SELECTABLE_INSURANCE_LIMIT_KINDS = [
   "per_claim",
   "per_victim",
   "annual_aggregate",
+  "employer_per_victim",
 ] as const;
 
 export const INSURANCE_TYPE_LABELS: Record<InsuranceType, string> = {

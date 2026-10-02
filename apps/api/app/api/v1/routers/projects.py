@@ -154,6 +154,7 @@ async def create_project(payload: ProjectCreate, session: SessionDep, ctx: Compa
     access.assert_can_edit(ctx.membership.role)
     data = payload.model_dump(exclude_unset=True)
     service_ids = data.pop("service_ids", None) or []
+    line_codes = data.pop("service_line_codes", None) or []
     annual = data.pop("annual_amounts", None) or []
     services = await _resolve_services(session, ctx.company_id, service_ids)
 
@@ -161,6 +162,8 @@ async def create_project(payload: ProjectCreate, session: SessionDep, ctx: Compa
         company_id=ctx.company_id, created_by=ctx.user_id, updated_by=ctx.user_id, **data
     )
     project.services = services
+    # Les linies que la referencia acredita (0053): directes, sense passar pel cataleg.
+    project.replace_service_lines(line_codes)
     _check_annual_amounts(project, annual)
     _set_annual_amounts(project, annual, ctx.user_id)
     session.add(project)
@@ -192,6 +195,7 @@ async def update_project(
     project = await _load_project(session, project_id, ctx.company_id)
     data = payload.model_dump(exclude_unset=True)
     service_ids = data.pop("service_ids", None)
+    line_codes = data.pop("service_line_codes", None)
     annual = data.pop("annual_amounts", None)
 
     for field, value in data.items():
@@ -201,11 +205,12 @@ async def update_project(
     await require_evidence_if_verified(session, project, ctx.company_id)
 
     if service_ids is not None:
-        services = await _resolve_services(session, ctx.company_id, service_ids)
-        if {s.id for s in services} != {s.id for s in project.services}:
-            # Les linies de servei son part del que es va verificar.
-            unverify_for_dependent_change(project)
-        project.services = services
+        # LEGACY (0053): els serveis del cataleg ja no son les linies que acredita la
+        # referencia; canviar-los no toca la qualificacio ni la verificacio.
+        project.services = await _resolve_services(session, ctx.company_id, service_ids)
+    if line_codes is not None and project.replace_service_lines(line_codes):
+        # Les linies acreditades son part del que es va verificar.
+        unverify_for_dependent_change(project)
     if annual is not None:
         _check_annual_amounts(project, annual)
         if _set_annual_amounts(project, annual, ctx.user_id):
@@ -261,6 +266,8 @@ async def delete_project(
 async def attach_service(
     project_id: uuid.UUID, service_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx
 ):
+    # LEGACY (0053): no toca les linies acreditades, pero continua sent escriure.
+    access.assert_can_edit(ctx.membership.role)
     project = await _load_project(session, project_id, ctx.company_id)
     services = await _resolve_services(session, ctx.company_id, [service_id])
     if services[0].id not in {service.id for service in project.services}:
@@ -278,6 +285,7 @@ async def attach_service(
 async def detach_service(
     project_id: uuid.UUID, service_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx
 ):
+    access.assert_can_edit(ctx.membership.role)
     project = await _load_project(session, project_id, ctx.company_id)
     project.services = [service for service in project.services if service.id != service_id]
     await session.commit()
@@ -309,13 +317,28 @@ async def list_project_cpvs(project_id: uuid.UUID, session: SessionDep, ctx: Com
 async def add_project_cpv(
     project_id: uuid.UUID, payload: ProjectCPVCreate, session: SessionDep, ctx: CompanyCtx
 ):
+    # Modificar una referencia d'execucio: la politica del coneixement (qui nomes
+    # consulta, no). No es esborrar el projecte.
+    access.assert_can_edit(ctx.membership.role)
     project = await _load_project(session, project_id, ctx.company_id)
-    await ensure_cpv_code(session, payload.cpv_code, payload.description)
-
+    # Abans de cap escriptura: un duplicat no canvia res (ni la verificacio).
     if payload.cpv_code in {item.cpv_code for item in project.cpvs}:
         raise ConflictError("Aquest CPV ja esta associat al projecte.")
+    await ensure_cpv_code(session, payload.cpv_code, payload.description)
 
     session.add(ProjectCPV(project_id=project.id, cpv_code=payload.cpv_code))
+    # Els CPV son part del que acredita la referencia: un canvi la torna a pendent.
+    unverify_for_dependent_change(project)
+    project.updated_by = ctx.user_id
+    await audit.record(
+        session,
+        action=AuditAction.UPDATE,
+        company_id=ctx.company_id,
+        user_id=ctx.user_id,
+        entity_type="company_projects",
+        entity_id=project.id,
+        summary="cpv afegit",
+    )
     await session.commit()
     await session.refresh(project)
     return project
@@ -329,6 +352,8 @@ async def add_project_cpv(
 async def remove_project_cpv(
     project_id: uuid.UUID, cpv_code: str, session: SessionDep, ctx: CompanyCtx
 ):
+    # Treure un CPV modifica el projecte, no l'esborra: la mateixa politica que editar.
+    access.assert_can_edit(ctx.membership.role)
     project = await _load_project(session, project_id, ctx.company_id)
     removed = await session.execute(
         sa.delete(ProjectCPV).where(
@@ -337,6 +362,17 @@ async def remove_project_cpv(
     )
     if removed.rowcount == 0:
         raise NotFoundError("Aquest CPV no esta associat al projecte.")
+    unverify_for_dependent_change(project)
+    project.updated_by = ctx.user_id
+    await audit.record(
+        session,
+        action=AuditAction.UPDATE,
+        company_id=ctx.company_id,
+        user_id=ctx.user_id,
+        entity_type="company_projects",
+        entity_id=project.id,
+        summary="cpv retirat",
+    )
     await session.commit()
     await session.refresh(project)
     return project

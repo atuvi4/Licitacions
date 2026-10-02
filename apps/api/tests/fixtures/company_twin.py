@@ -199,6 +199,8 @@ async def build_qualification_twin(db, company, rows: dict[str, Any]) -> dict[st
         status=ProjectStatus.COMPLETED,
     )
     network.services = [rows["services"]["dedicated_network"], rows["services"]["access_ftth"]]
+    # Les linies que acredita (0053), directes: la fotografia no llegeix `services`.
+    network.replace_service_lines(["dedicated_network", "access_ftth"])
     # Plurianual amb desglossament executat per any (0052).
     network.annual_amounts = [
         CompanyProjectAnnualAmount(
@@ -218,6 +220,7 @@ async def build_qualification_twin(db, company, rows: dict[str, Any]) -> dict[st
         status=ProjectStatus.COMPLETED,
     )
     pbx.services = [rows["services"]["voice_pbx"]]
+    pbx.replace_service_lines(["voice_pbx"])
     db.add_all([network, pbx])
     out["projects"] = {"network": network, "pbx": pbx}
 

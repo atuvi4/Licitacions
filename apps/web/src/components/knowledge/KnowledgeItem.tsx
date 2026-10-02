@@ -18,6 +18,8 @@ interface ItemProps {
   title: string;
   subtitle?: ReactNode;
   state: EffectiveState;
+  /** Un rètol més precís que el genèric de l'estat (p. ex. «Sense perfil de qualificació»). */
+  stateLabel?: string;
   /** Contingut propi de la dada (abast, papers, què hi falta). */
   children?: ReactNode;
   /** Accions pròpies (Edita, Edita l'abast…), abans d'Evidència i Verifica. */
@@ -35,7 +37,7 @@ interface ItemProps {
  * n'hi ha, verificar-la. Si es demana verificar sense evidència, l'API ho
  * refusa (`evidence_required`) i aquí s'explica i s'obre el panell.
  */
-export function KnowledgeItem({ kind, recordId, title, subtitle, state, children, actions, canEdit, canVerify, onChanged }: ItemProps) {
+export function KnowledgeItem({ kind, recordId, title, subtitle, state, stateLabel, children, actions, canEdit, canVerify, onChanged }: ItemProps) {
   const path = useCompanyPath();
   const target = EVIDENCE_TARGETS[kind];
   const counts = state.state === "verified" || state.state === "declared";
@@ -69,7 +71,7 @@ export function KnowledgeItem({ kind, recordId, title, subtitle, state, children
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
             <p className="text-body font-medium text-ink">{title}</p>
-            <StatePills value={state} />
+            <StatePills value={state} label={stateLabel} />
           </div>
           {subtitle && <p className="mt-0.5 text-caption text-muted">{subtitle}</p>}
           {children}

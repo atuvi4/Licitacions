@@ -8,6 +8,7 @@ import { DeclareDialog, type DeclareTarget } from "@/components/knowledge/Declar
 import { HistoricTab } from "@/components/knowledge/HistoricTab";
 import { PendingTab } from "@/components/knowledge/PendingTab";
 import { ScopeDialog } from "@/components/knowledge/ScopeDialog";
+import { QualificationTab } from "@/components/knowledge/qualification/QualificationTab";
 import { EMPTY_RECORDS, type KnowledgeView } from "@/components/knowledge/view";
 import { useCompanyPath, useSession } from "@/components/SessionProvider";
 import { Button, ErrorNotice, ErrorState, Input, PageHeader, PageSkeleton, Tabs } from "@/components/ui";
@@ -28,20 +29,22 @@ import {
   type Vocabulary,
 } from "@/lib/knowledge";
 import { searchMatcher } from "@/lib/text";
-import type { Certification, Service } from "@/lib/types";
+import type { Certification, FinancialYear, Insurance, Person, Project, Registration, Service } from "@/lib/types";
 
 /**
  * Coneixement de l'empresa (fase 2B del motor): què sap Tuvi de l'empresa, amb
  * quina garantia, i què falta validar. Tres vistes sobre les mateixes dades:
  * la feina pendent, el que és actual per categoria, i el que diu l'històric.
+ * La quarta, «Qualificació i mitjans», és l'entrada de solvència, experiència,
+ * assegurances, registres, persones, equips i recursos quantitatius (0052).
  *
  * Tot l'estat que es pinta surt de la fotografia (`/knowledge/snapshot`): una
  * dada només surt «Verificada» si la fotografia diu que ho és, és a dir, si té
  * evidència enllaçada.
  */
 
-type TabKey = "pendents" | "actual" | "historic";
-const TABS: TabKey[] = ["pendents", "actual", "historic"];
+type TabKey = "pendents" | "actual" | "qualificacio" | "historic";
+const TABS: TabKey[] = ["pendents", "actual", "qualificacio", "historic"];
 
 function isTab(value: string | null): value is TabKey {
   return value !== null && (TABS as string[]).includes(value);
@@ -68,6 +71,11 @@ export default function CompanyKnowledgePage() {
   const certifications = useResource<Certification[]>(path("/certifications"));
   const services = useResource<Service[]>(path("/services"));
   const vocabulary = useResource<Vocabulary>(path("/knowledge/vocabulary"));
+  const financialYears = useResource<FinancialYear[]>(path("/financial-years"));
+  const projects = useResource<Project[]>(path("/projects"));
+  const insurances = useResource<Insurance[]>(path("/insurances"));
+  const registrations = useResource<Registration[]>(path("/registrations"));
+  const people = useResource<Person[]>(path("/people"));
 
   const [picked, setPicked] = useState<TabKey | null>(null);
   const [declaring, setDeclaring] = useState<DeclareTarget | null>(null);
@@ -97,6 +105,11 @@ export default function CompanyKnowledgePage() {
     void records.reload();
     void certifications.reload();
     void services.reload();
+    void financialYears.reload();
+    void projects.reload();
+    void insurances.reload();
+    void registrations.reload();
+    void people.reload();
   }
 
   const index = useMemo(() => indexSnapshot(snapshot.data), [snapshot.data]);
@@ -135,10 +148,18 @@ export default function CompanyKnowledgePage() {
     records: records.data ?? EMPTY_RECORDS,
     certifications: certifications.data ?? [],
     services: services.data ?? [],
+    qualification: {
+      financialYears: financialYears.data ?? [],
+      projects: projects.data ?? [],
+      insurances: insurances.data ?? [],
+      registrations: registrations.data ?? [],
+      people: people.data ?? [],
+    },
     vocabulary: vocabulary.data,
     canEdit,
     canDecide,
     canVerify,
+    canDelete,
     reload,
     declare: setDeclaring,
     editScope: setScoping,
@@ -152,7 +173,17 @@ export default function CompanyKnowledgePage() {
   const todo = summary.pending + summary.historic;
   const urlTab = searchParams?.get("tab") ?? null;
   const tab: TabKey = isTab(urlTab) ? urlTab : (picked ?? (todo > 0 ? "pendents" : "actual"));
-  const secondaryError = observations.error ?? records.error ?? certifications.error ?? services.error ?? vocabulary.error;
+  const secondaryError =
+    observations.error ??
+    records.error ??
+    certifications.error ??
+    services.error ??
+    vocabulary.error ??
+    financialYears.error ??
+    projects.error ??
+    insurances.error ??
+    registrations.error ??
+    people.error;
 
   return (
     <>
@@ -201,6 +232,7 @@ export default function CompanyKnowledgePage() {
         items={[
           { key: "pendents", label: "Pendents de validar", count: todo > 0 ? todo : undefined, countLevel: "attention" },
           { key: "actual", label: "Coneixement actual" },
+          { key: "qualificacio", label: "Qualificació i mitjans" },
           { key: "historic", label: "Històric detectat", count: summary.historic > 0 ? summary.historic : undefined },
         ]}
         value={tab}
@@ -209,6 +241,7 @@ export default function CompanyKnowledgePage() {
 
       {tab === "pendents" && <PendingTab view={view} onShowCurrent={() => showTab("actual")} />}
       {tab === "actual" && <CurrentTab view={view} />}
+      {tab === "qualificacio" && <QualificationTab view={view} />}
       {tab === "historic" && <HistoricTab view={view} onShowCurrent={() => showTab("actual")} />}
 
       {declaring && (

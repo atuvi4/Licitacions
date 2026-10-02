@@ -70,8 +70,8 @@ Totes les files de coneixement actual porten aquests camps:
 | Papers d'un tercer | `partner_roles` | Nova (paper, línia, territori) |
 | Cobertura territorial d'un fet, d'un servei o d'un paper | `knowledge_coverage_areas` + `coverage_completeness` | `0047` (§3.3). Una fila per àrea, penjada de la dada per `entity_type` + `entity_id`. |
 | Solvència econòmica (volum de negoci per exercici) | `company_financial_years` | Ampliada a `0052` (§3.4): origen, `as_of`, verificació i cicle de vida. Import `Decimal` i moneda; l'any fa de vigència. |
-| Referències d'execució | `company_projects` + `company_project_annual_amounts` | Ampliada a `0052`. Un projecte `completed` amb import i data; les línies de servei són les dels serveis vinculats. **No és cap `historic_bid`**: una oferta presentada no acredita execució. Els imports **executats per any** (una fila per projecte i any, nova a `0052`) són el que es compara amb «l'any de major execució»; sense desglossament, l'import d'un projecte plurianual no s'imputa a cap any. |
-| Assegurances | `company_insurances` + `company_insurance_limits` | Ampliada a `0052`: origen i verificació; `expires_at` fa de vigència. Límits estructurats per tipus (`per_claim`, `annual_aggregate`, `per_victim`, `employer_per_victim` = RC patronal per víctima, …). Cap número de compte ni dada bancària. |
+| Referències d'execució | `company_projects` + `company_project_annual_amounts` + `company_project_service_lines` | Ampliada a `0052`. Un projecte `completed` amb import i data. Les línies de servei que acredita són les de `company_project_service_lines` (`0053`, directes del vocabulari): no depenen dels serveis que l'empresa ofereix avui. `project_services` és **legacy** (§3.5). **No és cap `historic_bid`**: una oferta presentada no acredita execució. Els imports **executats per any** (una fila per projecte i any, nova a `0052`) són el que es compara amb «l'any de major execució»; sense desglossament, l'import d'un projecte plurianual no s'imputa a cap any. |
+| Assegurances | `company_insurances` + `company_insurance_limits` | Ampliada a `0052`: origen i verificació; `expires_at` fa de vigència. La fitxa (pòlissa + conjunt complet de límits) es desa en una sola transacció (§3.5). Límits estructurats per tipus (`per_claim`, `annual_aggregate`, `per_victim`, `employer_per_victim` = RC patronal per víctima, …). Cap número de compte ni dada bancària. |
 | Registres i habilitacions | `company_registrations` | Ampliada a `0052`: origen, verificació, tipus `sector_operator_registry` (l'emissor és a `issuer`, cap registre concret al codi) i **abast estructurat** `scope_service_lines`. Sense abast estructurat, `scope_unknown`. |
 | Persones i perfils | `company_people` | Ampliada a `0052`: origen, verificació i `profile_codes` (perfils del vocabulari, una persona en pot cobrir diversos). Dades personals mínimes; la fotografia no porta noms. **Disponible no vol dir adscrit.** |
 | Equips i instruments | `company_equipment` | Nova a `0052`: tipus tancat (`otdr`, `olts`, `fusion_splicer`, …), fabricant, model, sèrie, mode d'accés, unitats, `calibration_required` (nul = no consta) i `calibration_valid_until`, amb procedència completa. **No és cap producte que es vengui.** |
@@ -113,6 +113,46 @@ defecte: així el downgrade decideix per valors explícits, sense comparar dates
 ni dependre de cap zona horària. **Entren a la fotografia**: una empresa que ja
 tenia exercicis, projectes, pòlisses, registres o persones canvia d'empremta;
 una que no en tenia, no.
+
+### 3.5 La fitxa sencera, d'un sol cop (fase 3A, pas 6: `0053`)
+
+**Assegurança = una transacció.** L'alta i la modificació d'una pòlissa
+(`POST`/`PATCH /insurances`) accepten `limits`, el CONJUNT COMPLET de límits
+(`kind`, `amount`, `currency`, `notes`; un tipus només una vegada). El CRUD aplica
+la pòlissa i el conjunt (tipus per tipus: el que hi és s'actualitza, el que falta
+es treu, el que és nou s'afegeix) i fa **un sol commit**: si qualsevol límit o la
+pòlissa falla, no en queda res (ni pòlissa nova, ni conjunt parcial). Un canvi
+del conjunt d'una pòlissa verificada la torna a pendent; el mateix conjunt no és
+cap canvi. No enviar `limits` els deixa com estan. La lectura porta `limits`.
+L'API granular `/insurances/{id}/limits` continua existint per a la pantalla
+antiga; la pantalla nova no la fa servir.
+
+**Línies directes de les referències (`0053`).** `company_project_service_lines`
+(projecte + línia del vocabulari, PK composta, CASCADE amb el projecte, RESTRICT
+amb el vocabulari) és la **font de veritat** de les línies que acredita una
+referència: la fotografia, l'empremta i l'anàlisi (R2) només llegeixen aquesta
+taula. L'API de projectes hi escriu amb `service_line_codes` (conjunt complet,
+codis del vocabulari; canviar-lo en una referència verificada la desverifica).
+Una referència de veu IP continua acreditant veu IP encara que avui l'empresa no
+tingui cap servei de veu IP.
+
+* **Upgrade:** backfill determinista des de `project_services` JOIN
+  `company_services` (línies no nul·les, sense duplicats): exactament el que
+  `0052` llegia, i cap empremta canvia.
+* **`project_services` queda LEGACY**, només per compatibilitat d'API
+  (`service_ids` a l'alta i al PATCH de projectes, `services` a la lectura, i
+  `PUT`/`DELETE /projects/{id}/services/{service_id}`). No s'esborra i no hi ha
+  sincronització en cap sentit: canviar els serveis **no** canvia les línies que
+  acredita la referència ni en desfà la verificació, i un projecte creat només amb
+  `service_ids` no acredita cap línia. La UI nova mai l'envia, i la pantalla antiga
+  `/experiencia` redirigeix a la secció nova.
+* **Downgrade: conjunts exactes.** Per a cada projecte, A = línies de
+  `company_project_service_lines` i B = línies dels serveis dels enllaços
+  `project_services` que JA EXISTEIXEN. Només passa si A == B a tots els projectes;
+  si A − B no és buit (`0052` perdria una línia, encara que hi hagi un servei
+  compatible no vinculat) o B − A no és buit (`0052` tornaria a afirmar una línia
+  treta), refusa amb `downgrade_0053_incompatible_rows` abans de cap DDL. Si passa,
+  només elimina la taula: cap INSERT, UPDATE ni DELETE a `project_services`.
 
 ### 3.1 Verificat vol dir amb evidència
 
@@ -410,13 +450,14 @@ es declaren amb els seus CRUD.
 
 ## 7. Pantalla «Coneixement de l'empresa»
 
-`/empresa/coneixement`, dins de la secció Empresa. Tres vistes sobre les
+`/empresa/coneixement`, dins de la secció Empresa. Quatre vistes sobre les
 mateixes dades:
 
 | Vista | Què hi ha |
 | --- | --- |
 | **Pendents de validar** | Les dades actuals que encara no es poden acreditar (què hi falta i com resoldre-ho) i els suggeriments de l'històric, per categoria. Els que només es poden descartar van al final. |
 | **Coneixement actual** | Certificacions, serveis, fets operatius, solucions, capacitats, productes i partners. A cada categoria hi ha el que és actual, el que només diu l'històric i el que no se sap. |
+| **Qualificació i mitjans** (`?tab=qualificacio&seccio=…`) | L'entrada de solvència, experiència, assegurances, registres, persones, equips i recursos quantitatius (IPv4). Llista compacta per secció i un calaix d'alta i edició; cada fitxa amb el seu estat, l'evidència i «Verifica» (només propietari i administració). Cap càlcul de compliment. |
 | **Històric detectat** | Tots els candidats, per categoria. |
 
 **L'estat que es pinta surt sempre del snapshot**, mai del
@@ -444,6 +485,36 @@ avisa que tornarà a pendent de verificar.
 
 La pantalla de certificacions que ja existia mostra el mateix estat efectiu i ja
 no deixa triar «Verificat» a mà; la de serveis demana la línia de servei.
+
+**Qualificació i mitjans: una sola UI d'edició.** La UI canònica de la
+qualificació és `/empresa/coneixement?tab=qualificacio`. Les pantalles 4C antigues
+que gestionen exactament les mateixes entitats **redirigeixen** (307, `next.config.ts`,
+llista a `apps/web/src/lib/legacy-redirects.ts`) a la secció corresponent:
+`/experiencia` i `/experiencia/{id}` → Experiència, `/empresa/assegurances` →
+Assegurances, `/empresa/registres` → Registres. Els components antics queden com a
+codi legacy i no s'esborra cap dada. **No** redirigeixen `/empresa/solvencia`
+(també preferències de contractació) ni `/empresa/equip` (també titulacions de cada
+persona): gestionen conceptes que la secció nova no té, i hi continuen editant els
+exercicis i les persones amb la mateixa representació. `/experiencia/{id}` porta
+`&project={id}` i la pestanya obre el calaix d'aquell projecte (a qui pot editar).
+
+El calaix d'una referència d'execució és la UI canònica de tot el projecte: dades,
+línies de servei acreditades, imports executats per any, **CPV del projecte**,
+evidència i verificació. Els CPV són metadada de l'experiència, separats de les
+línies: no entren a la fotografia ni a cap regla (R2 llegeix només les línies).
+Cada alta o baixa de CPV es desa al moment per `POST`/`DELETE
+/projects/{id}/cpvs`, amb la política d'edició del coneixement (treure un CPV
+modifica el projecte, no l'esborra: no cal ser propietari), desverifica una
+referència verificada, deixa un registre d'auditoria (`cpv afegit` / `cpv retirat`)
+en la mateixa transacció, i un duplicat (409) o un CPV inexistent (404) no canvien
+res.
+
+* La «Data de vigència de la informació» és opcional i no s'omple mai per
+  defecte: a les cinc taules del perfil s'envia nul·la. Als equips i als fets
+  quantitatius, l'API hi posa la data d'alta si no se n'indica cap, i la pantalla
+  ho diu.
+* Una persona sense cap perfil no entra a la fotografia per perfil: es mostra
+  «Sense perfil de qualificació», amb què cal fer, i sense «Verifica».
 
 ## 8. Dades confidencials
 
@@ -474,9 +545,12 @@ no deixa triar «Verificat» a mà; la de serveis demana la línia de servei.
   `import_knowledge`.
 * **Especificacions de producte** (PoE, ports…): les capacitats es declaren a
   nivell de solució, no de producte.
-* **Qualificació (`0052`)**: les pantalles del perfil no mostren encara
-  l'origen, la verificació, els perfils estructurats ni l'abast dels registres
-  (l'API sí); els equips no tenen pantalla. Una pòlissa d'un tipus es compara per
+* **Qualificació (`0052`)**: les pantalles 4C antigues no mostren l'origen, la
+  verificació, els perfils estructurats ni l'abast dels registres; ho fa la
+  pestanya «Qualificació i mitjans».
+* **Doble camí legacy (`0053`).** `project_services` i les rutes granulars de
+  límits es mantenen per a les pantalles antigues, sense sincronització amb el
+  camí nou. Una pòlissa d'un tipus es compara per
   tipus, no per objecte assegurat. La «similitud» d'una referència d'execució
   només es llegeix per línies de servei. Les finestres són per anys naturals
   (l'exercici és l'any de la fila), no per dates exactes, i la d'execució

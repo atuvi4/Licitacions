@@ -31,7 +31,14 @@ export type RecordKind =
   | "product"
   | "solution_product"
   | "partner"
-  | "partner_role";
+  | "partner_role"
+  // Qualificacio i mitjans (0052): les claus de `/knowledge/records/{kind}/{id}/verify`.
+  | "financial_year"
+  | "project"
+  | "insurance"
+  | "registration"
+  | "person"
+  | "equipment";
 
 export interface KnowledgeClaim {
   record_id: string;
@@ -72,7 +79,21 @@ export interface PendingItem {
   superseded_by_current: boolean;
 }
 
-export type SnapshotSection = "certifications" | "facts" | "services" | "solutions" | "capabilities" | "products" | "partners";
+export type SnapshotSection =
+  | "certifications"
+  | "facts"
+  | "services"
+  | "solutions"
+  | "capabilities"
+  | "products"
+  | "partners"
+  // Qualificacio i mitjans (0052). Opcionals: una API anterior no les envia.
+  | "financial_years"
+  | "execution_references"
+  | "insurances"
+  | "registrations"
+  | "profiles"
+  | "equipment";
 
 export interface KnowledgeSnapshot {
   company_id: string;
@@ -85,6 +106,12 @@ export interface KnowledgeSnapshot {
   capabilities: KnowledgeEntry[];
   products: KnowledgeEntry[];
   partners: KnowledgeEntry[];
+  financial_years?: KnowledgeEntry[];
+  execution_references?: KnowledgeEntry[];
+  insurances?: KnowledgeEntry[];
+  registrations?: KnowledgeEntry[];
+  profiles?: KnowledgeEntry[];
+  equipment?: KnowledgeEntry[];
   pending_validation: PendingItem[];
 }
 
@@ -113,6 +140,9 @@ export interface Vocabulary {
   service_lines: Array<{ code: string; label: string }>;
   capabilities: CapabilityDefinition[];
   standards: Array<{ code: string; label: string; levels: string[] | null }>;
+  /** Qualificacio i mitjans (0052). */
+  professional_profiles?: Array<{ code: string; label: string }>;
+  equipment_types?: Array<{ code: string; label: string }>;
 }
 
 interface RecordBase {
@@ -126,6 +156,8 @@ interface RecordBase {
 export interface OperatingFactRecord extends RecordBase {
   key: string;
   value: boolean;
+  /** Nomes als fets quantitatius (0052). */
+  value_number?: string | null;
   detail: string | null;
   coverage?: Coverage;
 }
@@ -168,6 +200,21 @@ export interface KnowledgeRecords {
   solution_products: Array<RecordBase & { solution_id: string; product_id: string }>;
   partners: PartnerRecord[];
   partner_roles: PartnerRoleRecord[];
+  /** Mitjans operatius (0052). Opcional: una API anterior no l'envia. */
+  equipment?: EquipmentRecord[];
+}
+
+/** Un equip o instrument adscrivible (0052). NO es cap producte que l'empresa vengui. */
+export interface EquipmentRecord extends RecordBase {
+  equipment_type: string;
+  manufacturer: string | null;
+  model: string | null;
+  serial_reference: string | null;
+  access_mode: string | null;
+  quantity: number;
+  calibration_required: boolean | null;
+  calibration_valid_until: string | null;
+  notes: string | null;
 }
 
 /* ----- Rètols -------------------------------------------------------------- */
@@ -240,6 +287,51 @@ export const FACT_LABELS: Record<string, string> = {
   datacenter_tier3: "Centre de dades Tier-3",
   support_24x7: "Suport 24x7",
   own_ftth_infrastructure: "Infraestructura FTTH pròpia",
+  ipv4_assignable_count: "IPv4 assignables",
+};
+
+/** Fets QUANTITATIUS (0052): porten un nombre (`value_number`), no un sí/no. Es
+ * gestionen a «Qualificació i mitjans», no a «Fets operatius». */
+export const NUMERIC_FACT_KEYS = ["ipv4_assignable_count"] as const;
+
+export function isNumericFact(key: string): boolean {
+  return (NUMERIC_FACT_KEYS as readonly string[]).includes(key);
+}
+
+export const NUMERIC_FACT_UNITS: Record<string, string> = { ipv4_assignable_count: "adreces" };
+
+/** Com en disposa l'empresa d'un equip. */
+export const EQUIPMENT_ACCESS_LABELS: Record<string, string> = {
+  owned: "Propi",
+  leased: "Arrendament (leasing)",
+  rented: "Lloguer",
+  partner_provided: "Aportat per un tercer",
+  other: "Altres",
+};
+
+/** Retols dels tipus d'equip quan el vocabulari de l'API no hi es. */
+export const EQUIPMENT_TYPE_LABELS: Record<string, string> = {
+  otdr: "Reflectòmetre òptic (OTDR)",
+  olts: "Equip de pèrdues òptiques (OLTS)",
+  fusion_splicer: "Fusionadora de fibra",
+  optical_power_meter: "Mesurador de potència òptica",
+  light_source: "Font de llum",
+  cable_certifier: "Certificador de cablejat",
+  spectrum_analyzer: "Analitzador d'espectre",
+  other: "Altres",
+};
+
+/** Retols dels perfils professionals quan el vocabulari de l'API no hi es. */
+export const PROFILE_LABELS: Record<string, string> = {
+  project_manager: "Cap de projecte",
+  network_security_specialist: "Especialista de xarxa i seguretat",
+  voip_specialist: "Especialista VoIP",
+  fiber_certification_specialist: "Responsable de fibra i certificació",
+  network_engineer: "Enginyer/a de xarxa",
+  radio_link_specialist: "Especialista en radioenllaços",
+  field_technician: "Tècnic/a de camp",
+  service_desk_agent: "Agent de suport i atenció",
+  data_center_operator: "Operador/a de CPD",
 };
 
 export const PARTNER_ROLE_LABELS: Record<string, string> = {
@@ -390,6 +482,12 @@ export const KIND_LABELS: Record<RecordKind, string> = {
   solution_product: "producte d'una solució",
   partner: "partner",
   partner_role: "paper del partner",
+  financial_year: "exercici econòmic",
+  project: "referència d'execució",
+  insurance: "assegurança",
+  registration: "registre",
+  person: "persona",
+  equipment: "equip",
 };
 
 export function serviceLineLabel(code: string | null | undefined, vocabulary?: Vocabulary | null): string {
@@ -493,14 +591,28 @@ export interface SnapshotIndex {
   pending: Map<string, PendingItem[]>;
 }
 
-const SECTIONS: SnapshotSection[] = ["certifications", "facts", "services", "solutions", "capabilities", "products", "partners"];
+const SECTIONS: SnapshotSection[] = [
+  "certifications",
+  "facts",
+  "services",
+  "solutions",
+  "capabilities",
+  "products",
+  "partners",
+  "financial_years",
+  "execution_references",
+  "insurances",
+  "registrations",
+  "profiles",
+  "equipment",
+];
 
 export function indexSnapshot(snapshot: KnowledgeSnapshot | null): SnapshotIndex {
   const claims = new Map<string, KnowledgeClaim>();
   const pending = new Map<string, PendingItem[]>();
   if (!snapshot) return { claims, pending };
   for (const section of SECTIONS) {
-    for (const entry of snapshot[section]) {
+    for (const entry of snapshot[section] ?? []) {
       for (const claim of entry.claims) claims.set(claim.record_id, claim);
     }
   }
@@ -542,13 +654,15 @@ export function entryState(entry: KnowledgeEntry | undefined): EffectiveState {
 }
 
 export function findEntry(snapshot: KnowledgeSnapshot | null, section: SnapshotSection, key: string): KnowledgeEntry | undefined {
-  return snapshot?.[section].find((entry) => entry.key === key);
+  return snapshot?.[section]?.find((entry) => entry.key === key);
 }
 
 /* ----- Pendents de validar -------------------------------------------------- */
 
 /** Els papers d'un partner i els productes d'una solució no tenen pantalla pròpia: no es llisten sols. */
 const NESTED_SUBJECTS = new Set(["partner_role", "solution_product"]);
+/** La fotografia anomena «execution_reference» el que l'API de verificacio anomena «project». */
+const SNAPSHOT_SUBJECT_KINDS: Record<string, RecordKind> = { execution_reference: "project" };
 
 export interface PendingGroup {
   id: string;
@@ -563,8 +677,9 @@ export function groupPendingRecords(snapshot: KnowledgeSnapshot | null): Pending
   const groups = new Map<string, PendingGroup>();
   for (const item of snapshot?.pending_validation ?? []) {
     if (item.kind === "historic_candidate" || !item.record_id || NESTED_SUBJECTS.has(item.subject)) continue;
-    const id = `${item.subject}:${item.record_id}`;
-    const group = groups.get(id) ?? { id, subject: item.subject as RecordKind, key: item.key, recordId: item.record_id, kinds: [] };
+    const subject = (SNAPSHOT_SUBJECT_KINDS[item.subject] ?? item.subject) as RecordKind;
+    const id = `${subject}:${item.record_id}`;
+    const group = groups.get(id) ?? { id, subject, key: item.key, recordId: item.record_id, kinds: [] };
     group.kinds.push(item.kind);
     groups.set(id, group);
   }
@@ -591,9 +706,13 @@ export interface KnowledgeSummary {
 export function summarize(snapshot: KnowledgeSnapshot | null, vocabulary: Vocabulary | null): KnowledgeSummary {
   const summary: KnowledgeSummary = { verified: 0, declared: 0, pending: 0, historic: 0, unknown: 0 };
   if (!snapshot) return summary;
+  // Una dada compta una vegada: una persona amb tres perfils surt a tres entrades.
+  const counted = new Set<string>();
   for (const section of SECTIONS) {
-    for (const entry of snapshot[section]) {
+    for (const entry of snapshot[section] ?? []) {
       for (const claim of entry.claims) {
+        if (counted.has(claim.record_id)) continue;
+        counted.add(claim.record_id);
         if (claim.source === "current_verified") summary.verified += 1;
         else summary.declared += 1;
       }
@@ -817,6 +936,12 @@ export const EVIDENCE_TARGETS: Partial<Record<RecordKind, EvidenceTarget>> = {
   solution_capability: { entityType: "solution_capability", relationship: "technical_sheet", category: "technical" },
   product: { entityType: "company_product", relationship: "technical_sheet", category: "technical" },
   partner: { entityType: "company_partner", relationship: "contract", category: "legal" },
+  financial_year: { entityType: "company_financial_year", relationship: "financial_statement", category: "financial" },
+  project: { entityType: "company_project", relationship: "certificate_of_good_execution", category: "project_evidence" },
+  insurance: { entityType: "company_insurance", relationship: "policy", category: "insurance" },
+  registration: { entityType: "company_registration", relationship: "certificate", category: "registration" },
+  person: { entityType: "company_person", relationship: "cv", category: "cv" },
+  equipment: { entityType: "company_equipment", relationship: "certificate", category: "technical" },
 };
 
 const EDIT_ROLES = new Set(["owner", "admin", "bid_manager", "technical"]);

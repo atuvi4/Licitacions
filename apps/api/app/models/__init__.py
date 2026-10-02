@@ -53,6 +53,7 @@ from app.models.profile import (
 from app.models.projects import (
     CompanyProject,
     CompanyProjectAnnualAmount,
+    CompanyProjectServiceLine,
     ProjectCPV,
     project_services,
 )
@@ -255,4 +256,5 @@ __all__ = [
     "project_services",
     "CompanyEquipment",
     "CompanyProjectAnnualAmount",
+    "CompanyProjectServiceLine",
 ]
