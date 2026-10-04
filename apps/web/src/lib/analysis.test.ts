@@ -34,14 +34,22 @@ describe("vocabulari del motor", () => {
     for (const [group, labels] of Object.entries(LABELS)) {
       expect(Object.keys(labels).sort()).toEqual([...(vocabulary.rendered as Record<string, string[]>)[group]].sort());
     }
-    for (const code of Object.keys(RESOLVE)) expect(vocabulary.explanations).toHaveProperty(code);
+    const current = (vocabulary.explanations as Record<string, Record<string, string>>)[vocabulary.rules_version];
+    for (const code of Object.keys(RESOLVE)) expect(current).toHaveProperty(code);
     expect([...FINDING_ORDER].sort()).toEqual([...vocabulary.rendered.finding_type].sort());
   });
 
   it("les explicacions són el text canònic del backend, tal com és", () => {
-    expect(explanation("TURNOVER_UNKNOWN")).toBe(vocabulary.explanations.TURNOVER_UNKNOWN);
+    const tables = vocabulary.explanations as Record<string, Record<string, string>>;
+    expect(vocabulary.rules_version).toBe("phase3a-analysis-v3");
+    // Cada run, amb el copy de la seva versió.
+    expect(explanation("TURNOVER_UNKNOWN", "phase3a-analysis-v2")).toBe(tables["phase3a-analysis-v2"].TURNOVER_UNKNOWN);
+    expect(explanation("TURNOVER_UNKNOWN", "phase3a-analysis-v3")).toBe(tables["phase3a-analysis-v3"].TURNOVER_UNKNOWN);
     // Un codi que el JSON encara no coneix: text neutre, mai el codi.
-    expect(explanation("SOME_NEW_CODE")).toBe("Explicació no disponible.");
+    expect(explanation("SOME_NEW_CODE", vocabulary.rules_version)).toBe("Explicació no disponible.");
+    // Una versió desconeguda: text neutre, mai la taula d'una altra versió.
+    expect(explanation("TURNOVER_UNKNOWN", "phase3a-analysis-v1")).toBe("Explicació no disponible.");
+    expect(explanation("TURNOVER_UNKNOWN", "")).toBe("Explicació no disponible.");
   });
 
   it("«no se sap» és neutre i «verificat» no és mai una font", () => {

@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from app.analysis.registry import EXPLANATIONS, ExplanationCode
+from app.analysis.registry import EXPLANATIONS_BY_VERSION, RULES_VERSION, ExplanationCode
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,7 +23,9 @@ def _codes(cls) -> set[str]:
 
 
 def test_every_explanation_code_has_its_canonical_text():
-    assert set(EXPLANATIONS) == _codes(ExplanationCode)
+    assert set(EXPLANATIONS_BY_VERSION[RULES_VERSION]) == _codes(ExplanationCode)
+    for table in EXPLANATIONS_BY_VERSION.values():
+        assert set(table) <= _codes(ExplanationCode)
 
 
 def test_the_committed_json_is_exactly_what_the_script_generates():
@@ -45,6 +47,17 @@ def test_the_output_is_deterministic_and_has_no_timestamps():
         and "202" not in first.split('"explanations"')[0]
     )
     vocabulary = script.build_vocabulary()
-    assert set(vocabulary) == {"contract", "explanations", "rendered"}
+    assert set(vocabulary) == {"contract", "explanations", "rendered", "rules_version"}
     for values in (*vocabulary["contract"].values(), *vocabulary["rendered"].values()):
         assert values == sorted(values)
+
+
+def test_explanations_are_exported_per_rules_version():
+    """El web renderitza cada run amb el copy de la seva `rules_version` (spec 3.11)."""
+    vocabulary = _script().build_vocabulary()
+    assert vocabulary["rules_version"] == RULES_VERSION
+    assert set(vocabulary["explanations"]) == set(EXPLANATIONS_BY_VERSION)
+    assert {"phase3a-analysis-v2", "phase3a-analysis-v3"} <= set(vocabulary["explanations"])
+    for version, table in EXPLANATIONS_BY_VERSION.items():
+        assert vocabulary["explanations"][version] == dict(table)
+        assert list(vocabulary["explanations"][version]) == sorted(table)

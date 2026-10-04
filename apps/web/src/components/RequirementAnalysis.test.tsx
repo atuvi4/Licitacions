@@ -83,6 +83,7 @@ function requirement(overrides: Partial<Requirement> = {}): Requirement {
     origin: "extracted" as const,
     archived_at: null,
     citations: [],
+    timing: "unknown" as const,
     tender_id: "t1",
     tender_lot_id: null,
     category: "certification",

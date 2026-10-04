@@ -426,7 +426,9 @@ async def unlink_source_ref(
 
 
 async def source_refs_of(
-    session: AsyncSession, model: type[TenderBlock] | type[TenderSite], ids: list[uuid.UUID]
+    session: AsyncSession,
+    model: type[TenderBlock] | type[TenderSite] | type[AwardCriterion],
+    ids: list[uuid.UUID],
 ) -> dict[uuid.UUID, list[TenderSourceRef]]:
     """Les cites de cada bloc o seu, en una sola consulta."""
     if not ids:

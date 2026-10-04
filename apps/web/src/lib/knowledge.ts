@@ -219,7 +219,8 @@ export interface EquipmentRecord extends RecordBase {
 
 /* ----- Rètols -------------------------------------------------------------- */
 
-/** L'API envia els rètols del vocabulari sense accents: aquí hi ha els que es mostren. */
+/** Els rètols que es mostren. L'API ja els envia amb accents (copy v3); aquests tenen
+ * preferència i l'API cobreix els codis que la web encara no coneix. */
 export const SERVICE_LINE_LABELS: Record<string, string> = {
   voice_pbx: "Centraleta i veu IP",
   voice_trunk: "Troncals de veu i numeració",

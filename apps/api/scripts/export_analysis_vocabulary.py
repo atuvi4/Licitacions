@@ -3,9 +3,10 @@
     apps/api/.venv/Scripts/python apps/api/scripts/export_analysis_vocabulary.py
 
 Escriu `apps/web/src/lib/analysis-vocabulary.generated.json`: determinista (ordenat,
-sense dates). `explanations` porta el text canonic de `EXPLANATIONS`, que la UI mostra
-tal com es. `rendered` son els valors que la UI pinta amb copy propi. `contract` son
-valors que l'API retorna pero la UI v1 no pinta com a text.
+sense dates). `explanations` porta el text canonic de `EXPLANATIONS_BY_VERSION` per
+`rules_version` (la UI el mostra tal com es, amb la taula de la versio de cada run) i
+`rules_version` es la versio vigent. `rendered` son els valors que la UI pinta amb copy
+propi. `contract` son valors que l'API retorna pero la UI v1 no pinta com a text.
 No l'editeu a ma: el test `test_analysis_vocabulary_export.py` el compara amb aquesta sortida.
 """
 
@@ -18,7 +19,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.analysis.registry import EXPLANATIONS, QUESTION_CODES, RULE_CODES  # noqa: E402
+from app.analysis.registry import (  # noqa: E402
+    EXPLANATIONS_BY_VERSION,
+    QUESTION_CODES,
+    RULE_CODES,
+    RULES_VERSION,
+)
 from app.models.enums import (  # noqa: E402
     AnalysisKnowledgeSource,
     AssessmentVerification,
@@ -59,10 +65,14 @@ RENDERED: dict[str, type[StrEnum]] = {
 def build_vocabulary() -> dict:
     return {
         "contract": {"question_code": sorted(QUESTION_CODES), "rule_code": sorted(RULE_CODES)},
-        "explanations": {code: EXPLANATIONS[code] for code in sorted(EXPLANATIONS)},
+        "explanations": {
+            version: {code: table[code] for code in sorted(table)}
+            for version, table in sorted(EXPLANATIONS_BY_VERSION.items())
+        },
         "rendered": {
             name: sorted(m.value for m in enum) for name, enum in sorted(RENDERED.items())
         },
+        "rules_version": RULES_VERSION,
     }
 
 

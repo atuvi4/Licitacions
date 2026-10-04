@@ -1,7 +1,8 @@
 /**
  * L'anàlisi determinista d'un plec (motor 0051/0052), per a la pestanya «Anàlisi».
  *
- * - Els textos d'explicació són els CANÒNICS del backend (`EXPLANATIONS`), tal com són.
+ * - Els textos d'explicació són els CANÒNICS del backend (`EXPLANATIONS_BY_VERSION`), tal
+ *   com són, amb la taula de la `rules_version` de cada run.
  * - Els valors d'enum els rotula el frontend (`LABELS`); la cobertura es prova contra el
  *   JSON generat des del registre (`analysis-vocabulary.generated.json`).
  * - Cap score, percentatge ni recomanació: només els comptadors que dona el motor.
@@ -125,6 +126,54 @@ export interface TenderStructureView {
   scope_items: ScopeItemView[];
 }
 
+/* ------------------------------------------------- agrupació de preguntes */
+
+/** JSON amb les claus ordenades en profunditat; els valors i l'ordre dels arrays, tal com són. */
+export function canonicalParams(value: unknown): string {
+  const sort = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sort);
+    if (v && typeof v === "object") {
+      return Object.fromEntries(
+        Object.entries(v as Record<string, unknown>)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([k, x]) => [k, sort(x)]),
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(sort(value ?? null));
+}
+
+export interface QuestionGroup {
+  key: string;
+  items: AnalysisQuestion[];
+}
+
+/**
+ * Agrupa per audience + question_code + params canonicalitzats, només amb `scope_item_id`.
+ * Sense `scope_item_id` cada pregunta és el seu propi grup. Mai per text ni per `dedupe_key`.
+ * Conserva l'ordre de la primera aparició.
+ */
+export function groupQuestions(questions: AnalysisQuestion[]): QuestionGroup[] {
+  const groups: QuestionGroup[] = [];
+  const byKey = new Map<string, QuestionGroup>();
+  for (const q of questions) {
+    if (!q.scope_item_id) {
+      groups.push({ key: q.id, items: [q] });
+      continue;
+    }
+    const key = JSON.stringify([q.audience, q.question_code, canonicalParams(q.params_json)]);
+    const found = byKey.get(key);
+    if (found) found.items.push(q);
+    else {
+      const g = { key: `g:${key}`, items: [q] };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+  }
+  return groups;
+}
+
 export function analysisPath(companyId: string, tenderId: string): string {
   return `/companies/${companyId}/tenders/${tenderId}/analysis`;
 }
@@ -159,7 +208,7 @@ export const LABELS: Record<RenderedGroup, Record<string, string>> = {
     blocker_potential: "Possible bloqueig (no confirmat)",
     review_required: "Cal revisar",
     evidence_gap: "Falta evidència",
-    missing_information: "Falta informació de l'empresa",
+    missing_information: "Falta informació",
     territory_gap: "Mancança de territori",
     delivery_gap: "Mancança d'execució",
     warning: "Avís",
@@ -207,9 +256,35 @@ export function levelOf(group: RenderedGroup, value: string): Level {
   return LEVELS[group]?.[value] ?? "neutral";
 }
 
-/** El text canònic del backend, sense reescriure'l. Un codi desconegut: text neutre. */
-export function explanation(code: string): string {
-  return (vocabulary.explanations as Record<string, string>)[code] ?? "Explicació no disponible.";
+/**
+ * Etiqueta d'un finding. `missing_information` es rotula segons qui no ha donat la dada
+ * (`details_json.missing_from`): el plec, l'empresa o ningú no atribuït (també tots els runs v2).
+ */
+export function findingLabel(finding: Pick<Finding, "finding_type" | "details_json">): string {
+  if (finding.finding_type === "missing_information") {
+    const from = finding.details_json?.missing_from;
+    if (from === "tender") return "Falta informació del plec";
+    if (from === "company") return "Falta informació de l'empresa";
+    return "Falta informació";
+  }
+  return label("finding_type", finding.finding_type);
+}
+
+/** La versió de regles vigent al backend quan es va generar el vocabulari. */
+export const CURRENT_RULES_VERSION: string = vocabulary.rules_version;
+
+const EXPLANATIONS_BY_VERSION = vocabulary.explanations as Record<string, Record<string, string>>;
+const own = (table: object, key: string): boolean => Object.prototype.hasOwnProperty.call(table, key);
+
+/**
+ * El text canònic del backend, sense reescriure'l, amb el copy de la versió del run.
+ * Una versió o un codi desconeguts: text neutre, mai la taula d'una altra versió.
+ * La versió és obligatòria: cada crida hi passa `run.rules_version`.
+ */
+export function explanation(code: string, rulesVersion: string): string {
+  if (!own(EXPLANATIONS_BY_VERSION, rulesVersion)) return "Explicació no disponible.";
+  const table = EXPLANATIONS_BY_VERSION[rulesVersion];
+  return own(table, code) ? table[code] : "Explicació no disponible.";
 }
 
 /* ---------------------------------------------------------- on es resol */
@@ -270,6 +345,11 @@ export const RESOLVE: Record<string, ResolveDestination> = {
   FACT_NUMBER_BELOW: Q("recursos", "Recursos quantitatius"),
   TERRITORY_LIST_UNAVAILABLE: QUESTIONS,
   CRITERION_TIMING_NOT_CONCLUSIVE: QUESTIONS,
+  TENDER_REFERENCE_DATE_MISSING: QUESTIONS,
+  CRITERION_NEEDS_UNKNOWN: CURRENT,
+  // Només el produeix un fet quantitatiu actual sense nombre: es completa on es declaren.
+  CRITERION_NEEDS_NOT_COMPARABLE: Q("recursos", "Recursos quantitatius"),
+  // DATA_MISSING_UNATTRIBUTED: a posta sense destinació (no se sap qui ha de donar la dada).
 };
 
 export function resolveFor(code: string): ResolveDestination | null {
@@ -288,12 +368,64 @@ export const FINDING_ORDER = [
   "warning",
 ];
 
-export function sortFindings(findings: Finding[]): Finding[] {
-  const rank = (type: string) => {
+/** Només els camps del requisit que l'ordre i l'etiqueta llegeixen. */
+export interface RequirementTimingView {
+  obligation?: string | null;
+  timing?: string | null;
+}
+
+export interface SortContext {
+  fits?: Array<Pick<FitAssessment, "requirement_id" | "fit_result">>;
+  criterionAssessments?: Array<Pick<CriterionAssessment, "award_criterion_id" | "lost_points">>;
+  requirements?: ReadonlyMap<string, RequirementTimingView>;
+}
+
+/** El requisit enllaçat d'un finding: el de nivell superior, o `details_json.requirement_id` (criteris). */
+export function linkedRequirementId(finding: Pick<Finding, "requirement_id" | "details_json">): string | null {
+  if (finding.requirement_id) return finding.requirement_id;
+  const nested = finding.details_json?.requirement_id;
+  return typeof nested === "string" && nested ? nested : null;
+}
+
+/**
+ * Etiqueta factual d'obligatorietat, NOMÉS amb camps reals del requisit. Sense `timing`
+ * (o amb un moment que no sigui un d'aquests dos) no diu res. Mai és una exclusió.
+ */
+export function obligationTag(requirement: RequirementTimingView | null | undefined): string | null {
+  if (!requirement || requirement.obligation !== "mandatory") return null;
+  if (requirement.timing === "at_submission") return "Obligatori · a la presentació";
+  if (requirement.timing === "before_formalization") return "Obligatori · abans de formalitzar";
+  return null;
+}
+
+function timingRank(requirement: RequirementTimingView | null | undefined): number {
+  if (!requirement || !requirement.timing || requirement.timing === "unknown") return 3;
+  if (requirement.obligation === "mandatory" && requirement.timing === "at_submission") return 0;
+  if (requirement.obligation === "mandatory" && requirement.timing === "before_formalization") return 1;
+  return 2;
+}
+
+/**
+ * Ordre de presentació (cap canvi de tipus): 1) possible bloqueig; 2) negatius demostrats
+ * (requisit `does_not_satisfy` o criteri amb `lost_points > 0`); 3) la resta, per tipus.
+ * Dins de cada grup: obligatori a la presentació, abans de formalitzar, la resta i, al final,
+ * `unknown` o requisit absent. Estable: els empats conserven l'ordre original.
+ */
+export function sortFindings(findings: Finding[], ctx: SortContext = {}): Finding[] {
+  const failing = new Set((ctx.fits ?? []).filter((f) => f.fit_result === "does_not_satisfy").map((f) => f.requirement_id));
+  const losing = new Set((ctx.criterionAssessments ?? []).filter((c) => c.lost_points > 0).map((c) => c.award_criterion_id));
+  const typeRank = (type: string) => {
     const index = FINDING_ORDER.indexOf(type);
     return index === -1 ? FINDING_ORDER.length : index;
   };
-  return [...findings].sort((a, b) => rank(a.finding_type) - rank(b.finding_type));
+  const keys = findings.map((f, index) => {
+    const negative = (f.requirement_id !== null && failing.has(f.requirement_id)) || (f.criterion_id !== null && losing.has(f.criterion_id));
+    const group = f.finding_type === "blocker_potential" ? 0 : negative ? 1 : 2;
+    const id = linkedRequirementId(f);
+    return { f, index, group, type: group === 2 ? typeRank(f.finding_type) : 0, timing: timingRank(id ? ctx.requirements?.get(id) : undefined) };
+  });
+  keys.sort((a, b) => a.group - b.group || a.type - b.type || a.timing - b.timing || a.index - b.index);
+  return keys.map((k) => k.f);
 }
 
 const n = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);

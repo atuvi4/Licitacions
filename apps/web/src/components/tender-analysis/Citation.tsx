@@ -30,7 +30,12 @@ export function Citation({ tenderId, requirement, criterion }: { tenderId: strin
       : null;
     return <EvidenceRef compact documentName={evidence.document_name} pageNumber={evidence.page_number} href={href} />;
   }
-  const manual = requirement?.citations?.find((c) => c.document_name || c.page_number);
-  if (manual) return <EvidenceRef compact documentName={manual.document_name} pageNumber={manual.page_number} href={null} />;
-  return null;
+  const manualList = requirement ? requirement.citations : criterion?.citations;
+  const manual = manualList?.find((c) => c.document_name || c.location_label);
+  if (!manual) return null;
+  if (!manual.location_label) return <EvidenceRef compact documentName={manual.document_name} pageNumber={manual.page_number} href={null} />;
+  // Ubicació dins del document («PCAP cl. 7.A»); la pàgina només si el backend la dona.
+  const parts = [manual.document_name, manual.location_label];
+  if (manual.page_number !== null && manual.page_number !== undefined) parts.push(`p. ${manual.page_number}`);
+  return <span className="text-caption text-muted">{parts.filter(Boolean).join(" · ")}</span>;
 }

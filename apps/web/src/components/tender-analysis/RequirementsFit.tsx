@@ -28,7 +28,7 @@ function FilterButton({ pressed, level, onClick, children }: { pressed: boolean;
   );
 }
 
-function Row({ fit, lookup, tenderId }: { fit: FitAssessment; lookup: AnalysisLookup; tenderId: string }) {
+function Row({ fit, lookup, tenderId, rulesVersion }: { fit: FitAssessment; lookup: AnalysisLookup; tenderId: string; rulesVersion: string }) {
   const [open, setOpen] = useState(false);
   const panel = useId();
   const destination = resolveFor(fit.explanation_code);
@@ -61,7 +61,7 @@ function Row({ fit, lookup, tenderId }: { fit: FitAssessment; lookup: AnalysisLo
         Per què?
       </button>
       <div id={panel} hidden={!open} className="text-body text-ink">
-        <p>{explanation(fit.explanation_code)}</p>
+        <p>{explanation(fit.explanation_code, rulesVersion)}</p>
         {destination && (
           <a href={destination.href} className="inline-flex min-h-11 items-center text-brand hover:underline md:min-h-0">
             On es resol: {destination.label}
@@ -105,7 +105,7 @@ export function RequirementsFit({ run, lookup, tenderId }: { run: AnalysisRun; l
             <h3 className="bg-subtle px-5 py-2 text-caption font-semibold text-muted uppercase">{category}</h3>
             <ul className="divide-y divide-border">
               {fits.map((fit) => (
-                <Row key={fit.id} fit={fit} lookup={lookup} tenderId={tenderId} />
+                <Row key={fit.id} fit={fit} lookup={lookup} tenderId={tenderId} rulesVersion={run.rules_version} />
               ))}
             </ul>
           </section>

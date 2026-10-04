@@ -41,7 +41,7 @@ export function CriteriaPoints({ run, lookup, tenderId }: { run: AnalysisRun; lo
                   <tr key={c.id} id={`crit-${c.award_criterion_id}`} className="scroll-mt-4 align-top">
                     <td className="py-2.5 pr-3">
                       <p className="font-medium text-ink">{criterionName(lookup, c.award_criterion_id)}</p>
-                      <p className="text-caption text-muted">{explanation(c.explanation_code)}</p>
+                      <p className="text-caption text-muted">{explanation(c.explanation_code, run.rules_version)}</p>
                       <Citation tenderId={tenderId} criterion={lookup.criteria.get(c.award_criterion_id)} />
                     </td>
                     <td className="py-2.5 pr-3">

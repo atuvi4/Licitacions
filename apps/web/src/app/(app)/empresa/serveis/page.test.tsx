@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { vocabularyFixture } from "@/test/knowledge-fixture";
+import { UNACCENTED_LABELS, accentedVocabularyFixture, vocabularyFixture } from "@/test/knowledge-fixture";
 import type { Service } from "@/lib/types";
 
 /**
@@ -136,5 +136,38 @@ describe("Serveis: cobertura territorial", () => {
     expect(post).toHaveBeenCalledTimes(1);
     expect(post.mock.calls[0][1]).toMatchObject({ name: "Centraleta", service_line_code: "voice_pbx" });
     expect(post.mock.calls[0][1]).not.toHaveProperty("coverage");
+  });
+});
+
+describe("Serveis: rètols del vocabulari amb accents (copy v3)", () => {
+  beforeEach(() => {
+    get.mockReset();
+  });
+
+  it("la taula i el formulari mostren els rètols accentuats, també els que només coneix l'API", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === `${BASE}/services`) {
+        return Promise.resolve([
+          service({ id: "svc-trunk", name: "Troncals", service_line_code: "voice_trunk" }),
+          service({ id: "svc-radio", name: "Enllaços", service_line_code: "radio_link" }),
+          service({ id: "svc-sat", name: "Backhaul", service_line_code: "satellite_backhaul" }),
+        ]);
+      }
+      if (path === `${BASE}/knowledge/vocabulary`) return Promise.resolve(accentedVocabularyFixture);
+      return Promise.reject(new Error(`inesperat: ${path}`));
+    });
+    const { container } = await renderPage();
+    for (const label of ["Troncals de veu i numeració", "Radioenllaços", "Retorn per satèl·lit"]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    expect(container.textContent).not.toMatch(UNACCENTED_LABELS);
+
+    fireEvent.click(screen.getByRole("button", { name: "Nou servei" }));
+    const dialog = screen.getByRole("dialog", { name: "Nou servei" });
+    const input = within(dialog).getByRole("combobox", { name: /Línia de servei/ });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const offered = within(within(dialog).getByRole("listbox")).getAllByRole("option").map((option) => option.textContent);
+    expect(offered).toEqual(accentedVocabularyFixture.service_lines.map((line) => line.label));
+    expect(offered.join(" | ")).not.toMatch(UNACCENTED_LABELS);
   });
 });

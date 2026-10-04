@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -84,19 +85,36 @@ def test_every_definition_is_coherent():
         assert (cap.value_type == CapabilityValueType.ORDINAL) == (cap.ordinal_scale is not None)
 
 
+def _without_accents(label: str) -> str:
+    decomposed = unicodedata.normalize("NFD", label)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
 def test_the_migrations_seed_exactly_this_vocabulary():
-    """El vocabulari es la 0045 mes el que hi han afegit les migracions posteriors."""
+    """El vocabulari es la 0045 mes el que hi han afegit les migracions posteriors.
+
+    Codis, tipus, comparadors, unitats i escales: identics. Els retols nomes poden
+    diferir en els accents (copy v3, F1): les migracions publicades no es reescriuen,
+    i les pantalles llegeixen els retols d'aquest fitxer (`/knowledge/vocabulary`).
+    """
     migration = _migration()
     seeded_lines = migration._SERVICE_LINES
     for path in LATER_MIGRATIONS:
         seeded_lines += _migration(path)._SERVICE_LINES
-    assert seeded_lines == tuple((s.code, s.label) for s in SERVICE_LINES)
+    assert tuple((code, _without_accents(label)) for code, label in seeded_lines) == tuple(
+        (s.code, _without_accents(s.label)) for s in SERVICE_LINES
+    )
     assert len(set(code for code, _ in seeded_lines)) == len(seeded_lines)
-    assert migration._CAPABILITIES == tuple(
+
+    def plain_capability(row):
+        code, line, label, *rest = row
+        return (code, line, _without_accents(label), *rest)
+
+    assert tuple(plain_capability(row) for row in migration._CAPABILITIES) == tuple(
         (
             c.code,
             c.service_line_code,
-            c.label,
+            _without_accents(c.label),
             str(c.value_type),
             str(c.comparator),
             c.unit,
@@ -104,9 +122,19 @@ def test_the_migrations_seed_exactly_this_vocabulary():
         )
         for c in CAPABILITIES
     )
-    assert migration._STANDARDS == tuple(
-        (s.code, s.label, list(s.levels) if s.levels else None) for s in CERTIFICATION_STANDARDS
+    assert tuple(
+        (code, _without_accents(label), levels) for code, label, levels in migration._STANDARDS
+    ) == tuple(
+        (s.code, _without_accents(s.label), list(s.levels) if s.levels else None)
+        for s in CERTIFICATION_STANDARDS
     )
+
+
+def test_the_accent_tolerance_is_only_about_accents():
+    """La comparacio amb les migracions no amaga cap canvi de text, nomes diacritics."""
+    assert _without_accents("Troncals de veu i numeració") == "Troncals de veu i numeracio"
+    assert _without_accents("Radioenllaços") == "Radioenllacos"
+    assert _without_accents("Electrònica de xarxa") != _without_accents("Electrònica de xarxes")
 
 
 @pytest.mark.parametrize(
@@ -137,13 +165,57 @@ def test_no_company_is_hardcoded_in_the_global_layer(path):
 async def test_mobile_telephony_is_a_service_line_like_the_others(db):
     """Una linia de servei mes: al vocabulari, als codis valids i a la taula."""
     line = next(s for s in SERVICE_LINES if s.code == "mobile_telephony")
-    assert line.label == "Telefonia mobil"
+    assert line.label == "Telefonia mòbil"
     assert "mobile_telephony" in SERVICE_LINE_CODES
     await seed_vocabulary(db)
     await db.commit()
     rows = {r.code: r.label for r in await db.scalars(sa.select(ServiceLineRow))}
     assert rows == {s.code: s.label for s in SERVICE_LINES}
-    assert rows["mobile_telephony"] == "Telefonia mobil"
+    assert rows["mobile_telephony"] == "Telefonia mòbil"
+
+
+async def test_reseeding_updates_the_labels_with_merge(db):
+    """Una base sembrada amb els retols antics (sense accents, com les migracions 0045 i
+    0046) queda amb els retols d'aquest fitxer despres de `seed_vocabulary`: `merge` els
+    actualitza per codi, sense duplicar cap fila."""
+    migration = _migration()
+    old_lines = migration._SERVICE_LINES
+    for path in LATER_MIGRATIONS:
+        old_lines += _migration(path)._SERVICE_LINES
+    for code, label in old_lines:
+        db.add(ServiceLineRow(code=code, label=label))
+    await db.flush()
+    for code, line, label, value_type, comparator, unit, scale in migration._CAPABILITIES:
+        db.add(
+            CapabilityDefinitionRow(
+                code=code,
+                service_line_code=line,
+                label=label,
+                value_type=value_type,
+                comparator=comparator,
+                unit=unit,
+                ordinal_scale=scale,
+            )
+        )
+    for code, label, levels in migration._STANDARDS:
+        db.add(CertificationStandardRow(code=code, label=label, levels=levels))
+    await db.commit()
+    db.expire_all()
+    stale = await db.get(ServiceLineRow, "voice_trunk")
+    assert stale.label == "Troncals de veu i numeracio"
+
+    await seed_vocabulary(db)
+    await db.commit()
+    db.expire_all()
+    lines = {r.code: r.label for r in await db.scalars(sa.select(ServiceLineRow))}
+    caps = {r.code: r.label for r in await db.scalars(sa.select(CapabilityDefinitionRow))}
+    standards = {r.code: r.label for r in await db.scalars(sa.select(CertificationStandardRow))}
+    assert lines == {s.code: s.label for s in SERVICE_LINES}
+    assert caps == {c.code: c.label for c in CAPABILITIES}
+    assert standards == {s.code: s.label for s in CERTIFICATION_STANDARDS}
+    assert lines["voice_trunk"] == "Troncals de veu i numeració"
+    assert caps["pbx.concurrent_calls"] == "Trucades simultànies"
+    assert standards["ISO_9001"] == "ISO 9001 (gestió de la qualitat)"
 
 
 def test_no_route_can_create_vocabulary():

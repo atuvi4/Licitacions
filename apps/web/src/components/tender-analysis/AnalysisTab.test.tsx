@@ -40,6 +40,27 @@ beforeEach(() => {
   role = "owner";
 });
 
+describe("Pestanya Anàlisi: vies d'execució i abast (T9)", () => {
+  it("diu «Vies d'execució (candidats)» i els elements d'abast de l'estructura", async () => {
+    respond(analysisFixture());
+    await renderTab();
+    expect(screen.getByText("Vies d'execució (candidats)")).toBeTruthy();
+    expect(screen.getByText("disponibles 1 · pendents 1 · no disponibles 0", { exact: false })).toBeTruthy();
+    expect(screen.getByText("2 elements d'abast al plec")).toBeTruthy();
+  });
+
+  it("sense estructura carregada, el comptador d'abast no surt", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === `${BASE}/current`) return Promise.resolve(analysisFixture());
+      if (path === "/companies/c1/tenders/t1/structure") return Promise.reject(new ApiError(500, "error", "x"));
+      return Promise.resolve(undefined);
+    });
+    await renderTab();
+    expect(screen.getByText("Vies d'execució (candidats)")).toBeTruthy();
+    expect(screen.queryByText(/elements? d'abast al plec/)).toBeNull();
+  });
+});
+
 describe("Pestanya Anàlisi: estats", () => {
   it("sense anàlisi (404) és l'estat normal, amb què és i què no és, i el botó Analitza", async () => {
     respond(new ApiError(404, "not_found", "Cap analisi vigent."));

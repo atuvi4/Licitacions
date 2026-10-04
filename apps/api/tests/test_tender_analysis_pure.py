@@ -3,6 +3,8 @@ territorial, registre de regles i cubells de punts. Cap base de dades."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import replace
 from datetime import date
@@ -22,7 +24,9 @@ from app.analysis.fingerprint import (
     SiteView,
     TenderStructureView,
     TerritoryView,
+    canonical_json,
     inputs_hash,
+    jsonable,
     review_revision_hash,
     structure_fingerprint,
 )
@@ -156,7 +160,7 @@ def test_inputs_hash_depends_on_exactly_the_seven_inputs():
         ("review_revision_hash", "x" * 64),
         ("tender_structure_fingerprint", "t" * 64),
         ("knowledge_fingerprint", "j" * 64),
-        ("rules_version", "phase3a-analysis-v3"),
+        ("rules_version", "phase3a-analysis-v2"),
     ):
         assert inputs_hash(**{**base, key: value}) != digest, key
     assert review_revision_hash([]) is None
@@ -259,7 +263,7 @@ def test_territory_aggregation_all_and_any():
 
 
 def test_the_registry_is_closed_and_nothing_is_orphan():
-    assert registry.RULES_VERSION == "phase3a-analysis-v2"
+    assert registry.RULES_VERSION == "phase3a-analysis-v3"
     source = "\n".join(
         (API_ROOT / "app" / "analysis" / name).read_text(encoding="utf-8")
         for name in ("engine.py", "territory.py", "points.py")
@@ -277,13 +281,121 @@ def test_the_registry_is_closed_and_nothing_is_orphan():
     assert question_names - used_questions == set(), "pregunta orfe"
     assert len(registry.RULE_CODES) == len(rule_names)
     assert all(code.endswith("_v1") for code in registry.RULE_CODES), "regles versionades"
+    current = registry.RULES_VERSION
     for code in registry.EXPLANATION_CODES:
-        assert registry.explanation_text(code)
+        assert registry.explanation_text(code, current) != registry.UNKNOWN_EXPLANATION_TEXT
     assert "{service_line}" not in registry.question_text(
         registry.QuestionCode.COMPANY_DECLARE_CAPABILITY,
         {"capability": "pbx.hot_desking", "service_line": "voice_pbx"},
+        current,
     )
-    assert "{title}" in registry.question_text(registry.QuestionCode.COMPANY_CONFIRM_FACT)
+    # v3: un parametre absent surt com l'expressio neutra, mai com a `{title}`; la v2
+    # conserva la interpolacio crua.
+    assert "{" not in registry.question_text(
+        registry.QuestionCode.COMPANY_CONFIRM_FACT, None, current
+    )
+    assert "{title}" in registry.question_text(
+        registry.QuestionCode.COMPANY_CONFIRM_FACT, None, registry.RULES_VERSION_V2
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Copy versionat per `rules_version` (spec 3.11)                                #
+# --------------------------------------------------------------------------- #
+
+V2 = "phase3a-analysis-v2"
+V3 = "phase3a-analysis-v3"
+
+#: sha256 de les taules v2 (explicacions i plantilles de pregunta) tal com eren a
+#: 7513e3a (`EXPLANATIONS` i `QUESTIONS` del registre), serialitzades per `_copy_digest`.
+#: Fixat abans de cap canvi de text: si falla, algu ha tocat el copy congelat de la v2.
+V2_COPY_SHA256 = "613a3408fb6debf80ea67c8a4ddf0016dfd74a1f6cdc05f29c73c165e38b4592"
+
+
+def _copy_digest(explanations, questions) -> str:
+    """Serialitzacio canonica: JSON UTF-8, claus ordenades, sense espais."""
+    payload = {"explanations": dict(explanations), "questions": dict(questions)}
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def test_the_v2_copy_is_frozen_exactly_as_it_was_at_7513e3a():
+    assert (
+        _copy_digest(registry.EXPLANATIONS_BY_VERSION[V2], registry.QUESTIONS_BY_VERSION[V2])
+        == V2_COPY_SHA256
+    )
+
+
+def test_every_version_has_both_tables_and_the_current_one_covers_every_code():
+    assert registry.RULES_VERSION == V3
+    assert set(registry.EXPLANATIONS_BY_VERSION) == set(registry.QUESTIONS_BY_VERSION)
+    assert {V2, V3} <= set(registry.EXPLANATIONS_BY_VERSION)
+    current = registry.RULES_VERSION
+    assert set(registry.EXPLANATIONS_BY_VERSION[current]) == registry.EXPLANATION_CODES
+    assert set(registry.QUESTIONS_BY_VERSION[current]) == registry.QUESTION_CODES
+    # Les versions antigues son subconjunts: un codi no canvia mai de significat.
+    for version in registry.EXPLANATIONS_BY_VERSION:
+        assert set(registry.EXPLANATIONS_BY_VERSION[version]) <= registry.EXPLANATION_CODES
+        assert set(registry.QUESTIONS_BY_VERSION[version]) <= registry.QUESTION_CODES
+    # La v2 no es pot modificar en calent.
+    with pytest.raises(TypeError):
+        registry.EXPLANATIONS_BY_VERSION[V2]["FACT_UNKNOWN"] = "x"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        registry.QUESTIONS_BY_VERSION[V2]["company.confirm_fact"] = "x"  # type: ignore[index]
+
+
+def test_the_text_comes_from_the_runs_version_table(monkeypatch):
+    code = registry.ExplanationCode.FACT_UNKNOWN
+    question = registry.QuestionCode.COMPANY_CONFIRM_FACT
+    params = {"fact": "support_24x7", "title": "Suport 24x7"}
+    v2_explanation = registry.EXPLANATIONS_BY_VERSION[V2][code]
+    v2_question = registry.QUESTIONS_BY_VERSION[V2][question].format(**params)
+    # Una v3 que ja digui una altra cosa: cada run es llegeix amb la seva taula.
+    monkeypatch.setitem(
+        registry.EXPLANATIONS_BY_VERSION, V3, {**registry.EXPLANATIONS_BY_VERSION[V3], code: "v3"}
+    )
+    monkeypatch.setitem(
+        registry.QUESTIONS_BY_VERSION,
+        V3,
+        {**registry.QUESTIONS_BY_VERSION[V3], question: "v3 {title}"},
+    )
+    assert registry.explanation_text(code, V2) == v2_explanation
+    assert registry.explanation_text(code, V3) == "v3"
+    assert registry.question_text(question, params, V2) == v2_question
+    # La v3 resol els parametres: el text lliure surt entre «».
+    assert registry.question_text(question, params, V3) == "v3 «Suport 24x7»"
+    # La v2 conserva la interpolacio crua: sense parametres, la plantilla tal com es.
+    assert registry.question_text(question, None, V2) == registry.QUESTIONS_BY_VERSION[V2][question]
+
+
+@pytest.mark.parametrize("version", ["phase3a-analysis-v1", "phase3a-analysis-v9", "", None])
+def test_an_unknown_version_gets_neutral_text_never_another_table(version):
+    assert registry.UNKNOWN_EXPLANATION_TEXT == "Explicació no disponible."
+    assert registry.UNKNOWN_QUESTION_TEXT == "Pregunta no disponible."
+    for code in registry.EXPLANATION_CODES:
+        assert registry.explanation_text(code, version) == "Explicació no disponible."
+    for code in registry.QUESTION_CODES:
+        assert registry.question_text(code, {"title": "T"}, version) == "Pregunta no disponible."
+
+
+def test_a_code_missing_from_the_runs_table_gets_neutral_text(monkeypatch):
+    """Un codi nou nomes a la v3 no surt mai amb text d'una altra taula en un run v2."""
+    v2_explanations = dict(registry.EXPLANATIONS_BY_VERSION[V2])
+    v2_questions = dict(registry.QUESTIONS_BY_VERSION[V2])
+    del v2_explanations[registry.ExplanationCode.FACT_UNKNOWN]
+    del v2_questions[registry.QuestionCode.COMPANY_CONFIRM_FACT]
+    monkeypatch.setitem(registry.EXPLANATIONS_BY_VERSION, V2, v2_explanations)
+    monkeypatch.setitem(registry.QUESTIONS_BY_VERSION, V2, v2_questions)
+    assert (
+        registry.explanation_text(registry.ExplanationCode.FACT_UNKNOWN, V2)
+        == "Explicació no disponible."
+    )
+    assert (
+        registry.question_text(registry.QuestionCode.COMPANY_CONFIRM_FACT, {"title": "T"}, V2)
+        == "Pregunta no disponible."
+    )
+    assert registry.explanation_text("SOME_NEW_CODE", V3) == "Explicació no disponible."
+    assert registry.question_text("company.some_new_code", None, V3) == "Pregunta no disponible."
 
 
 # --------------------------------------------------------------------------- #
@@ -318,3 +430,89 @@ def test_the_engine_reads_the_required_value_from_known_keys():
     assert engine._single_number({"a": 1, "b": 2}) is None
     assert engine._single_number({"with_cdr": True}) is None
     assert engine._single_number(None) is None
+
+
+# --------------------------------------------------------------------------- #
+# Empremta numericament canonica                                                #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "value",
+    [20, 20.0, Decimal("20.00"), Decimal("2E+1"), Decimal("20.000")],
+)
+def test_every_numeric_type_of_the_same_value_has_one_form(value):
+    assert jsonable(value) == {"$num": "20"}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(Decimal("1.50"), "1.5"), (0.1, "0.1"), (1.5, "1.5")],
+)
+def test_fractional_numbers_have_the_shortest_decimal_form(value, expected):
+    assert jsonable(value) == {"$num": expected}
+
+
+@pytest.mark.parametrize("value", [-0.0, 0, Decimal("-0"), Decimal("0E-3"), 0.0])
+def test_every_zero_is_the_same_zero(value):
+    assert jsonable(value) == {"$num": "0"}
+
+
+@pytest.mark.parametrize(
+    "value", [float("inf"), float("-inf"), float("nan"), Decimal("NaN"), Decimal("Infinity")]
+)
+def test_non_finite_numbers_are_rejected(value):
+    with pytest.raises(ValueError):
+        jsonable(value)
+
+
+def test_booleans_stay_booleans():
+    assert jsonable(True) is True
+    assert jsonable(False) is False
+    assert jsonable({"a": True}) == {"a": True}
+
+
+def test_nested_numbers_are_normalised_too():
+    assert jsonable({"a": [20.0, {"b": Decimal("1.50")}], "c": (3, 4.0)}) == {
+        "a": [{"$num": "20"}, {"b": {"$num": "1.5"}}],
+        "c": [{"$num": "3"}, {"$num": "4"}],
+    }
+    assert canonical_json({"p": 20}) == canonical_json({"p": 20.0})
+
+
+def test_stored_json_keeps_numbers_as_numbers():
+    # `support_json` es desa i es mostra: nomes l'empremta passa els nombres a cadena.
+    assert engine.as_json({"n": 3, "p": 20.5, "d": Decimal("1.50"), "ok": True}) == {
+        "n": 3,
+        "p": 20.5,
+        "d": "1.5",
+        "ok": True,
+    }
+
+
+def test_big_numbers_keep_every_digit():
+    assert jsonable(10**40 + 7) == {"$num": "10000000000000000000000000000000000000007"}
+    assert jsonable(10**40 + 7) != jsonable(10**40)
+    big = "1234567890123456789012345678901234"
+    assert jsonable(Decimal(big)) == {"$num": big}
+    assert jsonable(Decimal(big + ".50")) == {"$num": big + ".5"}
+    assert jsonable(Decimal("1E+40")) == jsonable(10**40) == {"$num": "1" + "0" * 40}
+
+
+def test_a_number_is_never_a_string():
+    assert jsonable(20) != jsonable("20")
+    assert canonical_json(20) != canonical_json("20")
+    assert canonical_json({"c": 20.0}) != canonical_json({"c": "20"})
+    # Cap dict d'usuari no pot imitar un nombre etiquetat.
+    assert canonical_json({"$num": "20"}) != canonical_json(20)
+
+
+def test_a_string_vs_number_value_json_changes_the_structure_fingerprint():
+    view = _view()
+    r1 = view.requirements[0]
+
+    def with_value(v):
+        return replace(view, requirements=(replace(r1, value_json={"count": v}),))
+
+    assert structure_fingerprint(with_value("20")) != structure_fingerprint(with_value(20))
+    assert structure_fingerprint(with_value(20)) == structure_fingerprint(with_value(20.0))

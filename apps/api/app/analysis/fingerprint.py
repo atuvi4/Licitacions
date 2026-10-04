@@ -5,17 +5,19 @@ El fingerprint es l'SHA-256 de la forma canonica de l'estructura del plec
 (`tender_source_refs`) en queden fora: canviar nomes d'on surt un valor no
 canvia el que el plec exigeix. Els conjunts entren ordenats i sense duplicats
 semantics; els ids es substitueixen per claus naturals (codi de bloc, identitat
-d'una seu, `dedup_key` d'un requisit o criteri); Decimal, dates, booleans i
-nuls tenen una sola representacio.
+d'una seu, `dedup_key` d'un requisit o criteri); els nombres (int, float, Decimal)
+son un objecte etiquetat `{"$num": "<decimal canonic>"}`; dates, booleans i nuls tenen una sola
+representacio.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from enum import StrEnum
 from typing import Any
 
@@ -27,21 +29,75 @@ def _norm(text: str | None) -> str | None:
     return cleaned or None
 
 
-def jsonable(value: Any) -> Any:
-    """Una sola forma per a cada tipus: cap Decimal, data o enum sense normalitzar."""
-    if isinstance(value, Decimal):
+#: Clau de l'objecte que representa un nombre a la forma canonica. Un nombre mai es
+#: igual a cap cadena (`20` != `"20"`), i com que les claus d'usuari que comencen per
+#: "$" s'escapen, cap dict ni cap valor d'usuari pot produir `{"$num": ...}`.
+NUMBER_TAG = "$num"
+
+
+def _number(value: Decimal | int | float) -> str:
+    """Una sola cadena decimal per a qualsevol nombre: 20, 20.0 i Decimal("20.00")
+    son "20". Un float entra per la seva representacio mes curta (0.1 -> "0.1"), no
+    per l'expansio binaria. NaN i infinits no tenen forma canonica: es rebutgen."""
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"nombre no finit a l'empremta: {value!r}")
+        value = Decimal(repr(value))
+    elif isinstance(value, int):
+        value = Decimal(value)
+    elif not value.is_finite():
+        raise ValueError(f"nombre no finit a l'empremta: {value!r}")
+    if value == 0:
+        return "0"
+    # Sense perdre digits: la normalitzacio per defecte arrodoneix a 28 xifres.
+    digits = len(value.as_tuple().digits)
+    with localcontext() as ctx:
+        ctx.prec = max(28, digits + 1)
         return format(value.normalize(), "f")
+
+
+def _encode(value: Any, *, canonical_numbers: bool) -> Any:
+    def rec(v: Any) -> Any:
+        return _encode(v, canonical_numbers=canonical_numbers)
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Decimal) and not canonical_numbers:
+        return format(value.normalize(), "f")
+    if canonical_numbers and isinstance(value, (int, float, Decimal)):
+        return {NUMBER_TAG: _number(value)}
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, StrEnum):
         return value.value
     if isinstance(value, dict):
-        return {str(k): jsonable(v) for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))}
+        items = sorted(value.items(), key=lambda kv: str(kv[0]))
+        if not canonical_numbers:
+            return {str(k): rec(v) for k, v in items}
+        # Una clau que comenca per "$" s'escapa (prefix "$"): cap dict d'usuari no pot
+        # ser igual a un nombre etiquetat.
+        return {(f"${k}" if str(k).startswith("$") else str(k)): rec(v) for k, v in items}
     if isinstance(value, (list, tuple)):
-        return [jsonable(v) for v in value]
+        return [rec(v) for v in value]
     if isinstance(value, (set, frozenset)):
-        return sorted((jsonable(v) for v in value), key=canonical_json)
+        return sorted(
+            (rec(v) for v in value),
+            key=lambda v: json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+        )
     return value
+
+
+def jsonable(value: Any) -> Any:
+    """Forma canonica per a empremtes: tot nombre (int, float, Decimal) es un unic
+    `{"$num": "20"}` (20, 20.0 i Decimal("20.00") coincideixen) i mai es igual a la
+    cadena "20"; un boolea no es un nombre."""
+    return _encode(value, canonical_numbers=True)
+
+
+def plain_jsonable(value: Any) -> Any:
+    """Per a JSON que es desa i es mostra (`support_json`): els int i float es
+    conserven com a nombres, nomes el Decimal passa a text. No serveix per a empremtes."""
+    return _encode(value, canonical_numbers=False)
 
 
 def canonical_json(value: Any) -> str:

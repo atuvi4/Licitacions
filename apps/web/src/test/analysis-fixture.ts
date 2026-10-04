@@ -56,6 +56,31 @@ export function analysisFixture(overrides: Partial<AnalysisRun> = {}): AnalysisR
   };
 }
 
+/** El mateix run, amb la versió v3 del copy i findings de falta d'informació amb origen. */
+export function analysisV3Fixture(overrides: Partial<AnalysisRun> = {}): AnalysisRun {
+  const base = analysisFixture();
+  const missing = (id: string, code: string, details: Record<string, unknown> | null) => ({
+    id,
+    finding_type: "missing_information",
+    rule_code: "missing_information_v1",
+    explanation_code: code,
+    requirement_id: null,
+    criterion_id: null,
+    scope_item_id: null,
+    details_json: details,
+  });
+  return {
+    ...base,
+    rules_version: "phase3a-analysis-v3",
+    findings: [
+      missing("g-tender", "TENDER_REFERENCE_DATE_MISSING", { missing_from: "tender" }),
+      missing("g-company", "DATA_MISSING", { missing_from: "company" }),
+      missing("g-unattributed", "DATA_MISSING_UNATTRIBUTED", null),
+    ],
+    ...overrides,
+  };
+}
+
 /** Requisits i criteris SINTÈTICS. `GONE_REQUIREMENT_ID` no hi és a propòsit (arxivat després de l'anàlisi). */
 export const requirementsFixture = {
   run: null,

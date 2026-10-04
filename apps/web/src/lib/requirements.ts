@@ -81,6 +81,8 @@ export interface SourceRefCitation {
  */
 export type RequirementRouting = "compliance_dossier" | "technical_solution" | "work_plan" | "review_routing";
 
+export type RequirementTiming = "at_submission" | "before_formalization" | "at_execution" | "ambiguous" | "unknown";
+
 export interface Requirement {
   id: string;
   /** `null` als escrits a mà: no venen de cap execució d'anàlisi. */
@@ -89,6 +91,8 @@ export interface Requirement {
   archived_at: string | null;
   /** La provinença dels manuals. Els extrets la porten a `evidence`. */
   citations: SourceRefCitation[];
+  /** Quan s'ha de complir segons el plec; `unknown` si no es sap. */
+  timing: RequirementTiming;
   tender_id: string;
   tender_lot_id: string | null;
   category: RequirementCategory;
@@ -130,6 +134,8 @@ export interface AwardCriterion {
   reviewed_at: string | null;
   created_at: string;
   evidence: RequirementEvidence[];
+  /** Cites manuals o de l'abast del criteri (mateixa forma que les dels requisits). */
+  citations: SourceRefCitation[];
 }
 
 export interface ExtractionRun {

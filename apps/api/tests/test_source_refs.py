@@ -23,7 +23,11 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models.enums import SourceRefKind
 from app.models.provenance import TenderSourceRef
-from app.models.tender_documents import TenderDocumentExtraction, TenderDocumentPage
+from app.models.tender_documents import (
+    TenderDocumentExtraction,
+    TenderDocumentFile,
+    TenderDocumentPage,
+)
 from app.services import source_refs
 from tests.fixtures.pdf_builder import build_pdf
 
@@ -762,3 +766,68 @@ async def test_the_read_model_never_exposes_where_the_bytes_live(client_a, db, t
     assert not any(
         "path" in name or "key" in name for name in TenderSourceRefRead.model_fields
     )
+
+
+async def test_bulk_resolution_equals_single_resolution(client_a, db, tenant_a):
+    """`resolve_source_refs` (en bloc) i `resolve_source_ref` (una) diuen el mateix.
+
+    Barreja: cita de pagina (extraction_id, sense fitxer), cita de fitxer i una
+    cita de pagina el document de la qual s'ha esborrat (`tender_document_id`
+    queda nul i la versio ja no es pot deduir).
+    """
+    user, company = tenant_a
+    tender_id = uuid.UUID(await _tender(client_a, company))
+    first = await _upload(client_a, company, str(tender_id), name="PCAP.pdf", data=PLEC)
+    second = await _upload(client_a, company, str(tender_id), name="PPT.pdf", data=PLEC_V2)
+    sheet = await _upload(
+        client_a, company, str(tender_id), name="preus.xlsx", data=XLSX_V1, mime=XLSX
+    )
+
+    page_ref = await source_refs.create_extracted_page_ref(
+        db,
+        tender_id=tender_id,
+        extraction_id=uuid.UUID(first["file"]["extraction_id"]),
+        page_id=(await _page_of(db, first["file"]["extraction_id"])).id,
+        user=user,
+    )
+    doomed_ref = await source_refs.create_extracted_page_ref(
+        db,
+        tender_id=tender_id,
+        extraction_id=uuid.UUID(second["file"]["extraction_id"]),
+        page_id=(await _page_of(db, second["file"]["extraction_id"])).id,
+        user=user,
+    )
+    file_ref = await source_refs.create_document_file_ref(
+        db, tender_id=tender_id, file_id=uuid.UUID(sheet["file"]["file_id"]), user=user
+    )
+    await db.commit()
+    assert page_ref.extraction_id is not None and page_ref.tender_document_file_id is None
+
+    # El document del segon plec desapareix: la cita ha de sobreviure igual.
+    await db.execute(
+        sa.update(TenderSourceRef)
+        .where(TenderSourceRef.id == doomed_ref.id)
+        .values(tender_document_id=None)
+    )
+    await db.execute(
+        sa.delete(TenderDocumentFile).where(
+            TenderDocumentFile.id == uuid.UUID(second["file"]["file_id"])
+        )
+    )
+    await db.commit()
+    ids = [page_ref.id, doomed_ref.id, file_ref.id]
+    db.expire_all()
+    refs = list(
+        (await db.execute(sa.select(TenderSourceRef).where(TenderSourceRef.id.in_(ids))))
+        .scalars()
+        .all()
+    )
+    page_ref, doomed_ref, file_ref = (next(r for r in refs if r.id == i) for i in ids)
+    bulk = await source_refs.resolve_source_refs(db, refs)
+    assert set(bulk) == {r.id for r in refs}
+    for ref in refs:
+        single = await source_refs.resolve_source_ref(db, ref)
+        assert bulk[ref.id] == single
+    assert bulk[page_ref.id].version_number == 1
+    assert bulk[doomed_ref.id].document_name is None
+    assert bulk[doomed_ref.id].version_number is None

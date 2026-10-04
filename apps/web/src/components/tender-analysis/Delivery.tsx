@@ -6,13 +6,12 @@ import type { AnalysisLookup } from "./AnalysisTab";
 import { scopeItemLabel } from "./Citation";
 
 function who(candidate: DeliveryCandidate, lookup: AnalysisLookup): string | null {
-  if (candidate.company_service_id) return lookup.services.get(candidate.company_service_id)?.name ?? null;
-  if (candidate.partner_role_id) {
-    const role = lookup.partnerRoles.get(candidate.partner_role_id);
-    if (!role) return null;
-    return [role.partner, PARTNER_ROLE_LABELS[role.role] ?? null].filter(Boolean).join(" · ") || null;
-  }
-  return null;
+  const service = candidate.company_service_id ? (lookup.services.get(candidate.company_service_id)?.name ?? null) : null;
+  const role = candidate.partner_role_id ? lookup.partnerRoles.get(candidate.partner_role_id) : undefined;
+  const partner = role ? [role.partner, PARTNER_ROLE_LABELS[role.role] ?? null].filter(Boolean).join(" · ") || null : null;
+  // Amb servei i soci alhora: servei · soci · paper. Altrament, l'únic que hi ha.
+  if (service && partner) return `${service} · ${partner}`;
+  return service ?? partner ?? null;
 }
 
 export function Delivery({ run, lookup }: { run: AnalysisRun; lookup: AnalysisLookup; tenderId: string }) {
@@ -55,7 +54,7 @@ export function Delivery({ run, lookup }: { run: AnalysisRun; lookup: AnalysisLo
                       {who(c, lookup) && <span className="text-ink">{who(c, lookup)}</span>}
                       <StatusPill level={levelOf("candidate_readiness", c.readiness)} size="sm" outline>{label("candidate_readiness", c.readiness)}</StatusPill>
                       <span className="text-caption text-muted">{label("territory_verdict", c.territory_verdict)}</span>
-                      <span className="w-full text-caption text-muted">{explanation(c.explanation_code)}</span>
+                      <span className="w-full text-caption text-muted">{explanation(c.explanation_code, run.rules_version)}</span>
                     </li>
                   ))}
                 </ul>

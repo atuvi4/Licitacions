@@ -17,15 +17,53 @@ export const vocabularyFixture: Vocabulary = {
     { code: "access_ftth", label: "Accessos FTTH" },
   ],
   capabilities: [
-    { code: "pbx.concurrent_calls", service_line_code: "voice_pbx", label: "Trucades simultanies", value_type: "number", comparator: "gte", unit: "canals", ordinal_scale: null },
+    { code: "pbx.concurrent_calls", service_line_code: "voice_pbx", label: "Trucades simultànies", value_type: "number", comparator: "gte", unit: "canals", ordinal_scale: null },
     { code: "pbx.queues", service_line_code: "voice_pbx", label: "Cues de trucades", value_type: "boolean", comparator: "is_true", unit: null, ordinal_scale: null },
-    { code: "switch.poe_standard", service_line_code: "network_switching", label: "Estandard PoE", value_type: "ordinal", comparator: "gte", unit: null, ordinal_scale: ["af", "at", "bt"] },
+    { code: "switch.poe_standard", service_line_code: "network_switching", label: "Estàndard PoE", value_type: "ordinal", comparator: "gte", unit: null, ordinal_scale: ["af", "at", "bt"] },
   ],
   standards: [
     { code: "ENS", label: "Esquema Nacional de Seguretat", levels: ["basic", "medium", "high"] },
-    { code: "ISO_9001", label: "ISO 9001 (gestio de la qualitat)", levels: null },
+    { code: "ISO_9001", label: "ISO 9001 (gestió de la qualitat)", levels: null },
   ],
 };
+
+/**
+ * El vocabulari tal com el retorna l'API des del copy v3: els rètols porten accents
+ * (`apps/api/app/knowledge/vocabulary.py`). A més, una línia, una capacitat i una norma
+ * que la web no coneix: per a aquestes, la pantalla mostra el rètol de l'API tal com és.
+ */
+export const accentedVocabularyFixture: Vocabulary = {
+  service_lines: [
+    { code: "voice_pbx", label: "Centraleta i veu IP" },
+    { code: "voice_trunk", label: "Troncals de veu i numeració" },
+    { code: "access_ftth", label: "Accessos FTTH" },
+    { code: "dedicated_network", label: "Xarxa dedicada entre seus" },
+    { code: "radio_link", label: "Radioenllaços" },
+    { code: "network_switching", label: "Electrònica de xarxa" },
+    { code: "fiber_deployment", label: "Desplegament i certificació de fibra" },
+    { code: "civil_works", label: "Obra civil" },
+    { code: "support_ops", label: "Suport, operació i nivells de servei" },
+    { code: "mobile_telephony", label: "Telefonia mòbil" },
+    { code: "satellite_backhaul", label: "Retorn per satèl·lit" },
+  ],
+  capabilities: [
+    { code: "pbx.concurrent_calls", service_line_code: "voice_pbx", label: "Trucades simultànies", value_type: "number", comparator: "gte", unit: "canals", ordinal_scale: null },
+    { code: "pbx.blf", service_line_code: "voice_pbx", label: "Estat de línia (BLF)", value_type: "boolean", comparator: "is_true", unit: null, ordinal_scale: null },
+    { code: "pbx.voicemail_email", service_line_code: "voice_pbx", label: "Bústia amb avís per correu", value_type: "boolean", comparator: "is_true", unit: null, ordinal_scale: null },
+    { code: "switch.poe_standard", service_line_code: "network_switching", label: "Estàndard PoE", value_type: "ordinal", comparator: "gte", unit: null, ordinal_scale: ["af", "at", "bt"] },
+    { code: "pbx.priority_transfer", service_line_code: "voice_pbx", label: "Transferència prioritària", value_type: "boolean", comparator: "is_true", unit: null, ordinal_scale: null },
+  ],
+  standards: [
+    { code: "ENS", label: "Esquema Nacional de Seguretat", levels: ["basic", "medium", "high"] },
+    { code: "ISO_9001", label: "ISO 9001 (gestió de la qualitat)", levels: null },
+    { code: "ISO_14001", label: "ISO 14001 (gestió ambiental)", levels: null },
+    { code: "ISO_27001", label: "ISO/IEC 27001 (seguretat de la informació)", levels: null },
+    { code: "ISO_45001", label: "ISO 45001 (seguretat i salut a la feina)", levels: null },
+  ],
+};
+
+/** Formes sense accent que la v3 ha corregit: cap pantalla no les ha de mostrar. */
+export const UNACCENTED_LABELS = /numeracio\b|Radioenllacos|Electronica de xarxa|certificacio de fibra|operacio i nivells|Telefonia mobil\b|simultanies|Estat de linia|Bustia amb avis|Estandard PoE|gestio de la qualitat|gestio ambiental|informacio\)|satel·lit|Transferencia prioritaria/;
 
 export function claimFixture(overrides: Partial<KnowledgeClaim> = {}): KnowledgeClaim {
   return {

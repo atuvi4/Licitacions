@@ -17,10 +17,10 @@ export const qualificationVocabularyFixture = {
   professional_profiles: [
     { code: "project_manager", label: "Cap de projecte" },
     { code: "network_engineer", label: "Enginyer de xarxa" },
-    { code: "field_technician", label: "Tecnic de camp" },
+    { code: "field_technician", label: "Tècnic de camp" },
   ],
   equipment_types: [
-    { code: "otdr", label: "Reflectometre optic (OTDR)" },
+    { code: "otdr", label: "Reflectòmetre òptic (OTDR)" },
     { code: "fusion_splicer", label: "Fusionadora de fibra" },
     { code: "other", label: "Altres" },
   ],

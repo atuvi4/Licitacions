@@ -33,6 +33,14 @@ describe("Targeta d'anàlisi al pas Decidir", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
+  it("no mostra cap nombre d'elements d'abast; manté el recompte de findings", async () => {
+    get.mockResolvedValue(analysisFixture());
+    const { container } = render(<DecisionAnalysisCard companyId="c1" tenderId="t1" />);
+    await flush();
+    expect(container.textContent).not.toMatch(/abast/i);
+    expect(screen.getByText(`${analysisFixture().findings.length} elements a resoldre abans de decidir.`)).toBeTruthy();
+  });
+
   it("desactualitzada: etiqueta amb text i enllaç a recalcular a la pestanya", async () => {
     get.mockResolvedValue(analysisFixture({ stale: true }));
     render(<DecisionAnalysisCard companyId="c1" tenderId="t1" />);

@@ -49,9 +49,10 @@ async def run_read(
     read = AnalysisRunRead.model_validate(run)
     read.summary = tender_analysis.summary_of(run)
     read.stale = stale
+    # El copy es el de la versio del run, no el de la vigent (spec 3.11).
     read.questions = [
         QuestionRead.model_validate(q).model_copy(
-            update={"text": question_text(q.question_code, q.params_json)}
+            update={"text": question_text(q.question_code, q.params_json, run.rules_version)}
         )
         for q in run.questions
     ]

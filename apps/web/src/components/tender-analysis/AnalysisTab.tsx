@@ -278,7 +278,7 @@ export function AnalysisTab({
           {secondaryFailed && (
             <p className="text-caption text-muted">Algunes dades complementàries no s&apos;han pogut carregar: alguns noms poden no aparèixer.</p>
           )}
-          <AnalysisSummary run={shown} />
+          <AnalysisSummary run={shown} scopeItemCount={lookup.structure ? lookup.structure.scope_items.length : null} />
         </div>
       </Card>
       <ResolveBeforeDeciding run={shown} lookup={lookup} tenderId={tenderId} />

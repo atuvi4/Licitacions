@@ -7,12 +7,15 @@ revisio de requisits del plec. Dades sintetiques.
 
 from __future__ import annotations
 
+import json
 import uuid
+from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 
+from app.analysis import registry
 from app.api.v1.routers import tender_analysis as router_module
 from app.knowledge import vocabulary
 from app.models.enums import RequirementCategory
@@ -308,3 +311,132 @@ async def test_two_simultaneous_requests_get_the_same_run(db, tenant_a, client_f
     assert {first.status_code, second.status_code} <= {200, 201}, (first.text, second.text)
     assert first.json()["id"] == second.json()["id"]
     assert await _runs(db, company.id, tender.id) == 1
+
+
+# --------------------------------------------------------------------------- #
+# RULES_VERSION v3 i copy versionat (spec 3.4 i 3.11)                           #
+# --------------------------------------------------------------------------- #
+
+V2 = "phase3a-analysis-v2"
+V3 = "phase3a-analysis-v3"
+_EXPLAINED = (
+    "fit_assessments",
+    "need_assessments",
+    "criterion_assessments",
+    "delivery_candidates",
+    "findings",
+)
+_WEB_VOCABULARY = (
+    Path(__file__).resolve().parents[2]
+    / "web"
+    / "src"
+    / "lib"
+    / "analysis-vocabulary.generated.json"
+)
+
+
+def _rendered(body: dict) -> dict[str, dict[str, str]]:
+    """Tot el text que veu l'usuari d'un run: les preguntes tal com les retorna l'API i
+    les explicacions renderitzades amb la versio del run (com fa el web)."""
+    version = body["rules_version"]
+    return {
+        "questions": {q["id"]: q["text"] for q in body["questions"]},
+        "explanations": {
+            f"{kind}:{row['id']}": registry.explanation_text(row["explanation_code"], version)
+            for kind in _EXPLAINED
+            for row in body[kind]
+        },
+    }
+
+
+async def _v2_run(client, monkeypatch, url: str) -> dict:
+    with monkeypatch.context() as patch:
+        patch.setattr(analysis, "RULES_VERSION", V2)
+        created = await client.post(f"{url}/runs")
+        assert created.status_code == 201, created.text
+        assert created.json()["rules_version"] == V2
+        current = await client.get(f"{url}/current")
+        assert current.status_code == 200 and current.json()["stale"] is False
+        return current.json()
+
+
+async def test_a_v2_run_keeps_rendering_its_v2_copy_text_for_text(
+    db, tenant_a, client_a, monkeypatch
+):
+    _, company = tenant_a
+    tender, *_ = await _synthetic_tender(db)
+    await _twin(db, company, client_a)
+    url = _base(company.id, tender.id)
+    before = await _v2_run(client_a, monkeypatch, url)
+    saved = _rendered(before)
+    assert saved["questions"] and saved["explanations"], "el plec sintetic ha de tenir text"
+    assert all(saved["questions"].values()) and all(saved["explanations"].values())
+    # El JSON del web renderitza el mateix copy v2.
+    web = json.loads(_WEB_VOCABULARY.read_text(encoding="utf-8"))["explanations"][V2]
+    for kind in _EXPLAINED:
+        for row in before[kind]:
+            code = row["explanation_code"]
+            if code in registry.EXPLANATIONS_BY_VERSION[V2]:
+                assert web[code] == registry.explanation_text(code, V2)
+            else:
+                # Aquest run «v2» el fabrica el motor actual: un codi nou nomes de la v3
+                # (que un run v2 real no pot contenir) no te text v2 i surt neutre.
+                assert code not in web
+                assert registry.explanation_text(code, V2) == registry.UNKNOWN_EXPLANATION_TEXT
+    # La v3 activa, i amb un copy que ja diu una altra cosa per a tots els codis.
+    monkeypatch.setitem(
+        registry.EXPLANATIONS_BY_VERSION,
+        V3,
+        {code: f"v3 · {text}" for code, text in registry.EXPLANATIONS_BY_VERSION[V3].items()},
+    )
+    monkeypatch.setitem(
+        registry.QUESTIONS_BY_VERSION,
+        V3,
+        {code: f"v3 · {text}" for code, text in registry.QUESTIONS_BY_VERSION[V3].items()},
+    )
+    assert analysis.RULES_VERSION == V3
+    after = await client_a.get(f"{url}/current")
+    assert after.status_code == 200 and after.json()["id"] == before["id"]
+    assert after.json()["rules_version"] == V2
+    assert _rendered(after.json()) == saved
+    by_id = await client_a.get(f"{url}/runs/{before['id']}")
+    assert _rendered(by_id.json()) == saved
+    # Un run v3 renderitza el copy v3.
+    recalculated = await client_a.post(f"{url}/runs")
+    assert recalculated.status_code == 201, recalculated.text
+    fresh = _rendered(recalculated.json())
+    assert fresh["questions"] and all(t.startswith("v3 · ") for t in fresh["questions"].values())
+    assert all(t.startswith("v3 · ") for t in fresh["explanations"].values())
+
+
+async def test_v3_never_reuses_a_v2_run_and_leaves_it_intact(db, tenant_a, client_a, monkeypatch):
+    _, company = tenant_a
+    tender, *_ = await _synthetic_tender(db)
+    await _twin(db, company, client_a)
+    company_id, tender_id = company.id, tender.id
+    url = _base(company_id, tender_id)
+    v2 = await _v2_run(client_a, monkeypatch, url)
+    # Abans de recalcular, la v2 surt desactualitzada.
+    stale = await client_a.get(f"{url}/current")
+    assert stale.json()["id"] == v2["id"] and stale.json()["stale"] is True
+    first = await client_a.post(f"{url}/runs")
+    assert first.status_code == 201, first.text
+    body = first.json()
+    assert body["reused"] is False and body["id"] != v2["id"]
+    assert body["rules_version"] == V3 and body["is_current"] is True
+    assert body["inputs_hash"] != v2["inputs_hash"]
+    again = await client_a.post(f"{url}/runs")
+    assert again.status_code == 200, again.text
+    assert again.json()["reused"] is True and again.json()["id"] == body["id"]
+    assert await _runs(db, company_id, tender_id) == 2
+    # El run v2 continua a la base intacte (nomes deixa de ser el vigent).
+    kept = await client_a.get(f"{url}/runs/{v2['id']}")
+    assert kept.status_code == 200
+    ignore = {"is_current", "stale"}
+    assert {k: v for k, v in kept.json().items() if k not in ignore} == {
+        k: v for k, v in v2.items() if k not in ignore
+    }
+    db.expire_all()
+    old = await db.get(TenderAnalysisRun, uuid.UUID(v2["id"]))
+    assert old.rules_version == V2 and old.inputs_hash == v2["inputs_hash"]
+    assert old.is_current is False

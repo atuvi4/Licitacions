@@ -208,6 +208,8 @@ class AwardCriterionRead(ORMModel):
     block_ids: list[uuid.UUID] = Field(default_factory=list)
     #: 0049: requisits que en son la cara exigible. Nomes identificadors.
     requirement_ids: list[uuid.UUID] = Field(default_factory=list)
+    #: 0050: cites del criteri (mateix vocabulari que `RequirementRead.citations`).
+    citations: list[TenderSourceRefRead] = Field(default_factory=list)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

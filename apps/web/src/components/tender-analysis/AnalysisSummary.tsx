@@ -2,7 +2,7 @@ import { StatusPill } from "@/components/ui";
 import { formatPoints as pts, label, levelOf, summaryOf, summarySentences, type AnalysisRun } from "@/lib/analysis";
 
 /** Resum factual: només els comptadors del motor. Cap score, percentatge ni recomanació. */
-export function AnalysisSummary({ run, compact = false }: { run: AnalysisRun; compact?: boolean }) {
+export function AnalysisSummary({ run, compact = false, scopeItemCount = null }: { run: AnalysisRun; compact?: boolean; scopeItemCount?: number | null }) {
   const summary = summaryOf(run);
   const fits: Array<[string, number]> = [
     ["satisfies", summary.fit.satisfies],
@@ -32,10 +32,14 @@ export function AnalysisSummary({ run, compact = false }: { run: AnalysisRun; co
         </div>
         {!compact && (
           <div>
-            <dt className="text-caption font-medium text-muted">Execució</dt>
+            <dt className="text-caption font-medium text-muted">Vies d&apos;execució (candidats)</dt>
             <dd className="mt-1 text-body text-ink tabular-nums">
-              {label("candidate_readiness", "available")} {summary.delivery.available} · Pendent {summary.delivery.pending} ·{" "}
-              {label("candidate_readiness", "unavailable")} {summary.delivery.unavailable}
+              disponibles {summary.delivery.available} · pendents {summary.delivery.pending} · no disponibles {summary.delivery.unavailable}
+              {scopeItemCount !== null && (
+                <span className="block text-caption text-muted">
+                  {scopeItemCount === 1 ? "1 element d'abast al plec" : `${scopeItemCount} elements d'abast al plec`}
+                </span>
+              )}
             </dd>
           </div>
         )}

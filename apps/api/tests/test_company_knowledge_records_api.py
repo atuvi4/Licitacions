@@ -243,7 +243,8 @@ async def test_everything_declared_by_hand_is_declared_and_pending(client_a, ten
 
 
 async def test_mobile_telephony_works_like_any_other_service_line(client_a, tenant_a, db):
-    """La telefonia mobil es una linia mes: vocabulari, serveis, papers i fotografia.
+    """La telefonia mobil es una linia mes: vocabulari (retol amb accents, v3), serveis,
+    papers i fotografia.
 
     Un mateix partner pot ser operador majorista de dues linies alhora
     (FTTH i mobil) sense duplicar-lo: son dos papers del mateix partner.
@@ -252,7 +253,7 @@ async def test_mobile_telephony_works_like_any_other_service_line(client_a, tena
     base = BASE.format(company=company.id)
 
     lines = (await client_a.get(f"{base}/vocabulary")).json()["service_lines"]
-    assert {"code": "mobile_telephony", "label": "Telefonia mobil"} in lines
+    assert {"code": "mobile_telephony", "label": "Telefonia mòbil"} in lines
 
     before = (await _snapshot(client_a, company))["fingerprint"]
 
