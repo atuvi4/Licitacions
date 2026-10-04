@@ -45,7 +45,6 @@ from app.schemas.requirements import (
     RequirementAnalysisRead,
     RequirementCitationLink,
     RequirementRead,
-    ReviewRequest,
 )
 from app.services import audit, manual_requirement, manual_tender, source_refs
 from app.services.requirement_analysis import (
@@ -240,65 +239,71 @@ async def list_runs(
     return [ExtractionRunRead.model_validate(run) for run in runs]
 
 
+async def _visible_requirement(
+    session: SessionDep, requirement_id: uuid.UUID, user_id: uuid.UUID
+) -> Requirement:
+    """El requisit, NOMES si l'usuari pot veure la seva licitacio (si no, 404)."""
+    requirement = await session.scalar(
+        sa.select(Requirement)
+        .join(Tender, Tender.id == Requirement.tender_id)
+        .options(selectinload(Requirement.evidence))
+        .where(Requirement.id == requirement_id, visible_to_user(user_id))
+    )
+    if requirement is None:
+        raise NotFoundError("Requisit no trobat.")
+    return requirement
+
+
 @router.get(
     "/requirements/{requirement_id}",
     response_model=RequirementRead,
     summary="Detall d'un requisit",
 )
-async def get_requirement(requirement_id: uuid.UUID, session: SessionDep, _: CurrentUser):
-    requirement = await session.scalar(
-        sa.select(Requirement)
-        .options(selectinload(Requirement.evidence))
-        .where(Requirement.id == requirement_id)
-    )
-    if requirement is None:
-        raise NotFoundError("Requisit no trobat.")
+async def get_requirement(requirement_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    requirement = await _visible_requirement(session, requirement_id, user.id)
     decoration = await _decorate_evidence(session, [requirement])
     read = RequirementRead.model_validate(requirement)
     read.evidence = _evidence_reads(requirement, decoration)
     return read
 
 
-# LEGACY (S-R1): escriu la revisio a la fila d'extraccio, que es GLOBAL i
-# compartida entre empreses. Es conserva per compatibilitat; la revisio nova
-# es per empresa i viu a `/companies/{company_id}/tenders/{tender_id}/review`.
+# RETIRAT (S-R1): escrivia la revisio a la fila d'extraccio, que es GLOBAL i
+# compartida entre empreses. La revisio es per empresa i viu a
+# `/companies/{company_id}/tenders/{tender_id}/review`. Es comprova la
+# visibilitat PRIMER (no visible = el mateix 404 que un id inexistent) i despres
+# es respon 410 sense escriure res.
 @router.post(
     "/requirements/{requirement_id}/review",
-    response_model=RequirementRead,
-    summary="Revisa un requisit",
+    summary="(Retirat) La revisio es per empresa",
+    status_code=410,
 )
-async def review_requirement(
-    requirement_id: uuid.UUID,
-    payload: ReviewRequest,
-    session: SessionDep,
-    user: CurrentUser,
-):
-    """Registra la revisio humana SENSE tocar el que va dir el model.
-
-    La correccio va a `manual_override_json`; els camps extrets es queden com
-    estaven. Aixi es pot auditar sempre si l'extractor encertava.
-    """
-    requirement = await session.scalar(
-        sa.select(Requirement)
-        .options(selectinload(Requirement.evidence))
-        .where(Requirement.id == requirement_id)
+async def review_requirement(requirement_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    await _visible_requirement(session, requirement_id, user.id)
+    raise EndpointMovedError(
+        "La revisio d'un requisit es per empresa. Fes-la a "
+        "/companies/{company_id}/tenders/{tender_id}/review/requirements.",
+        details={"requirement_id": str(requirement_id)},
     )
-    if requirement is None:
-        raise NotFoundError("Requisit no trobat.")
 
-    requirement.review_status = payload.review_status
-    requirement.review_note = payload.note
-    if payload.manual_override is not None:
-        requirement.manual_override_json = payload.manual_override
-    requirement.reviewed_by = user.id
-    requirement.reviewed_at = sa.func.now()
-    await session.commit()
-    await session.refresh(requirement)
 
-    decoration = await _decorate_evidence(session, [requirement])
-    read = RequirementRead.model_validate(requirement)
-    read.evidence = _evidence_reads(requirement, decoration)
-    return read
+async def _visible_criterion(
+    session: SessionDep, criterion_id: uuid.UUID, user_id: uuid.UUID
+) -> AwardCriterion:
+    """El criteri, NOMES si l'usuari pot veure la licitacio a la qual pertany.
+
+    Mateixa regla que `_load_tender`; si no, 404 com si no existis (sense filtrar
+    ni l'existencia ni cap dada del criteri d'una licitacio privada d'una altra
+    empresa).
+    """
+    criterion = await session.scalar(
+        sa.select(AwardCriterion)
+        .join(Tender, Tender.id == AwardCriterion.tender_id)
+        .options(selectinload(AwardCriterion.evidence))
+        .where(AwardCriterion.id == criterion_id, visible_to_user(user_id))
+    )
+    if criterion is None:
+        raise NotFoundError("Criteri no trobat.")
+    return criterion
 
 
 def _criterion_read(criterion: AwardCriterion, decoration: dict) -> AwardCriterionRead:
@@ -312,51 +317,26 @@ def _criterion_read(criterion: AwardCriterion, decoration: dict) -> AwardCriteri
     response_model=AwardCriterionRead,
     summary="Detall d'un criteri d'adjudicacio",
 )
-async def get_award_criterion(criterion_id: uuid.UUID, session: SessionDep, _: CurrentUser):
-    criterion = await session.scalar(
-        sa.select(AwardCriterion)
-        .options(selectinload(AwardCriterion.evidence))
-        .where(AwardCriterion.id == criterion_id)
-    )
-    if criterion is None:
-        raise NotFoundError("Criteri no trobat.")
+async def get_award_criterion(criterion_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    criterion = await _visible_criterion(session, criterion_id, user.id)
     decoration = await _decorate_evidence(session, [criterion])
     return _criterion_read(criterion, decoration)
 
 
-# LEGACY (S-R1): escriu la revisio a la fila d'extraccio, que es GLOBAL i
-# compartida entre empreses. Es conserva per compatibilitat; la revisio nova
-# es per empresa i viu a `/companies/{company_id}/tenders/{tender_id}/review`.
+# RETIRAT (S-R1): vegeu `review_requirement`. Mateix contracte: visibilitat
+# primer (404 indistingible), despres 410 sense cap escriptura.
 @router.post(
     "/award-criteria/{criterion_id}/review",
-    response_model=AwardCriterionRead,
-    summary="Revisa un criteri d'adjudicacio",
+    summary="(Retirat) La revisio es per empresa",
+    status_code=410,
 )
-async def review_award_criterion(
-    criterion_id: uuid.UUID,
-    payload: ReviewRequest,
-    session: SessionDep,
-    user: CurrentUser,
-):
-    criterion = await session.scalar(
-        sa.select(AwardCriterion)
-        .options(selectinload(AwardCriterion.evidence))
-        .where(AwardCriterion.id == criterion_id)
+async def review_award_criterion(criterion_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+    await _visible_criterion(session, criterion_id, user.id)
+    raise EndpointMovedError(
+        "La revisio d'un criteri d'adjudicacio es per empresa. Fes-la a "
+        "/companies/{company_id}/tenders/{tender_id}/review/award-criteria.",
+        details={"criterion_id": str(criterion_id)},
     )
-    if criterion is None:
-        raise NotFoundError("Criteri no trobat.")
-
-    criterion.review_status = payload.review_status
-    criterion.review_note = payload.note
-    if payload.manual_override is not None:
-        criterion.manual_override_json = payload.manual_override
-    criterion.reviewed_by = user.id
-    criterion.reviewed_at = sa.func.now()
-    await session.commit()
-    await session.refresh(criterion)
-
-    decoration = await _decorate_evidence(session, [criterion])
-    return _criterion_read(criterion, decoration)
 
 
 __all__ = ["router", "AnalysisRunStatus"]

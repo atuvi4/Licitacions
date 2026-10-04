@@ -223,10 +223,28 @@ async def test_lists_the_run_history(client_a, analyzable, tenant_a, session_fac
     assert sum(1 for run in runs if run["is_current"]) == 1, "nomes un run vigent"
 
 
-async def test_reviewing_a_requirement_preserves_the_model_output(
+async def _review_fields(session, requirement_id):
+    session.expire_all()
+    row = (
+        await session.execute(
+            sa.select(
+                Requirement.review_status,
+                Requirement.review_note,
+                Requirement.manual_override_json,
+                Requirement.reviewed_by,
+                Requirement.reviewed_at,
+                Requirement.title,
+                Requirement.value_json,
+            ).where(Requirement.id == requirement_id)
+        )
+    ).one()
+    return tuple(row)
+
+
+async def test_legacy_requirement_review_is_gone_and_preserves_the_model_output(
     client_a, analyzable, session, tenant_a, session_factory
 ):
-    """§26: corregir NO pot esborrar el que va dir el model."""
+    """El POST legacy esta retirat (410): no escriu res, l'output del model es intacte."""
     fake.queue_response(payload(analyzable["extraction"].id))
     tender_id = analyzable["document"].tender_id
     await request_analysis(client_a, tenant_a[1].id, tender_id, session_factory)
@@ -234,11 +252,11 @@ async def test_reviewing_a_requirement_preserves_the_model_output(
     requirement = await session.scalar(
         sa.select(Requirement).where(Requirement.tender_id == tender_id)
     )
-    original_title = requirement.title
-    original_value = dict(requirement.value_json)
+    requirement_id = requirement.id
+    before = await _review_fields(session, requirement_id)
 
     response = await client_a.post(
-        f"/api/v1/requirements/{requirement.id}/review",
+        f"/api/v1/requirements/{requirement_id}/review",
         json={
             "review_status": "verified",
             "note": "Comprovat contra la pagina 27.",
@@ -246,18 +264,12 @@ async def test_reviewing_a_requirement_preserves_the_model_output(
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["review_status"] == "verified"
-    assert body["review_note"] == "Comprovat contra la pagina 27."
-    assert body["manual_override_json"] == {"amount": 500000}
-    # L'output original es intacte.
-    assert body["title"] == original_title
-    assert body["value_json"] == original_value
-    assert body["reviewed_at"] is not None
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "endpoint_moved"
+    assert await _review_fields(session, requirement_id) == before
 
 
-async def test_rejecting_a_requirement_keeps_it_auditable(
+async def test_legacy_rejecting_a_requirement_is_gone_and_keeps_it(
     client_a, analyzable, session, tenant_a, session_factory
 ):
     fake.queue_response(payload(analyzable["extraction"].id))
@@ -266,16 +278,17 @@ async def test_rejecting_a_requirement_keeps_it_auditable(
     requirement = await session.scalar(
         sa.select(Requirement).where(Requirement.tender_id == tender_id)
     )
+    requirement_id = requirement.id
+    before = await _review_fields(session, requirement_id)
 
     response = await client_a.post(
-        f"/api/v1/requirements/{requirement.id}/review",
+        f"/api/v1/requirements/{requirement_id}/review",
         json={"review_status": "rejected", "note": "No aplica a aquest lot."},
     )
 
-    assert response.status_code == 200
-    assert response.json()["review_status"] == "rejected"
-    # Segueix existint: rebutjar no es esborrar.
-    assert await session.get(Requirement, requirement.id) is not None
+    assert response.status_code == 410
+    assert await _review_fields(session, requirement_id) == before
+    assert await session.get(Requirement, requirement_id) is not None
 
 
 async def test_unknown_identifiers_are_404(client_a, analyzable):
