@@ -3,7 +3,7 @@
 import { Check } from "lucide-react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
 import { useSession } from "@/components/SessionProvider";
 import { EconomicOfferSection } from "@/components/EconomicOfferSection";
@@ -13,7 +13,7 @@ import { WorkPlanDeadlines } from "@/components/WorkPlanDeadlines";
 import { DecisionHistory, DecisionPanel } from "@/components/WorkspaceDecision";
 import { DossierSection } from "@/components/WorkspaceDossier";
 import { DecisionAnalysisCard } from "@/components/tender-analysis/DecisionAnalysisCard";
-import { BlockerCounters, ChecklistSection, NotesSection, TasksSection } from "@/components/WorkspaceWork";
+import { ChecklistSection, NotesSection, TasksSection } from "@/components/WorkspaceWork";
 import {
   Banner,
   Button,
@@ -29,13 +29,11 @@ import {
 } from "@/components/ui";
 import { ReadinessControl } from "@/components/ReadinessControl";
 import { ReadinessProvider, useInvalidateReadiness } from "@/components/ReadinessProvider";
-import { ANALYSIS_BASIS_LABELS, ELIGIBILITY_LABELS } from "@/lib/compliance";
+import { decisionAnalysisState, analysisPath, type AnalysisRun } from "@/lib/analysis";
 import { useResource } from "@/lib/hooks";
 import { IssuesDrawer } from "@/components/IssuesDrawer";
 import { PREPARE_AREAS, PREPARE_AREA_LABELS, isPrepareArea, type PrepareArea } from "@/lib/readiness";
 import {
-  ANALYSIS_BASIS_LEVEL,
-  ELIGIBILITY_LEVEL,
   WORKSPACE_STATUS_LEVEL,
   deadlineLevel,
 } from "@/lib/labels";
@@ -150,7 +148,11 @@ function PhaseStepper({
   );
 }
 
-/** Context de la decisió: el que no es fusiona (encaix, elegibilitat, anàlisi i lot), una cosa per fila. */
+/**
+ * Context de la decisió: només Encaix (de `prefit_score`) i Lot. L'elegibilitat
+ * i la base de l'anàlisi del compliment anterior no hi són: no es presenten com
+ * a estat vigent (F-4).
+ */
 function ContextPanel({ workspace }: { workspace: WorkspaceDetail }) {
   const rows: Array<{ label: string; value: React.ReactNode }> = [
     {
@@ -165,33 +167,9 @@ function ContextPanel({ workspace }: { workspace: WorkspaceDetail }) {
           <span className="text-muted">Sense càlcul</span>
         ),
     },
-    {
-      label: "Elegibilitat",
-      value: workspace.eligibility ? (
-        <>
-          <StatusPill level={ELIGIBILITY_LEVEL[workspace.eligibility]} size="sm">
-            {ELIGIBILITY_LABELS[workspace.eligibility]}
-          </StatusPill>
-          <span className="ml-1.5 text-muted">podem acreditar que complim?</span>
-        </>
-      ) : (
-        <span className="text-muted">Sense càlcul</span>
-      ),
-    },
-    {
-      label: "Anàlisi",
-      value: (
-        <>
-          <StatusPill level={workspace.analysis_outdated ? "attention" : ANALYSIS_BASIS_LEVEL[workspace.analysis_basis]} size="sm">
-            {ANALYSIS_BASIS_LABELS[workspace.analysis_basis]}
-            {workspace.analysis_outdated && " · endarrerida"}
-          </StatusPill>
-        </>
-      ),
-    },
   ];
   if (workspace.lot_number !== null) {
-    rows.splice(1, 0, {
+    rows.push({
       label: "Lot",
       value: (
         <span className="text-ink">
@@ -212,6 +190,40 @@ function ContextPanel({ workspace }: { workspace: WorkspaceDetail }) {
         ))}
       </dl>
     </Card>
+  );
+}
+
+/**
+ * Únic propietari de `/analysis/current` (spec §4): només es munta al pas
+ * Decidir, llegeix un sol cop i passa el mateix estat a la targeta i al panell.
+ */
+function DecidirStep({
+  companyId,
+  data,
+  onDecided,
+  signerName,
+  children,
+}: {
+  companyId: string | null;
+  data: WorkspaceDetail;
+  onDecided: (decision: WorkspaceDecisionType) => Promise<void>;
+  signerName: string;
+  children: ReactNode;
+}) {
+  const resource = useResource<AnalysisRun>(
+    companyId ? `${analysisPath(companyId, data.tender_id)}/current` : null,
+  );
+  const analysis = decisionAnalysisState(resource);
+  return (
+    <div className="grid gap-5 lg:grid-cols-12">
+      <div className="lg:col-span-7">
+        <DecisionPanel workspace={data} onDecided={onDecided} signerName={signerName} analysis={analysis} />
+      </div>
+      <div className="flex flex-col gap-4 lg:col-span-5">
+        {companyId && <DecisionAnalysisCard state={analysis} tenderId={data.tender_id} />}
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -425,17 +437,10 @@ function WorkspaceView() {
         )}
 
         {step === "decidir" && (
-          <div className="grid gap-5 lg:grid-cols-12">
-            <div className="lg:col-span-7">
-              <DecisionPanel workspace={data} onDecided={onDecided} signerName={signerName} />
-            </div>
-            <div className="flex flex-col gap-4 lg:col-span-5">
-              {companyId && <DecisionAnalysisCard companyId={companyId} tenderId={data.tender_id} />}
-              <BlockerCounters workspace={data} />
-              <ContextPanel workspace={data} />
-              <DecisionHistory workspace={data} />
-            </div>
-          </div>
+          <DecidirStep companyId={companyId} data={data} onDecided={onDecided} signerName={signerName}>
+            <ContextPanel workspace={data} />
+            <DecisionHistory workspace={data} />
+          </DecidirStep>
         )}
 
         {step === "preparar" && (

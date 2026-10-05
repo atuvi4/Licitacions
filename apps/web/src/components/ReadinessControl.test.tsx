@@ -39,7 +39,7 @@ async function mount(readiness: Partial<FinalReadiness>, findings?: ReadinessFin
 
 /** Obre el calaix i torna el botó que l'ha obert. */
 async function open() {
-  const trigger = screen.getByRole("button", { name: /bloqueig|bloquejos|A punt|Preparació desconeguda/ });
+  const trigger = screen.getByRole("button", { name: /pendents? de preparació|A punt|Preparació desconeguda/ });
   // Un clic real deixa el focus al botó; jsdom no ho fa sol i el calaix ha de
   // poder tornar el focus on era.
   trigger.focus();
@@ -59,7 +59,7 @@ describe("Indicador de preparació final", () => {
     get.mockImplementation(() => new Promise(() => {}));
     const { container } = renderControl();
     expect(screen.queryByText("A punt")).toBeNull();
-    expect(container.textContent).not.toMatch(/bloqueig/);
+    expect(container.textContent).not.toMatch(/bloqueig|bloquej|pendent/);
     expect(container.querySelector("[aria-busy='true']")).not.toBeNull();
   });
 
@@ -69,22 +69,22 @@ describe("Indicador de preparació final", () => {
     expect(get).toHaveBeenCalledWith("/companies/c1/workspaces/w1/final-readiness");
   });
 
-  it("sense bloquejos: «A punt»", async () => {
+  it("sense pendents: «A punt»", async () => {
     await mount({});
     expect(screen.getByText("A punt")).toBeTruthy();
   });
 
-  it("amb bloquejos: el recompte, i en singular quan només n'hi ha un", async () => {
+  it("amb pendents: el recompte, i en singular quan només n'hi ha un", async () => {
     const view = await mount({}, [
       findingFixture({ severity: "blocker" }),
       findingFixture({ severity: "blocker", code: "economic_offer_not_started", domain: "economic" }),
     ]);
-    expect(screen.getByText("2 bloquejos")).toBeTruthy();
+    expect(screen.getByText("2 pendents de preparació")).toBeTruthy();
     expect(screen.queryByText("A punt")).toBeNull();
     view.unmount();
 
     await mount({}, [findingFixture({ severity: "blocker" })]);
-    expect(screen.getByText("1 bloqueig")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
   });
 
   it("els avisos i la informació no compten al capçal", async () => {
@@ -93,7 +93,7 @@ describe("Indicador de preparació final", () => {
       findingFixture({ severity: "warning", code: "technical_solution_requirement_missing", domain: "technical" }),
       findingFixture({ severity: "info", code: "economic_unit_limit_unknown", domain: "economic" }),
     ]);
-    expect(screen.getByText("1 bloqueig")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
   });
 
   it("si no es pot llegir, no diu «A punt»: diu que no ho sap i deixa reintentar", async () => {
@@ -151,19 +151,19 @@ describe("Calaix de preparació final", () => {
     ]);
     await open();
     const headings = screen.getAllByRole("heading", { level: 3 }).map((node) => node.textContent);
-    expect(headings[0]).toContain("Bloquegen la presentació");
+    expect(headings[0]).toContain("Cal resoldre per congelar");
     expect(headings[1]).toContain("Per informació");
     expect(headings.some((heading) => heading?.includes("Avisos"))).toBe(false);
 
     const rows = screen.getAllByRole("listitem").map((row) => row.textContent ?? "");
-    // Dins dels bloquejos, el dossier abans que l'oferta.
+    // Dins dels pendents, el dossier abans que l'oferta.
     expect(rows[0]).toContain("Falten documents obligatoris");
     expect(rows[0]).toContain("Dossier");
     expect(rows[1]).toContain("sense preu ofert");
     expect(rows[1]).toContain("Oferta econòmica");
   });
 
-  it("un bloqueig resolt no remena els que queden", async () => {
+  it("un pendent resolt no remena els que queden", async () => {
     const view = await mount({}, [
       findingFixture({ domain: "economic", severity: "blocker", code: "economic_lot_empty" }),
       findingFixture({ domain: "dossier", severity: "blocker", code: "mandatory_evidence_missing" }),
@@ -189,27 +189,27 @@ describe("Calaix de preparació final", () => {
     await open();
     const row = screen.getByRole("listitem");
     expect(row.textContent).toContain("Ningú no ha revisat l'abast tècnic");
-    expect(row.textContent).toContain("Bloqueig");
+    expect(row.textContent).toContain("Pendent");
     expect(row.textContent).not.toContain("technical_scope_unreviewed");
   });
 
   it("un codi desconegut es mostra amb el codi cru i la gravetat que diu el servidor", async () => {
     await mount({}, [findingFixture({ code: "economic_something_new", domain: "economic", severity: "blocker" })]);
-    expect(screen.getByText("1 bloqueig")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
     await open();
     const row = screen.getByRole("listitem");
     expect(row.textContent).toContain("encara no reconeix aquest estat");
-    expect(row.textContent).toContain("Bloqueig");
+    expect(row.textContent).toContain("Pendent");
     // El codi hi és, plegat al detall tècnic, per a qui l'hagi de reportar.
     expect(row.querySelector("summary")?.textContent).toBe("Detall tècnic");
     expect(row.querySelector("details")?.textContent).toContain("economic_something_new");
   });
 
-  it("no promou ni rebaixa gravetats: un preu unitari per sobre del màxim és un bloqueig", async () => {
+  it("no promou ni rebaixa gravetats: un preu unitari per sobre del màxim és un pendent", async () => {
     await mount({}, [findingFixture({ code: "economic_unit_limit_exceeded", domain: "economic", severity: "blocker" })]);
-    expect(screen.getByText("1 bloqueig")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
     await open();
-    expect(screen.getByRole("listitem").textContent).toContain("Bloqueig");
+    expect(screen.getByRole("listitem").textContent).toContain("Pendent");
   });
 
   it("cada problema porta a l'àrea on es resol, conservant el pas", async () => {
@@ -244,7 +244,7 @@ describe("Calaix de preparació final", () => {
       (screen.getAllByRole("link", { name })[0] as HTMLAnchorElement).getAttribute("href");
 
     expect(href(/Obre els plecs/)).toBe("/licitacions/t1?tab=plecs");
-    expect(href(/Obre l'anàlisi del plec/)).toBe("/licitacions/t1?tab=requisits");
+    expect(href(/Obre els requisits/)).toBe("/licitacions/t1?tab=requisits");
   });
 
   it("un problema sense entitat no s'inventa cap fila a la URL", async () => {
@@ -268,18 +268,53 @@ describe("Calaix de preparació final", () => {
     expect(link.getAttribute("href")).toBe("/candidatures/w1?pas=tancar");
   });
 
-  it("amb bloquejos pendents, el peu diu què cal fer i no ofereix cap drecera a Tancar", async () => {
+  it("amb pendents, el peu diu què cal fer i no ofereix cap drecera a Tancar", async () => {
     await mount({}, [findingFixture({ severity: "blocker" })]);
     await open();
-    expect(screen.getByRole("dialog").textContent).toContain("Resol els bloquejos");
+    expect(screen.getByRole("dialog").textContent).toContain("Resol els pendents marcats per poder congelar. Els avisos no ho impedeixen.");
     expect(screen.queryByRole("link", { name: /Ves a Tancar/ })).toBeNull();
+  });
+
+  it("sense pendents, el peu diu «Cap pendent per congelar.» i porta a Tancar", async () => {
+    await mount({}, [findingFixture({ severity: "warning", code: "technical_scope_stale", domain: "technical" })]);
+    await open();
+    expect(screen.getByRole("dialog").textContent).toContain("Cap pendent per congelar.");
+    expect(screen.getByRole("link", { name: /Ves a Tancar/ })).toBeTruthy();
+  });
+
+  it("ni la píndola ni el calaix diuen «bloqueig»/«bloquej», amb pendents o sense", async () => {
+    const findings = [
+      findingFixture({ severity: "blocker" }),
+      findingFixture({ severity: "warning", code: "technical_scope_stale", domain: "technical" }),
+      findingFixture({ severity: "info", code: "economic_unit_limit_unknown", domain: "economic" }),
+    ];
+    const view = await mount({}, findings);
+    expect(document.body.textContent).not.toMatch(/bloqueig|bloquej/i);
+    await open();
+    expect(document.body.textContent).not.toMatch(/bloqueig|bloquej/i);
+    expect(screen.getByRole("dialog").textContent).toContain("Cal resoldre per congelar");
+    view.unmount();
+
+    await mount({}, []);
+    await open();
+    expect(document.body.textContent).not.toMatch(/bloqueig|bloquej/i);
+  });
+
+  it("el recompte de la píndola continua sent el de severity=blocker", async () => {
+    await mount({}, [
+      findingFixture({ severity: "blocker" }),
+      findingFixture({ severity: "blocker", code: "economic_lot_empty", domain: "economic" }),
+      findingFixture({ severity: "blocker", code: "mandatory_evidence_missing", domain: "dossier" }),
+      findingFixture({ severity: "warning", code: "technical_scope_stale", domain: "technical" }),
+    ]);
+    expect(screen.getByText("3 pendents de preparació")).toBeTruthy();
   });
 
   it("no afegeix problemes que el servidor no digui", async () => {
     await mount({}, []);
     await open();
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
-    expect(screen.getByRole("dialog").textContent).toContain("Cap bloqueig, cap avís");
+    expect(screen.getByRole("dialog").textContent).toContain("Cap pendent, cap avís");
   });
 });
 
@@ -291,7 +326,7 @@ describe("Una sola lectura per a tothom", () => {
 
   it("el distintiu i el calaix surten de la mateixa lectura, no de dues portes", async () => {
     await mount({}, [findingFixture({ severity: "blocker", code: "mandatory_evidence_missing" })]);
-    expect(screen.getByText("1 bloqueig")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
     await open();
     // Obrir el calaix no torna a preguntar res: és la mateixa dada.
     expect(get).toHaveBeenCalledTimes(1);
@@ -320,7 +355,7 @@ describe("Una sola lectura per a tothom", () => {
       </ReadinessProvider>,
     );
     await flush();
-    expect(screen.getByText("1 bloqueig")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "desa la meva secció" }));

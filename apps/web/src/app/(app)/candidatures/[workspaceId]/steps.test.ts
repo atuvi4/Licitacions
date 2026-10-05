@@ -114,7 +114,7 @@ describe("primaryBanner", () => {
     expect(primaryBanner(workspaceFixture())).toBeNull();
   });
 
-  it("ordre de gravetat: anul·lada > lot retirat > termini > decisió > anàlisi > bloqueigs > avisos", () => {
+  it("ordre de gravetat: anul·lada > lot retirat > termini > decisió caducada", () => {
     const everything = workspaceFixture({
       tender_actionable: false,
       lot_removed: true,
@@ -144,12 +144,7 @@ describe("primaryBanner", () => {
     expect(banner.title).toContain("anul·lat");
     // La resta de motius viuen dins del mateix bàner, sense repetir el títol.
     expect(banner.reasons).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("lot"),
-        expect.stringContaining("termini"),
-        expect.stringContaining("plecs han canviat"),
-        expect.stringContaining("bloqueig"),
-      ]),
+      expect.arrayContaining([expect.stringContaining("lot"), expect.stringContaining("termini")]),
     );
     expect(banner.reasons.some((r) => r.includes("anul·lat"))).toBe(false);
     expect(new Set(banner.reasons).size).toBe(banner.reasons.length);
@@ -173,25 +168,9 @@ describe("primaryBanner", () => {
     expect(decision.level).toBe("attention");
     expect(decision.title).toBe("La licitació ha canviat després de la decisió");
     expect(decision.reasons.some((r) => /termini/i.test(r))).toBe(true);
+    // Sense decisió caducada, els senyals del compliment anterior no fan cap bàner.
     const noDecision = { ...noDeadline, decision_outdated: false, decision_reasons: [], changes_since_decision: [] };
-    const analysis = primaryBanner(noDecision)!;
-    expect(analysis.kicker).toBe("Anàlisi");
-    expect(analysis.level).toBe("attention");
-    expect(analysis.reasons).toContain("Els plecs han canviat: cal tornar a analitzar-los.");
-    expect(analysis.action.href).toBe("/licitacions/t1?tab=requisits");
-    const noAnalysis = { ...noDecision, analysis_outdated: false, outdated_reasons: [], open_warnings: ["confirmed_blockers"] };
-    const blockers = primaryBanner(noAnalysis)!;
-    expect(blockers.kicker).toBe("Bloqueig");
-    expect(blockers.level).toBe("blocking");
-    expect(blockers.title).toBe("2 requisits obligatoris no es compleixen");
-    expect(blockers.action.href).toBe("/licitacions/t1?tab=requisits");
-    const onlyWarnings = { ...noAnalysis, counters: workspaceFixture().counters, open_warnings: ["mandatory_unknown"] };
-    const warnings = primaryBanner(onlyWarnings)!;
-    expect(warnings.kicker).toBe("Avisos");
-    expect(warnings.level).toBe("attention");
-    expect(warnings.title).toBe(
-      "Hi ha requisits obligatoris sense dades al perfil: no se'n pot dir ni que sí ni que no.",
-    );
+    expect(primaryBanner(noDecision)).toBeNull();
   });
 
   it("decisió sense base coneguda: el títol ho diu i el motiu és el del diccionari", () => {
@@ -202,10 +181,20 @@ describe("primaryBanner", () => {
     expect(banner.reasons[0]).toContain("anterior a l'historial de canvis");
   });
 
-  it("un sol bloqueig confirmat es diu en singular", () => {
-    const banner = primaryBanner(
-      workspaceFixture({ counters: { ...workspaceFixture().counters, confirmed_blockers: 1 }, open_warnings: ["confirmed_blockers"] }),
-    )!;
-    expect(banner.title).toBe("1 requisit obligatori no es compleix");
+  it("el compliment anterior no genera cap bàner: ni bloqueig, ni avisos, ni anàlisi endarrerida", () => {
+    const legacy = workspaceFixture({
+      analysis_outdated: true,
+      outdated_reasons: ["requirements_outdated"],
+      counters: { ...workspaceFixture().counters, confirmed_blockers: 2 },
+      open_warnings: ["confirmed_blockers", "outdated_analysis", "mandatory_unknown"],
+    });
+    expect(primaryBanner(legacy)).toBeNull();
+    // Amb un candidat de fets del plec, el bàner és aquest i no arrossega res de l'antic.
+    const withDeadline = primaryBanner({ ...legacy, deadline_passed: true, days_remaining: -1 })!;
+    expect(withDeadline.kicker).toBe("Termini");
+    const text = JSON.stringify(withDeadline);
+    for (const forbidden of ["Avisos", "Bloqueig", "Anàlisi endarrerida", "compliment detallat", "requisits obligatoris"]) {
+      expect(text).not.toContain(forbidden);
+    }
   });
 });

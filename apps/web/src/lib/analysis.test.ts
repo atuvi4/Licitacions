@@ -8,6 +8,7 @@ import {
   MISSING_DESTINATION,
   MISSING_TEXT,
   RESOLVE,
+  decisionAnalysisState,
   dimensionValue,
   explanation,
   formatPoints,
@@ -119,5 +120,21 @@ describe("resum i ordre", () => {
     expect(partial.questions).toEqual({ buyer: 0, company: 0 });
     expect(partial.fit.unknown).toBe(0);
     expect(summarySentences(partial).join(" ")).not.toMatch(/NaN|undefined/);
+  });
+});
+
+describe("decisionAnalysisState", () => {
+  const run = analysisFixture();
+  const base = { data: null, loading: false, error: null, status: null };
+  it("els cinc estats", () => {
+    expect(decisionAnalysisState({ ...base, loading: true })).toEqual({ kind: "loading" });
+    expect(decisionAnalysisState({ ...base, data: run })).toEqual({ kind: "current", run });
+    const stale = { ...run, stale: true };
+    expect(decisionAnalysisState({ ...base, data: stale })).toEqual({ kind: "stale", run: stale });
+    expect(decisionAnalysisState({ ...base, error: "x", status: 404 })).toEqual({ kind: "absent" });
+    expect(decisionAnalysisState({ ...base, error: "x", status: 500 })).toEqual({ kind: "error" });
+  });
+  it("una recàrrega amb dades prèvies no torna a loading", () => {
+    expect(decisionAnalysisState({ ...base, data: run, loading: true }).kind).toBe("current");
   });
 });

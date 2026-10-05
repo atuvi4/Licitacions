@@ -1,12 +1,18 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { analysisFixture } from "@/test/analysis-fixture";
 import { decisionFixture, workspaceFixture } from "@/test/workspace-fixture";
+import type { DecisionAnalysisState } from "@/lib/analysis";
 
 const post = vi.fn();
+const get = vi.fn();
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, api: { ...actual.api, post: (...args: unknown[]) => post(...args) } };
+  return {
+    ...actual,
+    api: { ...actual.api, post: (...args: unknown[]) => post(...args), get: (...args: unknown[]) => get(...args) },
+  };
 });
 
 import { ApiError } from "@/lib/api";
@@ -16,8 +22,10 @@ import { DecisionHistory, DecisionPanel } from "./WorkspaceDecision";
 const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 const onDecided = vi.fn(async () => undefined);
 
-function renderPanel(overrides: Parameters<typeof workspaceFixture>[0] = {}) {
-  return render(<DecisionPanel workspace={workspaceFixture(overrides)} onDecided={onDecided} signerName="Anna Puig" />);
+function renderPanel(overrides: Parameters<typeof workspaceFixture>[0] = {}, analysis?: DecisionAnalysisState) {
+  return render(
+    <DecisionPanel workspace={workspaceFixture(overrides)} onDecided={onDecided} signerName="Anna Puig" analysis={analysis} />,
+  );
 }
 
 const button = (name: RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
@@ -27,6 +35,7 @@ const submitButton = () => [...dialog().querySelectorAll("button")].find((b) => 
 describe("DecisionPanel · l'acte de decidir", () => {
   beforeEach(() => {
     post.mockReset();
+    get.mockReset();
     onDecided.mockClear();
   });
 
@@ -55,14 +64,14 @@ describe("DecisionPanel · l'acte de decidir", () => {
   it("GO amb avisos oberts: el modal ensenya què quedarà registrat i exigeix el motiu; el POST és el de sempre", async () => {
     post.mockResolvedValue({});
     renderPanel({ go_requires_reason: true, open_warnings: ["mandatory_unknown", "mandatory_needs_review"] });
-    expect(screen.getByText(/Motiu · obligatori si aproves/).textContent).toContain("2 avisos oberts");
+    expect(screen.getByText(/Motiu · obligatori si aproves/).textContent).toContain("el registre de la decisió inclou 2 avisos del compliment anterior");
     fireEvent.click(button(/Presentar-se · GO/));
     const modal = dialog();
     expect(modal.textContent).toContain("Signada per");
     expect(modal.textContent).toContain("Anna Puig");
     expect(modal.textContent).toContain("Hi ha requisits obligatoris sense dades al perfil");
     expect(modal.textContent).toContain("Hi ha requisits obligatoris que una persona ha de revisar");
-    expect(modal.textContent).toContain("no es podrà editar");
+    expect(modal.textContent).toContain("no és una conclusió vigent");
     const submit = submitButton();
     expect(submit.disabled).toBe(true);
     const textarea = modal.querySelector("textarea")!;
@@ -120,8 +129,10 @@ describe("DecisionPanel · l'acte de decidir", () => {
     fireEvent.click(button(/Presentar-se · GO/));
     fireEvent.click(submitButton());
     await flush();
-    expect(screen.getByRole("dialog").textContent).toContain("Cal escriure el motiu");
-    expect(screen.getByRole("dialog").textContent).toContain("El termini de presentació ja ha passat.");
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Cal un motiu: el registre inclou avisos del compliment anterior: El termini de presentació ja ha passat.",
+    );
+    expect(screen.getByRole("dialog").textContent).not.toContain("Cal escriure el motiu");
     expect(onDecided).not.toHaveBeenCalled();
   });
 
@@ -149,19 +160,17 @@ describe("DecisionPanel · l'acte de decidir", () => {
     expect(container.textContent).toContain("Responsable de candidatures");
   });
 
-  it("indeterminat: «Cap requisit avaluat», mai un zero verd ni una recomanació GO", () => {
+  it("indeterminat: el motor antic no es presenta com a conclusió vigent", () => {
     const { container } = renderPanel({
       eligibility: "undetermined",
       recommendation: "undetermined",
       go_requires_reason: true,
       open_warnings: ["undetermined_eligibility", "missing_compliance"],
-      counters: { ...workspaceFixture().counters, total: 0, mandatory_total: 0, mandatory_satisfies: 0, mandatory_unknown: 0, mandatory_needs_review: 0 },
     });
     expect(container.textContent).not.toContain("El sistema no pot suggerir");
-    expect(container.querySelector("[data-level='ready']")).toBeNull();
     fireEvent.click(button(/Presentar-se · GO/));
-    expect(dialog().textContent).toContain("Cap requisit avaluat");
-    expect(dialog().textContent).toContain("Decidiràs sense saber si l'empresa compleix");
+    expect(dialog().textContent).not.toContain("Cap requisit avaluat");
+    expect(dialog().textContent).not.toContain("Decidiràs sense saber");
   });
 
   it("amb decisió vigent: qui, quan i per què; caducada es diu sense amagar-la; se'n pot prendre una de nova", () => {
@@ -185,7 +194,7 @@ describe("DecisionPanel · l'acte de decidir", () => {
     expect(container.textContent).toContain("decisió nova");
   });
 
-  it("l'anàlisi poc fiable i el termini passat surten al modal tal com quedaran registrats", () => {
+  it("el termini passat surt al modal i la simulació del motor antic no", () => {
     renderPanel({
       analysis_basis: "simulation",
       deadline_passed: true,
@@ -194,8 +203,106 @@ describe("DecisionPanel · l'acte de decidir", () => {
       open_warnings: ["deadline_passed", "unreliable_analysis"],
     });
     fireEvent.click(button(/Presentar-se · GO/));
-    expect(dialog().textContent).toContain("Simulació de desenvolupament");
+    expect(dialog().textContent).not.toContain("Simulació");
+    expect(dialog().textContent).not.toContain("Motor d'anàlisi no configurat");
     expect(dialog().textContent).toContain("El termini de presentació ja ha passat.");
+  });
+
+  it("amb recommendation, counters, eligibility i analysis_basis informats, el modal no en mostra res", () => {
+    const base = workspaceFixture();
+    renderPanel({
+      recommendation: "go_candidate",
+      eligibility: "undetermined",
+      analysis_basis: "provider_not_configured",
+      analysis_outdated: true,
+      counters: { ...base.counters, confirmed_blockers: 4 },
+    });
+    fireEvent.click(button(/Presentar-se · GO/));
+    const text = dialog().textContent ?? "";
+    for (const forbidden of [
+      "Recomanació",
+      "recomana",
+      "Bloqueigs confirmats",
+      "Cap requisit avaluat",
+      "Decidiràs sense saber",
+      "Simulació",
+      "Motor d'anàlisi no configurat",
+      "endarrerida",
+    ]) {
+      expect(text).not.toContain(forbidden);
+    }
+  });
+
+  it("la fila «Anàlisi del plec» segueix els cinc estats amb el mateix run que la targeta", () => {
+    const run = analysisFixture();
+    const row = () => screen.getByText("Anàlisi del plec").closest("div")!.textContent ?? "";
+    const states: Array<[DecisionAnalysisState | undefined, string]> = [
+      [undefined, "Es carrega l'anàlisi…"],
+      [{ kind: "loading" }, "Es carrega l'anàlisi…"],
+      [{ kind: "current", run }, "3 elements a resoldre"],
+      [{ kind: "current", run: { ...run, findings: [] } }, "Cap element pendent de resoldre"],
+      [{ kind: "current", run: { ...run, findings: run.findings.slice(0, 1) } }, "1 element a resoldre"],
+      [{ kind: "stale", run }, "3 elements a resoldre · desactualitzada"],
+      [{ kind: "absent" }, "Encara no hi ha anàlisi d'aquesta licitació."],
+      [{ kind: "error" }, "No s'ha pogut carregar l'anàlisi."],
+    ];
+    for (const [state, text] of states) {
+      const { unmount } = renderPanel({}, state);
+      fireEvent.click(button(/Presentar-se · GO/));
+      expect(row()).toContain(text);
+      if (state && (state.kind === "current" || state.kind === "stale")) {
+        expect(row()).toContain("Feta el ");
+        expect(row()).toContain("2026");
+      }
+      unmount();
+    }
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("obrir, teclejar i tancar el modal no fa cap GET", () => {
+    renderPanel({ go_requires_reason: true, open_warnings: ["deadline_passed"] }, { kind: "current", run: analysisFixture() });
+    fireEvent.click(button(/Presentar-se · GO/));
+    fireEvent.change(dialog().querySelector("textarea")!, { target: { value: "Motiu" } });
+    fireEvent.click(screen.getByRole("button", { name: /Cancel·la/ }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("el copy dels avisos del compliment anterior (spec §5) és als seus llocs", () => {
+    renderPanel({ go_requires_reason: true, open_warnings: ["deadline_passed"] });
+    expect(document.body.textContent).toContain(
+      "Motiu · obligatori si aproves: el registre de la decisió inclou 1 avís del compliment anterior. NO-GO i ajornar no en demanen.",
+    );
+    fireEvent.click(button(/Presentar-se · GO/));
+    const text = dialog().textContent ?? "";
+    expect(text).toContain("Avisos del compliment anterior que quedaran registrats");
+    expect(text).toContain("Motiu (obligatori: hi ha avisos del compliment anterior)");
+    expect(dialog().querySelector("textarea")!.getAttribute("placeholder")).toBe(
+      "Per què es presenta l'empresa malgrat els avisos del compliment anterior?",
+    );
+    expect(text).toContain(
+      "Quedarà registrada la decisió, qui la signa, quan i el motiu, amb els avisos del compliment anterior. El sistema també hi desa, com a registre intern, l'estat d'aquell compliment: no és una conclusió vigent.",
+    );
+  });
+
+  it("zero-state del bloc d'avisos", () => {
+    renderPanel({ open_warnings: [] });
+    fireEvent.click(button(/Presentar-se · GO/));
+    expect(dialog().textContent).toContain("Cap avís del compliment anterior.");
+    expect(dialog().textContent).toContain("El sistema en fa la fotografia en signar; ara mateix no n'hi ha cap.");
+  });
+
+  it("un codi d'avís desconegut mai no es veu: «Avís del compliment anterior»", async () => {
+    post.mockRejectedValue(new ApiError(422, "decision_reason_required", "x", [], { warnings: ["codi_desconegut_backend"] }));
+    renderPanel({ go_requires_reason: true, open_warnings: ["codi_desconegut_modal"] });
+    fireEvent.click(button(/Presentar-se · GO/));
+    expect(dialog().textContent).toContain("Avís del compliment anterior");
+    fireEvent.change(dialog().querySelector("textarea")!, { target: { value: "m" } });
+    fireEvent.click(submitButton());
+    await flush();
+    expect(dialog().textContent).toContain("Cal un motiu: el registre inclou avisos del compliment anterior: Avís del compliment anterior.");
+    expect(document.body.textContent).not.toContain("codi_desconegut_modal");
+    expect(document.body.textContent).not.toContain("codi_desconegut_backend");
   });
 });
 
@@ -205,6 +312,48 @@ describe("DecisionHistory", () => {
     expect(screen.getByText(/Encara no s'ha pres cap decisió/)).toBeTruthy();
     expect(screen.getByText(/Només compta com a decisió la que registra explícitament una persona\./)).toBeTruthy();
     expect(screen.queryByText(/La recomanació automàtica/)).toBeNull();
+  });
+
+  it("un avís desconegut a l'historial surt amb l'etiqueta neutra, mai el codi", () => {
+    const entry = decisionFixture({ open_warnings: ["codi_desconegut_historial"] });
+    const { container } = render(<DecisionHistory workspace={workspaceFixture({ decisions: [entry] })} />);
+    expect(container.textContent).toContain("Es va decidir sabent-ho: Avís del compliment anterior");
+    expect(container.textContent).not.toContain("codi_desconegut_historial");
+  });
+
+  it("la línia d'evidència és un registre del compliment anterior, mai «el sistema deia»", () => {
+    const entry = decisionFixture({ automated_recommendation: "go_candidate", deadline_passed: true });
+    const { container } = render(<DecisionHistory workspace={workspaceFixture({ decisions: [entry] })} />);
+    const text = container.textContent ?? "";
+    expect(text).toContain("Registre del moment (compliment anterior): ");
+    expect(text).toContain("el compliment anterior suggeria Candidata");
+    expect(text).toContain("amb el termini ja tancat");
+    expect(text).not.toContain("el sistema deia");
+  });
+
+  it("recomanació històrica desconeguda: text neutre, mai el valor cru", () => {
+    const entry = decisionFixture({ automated_recommendation: "weird_value" });
+    render(<DecisionHistory workspace={workspaceFixture({ decisions: [entry] })} />);
+    expect(document.body.textContent).toContain("el compliment anterior va fer un suggeriment (valor històric)");
+    expect(document.body.textContent).not.toContain("weird_value");
+  });
+
+  it("una recomanació històrica que coincideix amb una clau heretada també és desconeguda", () => {
+    const entry = decisionFixture({ automated_recommendation: "toString" });
+    render(<DecisionHistory workspace={workspaceFixture({ decisions: [entry] })} />);
+    expect(document.body.textContent).toContain("el compliment anterior va fer un suggeriment (valor històric)");
+    expect(document.body.textContent).not.toContain("undefined");
+    expect(document.body.textContent).not.toContain("suggeria toString");
+  });
+
+  it("sense recomanació ni termini tancat: cap de les dues frases", () => {
+    const entry = decisionFixture({ automated_recommendation: null, deadline_passed: false });
+    const { container } = render(<DecisionHistory workspace={workspaceFixture({ decisions: [entry] })} />);
+    const text = container.textContent ?? "";
+    expect(text).toContain("Registre del moment (compliment anterior)");
+    expect(text).not.toContain("suggeria");
+    expect(text).not.toContain("suggeriment");
+    expect(text).not.toContain("termini ja tancat");
   });
 
   it("append-only en ordre, «Vigent» només a la primera, qui/quan/motiu i els avisos d'aleshores", () => {

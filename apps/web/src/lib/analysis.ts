@@ -111,6 +111,25 @@ export interface AnalysisRun {
   questions: AnalysisQuestion[];
 }
 
+/** Estat únic de `/analysis/current` al pas Decidir: el llegeix un sol propietari i el consumeixen targeta i panell. */
+export type DecisionAnalysisState =
+  | { kind: "loading" }
+  | { kind: "current" | "stale"; run: AnalysisRun }
+  | { kind: "absent" }
+  | { kind: "error" };
+
+export function decisionAnalysisState(resource: {
+  data: AnalysisRun | null;
+  loading: boolean;
+  error: string | null;
+  status: number | null;
+}): DecisionAnalysisState {
+  if (resource.status === 404) return { kind: "absent" };
+  if (resource.error) return { kind: "error" };
+  if (!resource.data) return { kind: "loading" };
+  return { kind: resource.data.stale ? "stale" : "current", run: resource.data };
+}
+
 export type AnalysisWriteResult = AnalysisRun & { reused: boolean };
 
 export interface ScopeItemView {

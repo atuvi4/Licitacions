@@ -50,7 +50,7 @@ describe("Agrupació de problemes", () => {
     ]);
     expect(groups.map((group) => group.severity)).toEqual(["blocker", "warning", "info"]);
     expect(groups.map((group) => group.label)).toEqual([
-      "Bloquegen la presentació",
+      "Cal resoldre per congelar",
       "Avisos",
       "Per informació",
     ]);
@@ -159,7 +159,22 @@ describe("Codis → text i destinació", () => {
 
   it("el que no es resol preparant res porta a Decidir", () => {
     expect(findingCopy("decision_not_go")?.destination).toEqual({ kind: "step", step: "decidir" });
-    expect(findingCopy("analysis_outdated")?.destination).toEqual({ kind: "step", step: "decidir" });
+  });
+
+  it("els dos findings del motor antic tenen el copy nou, sense dir «anàlisi»", () => {
+    const outdated = findingCopy("analysis_outdated");
+    expect(outdated?.label).toBe("El compliment anterior ha quedat endarrerit");
+    expect(outdated?.hint).toBe("El plec o el compliment anterior han canviat des de l'última execució del motor anterior.");
+    expect(outdated?.action).toBe("Obre els requisits");
+    expect(outdated?.destination).toEqual({ kind: "tender", tab: "requisits" });
+    expect(outdated?.destination).not.toEqual({ kind: "step", step: "decidir" });
+    expect(findingCopy("requirement_analysis_predates_documents")?.label).toBe(
+      "Els requisits extrets no cobreixen els plecs d'ara",
+    );
+    for (const code of ["analysis_outdated", "requirement_analysis_predates_documents"]) {
+      const copy = findingCopy(code);
+      expect(`${copy?.label} ${copy?.hint ?? ""}`.toLowerCase()).not.toContain("anàlisi");
+    }
   });
 
   it("l'abast obsolet i una validació caducada són coses diferents", () => {

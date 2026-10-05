@@ -32,7 +32,7 @@ const SEVERITY_CLASS: Record<FindingSeverity, string> = {
 };
 
 const SEVERITY_LABEL: Record<FindingSeverity, string> = {
-  blocker: "Bloqueig",
+  blocker: "Pendent",
   warning: "Avís",
   info: "Informació",
 };
@@ -88,7 +88,7 @@ export function ReadinessControl() {
           </StatusPill>
         ) : (
           <StatusPill level="blocking" size="sm">
-            {blockers} {blockers === 1 ? "bloqueig" : "bloquejos"}
+            {blockers} {blockers === 1 ? "pendent" : "pendents"} de preparació
           </StatusPill>
         )}
         <ChevronRight size={14} strokeWidth={1.5} aria-hidden className="text-muted" />
@@ -139,7 +139,7 @@ function FindingList({
     return (
       <p className="px-4 py-5 text-body text-muted">
         {ready
-          ? "Cap bloqueig, cap avís: la candidatura es pot congelar."
+          ? "Cap pendent, cap avís: la candidatura es pot congelar."
           : "El servidor no ha donat cap detall d'aquesta preparació."}
       </p>
     );
@@ -257,7 +257,7 @@ function DrawerFooter({ readiness }: { readiness: FinalReadiness | null }) {
   if (!readiness.ready_for_final_review) {
     return (
       <p className="text-caption text-muted">
-        <strong className="text-ink">Resol els bloquejos per poder congelar.</strong> Els avisos no ho impedeixen.
+        <strong className="text-ink">Resol els pendents marcats per poder congelar.</strong> Els avisos no ho impedeixen.
       </p>
     );
   }
@@ -268,7 +268,7 @@ function DrawerFooter({ readiness }: { readiness: FinalReadiness | null }) {
   next.delete("entity");
   return (
     <div className="flex items-center justify-between gap-3">
-      <p className="text-caption text-muted">Cap bloqueig pendent.</p>
+      <p className="text-caption text-muted">Cap pendent per congelar.</p>
       {/* Congelar viu al pas Tancar: aquí només s'hi porta. */}
       <Link href={`${pathname}?${next.toString()}`} className="text-body text-brand hover:underline">
         Ves a Tancar →

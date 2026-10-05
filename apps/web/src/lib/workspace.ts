@@ -516,6 +516,11 @@ export const WARNING_LABELS: Record<string, string> = {
     "La licitació ha canviat després de l'anàlisi: el que es mostra descriu un estat anterior.",
 };
 
+/** Etiqueta d'un codi d'avís; un codi sense etiqueta mai no es mostra cru (spec F-4 §6). */
+export function warningLabel(code: string): string {
+  return Object.hasOwn(WARNING_LABELS, code) ? WARNING_LABELS[code] : "Avís del compliment anterior";
+}
+
 export const OUTDATED_LABELS: Record<string, string> = {
   requirement_run_changed: "Hi ha una anàlisi de requisits més recent que la del workspace.",
   compliance_run_changed: "Hi ha un càlcul de compliment més recent que el del workspace.",

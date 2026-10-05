@@ -2,28 +2,27 @@
 
 import { AnalysisSummary } from "@/components/tender-analysis/AnalysisSummary";
 import { Card, CardHeader, LinkButton, StatusPill } from "@/components/ui";
-import { analysisPath, type AnalysisRun } from "@/lib/analysis";
-import { useResource } from "@/lib/hooks";
+import type { DecisionAnalysisState } from "@/lib/analysis";
 import { formatDateTime } from "@/lib/labels";
 
 /** Lectura de l'anàlisi al pas Decidir. Fa servir els mateixos helpers; mai fa cap POST. */
-export function DecisionAnalysisCard({ companyId, tenderId }: { companyId: string; tenderId: string }) {
-  const current = useResource<AnalysisRun>(`${analysisPath(companyId, tenderId)}/current`);
+export function DecisionAnalysisCard({ state, tenderId }: { state: DecisionAnalysisState; tenderId: string }) {
   const href = `/licitacions/${tenderId}?tab=analisi`;
   const body = (() => {
-    if (current.status === 404) return <p className="text-body text-muted">Encara no hi ha anàlisi d&apos;aquesta licitació.</p>;
-    if (current.error) return <p className="text-body text-muted">No s&apos;ha pogut carregar l&apos;anàlisi.</p>;
-    if (!current.data) return null;
-    const pending = current.data.findings.length;
+    if (state.kind === "absent") return <p className="text-body text-muted">Encara no hi ha anàlisi d&apos;aquesta licitació.</p>;
+    if (state.kind === "error") return <p className="text-body text-muted">No s&apos;ha pogut carregar l&apos;anàlisi.</p>;
+    if (state.kind === "loading") return null;
+    const run = state.run;
+    const pending = run.findings.length;
     return (
       <div className="space-y-3">
-        <p className="text-caption text-muted">Feta el {formatDateTime(current.data.created_at)}.</p>
-        {current.data.stale && (
+        <p className="text-caption text-muted">Feta el {formatDateTime(run.created_at)}.</p>
+        {state.kind === "stale" && (
           <StatusPill level="attention" size="sm">
             Desactualitzada
           </StatusPill>
         )}
-        <AnalysisSummary run={current.data} compact />
+        <AnalysisSummary run={run} compact />
         <p className="text-body text-ink">
           {pending === 0
             ? "No hi ha cap element pendent de resoldre en aquesta anàlisi."
@@ -32,7 +31,7 @@ export function DecisionAnalysisCard({ companyId, tenderId }: { companyId: strin
       </div>
     );
   })();
-  const stale = Boolean(current.data?.stale);
+  const stale = state.kind === "stale";
   return (
     <Card>
       <CardHeader title="Anàlisi del plec" description="El que Tuvi sap i no sap d'aquesta licitació. La decisió és vostra." />
