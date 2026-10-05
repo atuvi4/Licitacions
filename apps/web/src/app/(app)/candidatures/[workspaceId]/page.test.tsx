@@ -423,7 +423,7 @@ describe("Candidatura · stepper i Decidir", () => {
     expect(step("Decidir").closest("[data-state]")?.getAttribute("data-state")).toBe("on");
   });
 
-  it("decision_reason_required: un sol GET extra del workspace, cap de l'anàlisi, cap navegació i el modal continua obert", async () => {
+  it("decision_reason_required: un sol GET extra del workspace i un de l'anàlisi, cap navegació i el modal continua obert", async () => {
     get.mockResolvedValueOnce(workspaceFixture({ go_requires_reason: false, decision_warnings: [] }));
     get.mockResolvedValueOnce(workspaceFixture({ go_requires_reason: true, decision_warnings: ["analysis_stale"] }));
     post.mockRejectedValue(
@@ -439,7 +439,7 @@ describe("Candidatura · stepper i Decidir", () => {
     expect(post).toHaveBeenCalledTimes(1);
     expect(get).toHaveBeenCalledTimes(2);
     expect(get.mock.calls[1][0]).toMatch(/\/companies\/c1\/workspaces\/w1$/);
-    expect(analysisCurrent).toHaveBeenCalledTimes(1);
+    expect(analysisCurrent).toHaveBeenCalledTimes(2);
     expect(readiness).toHaveBeenCalledTimes(1);
     expect(replace).not.toHaveBeenCalled();
     expect(push).not.toHaveBeenCalled();
@@ -448,6 +448,58 @@ describe("Candidatura · stepper i Decidir", () => {
     const dialog = screen.getByRole("dialog");
     expect(dialog.textContent).toContain("Cal un motiu: ");
     expect(dialog.textContent).toContain("Motiu (obligatori: hi ha avisos de l'anàlisi del plec)");
+  });
+
+  describe("conflicte decision_reason_required: cursa amb l'anàlisi", () => {
+    async function conflict(second: "stale" | "404") {
+      get.mockResolvedValueOnce(workspaceFixture({ go_requires_reason: false, decision_warnings: [] }));
+      analysisCurrent.mockReset();
+      analysisCurrent.mockResolvedValueOnce(analysisFixture({ id: "run-1" }));
+      if (second === "stale") analysisCurrent.mockResolvedValueOnce(analysisFixture({ id: "run-1", stale: true }));
+      else analysisCurrent.mockRejectedValueOnce(new ApiError(404, "not_found", "Not found"));
+      get.mockResolvedValueOnce(workspaceFixture({ go_requires_reason: true, decision_warnings: ["analysis_stale"] }));
+      post.mockRejectedValue(new ApiError(422, "decision_reason_required", "x", [], { warnings: ["analysis_stale"], basis: "analysis_v3" }));
+      render(<WorkspacePage />);
+      await flush();
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(analysisCurrent).toHaveBeenCalledTimes(1);
+      replace.mockClear();
+      await decide(/Presentar-se · GO/);
+      await flush();
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(get).toHaveBeenCalledTimes(2);
+      expect(analysisCurrent).toHaveBeenCalledTimes(2);
+      expect(replace).not.toHaveBeenCalled();
+      expect(screen.getByText("Ens presentem a aquesta licitació?")).toBeTruthy();
+      return screen.getByRole("dialog");
+    }
+
+    it("anàlisi vigent que passa a desactualitzada: la fila del modal ho diu i el panell passa a mode obligatori", async () => {
+      const dialog = await conflict("stale");
+      expect(dialog.textContent).toContain("desactualitzada");
+      expect(dialog.textContent).toContain("Motiu (obligatori: hi ha avisos de l'anàlisi del plec)");
+      expect(screen.getByTestId("panel-spy").getAttribute("data-kind")).toBe("stale");
+      expect(screen.getByTestId("card-spy").getAttribute("data-kind")).toBe("stale");
+    });
+
+    it("l'anàlisi desapareix (404): la fila diu que no n'hi ha", async () => {
+      const dialog = await conflict("404");
+      expect(dialog.textContent).toContain("Encara no hi ha anàlisi d'aquesta licitació.");
+      expect(screen.getByTestId("panel-spy").getAttribute("data-kind")).toBe("absent");
+    });
+
+    it("camí normal: obrir i tancar el modal sense conflicte no fa cap GET addicional", async () => {
+      get.mockResolvedValue(workspaceFixture());
+      analysisCurrent.mockReset();
+      analysisCurrent.mockResolvedValue(analysisFixture());
+      render(<WorkspacePage />);
+      await flush();
+      fireEvent.click(screen.getByRole("button", { name: /Presentar-se · GO/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Cancel·la/ }));
+      await flush();
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(analysisCurrent).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("advance acceptat: es rellegeix el workspace i, si ja és a revisió final, s'obre Tancar", async () => {

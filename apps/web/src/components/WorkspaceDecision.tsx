@@ -88,7 +88,7 @@ function plural(count: number, one: string, many: string): string {
 export function DecisionPanel({
   workspace,
   onDecided,
-  onRefreshWorkspace,
+  onDecisionConflict,
   signerName,
   analysis,
 }: {
@@ -97,9 +97,9 @@ export function DecisionPanel({
   onDecided: (decision: WorkspaceDecisionType) => Promise<void>;
   /**
    * Es crida només quan el backend rebutja la decisió amb `decision_reason_required`:
-   * rellegeix el workspace, sense navegar.
+   * el pas rellegeix el workspace i l'anàlisi vigent, sense navegar.
    */
-  onRefreshWorkspace: () => Promise<void>;
+  onDecisionConflict: () => Promise<void>;
   /** Qui signarà: el nom real de la sessió. */
   signerName: string;
   /** Estat únic de l'anàlisi vigent (el llegeix la pàgina; el modal mai no fa cap GET). */
@@ -145,7 +145,7 @@ export function DecisionPanel({
       setPending(null);
       await onDecided(pending);
     } else if (reasonRequired) {
-      await onRefreshWorkspace();
+      await onDecisionConflict();
     }
   }
 

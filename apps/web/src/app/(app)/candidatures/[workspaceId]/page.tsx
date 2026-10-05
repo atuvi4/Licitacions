@@ -216,13 +216,18 @@ function DecidirStep({
     companyId ? `${analysisPath(companyId, data.tender_id)}/current` : null,
   );
   const analysis = decisionAnalysisState(resource);
+  // Conflicte `decision_reason_required`: workspace i anàlisi vigent, les dues
+  // lectures alhora; el modal continua obert amb l'estat nou.
+  const onDecisionConflict = async () => {
+    await Promise.all([onRefreshWorkspace(), resource.reload()]);
+  };
   return (
     <div className="grid gap-5 lg:grid-cols-12">
       <div className="lg:col-span-7">
         <DecisionPanel
           workspace={data}
           onDecided={onDecided}
-          onRefreshWorkspace={onRefreshWorkspace}
+          onDecisionConflict={onDecisionConflict}
           signerName={signerName}
           analysis={analysis}
         />

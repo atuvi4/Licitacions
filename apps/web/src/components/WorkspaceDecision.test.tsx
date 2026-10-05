@@ -40,14 +40,14 @@ import { DecisionHistory, DecisionPanel } from "./WorkspaceDecision";
 
 const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 const onDecided = vi.fn(async () => undefined);
-const onRefreshWorkspace = vi.fn(async () => undefined);
+const onDecisionConflict = vi.fn(async () => undefined);
 
 function renderPanel(overrides: Parameters<typeof workspaceFixture>[0] = {}, analysis?: DecisionAnalysisState) {
   return render(
     <DecisionPanel
       workspace={workspaceFixture(overrides)}
       onDecided={onDecided}
-      onRefreshWorkspace={onRefreshWorkspace}
+      onDecisionConflict={onDecisionConflict}
       signerName="Anna Puig"
       analysis={analysis}
     />,
@@ -63,8 +63,8 @@ describe("DecisionPanel · l'acte de decidir", () => {
     post.mockReset();
     get.mockReset();
     onDecided.mockClear();
-    onRefreshWorkspace.mockReset();
-    onRefreshWorkspace.mockImplementation(async () => undefined);
+    onDecisionConflict.mockReset();
+    onDecisionConflict.mockImplementation(async () => undefined);
   });
 
   it("tres sortides reals i cap recomanació del sistema: només la decisió humana", () => {
@@ -206,7 +206,7 @@ describe("DecisionPanel · l'acte de decidir", () => {
       fireEvent.click(button(/Presentar-se · GO/));
       fireEvent.click(submitButton());
       await settle();
-      expect(onRefreshWorkspace).toHaveBeenCalledTimes(1);
+      expect(onDecisionConflict).toHaveBeenCalledTimes(1);
       expect(onDecided).not.toHaveBeenCalled();
       expect(dialog().textContent).toContain("Cal un motiu: ");
     });
@@ -218,7 +218,23 @@ describe("DecisionPanel · l'acte de decidir", () => {
       fireEvent.click(submitButton());
       await settle();
       expect(dialog().textContent).toContain("Cal un motiu: ");
-      expect(onRefreshWorkspace).toHaveBeenCalledTimes(1);
+      expect(onDecisionConflict).toHaveBeenCalledTimes(1);
+    });
+
+    it("després del conflicte, la fila «Anàlisi del plec» segueix el nou estat amb el modal obert", async () => {
+      post.mockRejectedValueOnce(reasonRequired());
+      const ws = workspaceFixture({ go_requires_reason: false, decision_warnings: [] });
+      const props = { onDecided, onDecisionConflict, signerName: "Anna Puig" };
+      const { rerender } = render(<DecisionPanel workspace={ws} analysis={{ kind: "current", run: analysisFixture() }} {...props} />);
+      fireEvent.click(button(/Presentar-se · GO/));
+      fireEvent.click(submitButton());
+      await settle();
+      expect(onDecisionConflict).toHaveBeenCalledTimes(1);
+      rerender(<DecisionPanel workspace={ws} analysis={{ kind: "stale", run: analysisFixture() }} {...props} />);
+      expect(dialog().textContent).toContain("desactualitzada");
+      rerender(<DecisionPanel workspace={ws} analysis={{ kind: "absent" }} {...props} />);
+      expect(dialog().textContent).toContain("Encara no hi ha anàlisi d'aquesta licitació.");
+      expect(screen.getByRole("dialog")).toBeTruthy();
     });
 
     it("un POST correcte no rellegeix res: només onDecided", async () => {
@@ -227,7 +243,7 @@ describe("DecisionPanel · l'acte de decidir", () => {
       fireEvent.click(button(/Presentar-se · GO/));
       fireEvent.click(submitButton());
       await settle();
-      expect(onRefreshWorkspace).not.toHaveBeenCalled();
+      expect(onDecisionConflict).not.toHaveBeenCalled();
       expect(onDecided).toHaveBeenCalledTimes(1);
     });
 
@@ -241,7 +257,7 @@ describe("DecisionPanel · l'acte de decidir", () => {
       fireEvent.click(button(/Presentar-se · GO/));
       fireEvent.click(submitButton());
       await settle();
-      expect(onRefreshWorkspace).not.toHaveBeenCalled();
+      expect(onDecisionConflict).not.toHaveBeenCalled();
       expect(onDecided).not.toHaveBeenCalled();
     });
 
@@ -255,7 +271,7 @@ describe("DecisionPanel · l'acte de decidir", () => {
         <DecisionPanel
           workspace={workspaceFixture({ go_requires_reason: true, decision_warnings: ["analysis_stale"] })}
           onDecided={onDecided}
-          onRefreshWorkspace={onRefreshWorkspace}
+          onDecisionConflict={onDecisionConflict}
           signerName="Anna Puig"
         />,
       );
