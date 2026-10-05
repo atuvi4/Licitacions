@@ -25,8 +25,11 @@ import {
 import { formatDateTime } from "@/lib/tenders";
 import {
   DECISION_LABELS,
+  analysisWarningLabel,
   deadlineLabel,
   warningLabel,
+  type AnalysisDecisionSnapshotV1,
+  type WorkspaceDecisionEntry,
   type WorkspaceDecisionType,
   type WorkspaceDetail,
 } from "@/lib/workspace";
@@ -85,12 +88,18 @@ function plural(count: number, one: string, many: string): string {
 export function DecisionPanel({
   workspace,
   onDecided,
+  onRefreshWorkspace,
   signerName,
   analysis,
 }: {
   workspace: WorkspaceDetail;
   /** Es crida només després d'un POST correcte, amb la decisió registrada. */
   onDecided: (decision: WorkspaceDecisionType) => Promise<void>;
+  /**
+   * Es crida només quan el backend rebutja la decisió amb `decision_reason_required`:
+   * rellegeix el workspace, sense navegar.
+   */
+  onRefreshWorkspace: () => Promise<void>;
   /** Qui signarà: el nom real de la sessió. */
   signerName: string;
   /** Estat únic de l'anàlisi vigent (el llegeix la pàgina; el modal mai no fa cap GET). */
@@ -100,8 +109,7 @@ export function DecisionPanel({
   const [reason, setReason] = useState("");
   const mutation = useMutation();
 
-  const warnings = workspace.open_warnings;
-  const needsReason = pending === "go" && workspace.go_requires_reason;
+  const warnings = workspace.decision_warnings;
   const latest = workspace.latest_decision;
   const decided = workspace.human_decision;
 
@@ -118,23 +126,37 @@ export function DecisionPanel({
 
   async function submit() {
     if (!pending) return;
+    // `mutation.run` només torna un booleà: el codi de l'error es captura aquí.
+    let reasonRequired = false;
     const ok = await mutation.run(async () => {
-      await api.post(`/companies/${workspace.company_id}/workspaces/${workspace.id}/decisions`, {
-        decision: pending,
-        reason: reason.trim() || null,
-      });
+      try {
+        await api.post(`/companies/${workspace.company_id}/workspaces/${workspace.id}/decisions`, {
+          decision: pending,
+          reason: reason.trim() || null,
+        });
+      } catch (caught) {
+        // Sense `instanceof`: els tests que simulen @/lib/api no exporten la classe.
+        const code = caught && typeof caught === "object" ? (caught as { code?: unknown }).code : undefined;
+        reasonRequired = code === "decision_reason_required";
+        throw caught;
+      }
     });
     if (ok) {
       setPending(null);
       await onDecided(pending);
+    } else if (reasonRequired) {
+      await onRefreshWorkspace();
     }
   }
 
   const apiError = mutation.apiError;
   const reasonRequiredByBackend = apiError?.code === "decision_reason_required";
-  const backendWarnings = reasonRequiredByBackend
-    ? ((apiError?.details.warnings as string[] | undefined) ?? []).map(warningLabel)
-    : [];
+  const backendCodes = reasonRequiredByBackend ? ((apiError?.details.warnings as string[] | undefined) ?? []) : [];
+  const backendWarnings = backendCodes.map(analysisWarningLabel);
+  // Després d'un 422 el backend té la darrera paraula: el modal passa a mode
+  // obligatori i mostra els avisos que ell ha vist, encara que la prop sigui vella.
+  const needsReason = pending === "go" && (workspace.go_requires_reason || reasonRequiredByBackend);
+  const shownWarnings = reasonRequiredByBackend ? backendCodes : warnings;
   const forbidden = apiError?.status === 403;
   const otherError = mutation.error && !reasonRequiredByBackend && !forbidden ? mutation.error : null;
 
@@ -231,7 +253,7 @@ export function DecisionPanel({
           <p className="text-[13px] leading-5 text-muted">
             Motiu · obligatori si aproves:{" "}
             <span className="text-ink">
-              el registre de la decisió inclou {plural(warnings.length, "avís", "avisos")} del compliment anterior.
+              el registre de la decisió inclou {plural(warnings.length, "avís", "avisos")} de l&apos;anàlisi del plec.
             </span>{" "}
             NO-GO i ajornar no en demanen.
           </p>
@@ -246,7 +268,11 @@ export function DecisionPanel({
       <Modal
         open={pending !== null}
         title={pending ? MODAL_TITLES[pending] : ""}
-        description="Quedarà registrada la decisió, qui la signa, quan i el motiu, amb els avisos del compliment anterior. El sistema també hi desa, com a registre intern, l'estat d'aquell compliment: no és una conclusió vigent."
+        description={
+          analysis?.kind === "absent"
+            ? "Quedarà registrada la decisió, qui la signa, quan i el motiu, i que en signar no hi havia cap anàlisi del plec vigent."
+            : "Quedarà registrada la decisió, qui la signa, quan i el motiu, amb la fotografia de l'anàlisi del plec vigent i els seus avisos."
+        }
         onClose={close}
         footer={
           <>
@@ -302,15 +328,15 @@ export function DecisionPanel({
 
           <div className="rounded-card border border-border px-4 py-3">
             <p className="text-[13px] font-semibold text-ink">
-              {warnings.length > 0
-                ? "Avisos del compliment anterior que quedaran registrats"
-                : "Cap avís del compliment anterior."}
+              {shownWarnings.length > 0
+                ? "Avisos de l'anàlisi del plec que quedaran registrats"
+                : "Cap avís de l'anàlisi del plec."}
             </p>
-            {warnings.length > 0 ? (
+            {shownWarnings.length > 0 ? (
               <ul className="mt-1.5 space-y-1">
-                {warnings.map((code) => (
+                {shownWarnings.map((code) => (
                   <li key={code} className="text-[13px] leading-5 text-ink">
-                    {warningLabel(code)}
+                    {analysisWarningLabel(code)}
                   </li>
                 ))}
               </ul>
@@ -322,13 +348,13 @@ export function DecisionPanel({
           </div>
 
           <Field
-            label={needsReason ? "Motiu (obligatori: hi ha avisos del compliment anterior)" : "Motiu (opcional)"}
+            label={needsReason ? "Motiu (obligatori: hi ha avisos de l'anàlisi del plec)" : "Motiu (opcional)"}
             hint={`${reason.length} de ${REASON_MAX_LENGTH} caràcters`}
             error={
               reasonRequiredByBackend
                 ? backendWarnings.length > 0
-                  ? `Cal un motiu: el registre inclou avisos del compliment anterior: ${backendWarnings.map((l) => (/[.!?]$/.test(l) ? l : `${l}.`)).join(" ")}`
-                  : "Cal un motiu: el registre inclou avisos del compliment anterior."
+                  ? `Cal un motiu: el registre inclou avisos de l'anàlisi del plec: ${backendWarnings.map((l) => (/[.!?]$/.test(l) ? l : `${l}.`)).join(" ")}`
+                  : "Cal un motiu: el registre inclou avisos de l'anàlisi del plec."
                 : undefined
             }
             required={needsReason}
@@ -340,7 +366,7 @@ export function DecisionPanel({
               onChange={(event) => setReason(event.target.value)}
               placeholder={
                 needsReason
-                  ? "Per què es presenta l'empresa malgrat els avisos del compliment anterior?"
+                  ? "Per què es presenta l'empresa malgrat els avisos de l'anàlisi del plec?"
                   : "Opcional: context per a qui ho llegeixi d'aquí a sis mesos."
               }
             />
@@ -361,6 +387,106 @@ export function DecisionPanel({
         </div>
       </Modal>
     </Card>
+  );
+}
+
+const NUMBER_FORMAT = new Intl.NumberFormat("ca", { maximumFractionDigits: 2 });
+
+/** Els punts del snapshot són decimals (27.0): fora el «.0», com a màxim 2 decimals. */
+function formatNumber(value: number): string {
+  return NUMBER_FORMAT.format(value);
+}
+
+const SNAPSHOT_STATE_LABELS: Record<AnalysisDecisionSnapshotV1["state"], string> = {
+  current: "vigent",
+  stale: "desactualitzada",
+  absent: "sense anàlisi vigent",
+};
+
+/**
+ * Registre d'una decisió v3: només el snapshot. Mai els comptadors legacy, ni
+ * `open_warnings` (null aquí vol dir «no aplica»), ni `deadline_passed` a part
+ * (ja és a `snapshot.warnings` quan toca).
+ */
+function AnalysisRecord({ snapshot, prefit }: { snapshot: AnalysisDecisionSnapshotV1; prefit: number | null }) {
+  const parts: string[] = [];
+  if (snapshot.state !== "absent") {
+    const { fit, points } = snapshot;
+    if (fit) {
+      parts.push(
+        `compleix ${fit.satisfies}`,
+        `no compleix ${fit.does_not_satisfy}`,
+        `no se sap ${fit.unknown}`,
+        `no aplica ${fit.not_applicable}`,
+      );
+    }
+    if (points) {
+      parts.push(
+        `punts assegurats ${formatNumber(points.secured)} / en risc ${formatNumber(points.at_risk)} / perduts ${formatNumber(points.lost)} / no avaluables ${formatNumber(points.not_assessable)}`,
+      );
+    }
+    if (snapshot.blocker_potential_count !== undefined) {
+      parts.push(plural(snapshot.blocker_potential_count, "possible bloqueig (no confirmat)", "possibles bloqueigs (no confirmats)"));
+    }
+    if (snapshot.findings_count !== undefined) {
+      parts.push(plural(snapshot.findings_count, "element a resoldre", "elements a resoldre"));
+    }
+    if (prefit !== null) parts.push(`pre-fit ${prefit}`);
+  }
+  return (
+    <>
+      <p className="mt-1.5 text-[12.5px] leading-5 text-muted">
+        Registre del moment (anàlisi del plec): {SNAPSHOT_STATE_LABELS[snapshot.state]}
+        {parts.map((part) => ` · ${part}`).join("")}
+      </p>
+      {snapshot.warnings.length > 0 ? (
+        <div className="mt-1 space-y-0.5">
+          {snapshot.warnings.map((code) => (
+            <p key={code} className="text-[12.5px] leading-5 text-warning">
+              Es va decidir sabent-ho: {analysisWarningLabel(code)}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-1 text-[12.5px] text-muted">Sense cap avís de l&apos;anàlisi del plec.</p>
+      )}
+    </>
+  );
+}
+
+/** Decisió antiga (snapshot null): la fotografia del compliment anterior, tal com es va desar. */
+function LegacyRecord({ entry }: { entry: WorkspaceDecisionEntry }) {
+  return (
+    <>
+      <p className="mt-1.5 text-[12.5px] leading-5 text-muted">
+        Registre del moment (compliment anterior):{" "}
+        {plural(entry.confirmed_blockers, "bloqueig confirmat", "bloqueigs confirmats")},{" "}
+        {plural(entry.potential_blockers, "possible", "possibles")} i{" "}
+        {plural(entry.mandatory_unknown + entry.mandatory_needs_review, "obligatori sense resoldre", "obligatoris sense resoldre")}
+        {entry.prefit_score !== null && ` · pre-fit ${entry.prefit_score}`}
+        {entry.automated_recommendation &&
+          (Object.hasOwn(RECOMMENDATION_LABELS, entry.automated_recommendation)
+            ? ` · el compliment anterior suggeria ${RECOMMENDATION_LABELS[entry.automated_recommendation as keyof typeof RECOMMENDATION_LABELS]}`
+            : " · el compliment anterior va fer un suggeriment (valor històric)")}
+        {entry.deadline_passed && " · amb el termini ja tancat"}
+      </p>
+      {/* Els comptadors diuen quants bloquejos hi havia. Això diu la
+          resta: que l'anàlisi era una simulació, que no hi havia motor,
+          que l'elegibilitat estava indeterminada. */}
+      {entry.open_warnings === null ? (
+        <p className="mt-1 text-[12.5px] italic text-muted">Els avisos d&apos;aquell moment no es van registrar.</p>
+      ) : entry.open_warnings.length > 0 ? (
+        <div className="mt-1 space-y-0.5">
+          {entry.open_warnings.map((code) => (
+            <p key={code} className="text-[12.5px] leading-5 text-warning">
+              Es va decidir sabent-ho: {warningLabel(code)}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-1 text-[12.5px] text-muted">Sense cap avís obert.</p>
+      )}
+    </>
   );
 }
 
@@ -396,33 +522,10 @@ export function DecisionHistory({ workspace }: { workspace: WorkspaceDetail }) {
               {entry.reason && (
                 <p className="mt-1.5 text-[13px] leading-5 whitespace-pre-line text-ink">“{entry.reason}”</p>
               )}
-              <p className="mt-1.5 text-[12.5px] leading-5 text-muted">
-                Registre del moment (compliment anterior):{" "}
-                {plural(entry.confirmed_blockers, "bloqueig confirmat", "bloqueigs confirmats")},{" "}
-                {plural(entry.potential_blockers, "possible", "possibles")} i{" "}
-                {plural(entry.mandatory_unknown + entry.mandatory_needs_review, "obligatori sense resoldre", "obligatoris sense resoldre")}
-                {entry.prefit_score !== null && ` · pre-fit ${entry.prefit_score}`}
-                {entry.automated_recommendation &&
-                  (Object.hasOwn(RECOMMENDATION_LABELS, entry.automated_recommendation)
-                    ? ` · el compliment anterior suggeria ${RECOMMENDATION_LABELS[entry.automated_recommendation as keyof typeof RECOMMENDATION_LABELS]}`
-                    : " · el compliment anterior va fer un suggeriment (valor històric)")}
-                {entry.deadline_passed && " · amb el termini ja tancat"}
-              </p>
-              {/* Els comptadors diuen quants bloquejos hi havia. Això diu la
-                  resta: que l'anàlisi era una simulació, que no hi havia motor,
-                  que l'elegibilitat estava indeterminada. */}
-              {entry.open_warnings === null ? (
-                <p className="mt-1 text-[12.5px] italic text-muted">Els avisos d&apos;aquell moment no es van registrar.</p>
-              ) : entry.open_warnings.length > 0 ? (
-                <div className="mt-1 space-y-0.5">
-                  {entry.open_warnings.map((code) => (
-                    <p key={code} className="text-[12.5px] leading-5 text-warning">
-                      Es va decidir sabent-ho: {warningLabel(code)}
-                    </p>
-                  ))}
-                </div>
+              {entry.analysis_snapshot_json === null ? (
+                <LegacyRecord entry={entry} />
               ) : (
-                <p className="mt-1 text-[12.5px] text-muted">Sense cap avís obert.</p>
+                <AnalysisRecord snapshot={entry.analysis_snapshot_json} prefit={entry.prefit_score} />
               )}
             </li>
           ))}

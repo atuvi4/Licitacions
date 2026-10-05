@@ -423,6 +423,33 @@ describe("Candidatura · stepper i Decidir", () => {
     expect(step("Decidir").closest("[data-state]")?.getAttribute("data-state")).toBe("on");
   });
 
+  it("decision_reason_required: un sol GET extra del workspace, cap de l'anàlisi, cap navegació i el modal continua obert", async () => {
+    get.mockResolvedValueOnce(workspaceFixture({ go_requires_reason: false, decision_warnings: [] }));
+    get.mockResolvedValueOnce(workspaceFixture({ go_requires_reason: true, decision_warnings: ["analysis_stale"] }));
+    post.mockRejectedValue(
+      new ApiError(422, "decision_reason_required", "x", [], { warnings: ["analysis_stale"], basis: "analysis_v3" }),
+    );
+    const { container } = render(<WorkspacePage />);
+    await flush();
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(analysisCurrent).toHaveBeenCalledTimes(1);
+    expect(readiness).toHaveBeenCalledTimes(1);
+    replace.mockClear();
+    await decide(/Presentar-se · GO/);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get.mock.calls[1][0]).toMatch(/\/companies\/c1\/workspaces\/w1$/);
+    expect(analysisCurrent).toHaveBeenCalledTimes(1);
+    expect(readiness).toHaveBeenCalledTimes(1);
+    expect(replace).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+    expect(container.querySelector("[aria-busy='true']")).toBeNull();
+    expect(screen.getByText("Ens presentem a aquesta licitació?")).toBeTruthy();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("Cal un motiu: ");
+    expect(dialog.textContent).toContain("Motiu (obligatori: hi ha avisos de l'anàlisi del plec)");
+  });
+
   it("advance acceptat: es rellegeix el workspace i, si ja és a revisió final, s'obre Tancar", async () => {
     search = "pas=preparar";
     const go = decisionFixture();

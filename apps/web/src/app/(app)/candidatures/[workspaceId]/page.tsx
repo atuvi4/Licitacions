@@ -201,12 +201,14 @@ function DecidirStep({
   companyId,
   data,
   onDecided,
+  onRefreshWorkspace,
   signerName,
   children,
 }: {
   companyId: string | null;
   data: WorkspaceDetail;
   onDecided: (decision: WorkspaceDecisionType) => Promise<void>;
+  onRefreshWorkspace: () => Promise<void>;
   signerName: string;
   children: ReactNode;
 }) {
@@ -217,7 +219,13 @@ function DecidirStep({
   return (
     <div className="grid gap-5 lg:grid-cols-12">
       <div className="lg:col-span-7">
-        <DecisionPanel workspace={data} onDecided={onDecided} signerName={signerName} analysis={analysis} />
+        <DecisionPanel
+          workspace={data}
+          onDecided={onDecided}
+          onRefreshWorkspace={onRefreshWorkspace}
+          signerName={signerName}
+          analysis={analysis}
+        />
       </div>
       <div className="flex flex-col gap-4 lg:col-span-5">
         {companyId && <DecisionAnalysisCard state={analysis} tenderId={data.tender_id} />}
@@ -354,6 +362,12 @@ function WorkspaceView() {
     setPinned("preparar");
     router.replace(hrefFor("preparar"), { scroll: false });
   };
+  // El backend ha rebutjat la decisió amb `decision_reason_required`: només es
+  // rellegeix el workspace (go_requires_reason i els avisos), sense preparació
+  // final, sense navegar i sense canviar el pas que es mira.
+  const onRefreshWorkspace = async () => {
+    await reload();
+  };
   // «Passa a revisió final» acceptat pel backend: es rellegeix el workspace i,
   // només si l'estat real reflecteix la transició, s'obre Tancar. Un advance
   // fallit no arriba aquí.
@@ -437,7 +451,13 @@ function WorkspaceView() {
         )}
 
         {step === "decidir" && (
-          <DecidirStep companyId={companyId} data={data} onDecided={onDecided} signerName={signerName}>
+          <DecidirStep
+            companyId={companyId}
+            data={data}
+            onDecided={onDecided}
+            onRefreshWorkspace={onRefreshWorkspace}
+            signerName={signerName}
+          >
             <ContextPanel workspace={data} />
             <DecisionHistory workspace={data} />
           </DecidirStep>

@@ -31,6 +31,7 @@ from app.models.compliance import CompanyComplianceRun, CompanyRequirementAssess
 from app.models.enums import (
     AnalysisBasis,
     AssessmentResult,
+    AuditAction,
     BlockerStatus,
     ChecklistItemSource,
     ChecklistItemStatus,
@@ -53,6 +54,8 @@ from app.models.workspace import (
     WorkspaceNote,
     WorkspaceTask,
 )
+from app.services import audit
+from app.services.tender_analysis import AnalysisStatus, current_analysis
 from app.services.tender_lifecycle import (
     is_actionable,
     load_change_log,
@@ -60,12 +63,17 @@ from app.services.tender_lifecycle import (
     revision_of,
 )
 from app.tenders.changes import ChangeImpact
+from app.workspace.analysis_snapshot import build_snapshot
 from app.workspace.checklist import (
     applies_to_workspace_lot,
     checklist_title,
     generates_checklist_item,
 )
-from app.workspace.decision import DecisionWarnings, requires_reason
+from app.workspace.decision import (
+    AnalysisDecisionWarnings,
+    DecisionWarnings,
+    requires_reason,
+)
 from app.workspace.transitions import (
     TransitionActor,
     WorkspaceTransitionError,
@@ -86,13 +94,19 @@ class WorkspaceExistsError(ValidationError):
     code = "workspace_already_exists"
 
 
+#: La base dels avisos que obliguen motiu: l'analisi vigent del plec (v3).
+DECISION_WARNING_BASIS = "analysis_v3"
+
+
 class DecisionReasonRequiredError(ValidationError):
     """GO amb avisos oberts sense justificacio escrita."""
 
     code = "decision_reason_required"
 
     def __init__(self, message: str, warnings: list[str]) -> None:
-        super().__init__(message, details={"warnings": warnings})
+        super().__init__(
+            message, details={"warnings": warnings, "basis": DECISION_WARNING_BASIS}
+        )
 
 
 class NotAssignableError(ValidationError):
@@ -320,6 +334,13 @@ class WorkspaceState:
     #: Per que la decisio humana no es pot donar per vigent. Buit = ho es.
     #: Codis, no frases: la interficie en deriva el text.
     decision_reasons: tuple[str, ...] = ()
+    #: L'analisi v3 vigent del plec i si esta caducada. `None` = no s'ha
+    #: carregat (`load_state(..., with_analysis=False)`): les llistes no la
+    #: calculen perque `is_stale` es car.
+    analysis: AnalysisStatus | None = None
+    #: Els avisos v3 que obliguen motiu per a un GO. `None` si no s'ha
+    #: carregat l'analisi.
+    analysis_warnings: AnalysisDecisionWarnings | None = None
 
     @property
     def decision_outdated(self) -> bool:
@@ -402,8 +423,18 @@ def _days_remaining(deadline: datetime | None, now: datetime | None = None) -> i
 
 
 async def load_state(
-    session: AsyncSession, workspace: BidWorkspace, *, now: datetime | None = None
+    session: AsyncSession,
+    workspace: BidWorkspace,
+    *,
+    now: datetime | None = None,
+    with_analysis: bool = False,
 ) -> WorkspaceState:
+    """L'estat que veu la pantalla.
+
+    Amb `with_analysis` tambe llegeix l'analisi v3 vigent (`current_analysis`,
+    la mateixa font que `GET /analysis/current`). Un workspace de lot usa el
+    run de l'expedient: l'analisi v3 es per empresa i licitacio.
+    """
     tender = await session.get(Tender, workspace.tender_id)
     if tender is None:  # pragma: no cover - FK ON DELETE CASCADE ho impedeix
         raise NotFoundError("Licitacio no trobada.")
@@ -488,6 +519,15 @@ async def load_state(
     if lot_is_gone(lot):
         reasons.append("lot_removed")
 
+    deadline_passed = days is not None and days < 0
+    analysis_status: AnalysisStatus | None = None
+    analysis_warnings: AnalysisDecisionWarnings | None = None
+    if with_analysis:
+        analysis_status = await current_analysis(session, workspace.company_id, workspace.tender_id)
+        analysis_warnings = AnalysisDecisionWarnings.from_status(
+            analysis_status, deadline_passed=deadline_passed
+        )
+
     return WorkspaceState(
         workspace=workspace,
         tender=tender,
@@ -507,7 +547,9 @@ async def load_state(
         outdated_reasons=tuple(reasons),
         deadline_at=deadline,
         days_remaining=days,
-        deadline_passed=days is not None and days < 0,
+        deadline_passed=deadline_passed,
+        analysis=analysis_status,
+        analysis_warnings=analysis_warnings,
     )
 
 
@@ -820,46 +862,73 @@ async def record_decision(
 
     L'estat del workspace s'actualitza a partir de la decisio, i aquest es
     l'UNIC cami del codi que hi pot posar `go_approved` o `no_go_approved`.
+
+    Una sola transaccio: decisio, canvi d'estat i auditoria es confirmen amb un
+    sol `commit`. Si qualsevol pas d'escriptura falla es fa `rollback` i no
+    queda res escrit. Els avisos que obliguen motiu i la fotografia surten de
+    l'analisi v3 vigent (el mateix `(run, stale)` que `GET /analysis/current`),
+    mai del compliment antic: una decisio nova no escriu fotografia legacy.
     """
     assert_can_decide(role)
 
-    state = await load_state(session, workspace, now=now)
-    warnings = state.warnings
+    state = await load_state(session, workspace, now=now, with_analysis=True)
+    analysis = state.analysis
+    warnings = state.analysis_warnings
+    assert analysis is not None and warnings is not None
     cleaned = (reason or "").strip() or None
     if requires_reason(decision, warnings) and cleaned is None:
         raise DecisionReasonRequiredError(
-            "Cal escriure el motiu: hi ha avisos oberts sobre aquesta candidatura.",
+            "Cal escriure el motiu: hi ha avisos oberts de l'analisi del plec.",
             warnings.codes(),
         )
+    # La fotografia es construeix amb el MATEIX objecte d'avisos que ha decidit
+    # si calia motiu: `snapshot.warnings` no pot divergir del que es veia.
+    snapshot = build_snapshot(analysis, warnings)
 
-    record = WorkspaceDecision(
-        company_id=workspace.company_id,
-        workspace_id=workspace.id,
-        decision=decision,
-        decided_by=user.id,
-        decided_at=now or datetime.now(UTC),
-        reason=cleaned,
-        compliance_run_id=state.compliance_run.id if state.compliance_run else None,
-        requirement_run_id=state.requirement_run.id if state.requirement_run else None,
-        prefit_score=state.prefit_score,
-        confirmed_blockers=warnings.confirmed_blockers,
-        potential_blockers=warnings.potential_blockers,
-        mandatory_unknown=warnings.mandatory_unknown,
-        mandatory_needs_review=warnings.mandatory_needs_review,
-        automated_recommendation=(
-            state.compliance_run.recommendation.value if state.compliance_run else None
-        ),
-        # La fotografia dels avisos, calculada AQUI i no a la interficie: el que
-        # ha de quedar es el que hi havia a la pantalla en aquest moment.
-        open_warnings=warnings.codes(),
-        deadline_passed=warnings.deadline_passed,
-        tender_revision_id=state.tender_revision.id if state.tender_revision else None,
-    )
-    session.add(record)
-    workspace.status = set_status(
-        workspace, status_for(decision), actor=TransitionActor.HUMAN_DECISION
-    )
-    await session.commit()
+    try:
+        record = WorkspaceDecision(
+            # L'id es fixa aqui perque l'auditoria el necessita abans del commit.
+            id=uuid.uuid4(),
+            company_id=workspace.company_id,
+            workspace_id=workspace.id,
+            decision=decision,
+            decided_by=user.id,
+            decided_at=now or datetime.now(UTC),
+            reason=cleaned,
+            analysis_run_id=analysis.run.id if analysis.run is not None else None,
+            analysis_snapshot_json=snapshot.to_json_dict(),
+            # Sense fotografia legacy: aquestes columnes nomes les tenen les
+            # decisions anteriors a v3. Els comptadors son NOT NULL, per aixo 0.
+            compliance_run_id=None,
+            requirement_run_id=None,
+            automated_recommendation=None,
+            open_warnings=None,
+            confirmed_blockers=0,
+            potential_blockers=0,
+            mandatory_unknown=0,
+            mandatory_needs_review=0,
+            # Fets, no fotografia del motor antic.
+            prefit_score=state.prefit_score,
+            deadline_passed=state.deadline_passed,
+            tender_revision_id=state.tender_revision.id if state.tender_revision else None,
+        )
+        session.add(record)
+        workspace.status = set_status(
+            workspace, status_for(decision), actor=TransitionActor.HUMAN_DECISION
+        )
+        await audit.record(
+            session,
+            action=AuditAction.UPDATE,
+            company_id=workspace.company_id,
+            user_id=user.id,
+            entity_type="workspace_decision",
+            entity_id=record.id,
+            summary=f"Decisio {decision.value} sobre la candidatura",
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
     await session.refresh(record)
     # `updated_at` te `onupdate` al servidor: despres d'un UPDATE el seu valor
     # nomes el sap la base de dades i cal tornar-lo a llegir explicitament.

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import (
     AnalysisBasis,
@@ -130,6 +130,23 @@ class DecisionRead(ORMModel):
     #: vol dir que la decisio es anterior a aquest registre: no es va anotar,
     #: que NO es el mateix que dir que no n'hi havia cap.
     open_warnings: list[str] | None = None
+    #: Decisions v3. `analysis_snapshot_json` None = decisio legacy (anterior a v3).
+    analysis_run_id: uuid.UUID | None = None
+    analysis_snapshot_json: dict[str, Any] | None = None
+
+    @field_validator("analysis_snapshot_json", mode="before")
+    @classmethod
+    def _revalidate_snapshot(cls, value: Any) -> Any:
+        """El que es llegeix es revalida amb el mateix schema tancat (spec, apartat 4).
+
+        Una fila corrompuda falla en veu alta en comptes de viatjar cap a la UI.
+        """
+        if value is None:
+            return None
+        # import local: el schema v1 depen del servei d'analisi
+        from app.workspace.analysis_snapshot import parse_snapshot
+
+        return parse_snapshot(value).to_json_dict()
 
 
 class ChecklistItemRead(ORMModel):
@@ -269,9 +286,15 @@ class WorkspaceDetail(BaseModel):
     latest_decision: DecisionRead | None = None
 
     counters: ComplianceCountersRead
-    #: Codis dels avisos oberts, per si es decideix amb algun d'ells.
+    #: Codis dels avisos LEGACY del compliment antic. Es mantenen per
+    #: compatibilitat i no decideixen res: el motiu obligatori surt de
+    #: `decision_warnings`.
     open_warnings: list[str] = Field(default_factory=list)
-    #: Cert si un GO exigiria motiu escrit ara mateix.
+    #: Codis v3 (analisi vigent del plec) que obliguen motiu per a un GO.
+    decision_warnings: list[str] = Field(default_factory=list)
+    #: Quina base ha produit `decision_warnings` i `go_requires_reason`.
+    decision_warning_basis: Literal["analysis_v3"] = "analysis_v3"
+    #: Cert si un GO exigiria motiu escrit ara mateix (base v3).
     go_requires_reason: bool = False
 
     current_compliance_run_id: uuid.UUID | None = None

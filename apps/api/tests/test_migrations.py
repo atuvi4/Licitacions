@@ -1971,3 +1971,39 @@ def test_les_linies_directes_dels_projectes_es_copien_i_el_downgrade_no_inventa_
     statements = down.replace("UPDATE alembic_version", "")
     for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM", "company_services ADD"):
         assert forbidden not in statements, forbidden
+
+
+def test_les_columnes_d_analisi_de_la_decisio_es_poden_aplicar_i_desfer():
+    """0053 -> 0054 -> 0053. Dues columnes nul·lables a `workspace_decisions`, la FK
+    SET NULL cap als runs d'analisi i el seu index; cap backfill. El downgrade les
+    treu en ordre invers (index, FK, columnes) i no toca cap fila.
+    """
+    up = _offline_sql("upgrade", "0053_project_service_lines:0054_decision_analysis_v3")
+    down = _offline_sql("downgrade", "0054_decision_analysis_v3:0053_project_service_lines")
+
+    assert "ALTER TABLE workspace_decisions ADD COLUMN analysis_run_id UUID" in up
+    assert "ALTER TABLE workspace_decisions ADD COLUMN analysis_snapshot_json JSONB" in up
+    assert "NOT NULL" not in up
+    assert (
+        "ALTER TABLE workspace_decisions ADD CONSTRAINT fk_workspace_decisions_analysis_run "
+        "FOREIGN KEY(analysis_run_id) REFERENCES tender_analysis_runs (id) ON DELETE SET NULL"
+    ) in up
+    assert (
+        "CREATE INDEX ix_workspace_decisions_analysis_run "
+        "ON workspace_decisions (analysis_run_id)"
+    ) in up
+    statements = up.replace("UPDATE alembic_version", "")
+    for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM"):
+        assert forbidden not in statements, forbidden
+
+    order = [
+        "DROP INDEX ix_workspace_decisions_analysis_run",
+        "DROP CONSTRAINT fk_workspace_decisions_analysis_run",
+        "DROP COLUMN analysis_snapshot_json",
+        "DROP COLUMN analysis_run_id",
+    ]
+    positions = [down.index(piece) for piece in order]
+    assert positions == sorted(positions)
+    statements = down.replace("UPDATE alembic_version", "")
+    for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM"):
+        assert forbidden not in statements, forbidden

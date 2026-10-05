@@ -62,11 +62,10 @@ async def run_read(
 @router.get("/current", response_model=AnalysisRunRead, summary="L'analisi vigent")
 async def read_current_analysis(tender_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
     await _visible_tender(session, ctx.company_id, tender_id)
-    run = await tender_analysis.current_run(session, ctx.company_id, tender_id)
-    if run is None:
+    status_ = await tender_analysis.current_analysis(session, ctx.company_id, tender_id)
+    if status_.run is None:
         raise NotFoundError("Cap analisi vigent.")
-    stale = await tender_analysis.is_stale(session, run)
-    return await run_read(session, run, stale=stale)
+    return await run_read(session, status_.run, stale=status_.stale)
 
 
 @router.get("/runs/{run_id}", response_model=AnalysisRunRead, summary="Una analisi concreta")
