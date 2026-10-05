@@ -17,11 +17,11 @@ Principis que no es negocien:
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 from typing import Any
 
 from app.analysis import points as pts
@@ -33,6 +33,7 @@ from app.analysis.fingerprint import (
     ScopeItemView,
     TenderStructureView,
     canonical_json,
+    plain_jsonable,
 )
 from app.analysis.registry import ExplanationCode as X
 from app.analysis.registry import QuestionCode as Q
@@ -56,6 +57,8 @@ from app.knowledge.snapshot import (
 from app.knowledge.vocabulary import (
     CAPABILITIES_BY_CODE,
     NUMERIC_FACT_KEYS,
+    PROFESSIONAL_PROFILE_CODES,
+    SERVICE_LINE_CODES,
     STANDARDS_BY_CODE,
 )
 from app.models.enums import (
@@ -69,14 +72,20 @@ from app.models.enums import (
     CandidateReadiness,
     CandidateType,
     CapabilityValueType,
+    ClientType,
     CriterionResult,
     DeliveryMode,
+    EquipmentType,
     FindingType,
     FitResult,
+    InsuranceLimitKind,
+    InsuranceType,
     NeedType,
+    OperatingFactKey,
     ProofKind,
     ProofStatus,
     QuestionAudience,
+    RegistrationType,
     RequirementCategory,
     RequirementObligation,
     RequirementTiming,
@@ -128,6 +137,90 @@ QUALIFICATION_RULES = frozenset(
         R.RESOURCES_REQUIREMENT,
     }
 )
+#: D'on falta la dada d'un `missing_information` (`details.missing_from`, v3 C-E2). No te
+#: valor per defecte: nomes es posa quan la regla demostra d'on falta; si no, cap camp.
+MISSING_FROM_COMPANY = "company"
+MISSING_FROM_TENDER = "tender"
+#: Explicacions d'un fit `unknown` en que la dada que falta per decidir (`DATA_MISSING`) es
+#: de l'empresa: la part del plec ja es estructurada (fet, norma, llindar, limits, abast,
+#: perfils o equips) i el que no consta, no consta al coneixement de l'empresa (o n'hi
+#: falta la prova). Queden fora, sense `missing_from` (`DATA_MISSING_UNATTRIBUTED`): un
+#: llindar o una norma del plec que no es poden llegir, les necessitats (barregen
+#: capacitats sense codi i valors no comparables) i les dades de perfil que aquest pas no
+#: llegeix. A mes, quan l'explicacio depen d'un codi del plec, el codi ha de ser del
+#: vocabulari que l'empresa pot declarar (`_declarable`): si no, tampoc no es demostra.
+DATA_MISSING_FROM_COMPANY = frozenset(
+    {
+        X.FACT_UNKNOWN,
+        X.FACT_HISTORIC_ONLY,
+        X.CERT_UNKNOWN,
+        X.CERT_HISTORIC_ONLY,
+        X.PROOF_MISSING_FOR_CLAIM,
+        X.TURNOVER_UNKNOWN,
+        X.EXECUTION_UNKNOWN,
+        X.INSURANCE_UNKNOWN,
+        X.INSURANCE_EXPIRED,
+        X.REGISTRATION_UNKNOWN,
+        X.REGISTRATION_SCOPE_UNKNOWN,
+        X.REGISTRATION_SCOPE_NOT_COVERED,
+        X.REGISTRATION_ONLY_OPERATOR_FACT,
+        X.PROFILES_MISSING,
+        X.EQUIPMENT_MISSING,
+        X.EQUIPMENT_CALIBRATION_UNKNOWN,
+    }
+)
+
+
+def _vocabulary(enum: type[StrEnum]) -> frozenset[str]:
+    """Els codis d'un enum tancat que identifiquen alguna cosa: `other` no (un «altre»
+    del plec i un «altre» de l'empresa no son demostrablement el mateix)."""
+    return frozenset(m.value for m in enum if m.value != "other")
+
+
+_OPERATING_FACTS = _vocabulary(OperatingFactKey)
+_REGISTRATION_TYPES = _vocabulary(RegistrationType)
+_INSURANCE_TYPES = _vocabulary(InsuranceType)
+_INSURANCE_LIMITS = _vocabulary(InsuranceLimitKind)
+_EQUIPMENT_TYPES = _vocabulary(EquipmentType)
+_CLIENT_TYPES = _vocabulary(ClientType)
+
+
+def _codes_in(value: Any, vocabulary: frozenset[str]) -> bool:
+    """Cert si cada codi (claus d'un dict o elements d'una llista) es del vocabulari."""
+    codes = list(value) if isinstance(value, (dict, list, tuple)) else [value]
+    return all(isinstance(c, str) and c in vocabulary for c in codes)
+
+
+def _declarable(explanation: str, value: dict[str, Any]) -> bool:
+    """El codi del plec que llegeix aquesta explicacio es del vocabulari que l'empresa pot
+    declarar. Sense aixo, «no consta a l'empresa» no es demostra (pot ser que el plec
+    demani una cosa que el model no sap expressar)."""
+    if explanation == X.FACT_UNKNOWN:
+        return _codes_in(value.get("operating_fact"), _OPERATING_FACTS)
+    if explanation == X.REGISTRATION_UNKNOWN:
+        return _codes_in(value.get("registration_type"), _REGISTRATION_TYPES)
+    if explanation == X.INSURANCE_UNKNOWN:
+        return _codes_in(value.get("insurance_type"), _INSURANCE_TYPES) and _codes_in(
+            value.get("insurance_limits_eur") or {}, _INSURANCE_LIMITS
+        )
+    if explanation == X.PROFILES_MISSING:
+        return _codes_in(value.get("required_profiles") or {}, PROFESSIONAL_PROFILE_CODES)
+    if explanation == X.EQUIPMENT_MISSING:
+        return _codes_in(value.get("required_equipment") or {}, _EQUIPMENT_TYPES)
+    if explanation == X.EXECUTION_UNKNOWN:
+        return _codes_in(value.get("service_lines") or [], SERVICE_LINE_CODES) and _codes_in(
+            value.get("client_types") or [], _CLIENT_TYPES
+        )
+    return True
+
+
+def data_missing_from(requirement: RequirementView, explanation: str) -> str | None:
+    """D'on falta la dada d'un `DATA_MISSING` (auditoria v3, C-E2), o `None`."""
+    if explanation in DATA_MISSING_FROM_COMPANY and _declarable(
+        explanation, requirement.value_json or {}
+    ):
+        return MISSING_FROM_COMPANY
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -207,6 +300,17 @@ class NeedAssessmentOut:
 
 
 @dataclass(frozen=True, slots=True)
+class RiskCause:
+    """Per que una part dels punts d'un criteri queda en risc (v3, C-E1): el codi de la
+    causa i la necessitat o el requisit enllacat que la porta. No es persisteix: nomes
+    alimenta els findings del criteri, un per causa."""
+
+    explanation_code: str
+    need_id: str | None = None
+    requirement_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CriterionAssessmentOut:
     criterion_id: str
     criterion_result: str
@@ -221,6 +325,9 @@ class CriterionAssessmentOut:
     rule_code: str
     explanation_code: str
     support: dict[str, Any] = field(default_factory=dict)
+    #: Les unitats (necessitat, requisit enllacat o compromis sense estructura) que
+    #: realment deixen punts en risc. Buit si no n'hi ha cap.
+    risk_causes: tuple[RiskCause, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -587,8 +694,13 @@ def _proof_evidence(
 
 
 def assess_proof(
-    requirement: RequirementView, company: CompanyView, record_ids: Iterable[str] = ()
+    requirement: RequirementView,
+    company: CompanyView,
+    record_ids: Iterable[str] = (),
+    window_unknown: bool = False,
 ) -> tuple[str, dict[str, Any]]:
+    """`window_unknown`: no se sap quines files compten (sense data de referencia, v3
+    C-E2), aixi que les proves que depenen de les files usades no es poden avaluar."""
     record_ids = tuple(record_ids)
     if requirement.proof_json is None:
         return ProofStatus.UNKNOWN.value, {"items": None}
@@ -600,6 +712,9 @@ def assess_proof(
     verdicts: list[dict[str, Any]] = []
     for item in items:
         kind = str(item.get("kind"))
+        if window_unknown and kind in QUALIFICATION_PROOFS:
+            verdicts.append({"kind": kind, "status": ProofStatus.UNKNOWN.value})
+            continue
         evidence = _proof_evidence(kind, requirement, company, record_ids)
         if kind not in EVALUABLE_PROOFS or evidence is None:
             status = ProofStatus.UNKNOWN.value
@@ -609,6 +724,10 @@ def assess_proof(
     statuses = {v["status"] for v in verdicts}
     if statuses == {ProofStatus.SUFFICIENT.value}:
         overall = ProofStatus.SUFFICIENT.value
+    elif window_unknown and ProofStatus.MISSING.value not in statuses:
+        # M4: sense finestra, cap prova no consta com a absent; la resta no es pot avaluar.
+        # `partial` acabaria en «falta la prova exigida» (`evidence_gap`), que seria fals.
+        overall = ProofStatus.UNKNOWN.value
     elif ProofStatus.SUFFICIENT.value in statuses:
         overall = ProofStatus.PARTIAL.value
     elif ProofStatus.MISSING.value in statuses:
@@ -1180,7 +1299,12 @@ def assess_requirement(
         )
 
     comparison, basis = assess_territory(requirement, tender, company)
-    proof, proof_support = assess_proof(requirement, company, core.support.get("record_ids") or ())
+    proof, proof_support = assess_proof(
+        requirement,
+        company,
+        core.support.get("record_ids") or (),
+        window_unknown=core.explanation == X.QUALIFICATION_REFERENCE_DATE_MISSING,
+    )
 
     fit, explanation = core.fit, core.explanation
     if fit == FitResult.SATISFIES.value and comparison.verdict == TerritoryVerdict.UNMATCHED.value:
@@ -1252,6 +1376,50 @@ def _bucket_for(fit: str, source: str, explanation: str | None = None) -> str:
     return "at_risk"
 
 
+def _is_declared_satisfies(fit: str, source: str) -> bool:
+    return fit == FitResult.SATISFIES.value and source == KS.CURRENT_DECLARED.value
+
+
+def _need_risk_cause(out: NeedAssessmentOut) -> RiskCause:
+    """Per que una necessitat `at_risk` deixa punts en risc. Nomes `satisfies` amb dada
+    declarada es «dades declarades sense verificar»; `unknown` sense dada actual es «no
+    consta cap dada actual»; la resta (p. ex. per sota del valor d'avui) diu la seva propia
+    explicacio. `NEED_VALUE_NOT_COMPARABLE` tambe: el motor torna abans de llegir el
+    coneixement de l'empresa (el valor del plec no es comparable), aixi que no es pot dir
+    que no consti.
+
+    Una necessitat `unknown` amb font ACTUAL (declarada o verificada) te una dada actual que
+    no es pot comparar (capacitat sense nombre o nivell, fet quantitatiu sense nombre):
+    tampoc no es «no consta» (I1). Un fet quantitatiu diu `CRITERION_NEEDS_NOT_COMPARABLE`;
+    la resta (una capacitat: `CAPABILITY_UNKNOWN`), la seva propia explicacio."""
+    current = out.knowledge_source in (KS.CURRENT_DECLARED.value, KS.CURRENT_VERIFIED.value)
+    if out.explanation_code == X.NEED_VALUE_NOT_COMPARABLE:
+        code = out.explanation_code
+    elif out.fit_result == FitResult.UNKNOWN.value and current:
+        code = (
+            X.CRITERION_NEEDS_NOT_COMPARABLE
+            if out.explanation_code == X.FACT_UNKNOWN
+            else out.explanation_code
+        )
+    elif out.fit_result == FitResult.UNKNOWN.value:
+        code = X.CRITERION_NEEDS_UNKNOWN
+    elif _is_declared_satisfies(out.fit_result, out.knowledge_source):
+        code = X.DECLARED_NOT_VERIFIED
+    else:
+        code = out.explanation_code
+    return RiskCause(code, need_id=out.need_id)
+
+
+def _requirement_risk_cause(fit: FitAssessmentOut) -> RiskCause:
+    """El mateix per a un requisit enllacat `at_risk` (sense necessitats puntuades)."""
+    code = (
+        X.DECLARED_NOT_VERIFIED
+        if _is_declared_satisfies(fit.fit_result, fit.knowledge_source)
+        else fit.explanation_code
+    )
+    return RiskCause(code, requirement_id=fit.requirement_id)
+
+
 def _threshold_of(need: NeedView) -> Any:
     number = _single_number(need.value_json)
     if number is not None:
@@ -1302,6 +1470,7 @@ def assess_criterion(
         if key in fits_by_key
     ]
     proof = ProofStatus.NOT_REQUIRED.value
+    causes: list[RiskCause] = []
     support: dict[str, Any] = {"max_points": max_points}
 
     if criterion.evaluation_type == "judgment":
@@ -1356,16 +1525,29 @@ def assess_criterion(
         ]
         if criterion.tranches and len(criterion.tranches) == len(scored):
             by_threshold = {_threshold_of(need): out for need, out in scored}
+            outcomes: list[tuple[str, NeedAssessmentOut | None]] = []
 
             def outcome(threshold: Any) -> str:
                 out = by_threshold.get(
                     float(threshold) if isinstance(threshold, (int, float)) else threshold
                 )
-                if out is None:
-                    return "at_risk"
-                return _bucket_for(out.fit_result, out.knowledge_source, out.explanation_code)
+                bucket = (
+                    "at_risk"
+                    if out is None
+                    else _bucket_for(out.fit_result, out.knowledge_source, out.explanation_code)
+                )
+                outcomes.append((bucket, out))
+                return bucket
 
             buckets = pts.allocate_tranches(max_points, criterion.tranches, outcome)
+            # Nomes els trams amb increment en risc en son causa. Un tram sense cap
+            # necessitat que hi correspongui es un compromis sense estructura comparable.
+            increments = pts.tranche_increments(max_points, criterion.tranches)
+            causes = [
+                _need_risk_cause(out) if out is not None else RiskCause(X.CRITERION_OPEN_COMMITMENT)
+                for (bucket, out), (_, increment) in zip(outcomes, increments, strict=True)
+                if bucket == "at_risk" and increment > pts.TOLERANCE
+            ]
         else:
             buckets_of = [
                 _bucket_for(out.fit_result, out.knowledge_source, out.explanation_code)
@@ -1378,6 +1560,12 @@ def assess_criterion(
             else:
                 bucket = "at_risk"
             buckets = pts.all_in(bucket, max_points)
+            if bucket == "at_risk":
+                causes = [
+                    _need_risk_cause(out)
+                    for (_, out), b in zip(scored, buckets_of, strict=True)
+                    if b == "at_risk"
+                ]
         source = _combine_sources(sources)
     elif linked:
         rule = R.CRITERION_FROM_REQUIREMENT
@@ -1392,6 +1580,9 @@ def assess_criterion(
             else:
                 buckets = pts.all_in("at_risk", max_points)
                 support["timing_not_conclusive"] = criterion.timing
+                causes = [
+                    RiskCause(X.CRITERION_TIMING_NOT_CONCLUSIVE, requirement_id=requirement.id)
+                ]
                 questions.append(
                     QuestionOut(
                         audience=QuestionAudience.BUYER.value,
@@ -1402,7 +1593,10 @@ def assess_criterion(
                     )
                 )
         else:
-            buckets = pts.all_in(_bucket_for(fit.fit_result, fit.knowledge_source), max_points)
+            bucket = _bucket_for(fit.fit_result, fit.knowledge_source)
+            buckets = pts.all_in(bucket, max_points)
+            if bucket == "at_risk":
+                causes = [_requirement_risk_cause(fit)]
     else:
         # Compromis automatic sense estructura comparable: obert, en risc. Mai perdut
         # ni assegurat per absencia de dada.
@@ -1419,6 +1613,7 @@ def assess_criterion(
                 rule_code=R.CRITERION_UNSTRUCTURED,
                 explanation_code=X.CRITERION_OPEN_COMMITMENT,
                 support=support,
+                risk_causes=(RiskCause(X.CRITERION_OPEN_COMMITMENT),),
             ),
             questions,
         )
@@ -1439,6 +1634,7 @@ def assess_criterion(
             rule_code=rule,
             explanation_code=explanation,
             support=support,
+            risk_causes=tuple(causes),
         ),
         questions,
     )
@@ -1838,14 +2034,47 @@ def requirement_findings(
             R.CAPABILITY_NEEDS_REQUIREMENT,
             *QUALIFICATION_RULES,
         )
-        if actionable:
+        # Sense cap dada de l'empresa, el volum i l'execucio no arriben a mirar el termini
+        # (`no_current_data`): si el plec tampoc no el dona, falten totes dues coses.
+        no_data_nor_deadline = (
+            fit.rule_code in (R.TURNOVER_REQUIREMENT, R.EXECUTION_REQUIREMENT)
+            and fit.explanation_code in (X.TURNOVER_UNKNOWN, X.EXECUTION_UNKNOWN)
+            and "reference_date" in fit.support
+            and fit.support["reference_date"] is None
+        )
+        if fit.explanation_code == X.QUALIFICATION_REFERENCE_DATE_MISSING or no_data_nor_deadline:
+            # v3 (C-E2): el que falta es el termini de presentacio, i falta al plec. Es
+            # demana a l'organ. Amb data de l'empresa (`QUALIFICATION_REFERENCE_DATE_MISSING`),
+            # cap «falta una dada de l'empresa» ni cap prova (proof `unknown`: no se sap de
+            # quins exercicis o anys).
             findings.append(
                 FindingOut(
                     FindingType.MISSING_INFORMATION.value,
                     R.MISSING_INFORMATION,
-                    X.DATA_MISSING,
+                    X.TENDER_REFERENCE_DATE_MISSING,
                     requirement_id=rid,
-                    details=details,
+                    details={**details, "missing_from": MISSING_FROM_TENDER},
+                )
+            )
+            questions.append(
+                QuestionOut(
+                    QuestionAudience.BUYER.value,
+                    Q.BUYER_PROVIDE_SUBMISSION_DEADLINE,
+                    R.MISSING_INFORMATION,
+                    requirement_id=rid,
+                    params={"title": requirement.title},
+                )
+            )
+        if actionable and fit.explanation_code != X.QUALIFICATION_REFERENCE_DATE_MISSING:
+            # «Falta una dada de l'empresa» nomes quan es demostra; si no, sense atribuir.
+            missing_from = data_missing_from(requirement, fit.explanation_code)
+            findings.append(
+                FindingOut(
+                    FindingType.MISSING_INFORMATION.value,
+                    R.MISSING_INFORMATION,
+                    X.DATA_MISSING if missing_from else X.DATA_MISSING_UNATTRIBUTED,
+                    requirement_id=rid,
+                    details={**details, "missing_from": missing_from} if missing_from else details,
                 )
             )
         if (
@@ -1941,7 +2170,8 @@ def requirement_findings(
                 R.MISSING_INFORMATION,
                 X.TERRITORY_LIST_UNAVAILABLE,
                 requirement_id=rid,
-                details={"territory_completeness": "unknown"},
+                # El requisit no porta cap territori i el plec no en dona la llista.
+                details={"territory_completeness": "unknown", "missing_from": MISSING_FROM_TENDER},
             )
         )
         questions.append(
@@ -1964,15 +2194,34 @@ def criterion_findings(
     findings: list[FindingOut] = []
     cid = criterion.id
     if out.points_status in ("at_risk", "mixed") and out.at_risk_points > pts.TOLERANCE:
-        findings.append(
-            FindingOut(
-                FindingType.REVIEW_REQUIRED.value,
-                R.REVIEW_REQUIRED,
-                X.DECLARED_NOT_VERIFIED,
-                criterion_id=cid,
-                details={"at_risk_points": out.at_risk_points},
+        # Un finding per causa real (v3, C-E1), amb les necessitats (o el requisit
+        # enllacat) que la porten. Mai «dades declarades» sense cap dada declarada.
+        assert out.risk_causes, ("punts en risc sense causa", criterion.key)
+        by_code: dict[str, list[RiskCause]] = {}
+        for cause in out.risk_causes:
+            by_code.setdefault(cause.explanation_code, []).append(cause)
+        for code, causes in by_code.items():
+            # `at_risk_points` es el TOTAL en risc del criteri, el mateix a cada finding
+            # d'aquest criteri: no es reparteix per causa i no s'ha de sumar entre findings.
+            details: dict[str, Any] = {"at_risk_points": out.at_risk_points}
+            need_ids = sorted({c.need_id for c in causes if c.need_id is not None})
+            requirement_ids = sorted({c.requirement_id for c in causes if c.requirement_id})
+            if need_ids:
+                details["need_ids"] = need_ids
+            if requirement_ids:
+                details["requirement_id"] = requirement_ids[0]
+            missing = code == X.CRITERION_NEEDS_UNKNOWN
+            findings.append(
+                FindingOut(
+                    FindingType.MISSING_INFORMATION.value
+                    if missing
+                    else FindingType.REVIEW_REQUIRED.value,
+                    R.MISSING_INFORMATION if missing else R.REVIEW_REQUIRED,
+                    code,
+                    criterion_id=cid,
+                    details=details,
+                )
             )
-        )
     demo_unknown = [
         o
         for n, o in needs
@@ -2102,4 +2351,4 @@ def summary(result: AnalysisResult, tender: TenderStructureView) -> dict[str, An
 
 def as_json(value: Any) -> Any:
     """Per a `support_json`: tot serialitzable, Decimal com a text."""
-    return json.loads(canonical_json(value))
+    return plain_jsonable(value)

@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.analysis.registry import ExplanationCode as X
 from app.analysis.registry import QuestionCode as Q
+from app.analysis.registry import question_text
 from app.knowledge import vocabulary
 from app.models.credentials import CompanyInsurance, CompanyInsuranceLimit, CompanyRegistration
 from app.models.enums import (
@@ -683,6 +684,84 @@ async def test_declared_without_evidence_is_unknown_with_an_evidence_gap(db, ten
         q.question_code == Q.COMPANY_PROVIDE_PROOF and q.requirement_id == req["turnover"]
         for q in run.questions
     )
+
+
+async def test_without_a_submission_deadline_the_buyer_is_asked_not_the_company(
+    db, tenant_a, client_a
+):
+    """C-E2: sense termini de presentacio no se sap quins exercicis ni quins anys compten.
+    El que falta es del plec: una pregunta a l'organ, cap «falta una dada de l'empresa»,
+    cap prova a demanar (no se sap de quins anys) i cap bloqueig. El fit no canvia."""
+    _, company = tenant_a
+    tender, req, _ = await _qualification_tender(db)
+    tender.deadline_at = None
+    tender_id = tender.id
+    await _qualified_twin(db, client_a, company)
+    run = await _analyze(db, company, tender_id)
+    fits = _fits(run, req)
+    for key, title in (("turnover", "Volum de negoci"), ("execution", "Serveis similars")):
+        fit = fits[key]
+        assert (fit.fit_result, fit.explanation_code, fit.proof_status) == (
+            "unknown",
+            X.QUALIFICATION_REFERENCE_DATE_MISSING,
+            "unknown",
+        ), key
+        assert fit.support_json["reference_date"] is None
+        mine = [f for f in run.findings if f.requirement_id == req[key]]
+        assert [
+            (str(f.finding_type), f.explanation_code, f.details_json.get("missing_from"))
+            for f in mine
+        ] == [("missing_information", X.TENDER_REFERENCE_DATE_MISSING, "tender")], key
+        asked = [
+            (
+                str(q.audience),
+                q.question_code,
+                q.params_json,
+                question_text(q.question_code, q.params_json, run.rules_version),
+            )
+            for q in run.questions
+            if q.requirement_id == req[key]
+        ]
+        assert asked == [
+            (
+                "buyer",
+                Q.BUYER_PROVIDE_SUBMISSION_DEADLINE,
+                {"title": title},
+                "Demaneu a l'òrgan el termini de presentació d'ofertes "
+                f"(cal per calcular el requisit «{title}»).",
+            )
+        ], key
+
+
+async def test_with_a_submission_deadline_the_company_is_still_asked_for_its_data(db, tenant_a):
+    """Amb termini, res no canvia: el que falta (la prova) es de l'empresa."""
+    _, company = tenant_a
+    tender, req, _ = await _qualification_tender(db)
+    tender_id = tender.id
+    await build_company_twin(db, company)
+    await db.commit()
+    run = await _analyze(db, company, tender_id)
+    fit = _fits(run, req)["turnover"]
+    assert (fit.fit_result, fit.proof_status, fit.explanation_code) == (
+        "unknown",
+        "missing",
+        X.PROOF_MISSING_FOR_CLAIM,
+    )
+    mine = {
+        (str(f.finding_type), f.explanation_code, (f.details_json or {}).get("missing_from"))
+        for f in run.findings
+        if f.requirement_id == req["turnover"]
+    }
+    assert mine == {
+        ("evidence_gap", X.PROOF_MISSING, None),
+        ("missing_information", X.DATA_MISSING, "company"),
+    }
+    assert any(
+        q.question_code == Q.COMPANY_PROVIDE_PROOF and q.requirement_id == req["turnover"]
+        for q in run.questions
+    )
+    assert not any(q.question_code == Q.BUYER_PROVIDE_SUBMISSION_DEADLINE for q in run.questions)
+    assert not any(f.explanation_code == X.TENDER_REFERENCE_DATE_MISSING for f in run.findings)
 
 
 async def test_a_run_goes_stale_only_on_a_material_qualification_change(db, tenant_a, client_a):

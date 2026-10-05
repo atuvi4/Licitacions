@@ -549,6 +549,132 @@ disseny original de la fase: FitScore, `ProposalDraft` i la síntesi són 3B.
 | **FitScore** | `tender_fit_assessments` | Una per run. Vector de dimensions (§6.3) + `recommendation` + `explanation`. |
 | **ProposalDraft** | `proposal_drafts` | Una per run, editable. Línia de solució per bloc (`service_line` → `solution_id` → `product_ids` → `partner_ids`), criteris automàtics proposats (C1=No, C2a=Sí…) amb el cost, esquelet de càlcul Inversió/Recurrent amb la política aplicada i supòsits. **Confidencial.** |
 
+### 6.2b UI: pestanya «Anàlisi» (fase 3A, pas 7)
+
+- `/licitacions/{id}?tab=analisi` mostra l'anàlisi vigent: resum factual, «Què cal resoldre abans de
+  decidir», requisits, criteris i punts, execució (només `delivery_candidates`) i preguntes generades.
+  Cap score, percentatge ni recomanació: la decisió és humana, al pas Decidir de la candidatura.
+  Aquest pas mostra una targeta d'anàlisi de només lectura (mai recalcula).
+- `POST /companies/{c}/tenders/{t}/analysis/runs` executa (o reutilitza) l'anàlisi: síncron, sense LLM,
+  `reused` a la resposta, 201/200. Permís: `review_actions.assert_can_review`. 409
+  `analysis_prerequisites_missing` (`details.missing = ["requirements"]`) si no hi ha requisits efectius;
+  una anàlisi existent no es toca. Cursa: un reintent; si tampoc, 409 `analysis_run_conflict`.
+- Els textos d'explicació són els canònics de la taula de la `rules_version` del run (`EXPLANATIONS_BY_VERSION`, §6.2c);
+  els valors d'enum els rotula el web. Vocabulari exportat, versionat per `rules_version` (`explanations` per versió
+  i `contract`), a `apps/web/src/lib/analysis-vocabulary.generated.json`. Cada codi nou o canvi de text v3
+  obliga a regenerar-lo (un test exigeix igualtat byte a byte amb l'exportador); la taula v2 no es regenera mai
+  diferent. Regenerar:
+
+      apps/api/.venv/Scripts/python apps/api/scripts/export_analysis_vocabulary.py
+
+### 6.2c Anàlisi v3 (`rules_version = phase3a-analysis-v3`)
+
+Correccions de la validació controlada de L'Escala. El motor continua sense decidir res: cap veredicte nou,
+cap score, cap bloqueig nou, cap migració d'esquema i cap valor d'enum nou a la base (`FindingType` no
+canvia). `RULES_VERSION` passa de `phase3a-analysis-v2` a `phase3a-analysis-v3`; en forma part
+l'`inputs_hash`, de manera que un run v2 no es reutilitza mai i surt «Desactualitzada» fins que es recalcula,
+mentre que dues anàlisis v3 amb les mateixes entrades reutilitzen el mateix run. Els runs són immutables:
+els runs v2 no es reescriuen ni es migren.
+
+**Copy versionat per `rules_version`.** Els codis són contracte: si una explicació ha de dir una cosa
+diferent, rep un codi nou; el text d'un codi existent només canvia de forma (accents, etiquetes), mai de
+significat. El registre guarda les taules per versió (`EXPLANATIONS_BY_VERSION`, `QUESTIONS_BY_VERSION`).
+La taula **v2 és congelada** (còpia literal de 7513e3a, amb interpolació crua dels codis; un test en fixa el
+hash) i els codis nous només existeixen a la v3. `explanation_text(code, rules_version)` i
+`question_text(code, params, rules_version)` fan servir la taula del run (el router hi passa
+`run.rules_version`). Versió o codi desconeguts: «Explicació no disponible.» / «Pregunta no disponible.»,
+mai la taula d'una altra versió. El web fa el mateix: `explanation(code, run.rules_version)` (versió
+obligatòria) sobre el JSON de vocabulari versionat. Un run v2 mostra exactament el mateix copy que abans.
+
+**Contracte de textos (v3).**
+- Les etiquetes es resolen a `question_text`: `params_json` continua guardant codis (és la clau de
+  deduplicació i forma part del run immutable) i el text els tradueix en renderitzar. Etiquetes de
+  `SERVICE_LINES`, `CAPABILITIES` i `CERTIFICATION_STANDARDS`, i mapes del backend per a `proof_kind`,
+  `category`, `registration_type` i `fact`.
+- Un codi sense etiqueta dona una frase neutra («una línia de servei del plec»…), mai el codi. Cap text
+  humà v3 conté codis interns (`snake_case`, `a.b_c`); ho fixen un test per a cada `QuestionCode` i cada
+  `ExplanationCode` v3 (text esperat exacte, amb paràmetres coneguts i desconeguts), un escaneig de tokens i
+  una llista d'accents prohibits.
+- Les etiquetes del vocabulari porten accents (`vocabulary.py`). Les taules sembrades per les migracions
+  0045/0046 conserven les etiquetes antigues sense accents (no hi ha migració; `seed_vocabulary` les
+  actualitzaria): cap pantalla ni cap codi les llegeix, perquè `/knowledge/vocabulary` surt de
+  `vocabulary.py`. Un test comprova que cap codi fa servir una etiqueta com a clau.
+
+**Canonicalització numèrica de l'empremta.** `fingerprint.jsonable` normalitza tot nombre (`int`, `float`,
+`Decimal`; no `bool`) a una forma decimal canònica **etiquetada**, `{"$num": "20"}`: `20`, `20.0` i
+`Decimal("20.00")` coincideixen, i en canvi mai igualen la cadena `"20"` (corregir `"20"` per `20` canvia
+l'empremta). `NaN` i `inf` es rebutgen; la precisió és la dels dígits (cap arrodoniment d'enters grans). Les
+claus de diccionari que comencen per `$` s'escapen (prefix `$`), de manera que cap valor d'usuari pot
+fabricar `{"$num": …}`. `plain_jsonable` (per al `support_json` que es desa i es mostra) conserva els nombres
+i no serveix per a empremtes. L'empremta d'estructura és idèntica abans i després de passar per la base
+(test de round-trip a PostgreSQL); l'empremta de coneixement (`snapshot.py`) s'ha auditat i no canvia.
+L'efecte és que totes les empremtes d'estructura canvien: és acceptable perquè la v3 ja deixa tots els runs
+antics desactualitzats.
+
+**`details_json.missing_from`.** Els findings `missing_information` poden dir d'on falta la dada:
+`tender`, `company` o cap valor (absent). El camp **no té valor per defecte** i només es posa quan es pot
+demostrar; si no, la UI diu «Falta informació» (també als runs v2). La UI rotula «Falta informació del
+plec» / «de l'empresa» / «Falta informació». Productors:
+
+| Productor | Explicació | `missing_from` |
+| --- | --- | --- |
+| Data de referència absent (R1/R2) | `TENDER_REFERENCE_DATE_MISSING` | `tender` |
+| Territori `unknown`, completesa `unknown` i cap territori | `TERRITORY_LIST_UNAVAILABLE` | `tender` |
+| Fit `unknown` accionable amb el codi al vocabulari (fet, certificació, prova, volum, execució, assegurança, registre, perfils, equips) | `DATA_MISSING` | `company` |
+| Llindar no llegible, norma no estructurada, perfil sense estructura, necessitats barrejades o sense mínim; també codis fora de vocabulari | `DATA_MISSING_UNATTRIBUTED` (només v3) | absent |
+| Criteri amb necessitats `unknown` sense dada actual | `CRITERION_NEEDS_UNKNOWN` | absent (pot ser una capacitat sense codi) |
+
+Un test comprova la taula contra el motor i que `FindingType.MISSING_INFORMATION` només té quatre
+productors: un de nou obliga a auditar-lo.
+
+**Criteris en risc: un finding per causa.** Abans, tot criteri `at_risk` emetia «Es compleix amb dades
+declarades». Ara cada finding diu la seva causa (`RiskCause`, interna), a partir de les necessitats i del
+requisit enllaçat que realment deixen punts en risc: necessitat `satisfies` + `current_declared` →
+`review_required` / `DECLARED_NOT_VERIFIED`; necessitat `unknown` sense dada actual (cap coneixement,
+capacitat sense codi, només històric) → `missing_information` / `CRITERION_NEEDS_UNKNOWN`; necessitat
+`unknown` amb dada actual que no es pot comparar (font `current_declared`/`current_verified`): una capacitat
+sense nombre o nivell → `review_required` / `CAPABILITY_UNKNOWN`, i un fet quantitatiu afirmat sense nombre →
+`review_required` / `CRITERION_NEEDS_NOT_COMPARABLE` (només v3); `CAPABILITY_BELOW_REQUIRED` i
+`NEED_VALUE_NOT_COMPARABLE` → `review_required` amb la seva pròpia explicació; moment de compliment no
+concloent → `CRITERION_TIMING_NOT_CONCLUSIVE`; compromís sense estructura → `CRITERION_OPEN_COMMITMENT`.
+Invariants: **mai** `DECLARED_NOT_VERIFIED` en un criteri si cap necessitat (o el requisit enllaçat) no és
+`satisfies` + `current_declared`; **mai** `CRITERION_NEEDS_UNKNOWN` amb una necessitat de font actual; tot
+punt en risc té causa. Els
+`details` porten els `need_ids` afectats i `at_risk_points`, que és **el total del criteri repetit a cada
+finding seu**: no s'ha de sumar entre findings. Els punts no canvien (0/27/5/68 a L'Escala).
+
+**Data de referència absent (R1/R2).** El fit continua `unknown` amb `QUALIFICATION_REFERENCE_DATE_MISSING`
+(`tenders.deadline_at`, mai el rellotge). El finding passa a ser `missing_information` /
+`TENDER_REFERENCE_DATE_MISSING` amb `missing_from = tender`, i la pregunta és al comprador:
+`buyer.provide_submission_deadline` (una per requisit afectat; sense `scope_item_id`, no s'agrupen). La prova
+queda `proof_status = unknown` (no se sap quins exercicis o anys compten), sense `evidence_gap` ni pregunta de
+prova, i mai és un `blocker_potential`. Sense finestra, si cap prova no consta com a absent el conjunt és
+`unknown` encara que alguna altra sigui `sufficient` (mai `partial`, que diria «falta la prova exigida»); amb
+alguna prova `missing`, l'agregació és la general. Si no hi ha termini i tampoc dades de l'empresa (volum o execució
+`unknown`), s'emet també el finding del plec i la pregunta del termini.
+
+**Cites.** `AwardCriterionRead.citations` (additiu, només lectura, `default_factory=list`) es carrega en
+bloc des de `award_criterion_source_ref_links` (`resolve_source_refs`, sense N+1, mateixa regla de lectura
+que els requisits). El web mostra `location_label` i la pàgina només si existeixen; mai s'inventa una cita.
+A L'Escala, la cita de R11a (i la de S-B4-FIBRE) passa del DOC-05 §6 al PPT, clàusula 6.2 de la p. 7, un cop
+verificada contra el text real; les cites no entren a l'empremta.
+
+**Ordre i etiqueta de «Què cal resoldre» (només presentació).** Tres grups estables: `blocker_potential`;
+negatius demostrats (requisit `does_not_satisfy` o criteri amb `lost_points > 0`); la resta, per tipus. Dins
+de cada grup, `mandatory` + `at_submission`, després `before_formalization`, la resta i `unknown`. L'etiqueta
+factual («Obligatori · a la presentació» / «Obligatori · abans de formalitzar») es pren dels camps
+`obligation` i `timing`, mai es dedueix. Una via d'execució amb servei i soci mostra tots dos; el resum compta
+candidats («Vies d'execució (candidats)»), no elements, i el nombre d'elements d'abast només surt a la
+pestanya (de `GET …/structure`). Les preguntes només s'agrupen amb el mateix destinatari, codi i
+`params_json` canonicalitzats **i** `scope_item_id` informat (la llista de seus es veu sempre; mai per text).
+
+**Gaps coneguts (punt 11).**
+- No hi ha cap camp d'admissibilitat o exclusió. `mandatory` + `at_submission` **no** és exclusió: només
+  serveix per prioritzar i per a l'etiqueta factual.
+- `modality` i `alternative_group` no arriben al motor.
+- L'obligatorietat i el moment ja existeixen estructurats (`requirements.obligation`, `requirements.timing`)
+  i el tipus `Requirement` del web ja declara `timing`.
+
 ### 6.3 FitScore: un vector, no una mitjana
 
 | Dimensió | Valor | Font |

@@ -123,10 +123,10 @@ export const FINDING_COPY: Record<string, FindingCopy> = {
     destination: DECIDE,
   },
   analysis_outdated: {
-    label: "L'anàlisi ha quedat endarrerida",
-    hint: "El plec o el compliment han canviat des de l'última anàlisi.",
-    action: "Ves a Decidir",
-    destination: DECIDE,
+    label: "El compliment anterior ha quedat endarrerit",
+    hint: "El plec o el compliment anterior han canviat des de l'última execució del motor anterior.",
+    action: "Obre els requisits",
+    destination: ANALISI,
   },
 
   /* --- Plecs -------------------------------------------------------------- */
@@ -147,11 +147,12 @@ export const FINDING_COPY: Record<string, FindingCopy> = {
     destination: PLECS,
   },
   requirement_analysis_predates_documents: {
-    label: "L'anàlisi encara no cobreix els plecs d'ara",
+    label: "Els requisits extrets no cobreixen els plecs d'ara",
     hint: "Els requisits vigents es van extreure d'uns altres documents.",
-    // Es resol on viu l'anàlisi, que és on es pot tornar a executar. Portar a
-    // Decidir seria enviar algú a un lloc on no hi ha el botó que necessita.
-    action: "Obre l'anàlisi del plec",
+    // Es resol on viuen els requisits extrets (motor anterior), que és on es
+    // poden tornar a extreure. Portar a Decidir seria enviar algú a un lloc on
+    // no hi ha el botó que necessita.
+    action: "Obre els requisits",
     destination: ANALISI,
   },
 
@@ -305,7 +306,7 @@ const DOMAIN_ORDER: FindingDomain[] = ["dossier", "technical", "economic", "work
 
 /** Els tres nivells del calaix, tal com els anomena el Design Freeze. */
 export const SEVERITY_GROUP_LABELS: Record<FindingSeverity, string> = {
-  blocker: "Bloquegen la presentació",
+  blocker: "Cal resoldre per congelar",
   warning: "Avisos",
   info: "Per informació",
 };

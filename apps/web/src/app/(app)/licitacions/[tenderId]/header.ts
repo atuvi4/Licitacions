@@ -21,12 +21,13 @@ import type { WorkspaceDetail } from "@/lib/workspace";
  * recompte inventat: si no hi ha anàlisi ni compliment, es diu.
  */
 
-export type TabKey = "resum" | "plecs" | "requisits" | "historial";
+export type TabKey = "resum" | "plecs" | "requisits" | "analisi" | "historial";
 
 export const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "resum", label: "Resum" },
   { key: "plecs", label: "Plecs" },
   { key: "requisits", label: "Requisits extrets" },
+  { key: "analisi", label: "Anàlisi" },
   { key: "historial", label: "Historial" },
 ];
 

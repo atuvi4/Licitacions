@@ -88,7 +88,7 @@ function ReadySummary({
   const technical = readiness?.technical ?? null;
   return (
     <Card>
-      <CardHeader title="Preparació completa" description="Cap bloqueig pendent. Això és el que quedaria congelat." />
+      <CardHeader title="Preparació completa" description="Cap pendent de preparació. Això és el que quedaria congelat." />
       <dl className="grid gap-x-8 gap-y-3 px-3.5 py-3 sm:grid-cols-3">
         {coverage && (
           <div>
@@ -324,7 +324,7 @@ export function SubmissionPackageSection({
             {readiness.data ? (
               <p>
                 <strong>
-                  Queden {blockers} {blockers === 1 ? "bloqueig" : "bloquejos"} per resoldre.
+                  Queden {blockers} {blockers === 1 ? "pendent" : "pendents"} de preparació per resoldre.
                 </strong>{" "}
                 <span className="text-muted">
                   Fins que no estiguin resolts no es pot congelar cap revisió. El calaix de preparació final diu quins són i

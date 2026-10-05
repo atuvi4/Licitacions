@@ -682,9 +682,32 @@ async def is_stale(
     return digest != run.inputs_hash
 
 
+@dataclass(frozen=True)
+class AnalysisStatus:
+    """L'analisi vigent d'un plec i si esta caducada: la unica font de (run, stale)."""
+
+    run: TenderAnalysisRun | None
+    stale: bool
+
+
+async def current_analysis(
+    session: AsyncSession,
+    company_id: uuid.UUID,
+    tender_id: uuid.UUID,
+    *,
+    on: date | None = None,
+) -> AnalysisStatus:
+    run = await current_run(session, company_id, tender_id)
+    if run is None:
+        return AnalysisStatus(run=None, stale=False)
+    return AnalysisStatus(run=run, stale=await is_stale(session, run, on=on))
+
+
 __all__ = [
     "AnalysisOutcome",
+    "AnalysisStatus",
     "analyze_tender",
+    "current_analysis",
     "current_run",
     "is_stale",
     "load_company_view",

@@ -14,24 +14,22 @@ import {
   Textarea,
 } from "@/components/ui";
 import { api } from "@/lib/api";
-import {
-  ANALYSIS_BASIS_HINTS,
-  ANALYSIS_BASIS_LABELS,
-  RECOMMENDATION_LABELS,
-  isTrustworthyAnalysis,
-} from "@/lib/compliance";
+import { RECOMMENDATION_LABELS } from "@/lib/compliance";
+import type { DecisionAnalysisState } from "@/lib/analysis";
 import { useMutation } from "@/lib/hooks";
 import {
   DECISION_LEVEL,
   DECISION_PENDING_LEVEL,
-  RECOMMENDATION_LEVEL,
   whoCanDecide,
 } from "@/lib/labels";
 import { formatDateTime } from "@/lib/tenders";
 import {
   DECISION_LABELS,
-  WARNING_LABELS,
+  analysisWarningLabel,
   deadlineLabel,
+  warningLabel,
+  type AnalysisDecisionSnapshotV1,
+  type WorkspaceDecisionEntry,
   type WorkspaceDecisionType,
   type WorkspaceDetail,
 } from "@/lib/workspace";
@@ -60,12 +58,15 @@ const SUBMIT_LABELS: Record<WorkspaceDecisionType, string> = {
   defer: "Registra l'ajornament",
 };
 
-const RECOMMENDATION_HEADLINES: Record<string, string> = {
-  go_candidate: "El sistema suggereix presentar-se.",
-  eligible_low_fit: "El sistema veu la candidatura elegible, però amb poc encaix.",
-  review: "El sistema suggereix revisar abans de decidir.",
-  no_go: "El sistema suggereix no presentar-se.",
-};
+/** Text de la fila «Anàlisi del plec» del modal segons l'estat únic (spec F-4 §4). Sense estat = carregant. */
+function analysisRowText(state: DecisionAnalysisState | undefined): string {
+  if (!state || state.kind === "loading") return "Es carrega l'anàlisi…";
+  if (state.kind === "absent") return "Encara no hi ha anàlisi d'aquesta licitació.";
+  if (state.kind === "error") return "No s'ha pogut carregar l'anàlisi.";
+  const pending = state.run.findings.length;
+  const count = pending === 0 ? "Cap element pendent de resoldre" : plural(pending, "element a resoldre", "elements a resoldre");
+  return `Feta el ${formatDateTime(state.run.created_at)} · ${count}${state.kind === "stale" ? " · desactualitzada" : ""}`;
+}
 
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
@@ -74,10 +75,9 @@ function plural(count: number, one: string, many: string): string {
 /**
  * L'acte de decidir (handoff L12, mockup 06 i cas 2).
  *
- * Quatre coses que mai es fusionen: el pre-fit, l'elegibilitat, la
- * recomanació automàtica i la decisió humana. Aquí només hi ha les dues
- * últimes, i la recomanació és text signat pel càlcul, mai un botó: cap
- * «accepta la recomanació», cap GO automàtic. Només un GO HUMÀ registrat fa
+ * Aquí només hi ha la decisió humana: cap elegibilitat ni recomanació
+ * automàtica, cap «accepta la recomanació», cap GO automàtic. L'anàlisi v3 hi
+ * arriba per props i només s'hi llegeix. Només un GO HUMÀ registrat fa
  * avançar el flux, i això ho decideix la pàgina a partir de la decisió desada.
  *
  * Contracte real (`POST …/decisions {decision, reason}`): el motiu només és
@@ -88,25 +88,30 @@ function plural(count: number, one: string, many: string): string {
 export function DecisionPanel({
   workspace,
   onDecided,
+  onDecisionConflict,
   signerName,
+  analysis,
 }: {
   workspace: WorkspaceDetail;
   /** Es crida només després d'un POST correcte, amb la decisió registrada. */
   onDecided: (decision: WorkspaceDecisionType) => Promise<void>;
+  /**
+   * Es crida només quan el backend rebutja la decisió amb `decision_reason_required`:
+   * el pas rellegeix el workspace i l'anàlisi vigent, sense navegar.
+   */
+  onDecisionConflict: () => Promise<void>;
   /** Qui signarà: el nom real de la sessió. */
   signerName: string;
+  /** Estat únic de l'anàlisi vigent (el llegeix la pàgina; el modal mai no fa cap GET). */
+  analysis?: DecisionAnalysisState;
 }) {
   const [pending, setPending] = useState<WorkspaceDecisionType | null>(null);
   const [reason, setReason] = useState("");
   const mutation = useMutation();
 
-  const warnings = workspace.open_warnings;
-  const needsReason = pending === "go" && workspace.go_requires_reason;
-  const undetermined = workspace.eligibility === "undetermined" || workspace.eligibility === null;
-  const trustworthy = isTrustworthyAnalysis(workspace.analysis_basis);
+  const warnings = workspace.decision_warnings;
   const latest = workspace.latest_decision;
   const decided = workspace.human_decision;
-  const counters = workspace.counters;
 
   function open(decision: WorkspaceDecisionType) {
     mutation.reset();
@@ -121,32 +126,37 @@ export function DecisionPanel({
 
   async function submit() {
     if (!pending) return;
+    // `mutation.run` només torna un booleà: el codi de l'error es captura aquí.
+    let reasonRequired = false;
     const ok = await mutation.run(async () => {
-      await api.post(`/companies/${workspace.company_id}/workspaces/${workspace.id}/decisions`, {
-        decision: pending,
-        reason: reason.trim() || null,
-      });
+      try {
+        await api.post(`/companies/${workspace.company_id}/workspaces/${workspace.id}/decisions`, {
+          decision: pending,
+          reason: reason.trim() || null,
+        });
+      } catch (caught) {
+        // Sense `instanceof`: els tests que simulen @/lib/api no exporten la classe.
+        const code = caught && typeof caught === "object" ? (caught as { code?: unknown }).code : undefined;
+        reasonRequired = code === "decision_reason_required";
+        throw caught;
+      }
     });
     if (ok) {
       setPending(null);
       await onDecided(pending);
+    } else if (reasonRequired) {
+      await onDecisionConflict();
     }
   }
 
-  const recommendationHeadline =
-    workspace.recommendation && RECOMMENDATION_HEADLINES[workspace.recommendation]
-      ? RECOMMENDATION_HEADLINES[workspace.recommendation]
-      : "El sistema no pot suggerir res: no s'ha avaluat cap requisit del plec.";
-  const unresolved = counters.mandatory_unknown + counters.mandatory_needs_review;
-  const recommendationBasis = undetermined
-    ? "«Cap bloqueig» aquí no vol dir que no n'hi hagi: vol dir que no s'ha mirat."
-    : `Calculat amb ${plural(counters.confirmed_blockers, "bloqueig confirmat", "bloqueigs confirmats")}, ${plural(counters.potential_blockers, "possible", "possibles")} i ${plural(unresolved, "obligatori sense resoldre", "obligatoris sense resoldre")}; canviarà quan es resolguin.`;
-
   const apiError = mutation.apiError;
   const reasonRequiredByBackend = apiError?.code === "decision_reason_required";
-  const backendWarnings = reasonRequiredByBackend
-    ? ((apiError?.details.warnings as string[] | undefined) ?? []).map((code) => WARNING_LABELS[code] ?? code)
-    : [];
+  const backendCodes = reasonRequiredByBackend ? ((apiError?.details.warnings as string[] | undefined) ?? []) : [];
+  const backendWarnings = backendCodes.map(analysisWarningLabel);
+  // Després d'un 422 el backend té la darrera paraula: el modal passa a mode
+  // obligatori i mostra els avisos que ell ha vist, encara que la prop sigui vella.
+  const needsReason = pending === "go" && (workspace.go_requires_reason || reasonRequiredByBackend);
+  const shownWarnings = reasonRequiredByBackend ? backendCodes : warnings;
   const forbidden = apiError?.status === 403;
   const otherError = mutation.error && !reasonRequiredByBackend && !forbidden ? mutation.error : null;
 
@@ -183,7 +193,7 @@ export function DecisionPanel({
   );
 
   return (
-    <Card frame className="flex h-full flex-col">
+    <Card frame className="flex flex-col">
       <div className="flex flex-1 flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6">
         <div>
           <p className="font-heading text-kicker font-semibold tracking-[0.1em] text-brand-strong uppercase">
@@ -227,7 +237,7 @@ export function DecisionPanel({
         ) : (
           <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted">
             <StatusPill level={DECISION_PENDING_LEVEL}>Pendent</StatusPill>
-            <span>Encara no s&apos;ha pres cap decisió. La recomanació automàtica no en compta com a una.</span>
+            <span>Encara no s&apos;ha pres cap decisió. Només compta com a decisió la que registra explícitament una persona.</span>
           </div>
         )}
 
@@ -243,8 +253,7 @@ export function DecisionPanel({
           <p className="text-[13px] leading-5 text-muted">
             Motiu · obligatori si aproves:{" "}
             <span className="text-ink">
-              hi ha {plural(warnings.length, "avís obert", "avisos oberts")} i{" "}
-              {warnings.length === 1 ? "quedarà registrat" : "quedaran registrats"} amb la decisió.
+              el registre de la decisió inclou {plural(warnings.length, "avís", "avisos")} de l&apos;anàlisi del plec.
             </span>{" "}
             NO-GO i ajornar no en demanen.
           </p>
@@ -254,28 +263,16 @@ export function DecisionPanel({
             a sis mesos.
           </p>
         )}
-
-        <div className="mt-auto flex items-start gap-3 border-t border-border pt-4">
-          <div className="min-w-0 flex-1">
-            <Attribution kind="rule" label="Recomanació del sistema" />
-            <p className="mt-1.5 text-[13px] leading-5 text-muted">
-              <strong className="text-ink">{recommendationHeadline}</strong>{" "}
-              {workspace.recommendation && (
-                <StatusPill level={RECOMMENDATION_LEVEL[workspace.recommendation]} size="sm" className="mr-1 align-middle">
-                  {RECOMMENDATION_LABELS[workspace.recommendation]}
-                </StatusPill>
-              )}
-              {recommendationBasis} És un suggeriment, no una decisió: la responsabilitat i la signatura
-              són d&apos;una persona.
-            </p>
-          </div>
-        </div>
       </div>
 
       <Modal
         open={pending !== null}
         title={pending ? MODAL_TITLES[pending] : ""}
-        description="Això és exactament el que quedarà registrat, i no es podrà editar; si canvia el context, se'n podrà prendre una de nova a sobre."
+        description={
+          analysis?.kind === "absent"
+            ? "Quedarà registrada la decisió, qui la signa, quan i el motiu, i que en signar no hi havia cap anàlisi del plec vigent."
+            : "Quedarà registrada la decisió, qui la signa, quan i el motiu, amb la fotografia de l'anàlisi del plec vigent i els seus avisos."
+        }
         onClose={close}
         footer={
           <>
@@ -323,78 +320,41 @@ export function DecisionPanel({
               <dt className="text-muted">Pre-fit</dt>
               <dd className="mt-0.5 text-ink">{workspace.prefit_score ?? "Sense càlcul"}</dd>
             </div>
-            <div>
-              <dt className="text-muted">Recomanació automàtica</dt>
-              <dd className="mt-0.5 text-ink">
-                {workspace.recommendation ? RECOMMENDATION_LABELS[workspace.recommendation] : "Sense càlcul"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted">Bloqueigs confirmats</dt>
-              {/* Un "0" surt igual tant si s'han avaluat vint requisits i cap
-                  bloqueja com si no se n'ha avaluat cap. Són coses oposades i
-                  aquesta és l'última pantalla abans d'un compromís. */}
-              <dd className="mt-0.5 text-ink">
-                {undetermined ? <span className="text-warning">Cap requisit avaluat</span> : counters.confirmed_blockers}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted">Anàlisi</dt>
-              <dd className={`mt-0.5 ${trustworthy ? "text-ink" : "text-warning"}`}>
-                {ANALYSIS_BASIS_LABELS[workspace.analysis_basis]}
-                {workspace.analysis_outdated && " · endarrerida"}
-              </dd>
+            <div className="col-span-2">
+              <dt className="text-muted">Anàlisi del plec</dt>
+              <dd className="mt-0.5 text-ink">{analysisRowText(analysis)}</dd>
             </div>
           </dl>
 
-          {undetermined && (
-            <div className="border border-warning bg-warning-soft px-4 py-3">
-              <p className="text-[13px] font-semibold text-warning">
-                Decidiràs sense saber si l&apos;empresa compleix
-              </p>
-              <p className="mt-1 text-[13px] leading-5 text-ink">
-                No s&apos;ha avaluat cap requisit d&apos;aquest plec. La decisió és teva i quedarà
-                registrada tal com és: presa sobre una anàlisi que encara no diu res.
-              </p>
-            </div>
-          )}
-
-          {!trustworthy && (
-            <div className="border border-warning bg-warning-soft px-4 py-3">
-              <p className="text-[13px] font-semibold text-warning">
-                {ANALYSIS_BASIS_LABELS[workspace.analysis_basis]}
-              </p>
-              <p className="mt-1 text-[13px] leading-5 text-ink">{ANALYSIS_BASIS_HINTS[workspace.analysis_basis]}</p>
-            </div>
-          )}
-
           <div className="rounded-card border border-border px-4 py-3">
             <p className="text-[13px] font-semibold text-ink">
-              {warnings.length > 0
-                ? `Quedaran registrats ${plural(warnings.length, "avís obert", "avisos oberts")}`
-                : "Cap avís obert"}
+              {shownWarnings.length > 0
+                ? "Avisos de l'anàlisi del plec que quedaran registrats"
+                : "Cap avís de l'anàlisi del plec."}
             </p>
-            {warnings.length > 0 ? (
+            {shownWarnings.length > 0 ? (
               <ul className="mt-1.5 space-y-1">
-                {warnings.map((code) => (
+                {shownWarnings.map((code) => (
                   <li key={code} className="text-[13px] leading-5 text-ink">
-                    {WARNING_LABELS[code] ?? code}
+                    {analysisWarningLabel(code)}
                   </li>
                 ))}
               </ul>
             ) : (
               <p className="mt-1 text-[13px] leading-5 text-muted">
-                El backend fa la fotografia dels avisos en el moment de signar; ara mateix no n&apos;hi ha cap.
+                El sistema en fa la fotografia en signar; ara mateix no n&apos;hi ha cap.
               </p>
             )}
           </div>
 
           <Field
-            label={needsReason ? "Motiu (obligatori: hi ha avisos oberts)" : "Motiu (opcional)"}
+            label={needsReason ? "Motiu (obligatori: hi ha avisos de l'anàlisi del plec)" : "Motiu (opcional)"}
             hint={`${reason.length} de ${REASON_MAX_LENGTH} caràcters`}
             error={
               reasonRequiredByBackend
-                ? `${mutation.error ?? "Cal escriure el motiu."}${backendWarnings.length > 0 ? ` ${backendWarnings.join(" ")}` : ""}`
+                ? backendWarnings.length > 0
+                  ? `Cal un motiu: el registre inclou avisos de l'anàlisi del plec: ${backendWarnings.map((l) => (/[.!?]$/.test(l) ? l : `${l}.`)).join(" ")}`
+                  : "Cal un motiu: el registre inclou avisos de l'anàlisi del plec."
                 : undefined
             }
             required={needsReason}
@@ -406,7 +366,7 @@ export function DecisionPanel({
               onChange={(event) => setReason(event.target.value)}
               placeholder={
                 needsReason
-                  ? "Per què s'aprova malgrat els avisos? Per exemple: «Anem en UTE amb qui aporta la classificació.»"
+                  ? "Per què es presenta l'empresa malgrat els avisos de l'anàlisi del plec?"
                   : "Opcional: context per a qui ho llegeixi d'aquí a sis mesos."
               }
             />
@@ -430,6 +390,106 @@ export function DecisionPanel({
   );
 }
 
+const NUMBER_FORMAT = new Intl.NumberFormat("ca", { maximumFractionDigits: 2 });
+
+/** Els punts del snapshot són decimals (27.0): fora el «.0», com a màxim 2 decimals. */
+function formatNumber(value: number): string {
+  return NUMBER_FORMAT.format(value);
+}
+
+const SNAPSHOT_STATE_LABELS: Record<AnalysisDecisionSnapshotV1["state"], string> = {
+  current: "vigent",
+  stale: "desactualitzada",
+  absent: "sense anàlisi vigent",
+};
+
+/**
+ * Registre d'una decisió v3: només el snapshot. Mai els comptadors legacy, ni
+ * `open_warnings` (null aquí vol dir «no aplica»), ni `deadline_passed` a part
+ * (ja és a `snapshot.warnings` quan toca).
+ */
+function AnalysisRecord({ snapshot, prefit }: { snapshot: AnalysisDecisionSnapshotV1; prefit: number | null }) {
+  const parts: string[] = [];
+  if (snapshot.state !== "absent") {
+    const { fit, points } = snapshot;
+    if (fit) {
+      parts.push(
+        `compleix ${fit.satisfies}`,
+        `no compleix ${fit.does_not_satisfy}`,
+        `no se sap ${fit.unknown}`,
+        `no aplica ${fit.not_applicable}`,
+      );
+    }
+    if (points) {
+      parts.push(
+        `punts assegurats ${formatNumber(points.secured)} / en risc ${formatNumber(points.at_risk)} / perduts ${formatNumber(points.lost)} / no avaluables ${formatNumber(points.not_assessable)}`,
+      );
+    }
+    if (snapshot.blocker_potential_count !== undefined) {
+      parts.push(plural(snapshot.blocker_potential_count, "possible bloqueig (no confirmat)", "possibles bloqueigs (no confirmats)"));
+    }
+    if (snapshot.findings_count !== undefined) {
+      parts.push(plural(snapshot.findings_count, "element a resoldre", "elements a resoldre"));
+    }
+    if (prefit !== null) parts.push(`pre-fit ${prefit}`);
+  }
+  return (
+    <>
+      <p className="mt-1.5 text-[12.5px] leading-5 text-muted">
+        Registre del moment (anàlisi del plec): {SNAPSHOT_STATE_LABELS[snapshot.state]}
+        {parts.map((part) => ` · ${part}`).join("")}
+      </p>
+      {snapshot.warnings.length > 0 ? (
+        <div className="mt-1 space-y-0.5">
+          {snapshot.warnings.map((code) => (
+            <p key={code} className="text-[12.5px] leading-5 text-warning">
+              Es va decidir sabent-ho: {analysisWarningLabel(code)}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-1 text-[12.5px] text-muted">Sense cap avís de l&apos;anàlisi del plec.</p>
+      )}
+    </>
+  );
+}
+
+/** Decisió antiga (snapshot null): la fotografia del compliment anterior, tal com es va desar. */
+function LegacyRecord({ entry }: { entry: WorkspaceDecisionEntry }) {
+  return (
+    <>
+      <p className="mt-1.5 text-[12.5px] leading-5 text-muted">
+        Registre del moment (compliment anterior):{" "}
+        {plural(entry.confirmed_blockers, "bloqueig confirmat", "bloqueigs confirmats")},{" "}
+        {plural(entry.potential_blockers, "possible", "possibles")} i{" "}
+        {plural(entry.mandatory_unknown + entry.mandatory_needs_review, "obligatori sense resoldre", "obligatoris sense resoldre")}
+        {entry.prefit_score !== null && ` · pre-fit ${entry.prefit_score}`}
+        {entry.automated_recommendation &&
+          (Object.hasOwn(RECOMMENDATION_LABELS, entry.automated_recommendation)
+            ? ` · el compliment anterior suggeria ${RECOMMENDATION_LABELS[entry.automated_recommendation as keyof typeof RECOMMENDATION_LABELS]}`
+            : " · el compliment anterior va fer un suggeriment (valor històric)")}
+        {entry.deadline_passed && " · amb el termini ja tancat"}
+      </p>
+      {/* Els comptadors diuen quants bloquejos hi havia. Això diu la
+          resta: que l'anàlisi era una simulació, que no hi havia motor,
+          que l'elegibilitat estava indeterminada. */}
+      {entry.open_warnings === null ? (
+        <p className="mt-1 text-[12.5px] italic text-muted">Els avisos d&apos;aquell moment no es van registrar.</p>
+      ) : entry.open_warnings.length > 0 ? (
+        <div className="mt-1 space-y-0.5">
+          {entry.open_warnings.map((code) => (
+            <p key={code} className="text-[12.5px] leading-5 text-warning">
+              Es va decidir sabent-ho: {warningLabel(code)}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-1 text-[12.5px] text-muted">Sense cap avís obert.</p>
+      )}
+    </>
+  );
+}
+
 /**
  * Historial. Append-only: canviar de GO a NO-GO no esborra el GO, l'apila a
  * sota. Si algú pregunta d'aquí a un any qui va aprovar què, la resposta és
@@ -444,7 +504,7 @@ export function DecisionHistory({ workspace }: { workspace: WorkspaceDetail }) {
       />
       {workspace.decisions.length === 0 ? (
         <p className="px-3.5 py-4 text-[13px] leading-5 text-muted">
-          Encara no s&apos;ha pres cap decisió. La recomanació automàtica no en compta com a una.
+          Encara no s&apos;ha pres cap decisió. Només compta com a decisió la que registra explícitament una persona.
         </p>
       ) : (
         <ol className="divide-y divide-border">
@@ -462,30 +522,10 @@ export function DecisionHistory({ workspace }: { workspace: WorkspaceDetail }) {
               {entry.reason && (
                 <p className="mt-1.5 text-[13px] leading-5 whitespace-pre-line text-ink">“{entry.reason}”</p>
               )}
-              <p className="mt-1.5 text-[12.5px] leading-5 text-muted">
-                Amb {plural(entry.confirmed_blockers, "bloqueig confirmat", "bloqueigs confirmats")},{" "}
-                {plural(entry.potential_blockers, "possible", "possibles")} i{" "}
-                {plural(entry.mandatory_unknown + entry.mandatory_needs_review, "obligatori sense resoldre", "obligatoris sense resoldre")}
-                {entry.prefit_score !== null && ` · pre-fit ${entry.prefit_score}`}
-                {entry.automated_recommendation &&
-                  ` · el sistema deia ${RECOMMENDATION_LABELS[entry.automated_recommendation as keyof typeof RECOMMENDATION_LABELS] ?? entry.automated_recommendation}`}
-                {entry.deadline_passed && " · amb el termini ja tancat"}
-              </p>
-              {/* Els comptadors diuen quants bloquejos hi havia. Això diu la
-                  resta: que l'anàlisi era una simulació, que no hi havia motor,
-                  que l'elegibilitat estava indeterminada. */}
-              {entry.open_warnings === null ? (
-                <p className="mt-1 text-[12.5px] italic text-muted">Els avisos d&apos;aquell moment no es van registrar.</p>
-              ) : entry.open_warnings.length > 0 ? (
-                <div className="mt-1 space-y-0.5">
-                  {entry.open_warnings.map((code) => (
-                    <p key={code} className="text-[12.5px] leading-5 text-warning">
-                      Es va decidir sabent-ho: {WARNING_LABELS[code] ?? code}
-                    </p>
-                  ))}
-                </div>
+              {entry.analysis_snapshot_json === null ? (
+                <LegacyRecord entry={entry} />
               ) : (
-                <p className="mt-1 text-[12.5px] text-muted">Sense cap avís obert.</p>
+                <AnalysisRecord snapshot={entry.analysis_snapshot_json} prefit={entry.prefit_score} />
               )}
             </li>
           ))}

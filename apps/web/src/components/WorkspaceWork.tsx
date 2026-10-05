@@ -17,7 +17,6 @@ import {
   StatusPill,
   Textarea,
   type DataTableColumn,
-  type Level,
 } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useMutation } from "@/lib/hooks";
@@ -27,7 +26,6 @@ import {
   CHECKLIST_STATUS_LABELS,
   checklistReconciliationMessage,
   TASK_STATUS_LABELS,
-  WARNING_LABELS,
   type ChecklistItem,
   type ChecklistItemStatus,
   type ChecklistRegenerateResult,
@@ -406,142 +404,6 @@ export function NotesSection({
           ))}
         </ol>
       )}
-    </Card>
-  );
-}
-
-/**
- * «Què bloqueja» (handoff L12, mockup 06 «Per decidir»). Només el contracte
- * real del workspace: els comptadors dels obligatoris, els avisos oberts que
- * el backend registrarà amb la decisió i el termini. El nom de cada bloqueig
- * no és al workspace (C-3): l'enllaç porta a la pestanya Requisits.
- */
-export function BlockerCounters({ workspace }: { workspace: WorkspaceDetail }) {
-  const c = workspace.counters;
-  const undetermined = workspace.eligibility === "undetermined" || workspace.eligibility === null;
-  const requirements = `/licitacions/${workspace.tender_id}?tab=requisits`;
-
-  const rows: Array<{ key: string; level: Level; pill: string; text: string; hint: string; link: string }> = undetermined
-    ? [
-        {
-          key: "none",
-          level: "neutral",
-          pill: "Sense avaluar",
-          text: "Cap requisit avaluat",
-          hint: "«Cap bloqueig» aquí no vol dir que no n'hi hagi: vol dir que no s'ha mirat.",
-          link: "Analitza el plec →",
-        },
-      ]
-    : [
-        {
-          key: "confirmed",
-          level: c.confirmed_blockers > 0 ? "blocking" : "neutral",
-          pill: `${c.confirmed_blockers} ${c.confirmed_blockers === 1 ? "bloqueja" : "bloquegen"}`,
-          text: c.confirmed_blockers > 0 ? "Requisits obligatoris que no es compleixen" : "Cap requisit obligatori incomplert",
-          hint: "Amb les dades actuals del perfil",
-          link: "Revisa →",
-        },
-        {
-          key: "potential",
-          level: c.potential_blockers > 0 ? "attention" : "neutral",
-          pill: `${c.potential_blockers} ${c.potential_blockers === 1 ? "possible" : "possibles"}`,
-          text: "Semblen no complir-se",
-          hint: "L'extracció del plec no està verificada",
-          link: "Revisa →",
-        },
-        {
-          key: "review",
-          level: c.mandatory_needs_review > 0 ? "attention" : "neutral",
-          pill: `${c.mandatory_needs_review} per revisar`,
-          text: "No comparables automàticament",
-          hint: "Una persona ho ha de mirar",
-          link: "Revisa →",
-        },
-        {
-          key: "unknown",
-          level: c.mandatory_unknown > 0 ? "attention" : "neutral",
-          pill: `${c.mandatory_unknown} sense dades`,
-          text: "El perfil no diu ni que sí ni que no",
-          hint: "Completa el perfil d'empresa",
-          link: "Completa →",
-        },
-        {
-          key: "ok",
-          level: c.mandatory_satisfies > 0 ? "ready" : "neutral",
-          pill: `${c.mandatory_satisfies} acreditats`,
-          text: `de ${c.mandatory_total} obligatoris`,
-          hint:
-            c.mandatory_not_applicable > 0
-              ? `${c.mandatory_not_applicable} no apliquen · ${c.total} requisits avaluats en total`
-              : `${c.total} requisits avaluats en total`,
-          link: "Veure →",
-        },
-      ];
-
-  return (
-    <Card>
-      <CardHeader
-        title="Què bloqueja"
-        action={
-          undetermined ? (
-            <StatusPill level="neutral" size="sm">
-              Sense avaluar
-            </StatusPill>
-          ) : (
-            <StatusPill level={c.confirmed_blockers > 0 ? "blocking" : "neutral"} size="sm">
-              {c.confirmed_blockers} {c.confirmed_blockers === 1 ? "bloqueig confirmat" : "bloqueigs confirmats"}
-            </StatusPill>
-          )
-        }
-      />
-      <ul className="divide-y divide-border">
-        {rows.map((row) => (
-          <li key={row.key} className="flex items-center gap-3 px-3.5 py-2.5">
-            <StatusPill level={row.level} size="sm" className="w-28 shrink-0 justify-center">
-              {row.pill}
-            </StatusPill>
-            <div className="min-w-0 flex-1">
-              <p className="text-[13.5px] leading-5 font-medium text-ink">{row.text}</p>
-              <p className="text-[12.5px] leading-5 text-muted">{row.hint}</p>
-            </div>
-            <Link href={requirements} className="shrink-0 text-[13px] text-brand hover:underline">
-              {row.link}
-            </Link>
-          </li>
-        ))}
-        {workspace.deadline_passed && (
-          <li className="flex items-center gap-3 px-3.5 py-2.5">
-            <StatusPill level="blocking" size="sm" className="w-28 shrink-0 justify-center">
-              Termini
-            </StatusPill>
-            <div className="min-w-0 flex-1">
-              <p className="text-[13.5px] leading-5 font-medium text-ink">{WARNING_LABELS.deadline_passed}</p>
-              <p className="text-[12.5px] leading-5 text-muted">
-                {workspace.deadline_at ? `Va vèncer el ${formatDateTime(workspace.deadline_at)}` : "Data no informada"}
-              </p>
-            </div>
-          </li>
-        )}
-      </ul>
-      {workspace.open_warnings.length > 0 && (
-        <div className="border-t border-border bg-subtle px-3.5 py-3">
-          <p className="font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase">
-            Avisos oberts · quedaran registrats amb la decisió
-          </p>
-          <div className="mt-1.5 space-y-1">
-            {workspace.open_warnings.map((code) => (
-              <p key={code} className="text-[13px] leading-5 text-ink">
-                {WARNING_LABELS[code] ?? code}
-              </p>
-            ))}
-          </div>
-        </div>
-      )}
-      <div className="border-t border-border px-3.5 py-2.5">
-        <Link href={requirements} className="text-[13px] text-brand hover:underline">
-          Veure el compliment detallat →
-        </Link>
-      </div>
     </Card>
   );
 }

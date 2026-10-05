@@ -6,7 +6,6 @@ import { formatDateTime } from "@/lib/tenders";
 import {
   DECISION_LABELS,
   DECISION_REASON_LABELS,
-  OUTDATED_LABELS,
   WARNING_LABELS,
   type WorkspaceDetail,
   type WorkspaceStatus,
@@ -118,16 +117,13 @@ export interface PageBanner {
 /**
  * Un sol bàner per pàgina (handoff §2.4), amb el motiu més greu com a títol
  * i la resta a dins. Ordre: anul·lada > lot retirat > termini passat >
- * decisió caducada > anàlisi endarrerida > bloqueigs confirmats > avisos.
- * Tot surt del contracte real del workspace; res no s'infereix.
+ * decisió caducada perquè el plec ha canviat. Només fets del plec: els
+ * bloqueigs, els avisos i l'anàlisi endarrerida del compliment anterior no
+ * fan cap bàner. Tot surt del contracte real del workspace; res no s'infereix.
  */
 export function primaryBanner(workspace: WorkspaceDetail): PageBanner | null {
   const tender = `/licitacions/${workspace.tender_id}`;
-  const requirements = `${tender}?tab=requisits`;
   const openTender = { label: "Obre la licitació →", href: tender };
-  const seeCompliance = { label: "Veure el compliment detallat →", href: requirements };
-  const confirmed = workspace.counters.confirmed_blockers;
-  const analysisReasons = workspace.outdated_reasons.map((code) => OUTDATED_LABELS[code] ?? code);
   const decisionReasons = [
     ...workspace.decision_reasons
       .filter((code) => code !== "tender_changed_since_decision")
@@ -195,61 +191,12 @@ export function primaryBanner(workspace: WorkspaceDetail): PageBanner | null {
       details: decisionReasons,
     });
   }
-  if (workspace.analysis_outdated) {
-    candidates.push({
-      key: "analysis",
-      level: "attention",
-      kicker: "Anàlisi",
-      title: "L'anàlisi ha quedat endarrerida",
-      detail: "No s'ha substituït res: la decisió i la feina fetes es conserven.",
-      action: { label: "Veure el plec i els requisits →", href: requirements },
-      summary: "L'anàlisi ha quedat endarrerida.",
-      details: analysisReasons,
-    });
-  }
-  if (confirmed > 0) {
-    candidates.push({
-      key: "blockers",
-      level: "blocking",
-      kicker: "Bloqueig",
-      title:
-        confirmed === 1
-          ? "1 requisit obligatori no es compleix"
-          : `${confirmed} requisits obligatoris no es compleixen`,
-      detail: "Amb les dades actuals del perfil. Es pot aprovar igualment, però caldrà escriure el motiu.",
-      action: seeCompliance,
-      // El mateix que diu l'avís obert del backend: no es diu dues vegades.
-      summary: WARNING_LABELS.confirmed_blockers,
-      details: [],
-    });
-  }
-  // Els avisos que el backend té oberts (i que quedaran registrats amb la
-  // decisió). Els que ja explica un bloc anterior no es repeteixen.
-  const skip = new Set<string>();
-  if (workspace.deadline_passed) skip.add("deadline_passed");
-  if (workspace.analysis_outdated) skip.add("outdated_analysis");
-  const warningLines = workspace.open_warnings
-    .filter((code) => !skip.has(code))
-    .map((code) => WARNING_LABELS[code] ?? code);
-  if (warningLines.length > 0) {
-    candidates.push({
-      key: "warnings",
-      level: "attention",
-      kicker: "Avisos",
-      title: warningLines[0],
-      detail: null,
-      action: seeCompliance,
-      summary: null,
-      details: warningLines,
-    });
-  }
 
   const head = candidates[0];
   if (!head) return null;
   const reasons: string[] = [];
   const add = (line: string) => {
     if (line === head.title || line === `${head.title}.`) return;
-    if (head.key === "blockers" && line === WARNING_LABELS.confirmed_blockers) return;
     if (!reasons.includes(line)) reasons.push(line);
   };
   for (const candidate of candidates) {

@@ -43,6 +43,19 @@ export interface Person {
   full_name: string | null;
 }
 
+/** Fotografia v1 de l'anàlisi del plec en el moment de decidir (schema tancat). */
+export interface AnalysisDecisionSnapshotV1 {
+  schema_version: 1;
+  state: "current" | "stale" | "absent";
+  rules_version?: string;
+  run_created_at?: string;
+  fit?: { satisfies: number; does_not_satisfy: number; unknown: number; not_applicable: number };
+  points?: { secured: number; at_risk: number; lost: number; not_assessable: number; max: number };
+  blocker_potential_count?: number;
+  findings_count?: number;
+  warnings: string[];
+}
+
 export interface WorkspaceDecisionEntry {
   id: string;
   decision: WorkspaceDecisionType;
@@ -68,6 +81,10 @@ export interface WorkspaceDecisionEntry {
    * anotar, que NO és el mateix que dir que no n'hi havia cap.
    */
   open_warnings: string[] | null;
+  /** Decisió v3: run d'anàlisi referenciat (pot ser null: absent o run esborrat). */
+  analysis_run_id: string | null;
+  /** `null` = decisió antiga (fotografia legacy); no-null = decisió v3. L'única branca. */
+  analysis_snapshot_json: AnalysisDecisionSnapshotV1 | null;
 }
 
 export interface ChecklistItem {
@@ -172,7 +189,11 @@ export interface WorkspaceDetail {
   human_decision: WorkspaceDecisionType | null;
   latest_decision: WorkspaceDecisionEntry | null;
   counters: ComplianceCounters;
+  /** Codis legacy del compliment anterior: compatibilitat, no decideix res. */
   open_warnings: string[];
+  /** Codis d'avís de l'anàlisi del plec (v3); alimenten panell i modal. */
+  decision_warnings: string[];
+  decision_warning_basis: "analysis_v3";
   go_requires_reason: boolean;
   current_compliance_run_id: string | null;
   current_requirement_run_id: string | null;
@@ -515,6 +536,25 @@ export const WARNING_LABELS: Record<string, string> = {
   outdated_analysis:
     "La licitació ha canviat després de l'anàlisi: el que es mostra descriu un estat anterior.",
 };
+
+/** Etiqueta d'un codi d'avís; un codi sense etiqueta mai no es mostra cru (spec F-4 §6). */
+export function warningLabel(code: string): string {
+  return Object.hasOwn(WARNING_LABELS, code) ? WARNING_LABELS[code] : "Avís del compliment anterior";
+}
+
+/** Vocabulari tancat dels avisos de l'anàlisi del plec (v3). Separat de WARNING_LABELS. */
+export const ANALYSIS_WARNING_LABELS: Record<string, string> = {
+  analysis_missing: "Encara no hi ha anàlisi del plec",
+  analysis_stale: "L'anàlisi del plec està desactualitzada",
+  blocker_potential: "L'anàlisi detecta possibles bloqueigs (no confirmats)",
+  deadline_passed: "El termini de presentació ja ha passat",
+};
+
+export function analysisWarningLabel(code: string): string {
+  return Object.hasOwn(ANALYSIS_WARNING_LABELS, code)
+    ? ANALYSIS_WARNING_LABELS[code]
+    : "Avís de l'anàlisi del plec";
+}
 
 export const OUTDATED_LABELS: Record<string, string> = {
   requirement_run_changed: "Hi ha una anàlisi de requisits més recent que la del workspace.",

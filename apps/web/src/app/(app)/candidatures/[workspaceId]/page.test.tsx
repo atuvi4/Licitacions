@@ -2,10 +2,12 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readinessFixture } from "@/test/readiness-fixture";
+import { analysisFixture } from "@/test/analysis-fixture";
 import { decisionFixture, workspaceFixture } from "@/test/workspace-fixture";
 
 const get = vi.fn();
 const readiness = vi.fn();
+const analysisCurrent = vi.fn();
 const post = vi.fn();
 const push = vi.fn();
 const replace = vi.fn();
@@ -16,7 +18,11 @@ let search = "";
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   const route = (path: unknown, ...rest: unknown[]) =>
-    typeof path === "string" && path.includes("/final-readiness") ? readiness(path, ...rest) : get(path, ...rest);
+    typeof path === "string" && path.includes("/final-readiness")
+      ? readiness(path, ...rest)
+      : typeof path === "string" && path.includes("/analysis/current")
+        ? analysisCurrent(path, ...rest)
+        : get(path, ...rest);
   return { ...actual, api: { ...actual.api, get: route, post: (...args: unknown[]) => post(...args) } };
 });
 vi.mock("@/components/SessionProvider", () => ({
@@ -58,6 +64,29 @@ vi.mock("@/components/TechnicalSolutionSection", () => ({
   ),
 }));
 vi.mock("@/components/WorkPlanDeadlines", () => ({ WorkPlanDeadlines: () => <div data-testid="deadlines">Terminis del plec (secció)</div> }));
+// Espies de propietat: el mateix estat d'anàlisi ha d'arribar a la targeta i al panell
+// (l'identificador surt com a atribut, mai com a text visible).
+vi.mock("@/components/tender-analysis/DecisionAnalysisCard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/tender-analysis/DecisionAnalysisCard")>();
+  return {
+    DecisionAnalysisCard: (props: { state: { kind: string; run?: { id: string } } }) => (
+      <div data-testid="card-spy" data-kind={props.state.kind} data-run-id={props.state.run?.id ?? ""}>
+        <actual.DecisionAnalysisCard {...(props as Parameters<typeof actual.DecisionAnalysisCard>[0])} />
+      </div>
+    ),
+  };
+});
+vi.mock("@/components/WorkspaceDecision", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/WorkspaceDecision")>();
+  return {
+    ...actual,
+    DecisionPanel: (props: Parameters<typeof actual.DecisionPanel>[0]) => (
+      <div data-testid="panel-spy" data-kind={props.analysis?.kind ?? ""} data-run-id={(props.analysis && "run" in props.analysis ? props.analysis.run.id : "")}>
+        <actual.DecisionPanel {...props} />
+      </div>
+    ),
+  };
+});
 vi.mock("@/components/WorkspaceWork", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/WorkspaceWork")>();
   return {
@@ -85,6 +114,8 @@ describe("Candidatura · stepper i Decidir", () => {
     get.mockReset();
     readiness.mockReset();
     readiness.mockResolvedValue(readinessFixture());
+    analysisCurrent.mockReset();
+    analysisCurrent.mockRejectedValue(new ApiError(404, "not_found", "Not found"));
     post.mockReset();
     push.mockClear();
     replace.mockClear();
@@ -155,9 +186,6 @@ describe("Candidatura · stepper i Decidir", () => {
         tender_actionable: false,
         deadline_passed: true,
         days_remaining: -3,
-        analysis_outdated: true,
-        outdated_reasons: ["requirements_outdated"],
-        open_warnings: ["deadline_passed", "outdated_analysis"],
         go_requires_reason: true,
       }),
     );
@@ -168,10 +196,9 @@ describe("Candidatura · stepper i Decidir", () => {
     expect(banners[0].getAttribute("data-level")).toBe("blocking");
     expect(banners[0].textContent).toContain("Anul·lada");
     expect(banners[0].textContent).toContain("El termini de presentació ja ha passat");
-    expect(banners[0].textContent).toContain("Els plecs han canviat");
   });
 
-  it("anàlisi endarrerida: es diu, la decisió vigent es continua veient i no es recalcula res", async () => {
+  it("senyals del compliment anterior: cap bàner (ni Bloqueig, ni Avisos, ni Anàlisi endarrerida)", async () => {
     const decision = decisionFixture();
     get.mockResolvedValue(
       workspaceFixture({
@@ -181,19 +208,98 @@ describe("Candidatura · stepper i Decidir", () => {
         decisions: [decision],
         analysis_outdated: true,
         outdated_reasons: ["compliance_run_changed"],
-        open_warnings: ["outdated_analysis"],
+        counters: { ...workspaceFixture().counters, confirmed_blockers: 2 },
+        open_warnings: ["confirmed_blockers", "outdated_analysis", "mandatory_unknown"],
       }),
     );
     search = "pas=decidir";
     const { container } = render(<WorkspacePage />);
     await flush();
-    const banner = container.querySelector("[role='status'][data-level]")!;
-    expect(banner.getAttribute("data-level")).toBe("attention");
-    expect(banner.textContent).toContain("Anàlisi");
+    expect(container.querySelector("[role='status'][data-level]")).toBeNull();
     expect(container.textContent).toContain("Decisió vigent");
     expect(container.textContent).toContain("Anna Puig");
     expect(post).not.toHaveBeenCalled();
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  const staleWorkspace = (overrides: Parameters<typeof workspaceFixture>[0] = {}) =>
+    workspaceFixture({
+      eligibility: "no_go",
+      analysis_basis: "simulation",
+      open_warnings: ["deadline_passed"],
+      counters: { ...workspaceFixture().counters, confirmed_blockers: 3, potential_blockers: 1 },
+      ...overrides,
+    });
+  const contextTexts = (container: HTMLElement) =>
+    [...container.querySelectorAll("dl")].flatMap((dl) =>
+      [...dl.querySelectorAll("dt, dd")].map((el) => `${el.tagName}:${el.textContent}`),
+    );
+
+  it("Decidir: el panell de context no té cap fila «Recomanació»; només Encaix", async () => {
+    get.mockResolvedValue(workspaceFixture({ recommendation: "go_candidate", eligibility: "eligible" }));
+    search = "pas=decidir";
+    const { container } = render(<WorkspacePage />);
+    await flush();
+    const labels = [...container.querySelectorAll("dt")].map((dt) => dt.textContent);
+    expect(labels).toContain("Encaix");
+    expect(labels).not.toContain("Elegibilitat");
+    expect(labels).not.toContain("Recomanació");
+  });
+
+  it("Decidir: sense «Què bloqueja», Elegibilitat, Anàlisi ni enllaços de compliment encara que les dades hi siguin", async () => {
+    get.mockResolvedValue(staleWorkspace());
+    search = "pas=decidir";
+    const { container } = render(<WorkspacePage />);
+    await flush();
+    const labels = [...container.querySelectorAll("dt")].map((dt) => dt.textContent);
+    expect(labels).not.toContain("Elegibilitat");
+    expect(labels).not.toContain("Anàlisi");
+    expect(container.textContent).not.toContain("Què bloqueja");
+    expect(container.textContent).not.toContain("Veure el compliment detallat");
+    expect(container.textContent).not.toContain("Analitza el plec");
+  });
+
+  it("Decidir: canviar eligibility i analysis_basis no canvia el panell de context", async () => {
+    search = "pas=decidir";
+    get.mockResolvedValueOnce(staleWorkspace());
+    const first = render(<WorkspacePage />);
+    await flush();
+    const before = contextTexts(first.container);
+    first.unmount();
+    get.mockResolvedValueOnce(staleWorkspace({ eligibility: "eligible", analysis_basis: "real", analysis_outdated: true }));
+    const second = render(<WorkspacePage />);
+    await flush();
+    expect(before.length).toBeGreaterThan(0);
+    expect(contextTexts(second.container)).toEqual(before);
+  });
+
+  it("Decidir: Encaix surt només de prefit_score", async () => {
+    search = "pas=decidir";
+    get.mockResolvedValueOnce(workspaceFixture({ prefit_score: 72 }));
+    const first = render(<WorkspacePage />);
+    await flush();
+    expect(first.container.textContent).toContain("72 sobre 100");
+    first.unmount();
+    get.mockResolvedValueOnce(workspaceFixture({ prefit_score: null }));
+    const second = render(<WorkspacePage />);
+    await flush();
+    const dt = [...second.container.querySelectorAll("dt")].find((el) => el.textContent === "Encaix");
+    expect(dt?.nextElementSibling?.textContent).toBe("Sense càlcul");
+  });
+
+  it("Decidir: la fila Lot només hi és amb lot_number", async () => {
+    search = "pas=decidir";
+    get.mockResolvedValueOnce(workspaceFixture({ lot_number: 2, lot_title: "Fibra" }));
+    const first = render(<WorkspacePage />);
+    await flush();
+    const dt = [...first.container.querySelectorAll("dt")].find((el) => el.textContent === "Lot");
+    expect(dt?.nextElementSibling?.textContent).toContain("2");
+    expect(dt?.nextElementSibling?.textContent).toContain("Fibra");
+    first.unmount();
+    get.mockResolvedValueOnce(workspaceFixture());
+    const second = render(<WorkspacePage />);
+    await flush();
+    expect([...second.container.querySelectorAll("dt")].map((el) => el.textContent)).not.toContain("Lot");
   });
 
   it("termini: dies i data quan hi és; «no consta» quan és null", async () => {
@@ -315,6 +421,85 @@ describe("Candidatura · stepper i Decidir", () => {
     expect(push).not.toHaveBeenCalled();
     expect(screen.getByText("Ens presentem a aquesta licitació?")).toBeTruthy();
     expect(step("Decidir").closest("[data-state]")?.getAttribute("data-state")).toBe("on");
+  });
+
+  it("decision_reason_required: un sol GET extra del workspace i un de l'anàlisi, cap navegació i el modal continua obert", async () => {
+    get.mockResolvedValueOnce(workspaceFixture({ go_requires_reason: false, decision_warnings: [] }));
+    get.mockResolvedValueOnce(workspaceFixture({ go_requires_reason: true, decision_warnings: ["analysis_stale"] }));
+    post.mockRejectedValue(
+      new ApiError(422, "decision_reason_required", "x", [], { warnings: ["analysis_stale"], basis: "analysis_v3" }),
+    );
+    const { container } = render(<WorkspacePage />);
+    await flush();
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(analysisCurrent).toHaveBeenCalledTimes(1);
+    expect(readiness).toHaveBeenCalledTimes(1);
+    replace.mockClear();
+    await decide(/Presentar-se · GO/);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get.mock.calls[1][0]).toMatch(/\/companies\/c1\/workspaces\/w1$/);
+    expect(analysisCurrent).toHaveBeenCalledTimes(2);
+    expect(readiness).toHaveBeenCalledTimes(1);
+    expect(replace).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+    expect(container.querySelector("[aria-busy='true']")).toBeNull();
+    expect(screen.getByText("Ens presentem a aquesta licitació?")).toBeTruthy();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("Cal un motiu: ");
+    expect(dialog.textContent).toContain("Motiu (obligatori: hi ha avisos de l'anàlisi del plec)");
+  });
+
+  describe("conflicte decision_reason_required: cursa amb l'anàlisi", () => {
+    async function conflict(second: "stale" | "404") {
+      get.mockResolvedValueOnce(workspaceFixture({ go_requires_reason: false, decision_warnings: [] }));
+      analysisCurrent.mockReset();
+      analysisCurrent.mockResolvedValueOnce(analysisFixture({ id: "run-1" }));
+      if (second === "stale") analysisCurrent.mockResolvedValueOnce(analysisFixture({ id: "run-1", stale: true }));
+      else analysisCurrent.mockRejectedValueOnce(new ApiError(404, "not_found", "Not found"));
+      get.mockResolvedValueOnce(workspaceFixture({ go_requires_reason: true, decision_warnings: ["analysis_stale"] }));
+      post.mockRejectedValue(new ApiError(422, "decision_reason_required", "x", [], { warnings: ["analysis_stale"], basis: "analysis_v3" }));
+      render(<WorkspacePage />);
+      await flush();
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(analysisCurrent).toHaveBeenCalledTimes(1);
+      replace.mockClear();
+      await decide(/Presentar-se · GO/);
+      await flush();
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(get).toHaveBeenCalledTimes(2);
+      expect(analysisCurrent).toHaveBeenCalledTimes(2);
+      expect(replace).not.toHaveBeenCalled();
+      expect(screen.getByText("Ens presentem a aquesta licitació?")).toBeTruthy();
+      return screen.getByRole("dialog");
+    }
+
+    it("anàlisi vigent que passa a desactualitzada: la fila del modal ho diu i el panell passa a mode obligatori", async () => {
+      const dialog = await conflict("stale");
+      expect(dialog.textContent).toContain("desactualitzada");
+      expect(dialog.textContent).toContain("Motiu (obligatori: hi ha avisos de l'anàlisi del plec)");
+      expect(screen.getByTestId("panel-spy").getAttribute("data-kind")).toBe("stale");
+      expect(screen.getByTestId("card-spy").getAttribute("data-kind")).toBe("stale");
+    });
+
+    it("l'anàlisi desapareix (404): la fila diu que no n'hi ha", async () => {
+      const dialog = await conflict("404");
+      expect(dialog.textContent).toContain("Encara no hi ha anàlisi d'aquesta licitació.");
+      expect(screen.getByTestId("panel-spy").getAttribute("data-kind")).toBe("absent");
+    });
+
+    it("camí normal: obrir i tancar el modal sense conflicte no fa cap GET addicional", async () => {
+      get.mockResolvedValue(workspaceFixture());
+      analysisCurrent.mockReset();
+      analysisCurrent.mockResolvedValue(analysisFixture());
+      render(<WorkspacePage />);
+      await flush();
+      fireEvent.click(screen.getByRole("button", { name: /Presentar-se · GO/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Cancel·la/ }));
+      await flush();
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(analysisCurrent).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("advance acceptat: es rellegeix el workspace i, si ja és a revisió final, s'obre Tancar", async () => {
@@ -472,7 +657,7 @@ describe("Candidatura · Preparar per àrees", () => {
     await flush();
     expect(readiness).toHaveBeenCalledTimes(1);
     expect(readiness).toHaveBeenCalledWith("/companies/c1/workspaces/w1/final-readiness");
-    expect(screen.getByText("1 bloqueig")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
   });
 
   it("un desat del dossier torna a preguntar la preparació final i el capçal canvia", async () => {
@@ -481,14 +666,14 @@ describe("Candidatura · Preparar per àrees", () => {
     readiness.mockResolvedValueOnce(readinessFixture());
     render(<WorkspacePage />);
     await flush();
-    expect(screen.getByText("1 bloqueig")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "simula desat del dossier" }));
     await flush();
 
     expect(readiness).toHaveBeenCalledTimes(2);
     expect(screen.getByText("A punt")).toBeTruthy();
-    expect(screen.queryByText("1 bloqueig")).toBeNull();
+    expect(screen.queryByText("1 pendent de preparació")).toBeNull();
     // Sense recarregar la pàgina: la secció no s'ha desmuntat.
     expect(screen.getByTestId("dossier")).toBeTruthy();
   });
@@ -715,5 +900,53 @@ describe("Candidatura · integració final d'Sprint 2", () => {
     });
     expect(leaveGuard).not.toHaveBeenCalled();
     expect(push).not.toHaveBeenCalled();
+  });
+});
+
+describe("Candidatura · propietari únic de /analysis/current", () => {
+  beforeEach(() => {
+    get.mockReset();
+    readiness.mockReset();
+    readiness.mockResolvedValue(readinessFixture());
+    analysisCurrent.mockReset();
+    analysisCurrent.mockResolvedValue(analysisFixture({ id: "run-xyz" }));
+    post.mockReset();
+    push.mockClear();
+    replace.mockClear();
+    get.mockResolvedValue(workspaceFixture());
+  });
+
+  it("Decidir: una sola lectura i el mateix run arriba a la targeta i al panell", async () => {
+    search = "";
+    render(<WorkspacePage />);
+    await flush();
+    expect(analysisCurrent).toHaveBeenCalledTimes(1);
+    expect(analysisCurrent.mock.calls[0][0]).toContain("/analysis/current");
+    expect(screen.getByTestId("card-spy").getAttribute("data-run-id")).toBe("run-xyz");
+    expect(screen.getByTestId("panel-spy").getAttribute("data-run-id")).toBe("run-xyz");
+    expect(screen.getByTestId("card-spy").getAttribute("data-kind")).toBe("current");
+    expect(screen.getByTestId("panel-spy").getAttribute("data-kind")).toBe("current");
+    expect(screen.queryByText(/run-xyz/)).toBeNull();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("obrir i tancar el modal no torna a llegir l'anàlisi", async () => {
+    search = "";
+    render(<WorkspacePage />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Presentar-se · GO/ }));
+    await flush();
+    fireEvent.change(screen.getAllByRole("textbox")[0], { target: { value: "Motiu de prova" } });
+    fireEvent.click(screen.getByRole("button", { name: /Cancel·la/ }));
+    await flush();
+    expect(analysisCurrent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["preparar", "tancar"])("%s: cap lectura de /analysis/current", async (pas) => {
+    search = `pas=${pas}`;
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.queryByTestId("card-spy")).toBeNull();
+    expect(analysisCurrent).not.toHaveBeenCalled();
   });
 });

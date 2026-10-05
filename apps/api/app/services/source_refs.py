@@ -313,6 +313,94 @@ async def resolve_source_ref(session: AsyncSession, ref: TenderSourceRef) -> Res
     )
 
 
+async def resolve_source_refs(
+    session: AsyncSession, refs: list[TenderSourceRef]
+) -> dict[uuid.UUID, ResolvedRef]:
+    """Com `resolve_source_ref`, per a moltes cites alhora (maxim 3 consultes).
+
+    Mateixa semantica, sense una consulta per cita. Serveix les lectures que
+    pinten les cites de molts elements d'una vegada.
+    """
+    if not refs:
+        return {}
+
+    document_ids = {r.tender_document_id for r in refs if r.tender_document_id is not None}
+    names: dict[uuid.UUID, str] = {}
+    if document_ids:
+        names = dict(
+            (
+                await session.execute(
+                    sa.select(TenderDocument.id, TenderDocument.name).where(
+                        TenderDocument.id.in_(document_ids)
+                    )
+                )
+            ).all()
+        )
+
+    file_ids = {r.tender_document_file_id for r in refs if r.tender_document_file_id is not None}
+    versions: dict[uuid.UUID, int] = {}
+    if file_ids:
+        versions = dict(
+            (
+                await session.execute(
+                    sa.select(TenderDocumentFile.id, TenderDocumentFile.version_number).where(
+                        TenderDocumentFile.id.in_(file_ids)
+                    )
+                )
+            ).all()
+        )
+
+    # Cites de pagina: fitxer amb els mateixos bytes DINS la mateixa licitacio.
+    page_refs = [r for r in refs if r.tender_document_file_id is None and r.extraction_id]
+    by_bytes: dict[tuple[str, uuid.UUID], tuple[uuid.UUID, int]] = {}
+    if page_refs:
+        rows = (
+            await session.execute(
+                sa.select(
+                    TenderDocumentContent.sha256,
+                    TenderDocument.tender_id,
+                    TenderDocumentFile.id,
+                    TenderDocumentFile.version_number,
+                )
+                .join(TenderDocument, TenderDocument.id == TenderDocumentFile.tender_document_id)
+                .join(
+                    TenderDocumentContent,
+                    TenderDocumentContent.id == TenderDocumentFile.content_id,
+                )
+                .where(
+                    TenderDocumentContent.sha256.in_({r.content_sha256 for r in page_refs}),
+                    TenderDocument.tender_id.in_({r.tender_id for r in page_refs}),
+                )
+                .order_by(TenderDocumentFile.version_number)
+            )
+        ).all()
+        for sha, tender_id, file_id, version_number in rows:
+            by_bytes.setdefault((sha, tender_id), (file_id, version_number))
+
+    result: dict[uuid.UUID, ResolvedRef] = {}
+    for ref in refs:
+        file_id = ref.tender_document_file_id
+        version_number = versions.get(file_id) if file_id is not None else None
+        if file_id is None and ref.extraction_id is not None:
+            found = by_bytes.get((ref.content_sha256, ref.tender_id))
+            if found is not None:
+                file_id, version_number = found
+        result[ref.id] = ResolvedRef(
+            ref=ref,
+            document_id=ref.tender_document_id,
+            document_name=names.get(ref.tender_document_id)
+            if ref.tender_document_id is not None
+            else None,
+            file_id=file_id,
+            version_number=version_number,
+            content_sha256=ref.content_sha256,
+            extraction_id=ref.extraction_id,
+            page_id=ref.page_id,
+            page_number=ref.page_number,
+        )
+    return result
+
+
 async def get_source_ref(
     session: AsyncSession, tender_id: uuid.UUID, ref_id: uuid.UUID
 ) -> TenderSourceRef:

@@ -49,6 +49,8 @@ export function workspaceFixture(overrides: Partial<WorkspaceDetail> = {}): Work
       confirmed_blockers: 0,
     },
     open_warnings: [],
+    decision_warnings: [],
+    decision_warning_basis: "analysis_v3",
     go_requires_reason: false,
     current_compliance_run_id: "cr1",
     current_requirement_run_id: "rr1",
@@ -97,6 +99,8 @@ export function decisionFixture(overrides: Partial<WorkspaceDecisionEntry> = {})
     automated_recommendation: "go_candidate",
     deadline_passed: false,
     open_warnings: ["mandatory_unknown", "mandatory_needs_review"],
+    analysis_run_id: null,
+    analysis_snapshot_json: null,
     ...overrides,
   };
 }

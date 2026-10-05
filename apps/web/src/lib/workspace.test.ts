@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { READINESS_BLOCKER_LABELS, STALE_REASON_LABELS, readinessBlockerLabel, staleReasonLabel } from "./workspace";
+import { READINESS_BLOCKER_LABELS, warningLabel, STALE_REASON_LABELS, readinessBlockerLabel, staleReasonLabel } from "./workspace";
 
 /** Els codis que emet `app/workspace/dossier.py` (BLOCKER_*). Si el backend n'afegeix un, aquesta prova ho diu. */
 const BACKEND_READINESS_BLOCKERS = [
@@ -52,5 +52,12 @@ describe("staleReasonLabel", () => {
 
   it("un codi desconegut no arriba mai al text de negoci", () => {
     expect(staleReasonLabel("brand_new_reason")).toBe("Motiu d'obsolescència no reconegut");
+  });
+});
+
+describe("warningLabel", () => {
+  it("un codi heretat d'Object.prototype dona el text neutre, mai «undefined»", () => {
+    expect(warningLabel("toString")).toBe("Avís del compliment anterior");
+    expect(warningLabel("constructor")).toBe("Avís del compliment anterior");
   });
 });

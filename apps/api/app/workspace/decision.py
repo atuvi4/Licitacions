@@ -9,6 +9,11 @@ El que si que fa es exigir que ho justifiqui per escrit i deixar-ho a
 l'historial al costat dels avisos que hi havia a la pantalla. La friccio va al
 lloc correcte: no a bloquejar la persona, sino a que quedi constancia.
 
+Hi ha dues families d'avisos: `DecisionWarnings` (legacy, del compliance antic;
+les decisions existents es llegeixen amb aquesta) i `AnalysisDecisionWarnings`
+(v3, derivada de l'analisi vigent). `requires_reason` accepta qualsevol objecte
+amb `any_open`.
+
 Quin estat deixa cada decisio i quines transicions son possibles NO es decideix
 aqui: viu a `app.workspace.transitions`, que es l'unica porta cap a
 `BidWorkspace.status`.
@@ -17,8 +22,17 @@ aqui: viu a `app.workspace.transitions`, que es l'unica porta cap a
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol
 
 from app.models.enums import WorkspaceDecisionType
+
+if TYPE_CHECKING:
+    from app.services.tender_analysis import AnalysisStatus
+
+
+class HasAnyOpen(Protocol):
+    @property
+    def any_open(self) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +97,57 @@ class DecisionWarnings:
         return codes
 
 
-def requires_reason(decision: WorkspaceDecisionType, warnings: DecisionWarnings) -> bool:
+@dataclass(frozen=True, slots=True)
+class AnalysisDecisionWarnings:
+    """Avisos v3: derivats de l'analisi vigent, en ordre fix."""
+
+    analysis_missing: bool = False
+    analysis_stale: bool = False
+    blocker_potential: bool = False
+    deadline_passed: bool = False
+
+    @classmethod
+    def from_status(
+        cls,
+        status: AnalysisStatus,
+        *,
+        deadline_passed: bool,
+    ) -> AnalysisDecisionWarnings:
+        # import local: evita el cicle amb el servei d'analisi
+        from app.services.tender_analysis import summary_of
+
+        count = summary_of(status.run)["blocker_potential_count"] if status.run else 0
+        return cls(
+            analysis_missing=status.run is None,
+            analysis_stale=status.run is not None and status.stale,
+            blocker_potential=count >= 1,
+            deadline_passed=deadline_passed,
+        )
+
+    @property
+    def any_open(self) -> bool:
+        return bool(
+            self.analysis_missing
+            or self.analysis_stale
+            or self.blocker_potential
+            or self.deadline_passed
+        )
+
+    def codes(self) -> list[str]:
+        """Codis dels avisos oberts, sempre en l'ordre dels camps."""
+        return [
+            code
+            for code in (
+                "analysis_missing",
+                "analysis_stale",
+                "blocker_potential",
+                "deadline_passed",
+            )
+            if getattr(self, code)
+        ]
+
+
+def requires_reason(decision: WorkspaceDecisionType, warnings: HasAnyOpen) -> bool:
     """Nomes el GO amb avisos oberts obliga a escriure el perque.
 
     Un NO-GO no necessita justificar-se davant de cap avis: descartar-se davant

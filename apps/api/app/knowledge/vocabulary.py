@@ -7,6 +7,11 @@ s'hi ha afegit despres, una migracio per ampliacio (`0046`: telefonia mobil).
 `test_knowledge_vocabulary` comprova que, sumades, diuen el mateix que aquest
 fitxer.
 
+**Els retols son text, no claus.** Porten accents (copy v3): les migracions
+publicades conserven els retols antics sense accents, i les pantalles els llegeixen
+d'aqui (`/knowledge/vocabulary`). Cap codi no compara mai un retol: es comparen els
+codis (`test_vocabulary_labels_are_not_keys`).
+
 **Codis tancats.** No hi ha cap API que en creï. Un requisit del plec que no
 encaixi amb cap capacitat quedara pendent de revisio i proposara un codi nou,
 que una persona afegira aqui i en una migracio. Un model de llenguatge no pot
@@ -25,6 +30,9 @@ from app.models.enums import (
     CapabilityValueType,
     EquipmentType,
     OperatingFactKey,
+    ProofKind,
+    RegistrationType,
+    RequirementCategory,
 )
 
 
@@ -64,16 +72,16 @@ class CertificationStandard:
 
 SERVICE_LINES: tuple[ServiceLine, ...] = (
     ServiceLine("voice_pbx", "Centraleta i veu IP"),
-    ServiceLine("voice_trunk", "Troncals de veu i numeracio"),
+    ServiceLine("voice_trunk", "Troncals de veu i numeració"),
     ServiceLine("access_ftth", "Accessos FTTH"),
     ServiceLine("dedicated_network", "Xarxa dedicada entre seus"),
-    ServiceLine("radio_link", "Radioenllacos"),
-    ServiceLine("network_switching", "Electronica de xarxa"),
-    ServiceLine("fiber_deployment", "Desplegament i certificacio de fibra"),
+    ServiceLine("radio_link", "Radioenllaços"),
+    ServiceLine("network_switching", "Electrònica de xarxa"),
+    ServiceLine("fiber_deployment", "Desplegament i certificació de fibra"),
     ServiceLine("civil_works", "Obra civil"),
-    ServiceLine("support_ops", "Suport, operacio i nivells de servei"),
+    ServiceLine("support_ops", "Suport, operació i nivells de servei"),
     # Afegida a la migracio 0046.
-    ServiceLine("mobile_telephony", "Telefonia mobil"),
+    ServiceLine("mobile_telephony", "Telefonia mòbil"),
 )
 
 _B, _N, _O = CapabilityValueType.BOOLEAN, CapabilityValueType.NUMBER, CapabilityValueType.ORDINAL
@@ -81,25 +89,25 @@ _TRUE, _GTE, _LTE = CapabilityComparator.IS_TRUE, CapabilityComparator.GTE, Capa
 
 CAPABILITIES: tuple[CapabilityDefinition, ...] = (
     CapabilityDefinition(
-        "pbx.concurrent_calls", "voice_pbx", "Trucades simultanies", _N, _GTE, unit="canals"
+        "pbx.concurrent_calls", "voice_pbx", "Trucades simultànies", _N, _GTE, unit="canals"
     ),
     CapabilityDefinition("pbx.ivr_multilevel", "voice_pbx", "IVR multinivell", _B, _TRUE),
     CapabilityDefinition("pbx.queues", "voice_pbx", "Cues de trucades", _B, _TRUE),
-    CapabilityDefinition("pbx.blf", "voice_pbx", "Estat de linia (BLF)", _B, _TRUE),
+    CapabilityDefinition("pbx.blf", "voice_pbx", "Estat de línia (BLF)", _B, _TRUE),
     CapabilityDefinition("pbx.call_park", "voice_pbx", "Aparcament de trucades", _B, _TRUE),
     CapabilityDefinition(
-        "pbx.voicemail_email", "voice_pbx", "Bustia amb avis per correu", _B, _TRUE
+        "pbx.voicemail_email", "voice_pbx", "Bústia amb avís per correu", _B, _TRUE
     ),
     CapabilityDefinition("pbx.cdr_export", "voice_pbx", "CDR exportable", _B, _TRUE),
     CapabilityDefinition(
-        "pbx.recording_policy", "voice_pbx", "Gravacio configurable per politica", _B, _TRUE
+        "pbx.recording_policy", "voice_pbx", "Gravació configurable per política", _B, _TRUE
     ),
     CapabilityDefinition("pbx.tls_srtp", "voice_pbx", "Xifratge TLS i SRTP", _B, _TRUE),
     CapabilityDefinition("pbx.fraud_block", "voice_pbx", "Bloqueig contra frau", _B, _TRUE),
     CapabilityDefinition(
         "pbx.outbound_number_select",
         "voice_pbx",
-        "Numeros de sortida seleccionables per usuari",
+        "Números de sortida seleccionables per usuari",
         _N,
         _GTE,
         unit="numeros",
@@ -115,7 +123,7 @@ CAPABILITIES: tuple[CapabilityDefinition, ...] = (
     CapabilityDefinition(
         "pbx.queue_callback_keep_position",
         "voice_pbx",
-        "Retorn de trucada conservant la posicio a la cua",
+        "Retorn de trucada conservant la posició a la cua",
         _B,
         _TRUE,
     ),
@@ -123,18 +131,18 @@ CAPABILITIES: tuple[CapabilityDefinition, ...] = (
     CapabilityDefinition(
         "switch.poe_standard",
         "network_switching",
-        "Estandard PoE",
+        "Estàndard PoE",
         _O,
         _GTE,
         ordinal_scale=("af", "at", "bt"),
     ),
     CapabilityDefinition(
-        "switch.mlag", "network_switching", "Agregacio redundant (MLAG o equivalent)", _B, _TRUE
+        "switch.mlag", "network_switching", "Agregació redundant (MLAG o equivalent)", _B, _TRUE
     ),
     CapabilityDefinition(
         "fiber.otdr_level",
         "fiber_deployment",
-        "Nivell de certificacio de fibra (1 = OLTS, 2 = OTDR)",
+        "Nivell de certificació de fibra (1 = OLTS, 2 = OTDR)",
         _O,
         _GTE,
         ordinal_scale=("1", "2"),
@@ -151,9 +159,9 @@ CERTIFICATION_STANDARDS: tuple[CertificationStandard, ...] = (
     CertificationStandard(
         "ENS", "Esquema Nacional de Seguretat", levels=("basic", "medium", "high")
     ),
-    CertificationStandard("ISO_9001", "ISO 9001 (gestio de la qualitat)"),
-    CertificationStandard("ISO_14001", "ISO 14001 (gestio ambiental)"),
-    CertificationStandard("ISO_27001", "ISO/IEC 27001 (seguretat de la informacio)"),
+    CertificationStandard("ISO_9001", "ISO 9001 (gestió de la qualitat)"),
+    CertificationStandard("ISO_14001", "ISO 14001 (gestió ambiental)"),
+    CertificationStandard("ISO_27001", "ISO/IEC 27001 (seguretat de la informació)"),
 )
 
 SERVICE_LINE_CODES = frozenset(s.code for s in SERVICE_LINES)
@@ -179,21 +187,21 @@ PROFESSIONAL_PROFILES: tuple[ProfessionalProfile, ...] = (
     ProfessionalProfile("project_manager", "Cap de projecte"),
     ProfessionalProfile("network_security_specialist", "Especialista de xarxa i seguretat"),
     ProfessionalProfile("voip_specialist", "Especialista VoIP"),
-    ProfessionalProfile("fiber_certification_specialist", "Responsable de fibra i certificacio"),
+    ProfessionalProfile("fiber_certification_specialist", "Responsable de fibra i certificació"),
     ProfessionalProfile("network_engineer", "Enginyer de xarxa"),
-    ProfessionalProfile("radio_link_specialist", "Especialista en radioenllacos"),
-    ProfessionalProfile("field_technician", "Tecnic de camp"),
-    ProfessionalProfile("service_desk_agent", "Agent de suport i atencio"),
+    ProfessionalProfile("radio_link_specialist", "Especialista en radioenllaços"),
+    ProfessionalProfile("field_technician", "Tècnic de camp"),
+    ProfessionalProfile("service_desk_agent", "Agent de suport i atenció"),
     ProfessionalProfile("data_center_operator", "Operador de CPD"),
 )
 PROFESSIONAL_PROFILE_CODES = frozenset(p.code for p in PROFESSIONAL_PROFILES)
 PROFILES_BY_CODE = {p.code: p for p in PROFESSIONAL_PROFILES}
 
 EQUIPMENT_TYPE_LABELS: dict[str, str] = {
-    EquipmentType.OTDR.value: "Reflectometre optic (OTDR)",
-    EquipmentType.OLTS.value: "Equip de perdues optiques (OLTS)",
+    EquipmentType.OTDR.value: "Reflectòmetre òptic (OTDR)",
+    EquipmentType.OLTS.value: "Equip de pèrdues òptiques (OLTS)",
     EquipmentType.FUSION_SPLICER.value: "Fusionadora de fibra",
-    EquipmentType.OPTICAL_POWER_METER.value: "Mesurador de potencia optica",
+    EquipmentType.OPTICAL_POWER_METER.value: "Mesurador de potència òptica",
     EquipmentType.LIGHT_SOURCE.value: "Font de llum",
     EquipmentType.CABLE_CERTIFIER.value: "Certificador de cablejat",
     EquipmentType.SPECTRUM_ANALYZER.value: "Analitzador d'espectre",
@@ -213,6 +221,68 @@ OPERATING_FACT_VALUE_TYPES: dict[str, CapabilityValueType] = {
 }
 assert set(OPERATING_FACT_VALUE_TYPES) == {k.value for k in OperatingFactKey}
 NUMERIC_FACT_KEYS = frozenset(key for key, kind in OPERATING_FACT_VALUE_TYPES.items() if kind == _N)
+
+
+# --- Retols dels codis que surten a les preguntes del motor (copy v3) ----------------
+#
+# `question_text` (v3) tradueix els codis de `params_json` a aquests retols. Cada mapa
+# cobreix exactament el seu enum. Son els mateixos retols que fa servir el web.
+
+OPERATING_FACT_LABELS: dict[str, str] = {
+    OperatingFactKey.TELECOM_OPERATOR_CNMC.value: "Operador inscrit a la CNMC",
+    OperatingFactKey.OWN_NUMBER_RANGE_NRN.value: "Rang de numeració propi (NRN)",
+    OperatingFactKey.DATACENTER_TIER3.value: "Centre de dades Tier-3",
+    OperatingFactKey.OWN_FTTH_INFRASTRUCTURE.value: "Infraestructura FTTH pròpia",
+    OperatingFactKey.SUPPORT_24X7.value: "Suport 24x7",
+    OperatingFactKey.IPV4_ASSIGNABLE_COUNT.value: "IPv4 assignables",
+}
+assert set(OPERATING_FACT_LABELS) == {k.value for k in OperatingFactKey}
+
+REGISTRATION_TYPE_LABELS: dict[str, str] = {
+    RegistrationType.ROLECE.value: "ROLECE",
+    RegistrationType.RELI.value: "RELI",
+    RegistrationType.BUSINESS_CLASSIFICATION.value: "Classificació empresarial",
+    RegistrationType.PROFESSIONAL_REGISTRY.value: "Registre professional",
+    RegistrationType.ADMINISTRATIVE_ACCREDITATION.value: "Acreditació administrativa",
+    RegistrationType.SECTOR_OPERATOR_REGISTRY.value: "Registre sectorial d'operadors",
+    RegistrationType.OTHER.value: "Altres",
+}
+assert set(REGISTRATION_TYPE_LABELS) == {t.value for t in RegistrationType}
+
+REQUIREMENT_CATEGORY_LABELS: dict[str, str] = {
+    RequirementCategory.DEADLINE.value: "Terminis",
+    RequirementCategory.ECONOMIC_SOLVENCY.value: "Solvència econòmica",
+    RequirementCategory.TECHNICAL_SOLVENCY.value: "Solvència tècnica",
+    RequirementCategory.EXPERIENCE.value: "Experiència",
+    RequirementCategory.CERTIFICATION.value: "Certificacions",
+    RequirementCategory.REGISTRATION.value: "Registres",
+    RequirementCategory.BUSINESS_CLASSIFICATION.value: "Classificació empresarial",
+    RequirementCategory.INSURANCE.value: "Assegurances",
+    RequirementCategory.PERSONNEL.value: "Equip humà",
+    RequirementCategory.PROFESSIONAL_QUALIFICATION.value: "Titulacions",
+    RequirementCategory.EQUIPMENT_OR_RESOURCES.value: "Equipament i recursos",
+    RequirementCategory.ADMINISTRATIVE_DOCUMENTATION.value: "Documentació",
+    RequirementCategory.TECHNICAL_REQUIREMENT.value: "Condicions tècniques",
+    RequirementCategory.CONTRACT_CONDITION.value: "Condicions del contracte",
+    RequirementCategory.OTHER.value: "Altres",
+}
+assert set(REQUIREMENT_CATEGORY_LABELS) == {c.value for c in RequirementCategory}
+
+PROOF_KIND_LABELS: dict[str, str] = {
+    ProofKind.RESPONSIBLE_DECLARATION.value: "Declaració responsable",
+    ProofKind.COVERAGE_MAP.value: "Mapa de cobertura",
+    ProofKind.OWNERSHIP_DOCUMENT.value: "Document de titularitat",
+    ProofKind.CERTIFICATE.value: "Certificat",
+    ProofKind.ANNUAL_ACCOUNTS.value: "Comptes anuals",
+    ProofKind.EXECUTION_CERTIFICATES.value: "Certificats de bona execució",
+    ProofKind.INSURANCE_POLICY.value: "Pòlissa d'assegurança",
+    ProofKind.CALIBRATION_CERTIFICATE.value: "Certificat de calibratge",
+    ProofKind.TECHNICAL_SHEET.value: "Fitxa tècnica",
+    ProofKind.REGISTRY_INSCRIPTION.value: "Inscripció al registre",
+    ProofKind.STAFF_COMMITMENT.value: "Compromís d'adscripció de personal",
+    ProofKind.OTHER.value: "Altres",
+}
+assert set(PROOF_KIND_LABELS) == {k.value for k in ProofKind}
 
 
 def fact_value_type(key: str) -> CapabilityValueType:

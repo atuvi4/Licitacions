@@ -6,14 +6,17 @@ transaccio, model i lectura. Un plec sintetic petit i un besso d'empresa.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from decimal import Decimal
 
 import pytest
 import sqlalchemy as sa
 
-from app.analysis.registry import RULES_VERSION
+from app.analysis import registry
+from app.analysis.registry import RULES_VERSION, RULES_VERSION_V2
 from app.analysis.registry import ExplanationCode as X
 from app.analysis.registry import QuestionCode as Q
+from app.analysis.registry import RuleCode as R
 from app.knowledge import vocabulary
 from app.models.enums import (
     AreaKind,
@@ -496,9 +499,30 @@ async def test_a_capability_with_data_moves_points_and_a_verified_fact_secures(
     ) == (2.0, 0.0, "at_risk", "needs_review")
     below = [n for n in run.need_assessments if n.explanation_code == X.CAPABILITY_BELOW_REQUIRED]
     assert len(below) == 1 and below[0].fit_result == "does_not_satisfy"
-    assert ("review_required", crits["t1"].id) in {
-        (f.finding_type, f.criterion_id) for f in run.findings
+    # Causa real de T1 (v3): els trams 30 i 40 son declarats sense verificar; el de 50
+    # queda per sota del valor d'avui. Un finding per causa, amb les seves necessitats.
+    scored = {
+        str(n.capability_need_id): n
+        for n in run.need_assessments
+        if (n.support_json or {}).get("required") in ("30", "40", "50")
     }
+    declared = sorted(
+        k for k, n in scored.items() if (n.fit_result, n.knowledge_source) == (
+            "satisfies", "current_declared"
+        )
+    )  # fmt: skip
+    assert len(declared) == 2 and [str(below[0].capability_need_id)] == sorted(
+        set(scored) - set(declared)
+    )
+    t1_findings = sorted(
+        (f.finding_type.value, f.explanation_code, sorted(f.details_json["need_ids"]))
+        for f in run.findings
+        if f.criterion_id == crits["t1"].id
+    )
+    assert t1_findings == [
+        ("review_required", X.CAPABILITY_BELOW_REQUIRED, [str(below[0].capability_need_id)]),
+        ("review_required", X.DECLARED_NOT_VERIFIED, declared),
+    ]
     # Una capacitat que l'empresa diu que NO te: la necessitat minima no es compleix.
     db.add(
         SolutionCapability(
@@ -881,6 +905,615 @@ async def test_a_lower_current_tier_does_not_lose_the_upper_tier(db, tenant_a, c
     assert len(fifty) == 1, (
         "la necessitat del tram 50 diu que avui no s'hi arriba, pero no perd res"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Causa real dels punts en risc d'un criteri (v3, C-E1)                          #
+# --------------------------------------------------------------------------- #
+
+
+def _pure_need(nid: str, threshold: int | None = None, capability: str = "pbx.concurrent_calls"):
+    from app.analysis.fingerprint import NeedView
+
+    return NeedView(
+        id=nid, capability_code=capability, unmapped_capability=None, comparator="gte",
+        value_json={"channels": threshold} if threshold is not None else None,
+        value_schema="v1", need_type="scored_improvement", points=None, criterion_key="k-c",
+    )  # fmt: skip
+
+
+def _pure_out(nid: str, fit: str, source: str, explanation: str = X.CAPABILITY_SUPPORTED):
+    from app.analysis import engine as pure
+
+    return pure.NeedAssessmentOut(
+        need_id=nid, requirement_id="r", fit_result=fit, knowledge_source=source,
+        verification_status="not_verified", rule_code="need_capability_v1",
+        explanation_code=explanation,
+    )  # fmt: skip
+
+
+def _criterion_findings_for(pairs, tranches=None, requirements=(), fits_by_key=None, timing=None):
+    """Valora un criteri automatic pur i en retorna `(assessment, troballes)`."""
+    from app.analysis import engine as pure
+    from app.analysis.fingerprint import CriterionView, TenderStructureView
+
+    criterion = CriterionView(
+        id="c", key="k-c", name="C", points=2.0, criterion_type="improvement",
+        evaluation_type="automatic", timing=timing or "at_submission", tranches=tranches,
+    )  # fmt: skip
+    tender = TenderStructureView(
+        tender_id="t", requirements=tuple(requirements), criteria=(criterion,)
+    )
+    needs = {"k-c": list(pairs)} if pairs else {}
+    out, _ = pure.assess_criterion(criterion, tender, needs, fits_by_key or {})
+    findings = pure.criterion_findings(criterion, out, needs.get("k-c", []))
+    # Invariant: «dades declarades» nomes si CADA necessitat de la causa (o el requisit
+    # enllacat) compleix amb dada declarada, i sempre amb almenys una causa.
+    declared = ("satisfies", "current_declared")
+    outs = {o.need_id: o for _, o in pairs}
+    linked = {fit.requirement_id: fit for _, fit in (fits_by_key or {}).values()}
+    for f in findings:
+        if f.explanation_code != X.DECLARED_NOT_VERIFIED:
+            continue
+        assert f.details.get("need_ids") or f.details.get("requirement_id")
+        for need_id in f.details.get("need_ids", []):
+            assert (outs[need_id].fit_result, outs[need_id].knowledge_source) == declared
+        if f.details.get("requirement_id"):
+            fit = linked[f.details["requirement_id"]]
+            assert (fit.fit_result, fit.knowledge_source) == declared
+    # Invariant (I1): «no consta cap dada actual» mai amb una necessitat de font actual.
+    for f in findings:
+        if f.explanation_code == X.CRITERION_NEEDS_UNKNOWN:
+            for need_id in f.details.get("need_ids", []):
+                assert outs[need_id].knowledge_source not in CURRENT_SOURCES, need_id
+    return out, findings
+
+
+CURRENT_SOURCES = ("current_declared", "current_verified")
+
+
+def _kinds(findings):
+    return [(f.finding_type, f.explanation_code, f.details.get("need_ids")) for f in findings]
+
+
+async def test_an_unknown_need_puts_points_at_risk_for_missing_information():
+    out, findings = _criterion_findings_for(
+        [(_pure_need("n1"), _pure_out("n1", "unknown", "none"))]
+    )
+    assert (out.points_status, out.at_risk_points) == ("at_risk", 2.0)
+    assert _kinds(findings) == [("missing_information", X.CRITERION_NEEDS_UNKNOWN, ["n1"])]
+
+
+async def test_a_need_whose_value_cannot_be_read_is_not_missing_company_data():
+    """`NEED_VALUE_NOT_COMPARABLE`: el motor no ha llegit cap dada de l'empresa (el valor del
+    plec no es comparable), aixi que no es «no consta cap dada actual»: es revisio, amb la
+    seva propia explicacio. Una necessitat sense codi continua sent «no consta»."""
+    out, findings = _criterion_findings_for(
+        [
+            (
+                _pure_need("n1", capability="pbx.queues"),
+                _pure_out("n1", "unknown", "none", X.NEED_VALUE_NOT_COMPARABLE),
+            ),
+            (
+                _pure_need("n2", capability="pbx.hot_desking"),
+                _pure_out("n2", "unknown", "none", X.CAPABILITY_UNMAPPED),
+            ),
+        ]
+    )
+    assert out.at_risk_points == 2.0
+    assert sorted(_kinds(findings)) == [
+        ("missing_information", X.CRITERION_NEEDS_UNKNOWN, ["n2"]),
+        ("review_required", X.NEED_VALUE_NOT_COMPARABLE, ["n1"]),
+    ]
+
+
+def _pure_fact_need(nid: str, count: int = 10):
+    from app.analysis.fingerprint import NeedView
+
+    return NeedView(
+        id=nid, capability_code=None, unmapped_capability=None, comparator="gte",
+        value_json={"operating_fact": "ipv4_assignable_count", "count": count},
+        value_schema="v1", need_type="scored_improvement", points=None, criterion_key="k-c",
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("source", CURRENT_SOURCES)
+async def test_a_current_capability_without_a_comparable_value_is_review_not_missing(source):
+    """I1: la capacitat consta amb dada actual (declarada o verificada) pero sense nombre o
+    nivell. Hi ha dada actual, aixi que no es «no consta cap dada actual»: es revisio, amb
+    l'explicacio propia de la necessitat."""
+    out, findings = _criterion_findings_for(
+        [(_pure_need("n1"), _pure_out("n1", "unknown", source, X.CAPABILITY_UNKNOWN))]
+    )
+    assert (out.points_status, out.at_risk_points) == ("at_risk", 2.0)
+    assert _kinds(findings) == [("review_required", X.CAPABILITY_UNKNOWN, ["n1"])]
+    assert "missing_from" not in findings[0].details
+
+
+@pytest.mark.parametrize("source", CURRENT_SOURCES)
+async def test_a_current_numeric_fact_without_a_number_is_not_comparable(source):
+    """I1: el fet quantitatiu consta amb dada actual pero sense nombre: no es pot comparar
+    (codi nomes v3), mai «no consta cap dada actual»."""
+    out, findings = _criterion_findings_for(
+        [(_pure_fact_need("n1"), _pure_out("n1", "unknown", source, X.FACT_UNKNOWN))]
+    )
+    assert (out.points_status, out.at_risk_points) == ("at_risk", 2.0)
+    assert _kinds(findings) == [("review_required", X.CRITERION_NEEDS_NOT_COMPARABLE, ["n1"])]
+    assert "missing_from" not in findings[0].details
+
+
+async def test_without_current_data_an_unknown_need_is_still_missing_information():
+    """Sense cap dada actual (cap coneixement o nomes historic), la causa continua sent
+    «no consta cap dada actual», tant per a capacitats com per a fets quantitatius."""
+    out, findings = _criterion_findings_for(
+        [
+            (_pure_need("n1"), _pure_out("n1", "unknown", "none", X.CAPABILITY_UNKNOWN)),
+            (
+                _pure_need("n2", capability="pbx.queues"),
+                _pure_out("n2", "unknown", "historical", X.CAPABILITY_HISTORIC_ONLY),
+            ),
+            (_pure_fact_need("n3"), _pure_out("n3", "unknown", "none", X.FACT_UNKNOWN)),
+            (_pure_fact_need("n4"), _pure_out("n4", "unknown", "historical", X.FACT_UNKNOWN)),
+        ]
+    )
+    assert out.at_risk_points == 2.0
+    assert _kinds(findings) == [
+        ("missing_information", X.CRITERION_NEEDS_UNKNOWN, ["n1", "n2", "n3", "n4"])
+    ]
+
+
+def _snapshot_company(capabilities=None, facts=None):
+    from app.analysis import engine as pure
+    from app.knowledge.snapshot import KnowledgeSnapshot
+
+    snapshot = KnowledgeSnapshot(
+        company_id="e", evaluated_on=date(2026, 1, 1), certifications={},
+        facts=facts or {}, services={}, solutions={}, capabilities=capabilities or {},
+        products={}, partners={}, pending_validation=(), fingerprint="x",
+    )  # fmt: skip
+    return pure.CompanyView(company_id="e", snapshot=snapshot)
+
+
+def _current_claim(record_id: str, value, number=None):
+    from app.knowledge.snapshot import Claim, KnowledgeSource
+
+    return Claim(
+        record_id=record_id, source=KnowledgeSource.CURRENT_DECLARED, value=value,
+        as_of=date(2026, 1, 1), valid_until=None, number=number,
+    )  # fmt: skip
+
+
+async def test_current_data_without_a_value_reaches_the_criterion_as_review():
+    """De punta a punta (avaluadors reals del coneixement): una capacitat declarada sense
+    nombre i un fet afirmat sense nombre donen necessitats `unknown` de font actual, i el
+    criteri ho diu com a revisio, no com a «no consta cap dada actual»."""
+    from app.analysis import engine as pure
+    from app.analysis.fingerprint import RequirementView
+    from app.knowledge.snapshot import Entry
+
+    requirement = RequirementView(
+        id="r", key="k-r", title="R", category="technical_requirement",
+        obligation="optional", timing="at_execution",
+    )  # fmt: skip
+    capability = _current_claim(
+        "cap", {"solution": "S", "status": "supported", "number": None, "level": None}
+    )
+    fact = _current_claim("fact", True, number=None)
+    company = _snapshot_company(
+        capabilities={"pbx.concurrent_calls": Entry("pbx.concurrent_calls", (capability,), ())},
+        facts={"ipv4_assignable_count": Entry("ipv4_assignable_count", (fact,), ())},
+    )
+    cap_need, fact_need = _pure_need("n1", 30), _pure_fact_need("n2")
+    cap_out = pure.assess_need(cap_need, requirement, company)
+    fact_out = pure.assess_need(fact_need, requirement, company)
+    assert (cap_out.fit_result, cap_out.knowledge_source, cap_out.explanation_code) == (
+        "unknown",
+        "current_declared",
+        X.CAPABILITY_UNKNOWN,
+    )
+    assert (fact_out.fit_result, fact_out.knowledge_source, fact_out.explanation_code) == (
+        "unknown",
+        "current_declared",
+        X.FACT_UNKNOWN,
+    )
+    _, findings = _criterion_findings_for([(cap_need, cap_out), (fact_need, fact_out)])
+    assert sorted(_kinds(findings)) == [
+        ("review_required", X.CAPABILITY_UNKNOWN, ["n1"]),
+        ("review_required", X.CRITERION_NEEDS_NOT_COMPARABLE, ["n2"]),
+    ]
+
+
+async def test_a_declared_need_puts_points_at_risk_for_review():
+    out, findings = _criterion_findings_for(
+        [(_pure_need("n1"), _pure_out("n1", "satisfies", "current_declared"))]
+    )
+    assert (out.points_status, out.at_risk_points) == ("at_risk", 2.0)
+    assert _kinds(findings) == [("review_required", X.DECLARED_NOT_VERIFIED, ["n1"])]
+
+
+async def test_a_declared_and_an_unknown_need_give_one_finding_per_cause():
+    out, findings = _criterion_findings_for(
+        [
+            (
+                _pure_need("n1", capability="pbx.queues"),
+                _pure_out("n1", "satisfies", "current_declared"),
+            ),
+            (_pure_need("n2", capability="pbx.hot_desking"), _pure_out("n2", "unknown", "none")),
+            (_pure_need("n3", capability="pbx.cdr_export"), _pure_out("n3", "unknown", "none")),
+        ]
+    )
+    assert out.at_risk_points == 2.0
+    assert sorted(_kinds(findings)) == [
+        ("missing_information", X.CRITERION_NEEDS_UNKNOWN, ["n2", "n3"]),
+        ("review_required", X.DECLARED_NOT_VERIFIED, ["n1"]),
+    ]
+    assert all(f.criterion_id == "c" and f.requirement_id is None for f in findings)
+
+
+async def test_a_verified_need_gives_no_review_finding():
+    out, findings = _criterion_findings_for(
+        [(_pure_need("n1"), _pure_out("n1", "satisfies", "current_verified"))]
+    )
+    assert (out.points_status, out.secured_points) == ("secured", 2.0)
+    assert findings == []
+
+
+async def test_only_the_tranches_left_at_risk_name_their_cause():
+    """Trams: el tram verificat no es causa de res; el declarat i el desconegut, si."""
+    tranches = [{"min": 30, "points": 0.5}, {"min": 40, "points": 1.0}, {"min": 50, "points": 2}]
+    out, findings = _criterion_findings_for(
+        [
+            (_pure_need("n30", 30), _pure_out("n30", "satisfies", "current_verified")),
+            (_pure_need("n40", 40), _pure_out("n40", "satisfies", "current_declared")),
+            (_pure_need("n50", 50), _pure_out("n50", "unknown", "none")),
+        ],
+        tranches=tranches,
+    )
+    assert (out.secured_points, out.at_risk_points, out.points_status) == (0.5, 1.5, "mixed")
+    assert sorted(_kinds(findings)) == [
+        ("missing_information", X.CRITERION_NEEDS_UNKNOWN, ["n50"]),
+        ("review_required", X.DECLARED_NOT_VERIFIED, ["n40"]),
+    ]
+
+
+async def test_an_unstructured_or_linked_criterion_names_its_own_cause():
+    from app.analysis import engine as pure
+    from app.analysis.fingerprint import RequirementView
+
+    # Sense cap estructura: compromis obert, mai «dades declarades».
+    _, findings = _criterion_findings_for([])
+    assert _kinds(findings) == [("review_required", X.CRITERION_OPEN_COMMITMENT, None)]
+
+    def linked(fit: str, source: str, timing: str = "at_submission"):
+        requirement = RequirementView(
+            id="r", key="k-r", title="R", category="technical_requirement",
+            obligation="optional", timing="at_execution", criterion_keys=("k-c",),
+        )  # fmt: skip
+        fit_out = pure.FitAssessmentOut(
+            requirement_id="r", fit_result=fit, knowledge_source=source,
+            proof_status="not_required", territory_verdict="not_applicable",
+            verification_status="not_verified", rule_code="r",
+            explanation_code=X.FACT_TRUE_DECLARED,
+        )  # fmt: skip
+        return _criterion_findings_for(
+            [], requirements=[requirement], fits_by_key={"k-r": (requirement, fit_out)},
+            timing=timing,
+        )  # fmt: skip
+
+    out, findings = linked("satisfies", "current_declared")
+    assert out.at_risk_points == 2.0
+    assert [
+        (f.finding_type, f.explanation_code, f.details.get("requirement_id")) for f in findings
+    ] == [("review_required", X.DECLARED_NOT_VERIFIED, "r")]
+    out, findings = linked("does_not_satisfy", "current_declared", timing="ambiguous")
+    assert out.explanation_code == X.CRITERION_TIMING_NOT_CONCLUSIVE
+    assert [(f.finding_type, f.explanation_code) for f in findings] == [
+        ("review_required", X.CRITERION_TIMING_NOT_CONCLUSIVE)
+    ]
+    _, findings = linked("satisfies", "current_verified")
+    assert findings == []
+
+
+# --------------------------------------------------------------------------- #
+# D'on falta la dada d'un `missing_information` (v3, C-E2)                         #
+# --------------------------------------------------------------------------- #
+
+COMPANY, TENDER = "company", "tender"
+#: Auditoria dels productors de `missing_information` al finding generic: per a cada
+#: explicacio del fit, d'on falta la dada (`details.missing_from`), o `None` (cap camp) si
+#: no es pot demostrar a partir de la regla. Amb `company` el finding es `DATA_MISSING`
+#: («falta una dada de l'empresa»); sense, `DATA_MISSING_UNATTRIBUTED`. Els codis del plec
+#: son del vocabulari (`_IN_VOCABULARY`); fora del vocabulari, vegeu el test seguent.
+DATA_MISSING_FROM = [
+    (R.FACT_REQUIREMENT, X.FACT_UNKNOWN, COMPANY),
+    (R.FACT_REQUIREMENT, X.FACT_HISTORIC_ONLY, COMPANY),
+    (R.FACT_REQUIREMENT, X.QUALIFICATION_THRESHOLD_NOT_COMPARABLE, None),
+    (R.FACT_REQUIREMENT, X.PROOF_MISSING_FOR_CLAIM, COMPANY),
+    (R.CERTIFICATION_REQUIREMENT, X.CERT_UNKNOWN, COMPANY),
+    (R.CERTIFICATION_REQUIREMENT, X.CERT_HISTORIC_ONLY, COMPANY),
+    (R.CERTIFICATION_REQUIREMENT, X.CERT_STANDARD_NOT_STRUCTURED, None),
+    (R.CERTIFICATION_REQUIREMENT, X.PROOF_MISSING_FOR_CLAIM, COMPANY),
+    (R.PROFILE_DATA_REQUIREMENT, X.PROFILE_DATA_NOT_IN_SNAPSHOT, None),
+    (R.CAPABILITY_NEEDS_REQUIREMENT, X.NEEDS_UNKNOWN, None),
+    (R.CAPABILITY_NEEDS_REQUIREMENT, X.NEEDS_NONE_MINIMUM, None),
+    (R.CAPABILITY_NEEDS_REQUIREMENT, X.PROOF_MISSING_FOR_CLAIM, COMPANY),
+    (R.TURNOVER_REQUIREMENT, X.TURNOVER_UNKNOWN, COMPANY),
+    (R.TURNOVER_REQUIREMENT, X.QUALIFICATION_THRESHOLD_NOT_COMPARABLE, None),
+    (R.TURNOVER_REQUIREMENT, X.PROOF_MISSING_FOR_CLAIM, COMPANY),
+    (R.EXECUTION_REQUIREMENT, X.EXECUTION_UNKNOWN, COMPANY),
+    (R.EXECUTION_REQUIREMENT, X.QUALIFICATION_THRESHOLD_NOT_COMPARABLE, None),
+    (R.EXECUTION_REQUIREMENT, X.PROOF_MISSING_FOR_CLAIM, COMPANY),
+    (R.INSURANCE_REQUIREMENT, X.INSURANCE_UNKNOWN, COMPANY),
+    (R.INSURANCE_REQUIREMENT, X.INSURANCE_EXPIRED, COMPANY),
+    (R.INSURANCE_REQUIREMENT, X.QUALIFICATION_THRESHOLD_NOT_COMPARABLE, None),
+    (R.INSURANCE_REQUIREMENT, X.PROOF_MISSING_FOR_CLAIM, COMPANY),
+    (R.REGISTRATION_REQUIREMENT, X.REGISTRATION_UNKNOWN, COMPANY),
+    (R.REGISTRATION_REQUIREMENT, X.REGISTRATION_SCOPE_UNKNOWN, COMPANY),
+    (R.REGISTRATION_REQUIREMENT, X.REGISTRATION_SCOPE_NOT_COVERED, COMPANY),
+    (R.REGISTRATION_REQUIREMENT, X.REGISTRATION_ONLY_OPERATOR_FACT, COMPANY),
+    (R.REGISTRATION_REQUIREMENT, X.PROOF_MISSING_FOR_CLAIM, COMPANY),
+    (R.RESOURCES_REQUIREMENT, X.PROFILES_MISSING, COMPANY),
+    (R.RESOURCES_REQUIREMENT, X.EQUIPMENT_MISSING, COMPANY),
+    (R.RESOURCES_REQUIREMENT, X.EQUIPMENT_CALIBRATION_UNKNOWN, COMPANY),
+    (R.RESOURCES_REQUIREMENT, X.QUALIFICATION_THRESHOLD_NOT_COMPARABLE, None),
+    (R.RESOURCES_REQUIREMENT, X.PROOF_MISSING_FOR_CLAIM, COMPANY),
+]
+
+
+#: Un `value_json` amb tots els codis del plec dins del vocabulari.
+_IN_VOCABULARY = {
+    "operating_fact": "support_24x7",
+    "standard": "ISO_9001",
+    "registration_type": "sector_operator_registry",
+    "insurance_type": "civil_liability",
+    "insurance_limits_eur": {"per_claim": "300000"},
+    "required_profiles": {"project_manager": 1},
+    "required_equipment": {"otdr": 1},
+    "service_lines": ["dedicated_network"],
+    "client_types": ["public"],
+}
+
+
+def _pure_requirement_findings(
+    rule: str,
+    explanation: str,
+    fit: str = "unknown",
+    proof: str = "not_required",
+    territory: str = "not_applicable",
+    value_json: dict | None = None,
+    support: dict | None = None,
+):
+    from app.analysis import engine as pure
+    from app.analysis.fingerprint import RequirementView
+
+    requirement = RequirementView(
+        id="r", key="k-r", title="Volum de negoci", category="economic_solvency",
+        obligation="mandatory", timing="at_submission",
+        value_json=_IN_VOCABULARY if value_json is None else value_json,
+    )  # fmt: skip
+    fit_out = pure.FitAssessmentOut(
+        requirement_id="r", fit_result=fit, knowledge_source="none", proof_status=proof,
+        territory_verdict=territory, verification_status="unknown", rule_code=rule,
+        explanation_code=explanation, support=support or {},
+    )  # fmt: skip
+    return pure.requirement_findings(requirement, fit_out, [], None)
+
+
+def _missing(findings):
+    return [
+        (f.explanation_code, f.details.get("missing_from", "<cap>"))
+        for f in findings
+        if f.finding_type == "missing_information"
+    ]
+
+
+@pytest.mark.parametrize(("rule", "explanation", "expected"), DATA_MISSING_FROM)
+async def test_data_missing_says_where_the_data_is_missing_only_when_it_can_show_it(
+    rule, explanation, expected
+):
+    findings, _ = _pure_requirement_findings(rule, explanation)
+    if expected == COMPANY:
+        assert _missing(findings) == [(X.DATA_MISSING, COMPANY)]
+    else:
+        assert _missing(findings) == [(X.DATA_MISSING_UNATTRIBUTED, "<cap>")]
+
+
+@pytest.mark.parametrize(
+    ("rule", "explanation", "outside"),
+    [
+        (R.FACT_REQUIREMENT, X.FACT_UNKNOWN, {"operating_fact": "fax_line"}),
+        (R.REGISTRATION_REQUIREMENT, X.REGISTRATION_UNKNOWN, {"registration_type": "guild"}),
+        (R.REGISTRATION_REQUIREMENT, X.REGISTRATION_UNKNOWN, {"registration_type": "other"}),
+        (R.INSURANCE_REQUIREMENT, X.INSURANCE_UNKNOWN, {"insurance_type": "cyber_risk"}),
+        (
+            R.INSURANCE_REQUIREMENT,
+            X.INSURANCE_UNKNOWN,
+            {"insurance_limits_eur": {"per_claim": "1", "per_hacker": "1"}},
+        ),
+        (R.RESOURCES_REQUIREMENT, X.PROFILES_MISSING, {"required_profiles": {"astronaut": 1}}),
+        (R.RESOURCES_REQUIREMENT, X.EQUIPMENT_MISSING, {"required_equipment": ["telescope"]}),
+        (R.EXECUTION_REQUIREMENT, X.EXECUTION_UNKNOWN, {"service_lines": ["teleportation"]}),
+        (R.EXECUTION_REQUIREMENT, X.EXECUTION_UNKNOWN, {"client_types": ["galactic"]}),
+    ],
+)
+async def test_a_tender_code_outside_the_vocabulary_is_not_missing_company_data(
+    rule, explanation, outside
+):
+    """L'empresa nomes pot declarar codis del vocabulari: si el plec en demana un altre (o
+    `other`, que no identifica res), no es pot demostrar que la dada falti a l'empresa."""
+    findings, _ = _pure_requirement_findings(
+        rule, explanation, value_json={**_IN_VOCABULARY, **outside}
+    )
+    assert _missing(findings) == [(X.DATA_MISSING_UNATTRIBUTED, "<cap>")]
+
+
+async def test_the_audit_table_matches_the_engine_and_covers_every_producer():
+    """Cada productor de `missing_information` del motor es a l'auditoria: si se n'afegeix
+    un, aquest test obliga a decidir (i fixar) el seu `missing_from`."""
+    import inspect
+
+    from app.analysis import engine as pure
+
+    assert pure.DATA_MISSING_FROM_COMPANY == frozenset(
+        x for _, x, where in DATA_MISSING_FROM if where == COMPANY
+    )
+    # DATA_MISSING, TENDER_REFERENCE_DATE_MISSING, TERRITORY_LIST_UNAVAILABLE (requisit) i
+    # CRITERION_NEEDS_UNKNOWN (criteri).
+    assert inspect.getsource(pure).count("FindingType.MISSING_INFORMATION") == 4
+    # El codi sense atribucio es nomes de la v3: la taula v2 no el te.
+    assert X.DATA_MISSING_UNATTRIBUTED not in registry.EXPLANATIONS_BY_VERSION[RULES_VERSION_V2]
+    findings, questions = _pure_requirement_findings(
+        R.FACT_REQUIREMENT, X.FACT_TRUE_VERIFIED, fit="satisfies", territory="unknown"
+    )
+    assert _missing(findings) == [(X.TERRITORY_LIST_UNAVAILABLE, TENDER)]
+    _, findings = _criterion_findings_for(
+        [(_pure_need("n1"), _pure_out("n1", "unknown", "none", X.CAPABILITY_UNKNOWN))]
+    )
+    # Una necessitat `unknown` pot ser una capacitat sense codi o un valor que el vocabulari
+    # no recull: no es pot demostrar que falti a l'empresa.
+    assert _missing(findings) == [(X.CRITERION_NEEDS_UNKNOWN, "<cap>")]
+    # I1: un fet quantitatiu actual sense nombre no es `missing_information` sino revisio,
+    # sense `missing_from` (la dada hi es, pero no es pot comparar). Codi nomes v3.
+    _, findings = _criterion_findings_for(
+        [(_pure_fact_need("n1"), _pure_out("n1", "unknown", "current_declared", X.FACT_UNKNOWN))]
+    )
+    assert _missing(findings) == []
+    assert [(f.finding_type, f.explanation_code, f.details.get("missing_from", "<cap>"))
+            for f in findings] == [
+        ("review_required", X.CRITERION_NEEDS_NOT_COMPARABLE, "<cap>")
+    ]  # fmt: skip
+    assert (
+        X.CRITERION_NEEDS_NOT_COMPARABLE not in registry.EXPLANATIONS_BY_VERSION[RULES_VERSION_V2]
+    )
+
+
+@pytest.mark.parametrize(
+    ("rule", "explanation"),
+    [(R.TURNOVER_REQUIREMENT, X.TURNOVER_UNKNOWN), (R.EXECUTION_REQUIREMENT, X.EXECUTION_UNKNOWN)],
+)
+async def test_no_company_data_and_no_deadline_asks_both_the_company_and_the_buyer(
+    rule, explanation
+):
+    """Sense cap dada de l'empresa el motor no arriba a mirar el termini: falten totes dues
+    coses, i es diu (i es pregunta) cadascuna on toca."""
+    findings, questions = _pure_requirement_findings(
+        rule, explanation, support={"reference_date": None}
+    )
+    assert sorted(_missing(findings)) == [
+        (X.DATA_MISSING, COMPANY),
+        (X.TENDER_REFERENCE_DATE_MISSING, TENDER),
+    ]
+    assert sorted((q.audience, q.question_code) for q in questions) == [
+        ("buyer", Q.BUYER_PROVIDE_SUBMISSION_DEADLINE),
+        ("company", Q.COMPANY_PROVIDE_PROFILE_DATA),
+    ]
+    # Amb termini, nomes l'empresa.
+    findings, questions = _pure_requirement_findings(
+        rule, explanation, support={"reference_date": "2026-03-01"}
+    )
+    assert _missing(findings) == [(X.DATA_MISSING, COMPANY)]
+    assert [q.question_code for q in questions] == [Q.COMPANY_PROVIDE_PROFILE_DATA]
+
+
+async def test_without_a_window_only_the_record_proofs_become_unknown():
+    """`window_unknown`: les proves que depenen de les files usades (exercicis, projectes...)
+    no es poden avaluar; un certificat de norma s'avalua igual que abans."""
+    from app.analysis import engine as pure
+    from app.analysis.fingerprint import RequirementView
+    from app.knowledge.snapshot import Claim, Entry, KnowledgeSnapshot, KnowledgeSource
+
+    def claim(record_id: str, evidence: bool) -> Claim:
+        return Claim(
+            record_id=record_id, source=KnowledgeSource.CURRENT_DECLARED, value={},
+            as_of=date(2026, 1, 1), valid_until=None, has_evidence=evidence,
+        )  # fmt: skip
+
+    def company(cert_evidence: bool):
+        snapshot = KnowledgeSnapshot(
+            company_id="e", evaluated_on=date(2026, 1, 1),
+            certifications={"ISO_9001": Entry("ISO_9001", (claim("c", cert_evidence),), ())},
+            facts={}, services={}, solutions={}, capabilities={}, products={}, partners={},
+            pending_validation=(), fingerprint="x",
+            financial_years={"2025": Entry("2025", (claim("y", False),), ())},
+        )  # fmt: skip
+        return pure.CompanyView(company_id="e", snapshot=snapshot)
+
+    requirement = RequirementView(
+        id="r", key="k-r", title="Volum", category="economic_solvency",
+        obligation="mandatory", timing="at_submission",
+        value_json={"turnover_min_eur": "1", "standard": "ISO_9001"},
+        proof_json=[{"kind": "annual_accounts"}, {"kind": "certificate"}],
+    )  # fmt: skip
+
+    def statuses(cert_evidence: bool, window_unknown: bool):
+        overall, support = pure.assess_proof(
+            requirement, company(cert_evidence), ("y",), window_unknown=window_unknown
+        )
+        return overall, [(i["kind"], i["status"]) for i in support["items"]]
+
+    # Amb finestra: l'exercici usat no te evidencia -> missing.
+    assert statuses(False, False) == (
+        "missing",
+        [("annual_accounts", "missing"), ("certificate", "missing")],
+    )
+    # Sense finestra: els comptes, unknown; el certificat s'avalua igual que abans.
+    assert statuses(False, True) == (
+        "missing",
+        [("annual_accounts", "unknown"), ("certificate", "missing")],
+    )
+    # M4: sense finestra, una prova `unknown` i la resta `sufficient` no es «falta la
+    # prova»: cap prova no consta com a absent, aixi que el conjunt es `unknown`...
+    assert statuses(True, True) == (
+        "unknown",
+        [("annual_accounts", "unknown"), ("certificate", "sufficient")],
+    )
+    # ...i el requisit no porta cap `evidence_gap` ni cap pregunta de prova.
+    overall, proof = pure.assess_proof(requirement, company(True), ("y",), window_unknown=True)
+    fit_out = pure.FitAssessmentOut(
+        requirement_id="r", fit_result="unknown", knowledge_source="none", proof_status=overall,
+        territory_verdict="not_applicable", verification_status="unknown",
+        rule_code=R.TURNOVER_REQUIREMENT, explanation_code=X.QUALIFICATION_REFERENCE_DATE_MISSING,
+        support={"proof": proof, "reference_date": None},
+    )  # fmt: skip
+    findings, questions = pure.requirement_findings(requirement, fit_out, [], None)
+    assert [f.finding_type for f in findings if f.finding_type == "evidence_gap"] == []
+    assert [q for q in questions if q.question_code == Q.COMPANY_PROVIDE_PROOF] == []
+    # Fora del cami sense finestra, l'agregacio general no canvia (fora d'abast de M4):
+    # `sufficient` + una prova no avaluable (`unknown`) continua `partial`.
+    other = RequirementView(
+        id="r", key="k-r", title="Volum", category="economic_solvency",
+        obligation="mandatory", timing="at_submission",
+        value_json={"standard": "ISO_9001"},
+        proof_json=[{"kind": "certificate"}, {"kind": "technical_sheet"}],
+    )  # fmt: skip
+    assert pure.assess_proof(other, company(True), ())[0] == "partial"
+
+
+@pytest.mark.parametrize("rule", [R.TURNOVER_REQUIREMENT, R.EXECUTION_REQUIREMENT])
+async def test_without_a_reference_date_the_buyer_is_asked_for_the_deadline(rule):
+    findings, questions = _pure_requirement_findings(
+        rule, X.QUALIFICATION_REFERENCE_DATE_MISSING, proof="unknown"
+    )
+    assert [(f.finding_type, f.explanation_code, f.details) for f in findings] == [
+        (
+            "missing_information",
+            X.TENDER_REFERENCE_DATE_MISSING,
+            {
+                "fit": "unknown",
+                "explanation": X.QUALIFICATION_REFERENCE_DATE_MISSING,
+                "category": "economic_solvency",
+                "missing_from": TENDER,
+            },
+        )
+    ]
+    assert [(q.audience, q.question_code, q.rule_code, q.params) for q in questions] == [
+        (
+            "buyer",
+            Q.BUYER_PROVIDE_SUBMISSION_DEADLINE,
+            R.MISSING_INFORMATION,
+            {"title": "Volum de negoci"},
+        )
+    ]
 
 
 @pytest.mark.parametrize(

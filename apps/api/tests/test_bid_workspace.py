@@ -52,7 +52,11 @@ from app.models.workspace import BidWorkspace, WorkspaceChecklistItem, Workspace
 from app.services import bid_workspace as service
 from app.services.compliance_analysis import analyze_company_compliance
 from app.workspace.checklist import checklist_title, format_amount
-from app.workspace.decision import DecisionWarnings, requires_reason
+from app.workspace.decision import (
+    AnalysisDecisionWarnings,
+    DecisionWarnings,
+    requires_reason,
+)
 from app.workspace.transitions import (
     ALLOWED_TRANSITIONS,
     FINAL_APPROVAL_STATUSES,
@@ -286,17 +290,12 @@ def test_a_clean_go_needs_no_written_reason():
 @pytest.mark.parametrize(
     "warning",
     [
-        DecisionWarnings(confirmed_blockers=1),
-        DecisionWarnings(potential_blockers=1),
-        DecisionWarnings(mandatory_unknown=1),
-        DecisionWarnings(mandatory_needs_review=1),
-        DecisionWarnings(deadline_passed=True),
-        # Els tres de sota son els que faltaven: una decisio presa sobre una
-        # analisi que no diu res, que no es de fiar, o que descriu un estat
-        # anterior de la licitacio.
-        DecisionWarnings(undetermined_eligibility=True),
-        DecisionWarnings(unreliable_analysis=True),
-        DecisionWarnings(outdated_analysis=True),
+        # F-4b: el vocabulari tancat v3 (spec §5). Els avisos del compliment
+        # antic ja no obliguen motiu; aquests quatre si.
+        AnalysisDecisionWarnings(analysis_missing=True),
+        AnalysisDecisionWarnings(analysis_stale=True),
+        AnalysisDecisionWarnings(blocker_potential=True),
+        AnalysisDecisionWarnings(deadline_passed=True),
     ],
 )
 def test_a_go_with_an_open_warning_needs_a_written_reason(warning):
@@ -308,12 +307,12 @@ def test_un_go_sense_veredicte_exigeix_que_algu_ho_escrigui():
 
     No es bloqueja el GO a proposit: prohibir-lo empenyeria la decisio fora de
     l'eina, que es on deixa de quedar registrada. El que si que ha de passar es
-    que consti que es va decidir sense saber si l'empresa complia.
+    que consti que es va decidir sense cap analisi vigent del plec al darrere.
     """
-    warnings = DecisionWarnings(undetermined_eligibility=True)
+    warnings = AnalysisDecisionWarnings(analysis_missing=True)
 
     assert warnings.any_open is True
-    assert "undetermined_eligibility" in warnings.codes()
+    assert warnings.codes() == ["analysis_missing"]
     assert requires_reason(WorkspaceDecisionType.GO, warnings) is True
 
 
@@ -505,8 +504,17 @@ async def test_a_go_records_who_when_and_why(db, tenant_a, tender, extraction_ru
     assert decision.decided_by == user.id
     assert decision.decided_at is not None
     assert decision.reason == "Tenim la documentacio a punt."
-    assert decision.compliance_run_id == run.id
-    assert decision.requirement_run_id == extraction_run.id
+    # F-4b: una decisio nova no escriu fotografia legacy, encara que hi hagi
+    # compliment i requisits vigents; el seu context es l'analisi v3.
+    assert run.id is not None and extraction_run.id is not None
+    assert decision.compliance_run_id is None
+    assert decision.requirement_run_id is None
+    assert decision.analysis_run_id is None, "aquest plec no te cap analisi v3"
+    assert decision.analysis_snapshot_json == {
+        "schema_version": 1,
+        "state": "absent",
+        "warnings": ["analysis_missing"],
+    }
     assert workspace.status == WorkspaceStatus.GO_APPROVED
 
 
@@ -535,15 +543,20 @@ async def test_a_viewer_cannot_approve_a_candidacy(db, tenant_a, tender, extract
 async def test_a_go_with_a_blocker_requires_a_written_reason(
     db, tenant_a, tender, extraction_run
 ):
-    """§8: no es prohibeix, pero s'ha d'escriure el perque."""
+    """§8: no es prohibeix, pero s'ha d'escriure el perque.
+
+    F-4b: el bloqueig LEGACY ja no es el que obliga. Qui ho exigeix aqui es
+    `analysis_missing` (no hi ha analisi v3), i l'error ho diu amb la base.
+    """
     user, company = tenant_a
     # Sense cap dada de facturacio: el requisit obligatori queda sense resoldre.
     await add_requirement(db, extraction_run, tender, value={"amount": 450000})
     await run_compliance(db, company.id, tender)
     workspace = await open_workspace(db, company.id, tender, user.id)
 
-    state = await service.load_state(db, workspace)
-    assert state.warnings.any_open, "el cas ha de tenir algun avis obert"
+    state = await service.load_state(db, workspace, with_analysis=True)
+    assert state.warnings.any_open, "el cas te avisos legacy oberts"
+    assert state.analysis_warnings.codes() == ["analysis_missing"]
 
     with pytest.raises(service.DecisionReasonRequiredError) as caught:
         await service.record_decision(
@@ -554,7 +567,9 @@ async def test_a_go_with_a_blocker_requires_a_written_reason(
             role=MembershipRole.OWNER,
             reason=None,
         )
-    assert caught.value.details["warnings"], "l'error ha de dir quins avisos hi havia"
+    # Nomes el vocabulari v3: cap codi legacy no obliga motiu.
+    assert caught.value.details == {"warnings": ["analysis_missing"], "basis": "analysis_v3"}
+    assert not set(caught.value.details["warnings"]) & set(state.warnings.codes())
 
     # Amb motiu, la mateixa decisio passa: qui decideix es la persona.
     decision = await service.record_decision(
@@ -567,13 +582,15 @@ async def test_a_go_with_a_blocker_requires_a_written_reason(
     )
     assert workspace.status == WorkspaceStatus.GO_APPROVED
     assert decision.reason is not None
-    # I l'historial guarda els avisos que hi havia a la pantalla.
+    # I l'historial guarda els avisos v3 que hi havia a la pantalla; els
+    # comptadors legacy ja no es fotografien (0 per la restriccio NOT NULL).
+    assert decision.analysis_snapshot_json["warnings"] == ["analysis_missing"]
     assert (
         decision.mandatory_unknown
         + decision.mandatory_needs_review
         + decision.potential_blockers
         + decision.confirmed_blockers
-    ) > 0
+    ) == 0
 
 
 async def test_whitespace_is_not_a_reason(db, tenant_a, tender, extraction_run):
@@ -797,6 +814,7 @@ async def test_a_human_decision_survives_a_recalculation(db, tenant_a, tender, e
         role=MembershipRole.OWNER,
         reason="Complim tots els requisits.",
     )
+    saved_snapshot = dict(decision.analysis_snapshot_json)
 
     # Es refa l'analisi i el compliment sencers.
     new_extraction = await add_extraction_run(db, tender)
@@ -810,8 +828,11 @@ async def test_a_human_decision_survives_a_recalculation(db, tenant_a, tender, e
     assert workspace.status == WorkspaceStatus.GO_APPROVED, "la decisio humana no es recalcula"
     assert len(history) == 1
     assert history[0].id == decision.id
-    assert history[0].compliance_run_id == first_run.id, (
-        "la decisio segueix apuntant al calcul que hi havia quan es va prendre"
+    # F-4b: la decisio nova ja no apunta al compliment antic (NULL abans i
+    # despres); el que es conserva intacte es la seva fotografia v3.
+    assert history[0].compliance_run_id is None
+    assert history[0].analysis_snapshot_json == saved_snapshot, (
+        "la decisio conserva el que hi havia quan es va prendre"
     )
 
 
@@ -948,7 +969,11 @@ async def test_the_api_refuses_a_go_without_reason_when_there_are_warnings(
 
     assert refused.status_code == 422
     assert refused.json()["error"]["code"] == "decision_reason_required"
-    assert refused.json()["error"]["details"]["warnings"]
+    # F-4b: vocabulari v3 i base explicita; el compliment antic no hi compta.
+    assert refused.json()["error"]["details"] == {
+        "warnings": ["analysis_missing"],
+        "basis": "analysis_v3",
+    }
 
 
 async def test_the_api_lets_a_viewer_look_but_not_decide(
@@ -1409,13 +1434,53 @@ async def test_a_submitted_workspace_refuses_a_new_go(db, tenant_a, tender, extr
 # --------------------------------------------------------------------------- #
 
 
+async def legacy_decision(db, workspace, user, *, open_warnings) -> WorkspaceDecision:
+    """Una decisio escrita abans de F-4b: fotografia legacy i snapshot NULL.
+
+    `record_decision` ja no en pot escriure cap (§3): es crea directament, com
+    les files que hi ha a la base de dades.
+    """
+    decision = WorkspaceDecision(
+        company_id=workspace.company_id,
+        workspace_id=workspace.id,
+        decision=WorkspaceDecisionType.GO,
+        decided_by=user.id,
+        decided_at=datetime.now(UTC),
+        reason="Endavant tot i la simulacio.",
+        confirmed_blockers=0,
+        potential_blockers=0,
+        mandatory_unknown=0,
+        mandatory_needs_review=0,
+        open_warnings=open_warnings,
+        deadline_passed=False,
+    )
+    db.add(decision)
+    await db.commit()
+    await db.refresh(decision)
+    return decision
+
+
 async def test_una_decisio_desa_els_avisos_que_hi_havia(db, workspace_with_analysis):
     """L'historial ha de poder dir "es va aprovar sabent que era una simulacio".
 
     Els comptadors de bloquejos no basten: els tres zeros que ensenyava
     l'historial eren certs i no explicaven el que de veritat pesava a la
-    pantalla.
+    pantalla. Fila legacy: els avisos viuen a `open_warnings`.
     """
+    workspace, user = workspace_with_analysis
+    state = await service.load_state(db, workspace)
+
+    decision = await legacy_decision(
+        db, workspace, user, open_warnings=state.warnings.codes()
+    )
+
+    assert decision.analysis_snapshot_json is None
+    assert decision.open_warnings is not None
+    assert "unreliable_analysis" in decision.open_warnings
+
+
+async def test_una_decisio_v3_desa_els_avisos_que_hi_havia(db, workspace_with_analysis):
+    """La versio v3: els avisos viuen a `analysis_snapshot_json["warnings"]`."""
     workspace, user = workspace_with_analysis
 
     decision = await service.record_decision(
@@ -1424,11 +1489,11 @@ async def test_una_decisio_desa_els_avisos_que_hi_havia(db, workspace_with_analy
         decision=WorkspaceDecisionType.GO,
         user=user,
         role=MembershipRole.OWNER,
-        reason="Endavant tot i la simulacio.",
+        reason="Endavant sense analisi del plec.",
     )
 
-    assert decision.open_warnings is not None
-    assert "unreliable_analysis" in decision.open_warnings
+    assert decision.open_warnings is None
+    assert decision.analysis_snapshot_json["warnings"] == ["analysis_missing"]
 
 
 async def test_la_fotografia_no_canvia_quan_canvia_lestat(db, workspace_with_analysis):
@@ -1438,15 +1503,12 @@ async def test_la_fotografia_no_canvia_quan_canvia_lestat(db, workspace_with_ana
     explicaria la decisio amb informacio que qui la va prendre no tenia.
     """
     workspace, user = workspace_with_analysis
-    decision = await service.record_decision(
-        db,
-        workspace,
-        decision=WorkspaceDecisionType.GO,
-        user=user,
-        role=MembershipRole.OWNER,
-        reason="Endavant tot i la simulacio.",
+    state = await service.load_state(db, workspace)
+    decision = await legacy_decision(
+        db, workspace, user, open_warnings=state.warnings.codes()
     )
     desats = list(decision.open_warnings or [])
+    assert "unreliable_analysis" in desats
 
     # L'analisi passa a ser real DESPRES de decidir.
     run = await db.scalar(
@@ -1461,8 +1523,7 @@ async def test_la_fotografia_no_canvia_quan_canvia_lestat(db, workspace_with_ana
     assert list(decision.open_warnings or []) == desats
 
 
-async def test_una_decisio_antiga_diu_que_no_es_va_registrar(db, workspace_with_analysis):
-    """`NULL` vol dir "no es va anotar", no "no hi havia cap avis"."""
+async def test_la_fotografia_v3_no_canvia_quan_canvia_lestat(db, workspace_with_analysis):
     workspace, user = workspace_with_analysis
     decision = await service.record_decision(
         db,
@@ -1470,11 +1531,193 @@ async def test_una_decisio_antiga_diu_que_no_es_va_registrar(db, workspace_with_
         decision=WorkspaceDecisionType.GO,
         user=user,
         role=MembershipRole.OWNER,
-        reason="Endavant.",
+        reason="Endavant sense analisi del plec.",
     )
-    # Com quedaria una decisio anterior a la columna.
-    decision.open_warnings = None
+    desada = dict(decision.analysis_snapshot_json)
+
+    # El termini passa DESPRES de decidir: avui hi hauria un avis mes.
+    tender = await db.get(Tender, workspace.tender_id)
+    tender.deadline_at = PAST_DEADLINE
     await db.commit()
+    state = await service.load_state(db, workspace, with_analysis=True)
     await db.refresh(decision)
 
-    assert decision.open_warnings is None
+    assert state.analysis_warnings.codes() == ["analysis_missing", "deadline_passed"]
+    assert decision.analysis_snapshot_json == desada
+    assert desada["warnings"] == ["analysis_missing"]
+
+
+async def test_una_decisio_antiga_diu_que_no_es_va_registrar(db, workspace_with_analysis):
+    """`NULL` vol dir "no es va anotar", no "no hi havia cap avis".
+
+    Pero nomes en una fila legacy (`analysis_snapshot_json` NULL). Una decisio
+    v3 nova tambe te `open_warnings` NULL i NO s'ha de llegir com a "no
+    registrat": la branca la decideix nomes el snapshot (§3).
+    """
+    from app.schemas.workspace import DecisionRead
+
+    workspace, user = workspace_with_analysis
+    # Com quedaria una decisio anterior a la columna.
+    antiga = await legacy_decision(db, workspace, user, open_warnings=None)
+
+    assert antiga.open_warnings is None
+    assert antiga.analysis_snapshot_json is None
+
+    nova = await service.record_decision(
+        db,
+        workspace,
+        decision=WorkspaceDecisionType.NO_GO,
+        user=user,
+        role=MembershipRole.OWNER,
+        reason=None,
+    )
+    read = DecisionRead.model_validate(nova)
+    assert read.open_warnings is None
+    assert read.analysis_snapshot_json is not None, "v3: els avisos son al snapshot"
+    assert read.analysis_snapshot_json["warnings"] == ["analysis_missing"]
+
+
+async def test_una_fila_legacy_poblada_es_llegeix_com_abans_de_f4b(
+    db, client_a, tenant_a, tender, extraction_run
+):
+    """Una decisio anterior a v3 amb fotografia legacy completa no perd cap camp."""
+    user, company = tenant_a
+    workspace = await open_workspace(db, company.id, tender, user.id)
+    compliance = await run_compliance(db, company.id, tender)
+    legacy = WorkspaceDecision(
+        company_id=company.id,
+        workspace_id=workspace.id,
+        decision=WorkspaceDecisionType.GO,
+        decided_by=user.id,
+        decided_at=datetime.now(UTC) - timedelta(days=2),
+        reason="Endavant tot i els avisos.",
+        compliance_run_id=compliance.id,
+        requirement_run_id=extraction_run.id,
+        prefit_score=61,
+        confirmed_blockers=1,
+        potential_blockers=2,
+        mandatory_unknown=3,
+        mandatory_needs_review=4,
+        automated_recommendation="no_go",
+        deadline_passed=False,
+        open_warnings=["missing_compliance", "undetermined_eligibility"],
+    )
+    db.add(legacy)
+    await db.commit()
+    await db.refresh(legacy)
+
+    url = f"/api/v1/companies/{company.id}/workspaces/{workspace.id}/decisions"
+    response = await client_a.get(url)
+    assert response.status_code == 200, response.text
+    (entry,) = response.json()
+
+    assert entry["id"] == str(legacy.id)
+    assert entry["decision"] == "go"
+    assert entry["decided_by"] == str(user.id)
+    assert entry["reason"] == "Endavant tot i els avisos."
+    assert entry["compliance_run_id"] == str(compliance.id)
+    assert entry["requirement_run_id"] == str(extraction_run.id)
+    assert entry["prefit_score"] == 61
+    assert entry["confirmed_blockers"] == 1
+    assert entry["potential_blockers"] == 2
+    assert entry["mandatory_unknown"] == 3
+    assert entry["mandatory_needs_review"] == 4
+    assert entry["automated_recommendation"] == "no_go"
+    assert entry["deadline_passed"] is False
+    assert entry["open_warnings"] == ["missing_compliance", "undetermined_eligibility"]
+    assert entry["analysis_run_id"] is None
+    assert entry["analysis_snapshot_json"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Decisions v3 (0054): les columnes noves neixen buides                        #
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_decision_without_the_v3_fields_reads_as_legacy(
+    db, tenant_a, tender, extraction_run
+):
+    """Una fila escrita sense les columnes de 0054 es llegeix com a legacy."""
+    from app.schemas.workspace import DecisionRead
+
+    user, company = tenant_a
+    workspace = await open_workspace(db, company.id, tender, user.id)
+    # F-4b: `record_decision` ja escriu sempre el snapshot; una fila sense els
+    # camps de 0054 nomes pot ser una d'anterior, i es crea directament.
+    decision = await legacy_decision(db, workspace, user, open_warnings=None)
+
+    read = DecisionRead.model_validate(decision)
+    assert read.analysis_run_id is None
+    assert read.analysis_snapshot_json is None
+
+
+@pytest.mark.postgres
+async def test_0054_rehearsal_on_postgres_keeps_legacy_decisions_intact(
+    db, engine, tenant_a, tender, extraction_run
+):
+    """Assaig sobre PostgreSQL: baixa a l'estat 0053, insereix una decisio legacy,
+    puja 0054 (files intactes, columnes noves NULL) i la torna a baixar (intacta).
+
+    El harness crea l'schema aillat amb `create_all` (no hi ha cap patro per aplicar la
+    cadena Alembic completa sobre PG de test); per tant s'executen les funcions reals
+    `downgrade()` / `upgrade()` de 0054 amb `Operations` sobre la connexio.
+    """
+    import importlib.util
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    spec = importlib.util.spec_from_file_location(
+        "migration_0054", path / "0054_decision_analysis_v3.py"
+    )
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    user, company = tenant_a
+    workspace = await open_workspace(db, company.id, tender, user.id)
+    await db.commit()
+    decision_id = uuid.uuid4()
+
+    def _run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def _row(conn):
+        result = await conn.execute(
+            sa.text(
+                "SELECT decision, reason, confirmed_blockers FROM workspace_decisions "
+                "WHERE id = :id"
+            ),
+            {"id": decision_id},
+        )
+        return tuple(result.one())
+
+    async with engine.begin() as conn:
+        await conn.run_sync(_run, migration.downgrade)
+        await conn.execute(
+            sa.text(
+                "INSERT INTO workspace_decisions (id, company_id, workspace_id, decision, "
+                "decided_by, reason, confirmed_blockers, potential_blockers, "
+                "mandatory_unknown, mandatory_needs_review, deadline_passed, "
+                "decided_at) VALUES (:id, :company, :ws, 'defer', "
+                ":user, 'legacy', 0, 0, 0, 0, false, now())"
+            ),
+            {"id": decision_id, "company": company.id, "ws": workspace.id, "user": user.id},
+        )
+        before = await _row(conn)
+
+        await conn.run_sync(_run, migration.upgrade)
+        assert await _row(conn) == before
+        result = await conn.execute(
+            sa.text(
+                "SELECT analysis_run_id, analysis_snapshot_json FROM workspace_decisions "
+                "WHERE id = :id"
+            ),
+            {"id": decision_id},
+        )
+        assert tuple(result.one()) == (None, None)
+
+        await conn.run_sync(_run, migration.downgrade)
+        assert await _row(conn) == before
+        await conn.run_sync(_run, migration.upgrade)

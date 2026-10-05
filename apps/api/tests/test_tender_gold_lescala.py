@@ -14,6 +14,7 @@ cap correspondencia inventada entre les set seus critiques i els ramals.
 from __future__ import annotations
 
 import json
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -168,6 +169,21 @@ def _citations(dataset: dict) -> set[tuple]:
 # --------------------------------------------------------------------------- #
 # El dataset: nomes el plec                                                     #
 # --------------------------------------------------------------------------- #
+
+
+async def test_the_visible_document_names_are_correct_catalan(dataset):
+    """Els noms dels documents surten a totes les cites (C-5): catala amb accents. Nomes el
+    `name`; `path` i `sha256` (la identitat del fitxer) no es toquen."""
+    unaccented = re.compile(
+        r"\b(clausules|tecniques|caracteristiques|especifiques|economica|automatics|"
+        r"formules|calcul|memoria|aprovacio|conte)\b",
+        re.IGNORECASE,
+    )
+    bad = {d["key"]: d["name"] for d in dataset["documents"] if unaccented.search(d["name"])}
+    assert bad == {}
+    by_key = {d["key"]: d["name"] for d in dataset["documents"]}
+    assert by_key["PCAP"] == "Plec de clàusules administratives particulars"
+    assert by_key["PPT"] == "Plec de prescripcions tècniques (DOC-02)"
 
 
 async def test_the_dataset_is_public_tender_data_only(dataset):
@@ -567,7 +583,7 @@ async def test_the_lescala_tender_is_representable_without_inventing(db, dataset
     assert len(documents) == 9
     real = [d for d in documents if "DOC-04" in (d.name or "")]
     assert [d.name for d in real] == ["Annex mestre d'inventaris (DOC-04)"]
-    assert any("conte el DOC-03" in (d.name or "") for d in documents), "el fals es conserva"
+    assert any("conté el DOC-03" in (d.name or "") for d in documents), "el fals es conserva"
     assert "DOC-04" not in [m["code"] for m in dataset["missing_documents"]]
     assert not any("DOC-04" in w for w in dataset["withheld"]["because_documents_are_missing"])
 

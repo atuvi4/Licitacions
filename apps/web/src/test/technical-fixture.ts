@@ -10,6 +10,7 @@ export function requirementFixture(overrides: Partial<Requirement> = {}): Requir
     origin: "extracted" as const,
     archived_at: null,
     citations: [],
+    timing: "unknown" as const,
     tender_id: "t1",
     tender_lot_id: null,
     category: "technical_requirement",

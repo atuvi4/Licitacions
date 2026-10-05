@@ -7,6 +7,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ComplianceSection } from "@/components/ComplianceSection";
 import { PreFitPanel, ScoreValue } from "@/components/PreFit";
 import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
+import { AnalysisTab } from "@/components/tender-analysis/AnalysisTab";
 import { ReviewSummaryCard } from "@/components/review/ReviewSummaryCard";
 import { useSession } from "@/components/SessionProvider";
 import { TenderChangeHistory } from "@/components/TenderChangeHistory";
@@ -872,6 +873,18 @@ function TenderDetail() {
             }}
           />
         </div>
+      )}
+
+      {/* ========================================================= Anàlisi === */}
+      {tab === "analisi" && (
+        <AnalysisTab
+          companyId={companyId}
+          tenderId={tenderId}
+          requirements={analysis.data}
+          requirementsFailed={Boolean(analysis.error)}
+          workspaceId={candidature.workspace?.id ?? null}
+          candidatureChecked={candidature.checked}
+        />
       )}
 
       {/* ======================================================== Historial === */}

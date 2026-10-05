@@ -113,6 +113,7 @@ def _note_read(note: WorkspaceNote, names: dict[uuid.UUID, str | None]) -> NoteR
 
 
 async def _summary(session: SessionDep, workspace: BidWorkspace) -> WorkspaceSummary:
+    # Sense analisi v3: les llistes no paguen `is_stale` per a cada candidatura.
     state = await service.load_state(session, workspace)
     buyer_name = None
     if state.tender.buyer_id:
@@ -144,7 +145,7 @@ async def _summary(session: SessionDep, workspace: BidWorkspace) -> WorkspaceSum
 async def _detail(
     session: SessionDep, ctx: CompanyCtx, workspace: BidWorkspace
 ) -> WorkspaceDetail:
-    state = await service.load_state(session, workspace)
+    state = await service.load_state(session, workspace, with_analysis=True)
     items = await workspace_dossier.active_checklist_items(session, workspace)
     tasks = await service.workspace_tasks(session, workspace.id)
     notes = await service.workspace_notes(session, workspace.id)
@@ -165,7 +166,12 @@ async def _detail(
             sa.select(Buyer.name).where(Buyer.id == state.tender.buyer_id)
         )
 
-    warnings = state.warnings
+    # Dues families d'avisos, cadascuna amb el seu significat: `open_warnings`
+    # son els legacy del compliment antic (compatibilitat); els que obliguen
+    # motiu per a un GO surten de l'analisi v3 vigent.
+    legacy_warnings = state.warnings
+    decision_warnings = state.analysis_warnings
+    assert decision_warnings is not None
     can_decide = ctx.membership.role in service.DECISION_ROLES
     latest = decisions[0] if decisions else None
     # Readiness del dossier: una tercera dimensio que tampoc no es fusiona amb
@@ -200,8 +206,10 @@ async def _detail(
         human_decision=latest.decision if latest else None,
         latest_decision=_decision_read(latest, names) if latest else None,
         counters=ComplianceCountersRead(**asdict(state.counters)),
-        open_warnings=warnings.codes(),
-        go_requires_reason=warnings.any_open,
+        open_warnings=legacy_warnings.codes(),
+        decision_warnings=decision_warnings.codes(),
+        decision_warning_basis=service.DECISION_WARNING_BASIS,
+        go_requires_reason=decision_warnings.any_open,
         current_compliance_run_id=workspace.current_compliance_run_id,
         current_requirement_run_id=workspace.current_requirement_run_id,
         analysis_basis=state.analysis_basis,
@@ -351,10 +359,11 @@ async def decide(
 
     Exigeix usuari autenticat (`get_current_user`), pertinenca a l'empresa
     (`get_company_context`), rol amb potestat i una accio explicita. Qui i quan
-    queden a la fila, que no s'actualitza mai.
+    queden a la fila, que no s'actualitza mai. Decisio, canvi d'estat i
+    auditoria es confirmen junts dins de `record_decision` (un sol commit).
     """
     workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
-    decision = await service.record_decision(
+    await service.record_decision(
         session,
         workspace,
         decision=payload.decision,
@@ -362,16 +371,6 @@ async def decide(
         role=ctx.membership.role,
         reason=payload.reason,
     )
-    await audit.record(
-        session,
-        action=AuditAction.UPDATE,
-        company_id=ctx.company_id,
-        user_id=ctx.user.id,
-        entity_type="workspace_decision",
-        entity_id=decision.id,
-        summary=f"Decisio {decision.decision.value} sobre la candidatura",
-    )
-    await session.commit()
     # Mutacio explicita: es desa l'estat reconciliat. Abans ho feia, de retruc,
     # la lectura del workspace que es retorna.
     await workspace_dossier.reconcile_readiness(session, workspace)

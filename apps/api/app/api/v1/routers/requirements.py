@@ -46,11 +46,11 @@ from app.schemas.requirements import (
     RequirementCitationLink,
     RequirementRead,
 )
-from app.services import audit, manual_requirement, manual_tender, source_refs
+from app.services import audit, manual_requirement, manual_tender, source_refs, tender_structure
 from app.services.requirement_analysis import (
     analysis_input,
 )
-from app.services.source_refs import resolve_source_ref
+from app.services.source_refs import resolve_source_ref, resolve_source_refs
 from app.tenders.visibility import visible_to_user
 
 router = APIRouter(tags=["analisi de plecs"])
@@ -187,10 +187,22 @@ async def read_analysis(tender_id: uuid.UUID, session: SessionDep, user: Current
     # v3 guarda a la mateixa taula candidats, desitjables i text informatiu. La
     # fitxa pinta `award_criteria` com a criteris que puntuen: nomes hi van els
     # de v1/v2 i els v3 formals. La resta, a `award_candidates`.
+    # Cites dels criteris (formals i candidats): UNA consulta per a tots, mes la
+    # resolucio en bloc. La visibilitat ja l'ha decidit `_load_tender`.
+    criterion_refs = await tender_structure.source_refs_of(
+        session, AwardCriterion, [c.id for c in criteria]
+    )
+    resolved = await resolve_source_refs(
+        session, [ref for refs in criterion_refs.values() for ref in refs]
+    )
+
     criteria_reads = []
     candidate_reads = []
     for criterion in criteria:
         read = _criterion_read(criterion, decoration)
+        read.citations = [
+            read_of(resolved[ref.id]) for ref in criterion_refs.get(criterion.id, [])
+        ]
         if counts_as_award_criterion(criterion.adjudication_basis_json):
             criteria_reads.append(read)
         else:

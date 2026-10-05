@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -208,6 +209,7 @@ class WorkspaceDecision(UUIDPrimaryKeyMixin, CompanyOwnedMixin, Base):
     __tablename__ = "workspace_decisions"
     __table_args__ = (
         sa.Index("ix_workspace_decisions_workspace_decided", "workspace_id", "decided_at"),
+        sa.Index("ix_workspace_decisions_analysis_run", "analysis_run_id"),
     )
 
     workspace_id: Mapped[uuid.UUID] = mapped_column(
@@ -253,6 +255,21 @@ class WorkspaceDecision(UUIDPrimaryKeyMixin, CompanyOwnedMixin, Base):
     )
     prefit_score: Mapped[int | None] = mapped_column(sa.Integer)
 
+    #: Decisions v3 (0054). Run d'analisi v3 contra el qual es va decidir.
+    analysis_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "tender_analysis_runs.id",
+            ondelete="SET NULL",
+            name="fk_workspace_decisions_analysis_run",
+        ),
+    )
+    #: Fotografia versionada del que hi havia a la pantalla. NULL = decisio legacy
+    #: (anterior a v3); NO NULL = decisio v3. Les files antigues no es toquen.
+    analysis_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(
+        sa.JSON(none_as_null=True)
+    )
+
     #: Els avisos que hi havia a la pantalla en aquell moment. Sense aixo,
     #: l'historial no diu si la persona va decidir amb la informacio a la vista.
     confirmed_blockers: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
@@ -273,7 +290,7 @@ class WorkspaceDecision(UUIDPrimaryKeyMixin, CompanyOwnedMixin, Base):
     #:
     #: `NULL` a les decisions anteriors a aquest camp vol dir "no es va
     #: registrar", que NO es el mateix que "no hi havia cap avis".
-    open_warnings: Mapped[list[str] | None] = mapped_column(sa.JSON)
+    open_warnings: Mapped[list[str] | None] = mapped_column(sa.JSON(none_as_null=True))
     deadline_passed: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
 
     workspace: Mapped[BidWorkspace] = relationship(back_populates="decisions")

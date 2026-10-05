@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  UNACCENTED_LABELS,
+  accentedVocabularyFixture,
   emptySnapshotFixture,
   legacyCertificationFixture,
   observationsFixture,
@@ -577,7 +579,7 @@ describe("Coneixement de l'empresa", () => {
     respond({
       [`${BASE}/knowledge/vocabulary`]: {
         ...vocabularyFixture,
-        service_lines: [...vocabularyFixture.service_lines, { code: "mobile_telephony", label: "Telefonia mobil" }],
+        service_lines: [...vocabularyFixture.service_lines, { code: "mobile_telephony", label: "Telefonia mòbil" }],
       },
     });
     const { container } = await renderPage();
@@ -619,7 +621,7 @@ describe("Coneixement de l'empresa", () => {
   });
 
   describe("les línies de servei surten del vocabulari de l'API", () => {
-    const withMobile = { ...vocabularyFixture, service_lines: [...vocabularyFixture.service_lines, { code: "mobile_telephony", label: "Telefonia mobil" }] };
+    const withMobile = { ...vocabularyFixture, service_lines: [...vocabularyFixture.service_lines, { code: "mobile_telephony", label: "Telefonia mòbil" }] };
 
     it("«Declara un servei»: escrivint «mobil» surt «Telefonia mòbil» i en desar s'envia mobile_telephony", async () => {
       post.mockResolvedValue({});
@@ -663,7 +665,7 @@ describe("Coneixement de l'empresa", () => {
 
   describe("cercador", () => {
     const search = () => screen.getByRole("searchbox", { name: "Cerca al coneixement" }) as HTMLInputElement;
-    const withMobile = { ...vocabularyFixture, service_lines: [...vocabularyFixture.service_lines, { code: "mobile_telephony", label: "Telefonia mobil" }] };
+    const withMobile = { ...vocabularyFixture, service_lines: [...vocabularyFixture.service_lines, { code: "mobile_telephony", label: "Telefonia mòbil" }] };
 
     it("«Soci» troba el partner i amaga la resta; «Centraleta» troba la solució de l'històric", async () => {
       const { container } = await renderPage();
@@ -1034,5 +1036,40 @@ describe("Coneixement de l'empresa", () => {
     fireEvent.submit(dialog.querySelector("form")!);
     await flush();
     expect(post.mock.calls[0][1]).not.toHaveProperty("coverage");
+  });
+});
+
+describe("Coneixement: rètols del vocabulari amb accents (copy v3)", () => {
+  beforeEach(() => {
+    get.mockReset();
+    role = "owner";
+  });
+
+  it("línies, capacitats i normes surten amb accents, també les que només coneix l'API", async () => {
+    const provenance = { knowledge_origin: "declared" as const, as_of: "2026-09-29", valid_until: null, lifecycle: "current" as const };
+    const records = recordsFixture();
+    respond({
+      [`${BASE}/knowledge/vocabulary`]: accentedVocabularyFixture,
+      [`${BASE}/knowledge/records`]: {
+        ...records,
+        solutions: [{ id: "sol-1", name: "Centraleta Sintètica", service_line_code: "voice_pbx", vendor: null, edition: null, ...provenance }],
+        solution_capabilities: [
+          { id: "cap-blf", solution_id: "sol-1", capability_code: "pbx.blf", status: "supported", value_number: null, value_level: null, limits_note: null, ...provenance },
+          { id: "cap-vip", solution_id: "sol-1", capability_code: "pbx.priority_transfer", status: "supported", value_number: null, value_level: null, limits_note: null, ...provenance },
+        ],
+      },
+    });
+    const { container } = await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+
+    const lines = container.querySelector("#serveis")!.textContent ?? "";
+    for (const label of ["Troncals de veu i numeració", "Radioenllaços", "Electrònica de xarxa", "Telefonia mòbil", "Retorn per satèl·lit"]) {
+      expect(lines).toContain(label);
+    }
+    const capabilities = container.querySelector("#capacitats")!.textContent ?? "";
+    expect(capabilities).toContain("Estat de línia (BLF)");
+    expect(capabilities).toContain("Transferència prioritària");
+    expect(container.querySelector("#certificacions")!.textContent).toContain("ISO 45001 (seguretat i salut a la feina)");
+    expect(container.textContent).not.toMatch(UNACCENTED_LABELS);
   });
 });

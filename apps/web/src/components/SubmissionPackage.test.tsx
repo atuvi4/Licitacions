@@ -257,7 +257,7 @@ describe("SubmissionPackageSection · congelar, revisar, aprovar; aprovar no és
     const freeze = screen.getByRole("button", { name: "Congela la proposta" }) as HTMLButtonElement;
     expect(freeze.disabled).toBe(true);
     const banner = container.querySelector("[role='status'][data-level='attention']")!;
-    expect(banner.textContent).toContain("Queden 1 bloqueig per resoldre");
+    expect(banner.textContent).toContain("Queden 1 pendent de preparació per resoldre");
     expect(banner.textContent).toContain("Torna a Preparar");
     expect(container.textContent).not.toMatch(/Només .* pot/);
     expect(container.textContent).toContain("Estat: Preparant oferta");
@@ -318,12 +318,13 @@ describe("Tancar · la porta d'S6", () => {
       findings: codes.map((code) => ({ code, severity: "blocker" as const, domain: "economic" as const, entity_id: null, context: {} })),
     });
 
-  it("amb bloquejos no es pot congelar, i es diuen quants", async () => {
+  it("amb pendents no es pot congelar, i es diuen quants", async () => {
     readiness = blocking("economic_offer_not_started", "economic_lot_empty");
     mockLoad([], {});
     renderSection();
     await flush();
-    expect(screen.getByText(/Queden 2 bloquejos per resoldre/)).toBeTruthy();
+    expect(screen.getByText(/Queden 2 pendents de preparació per resoldre/)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/bloqueig|bloquej/i);
     expect((screen.getByRole("button", { name: "Congela la proposta" }) as HTMLButtonElement).disabled).toBe(true);
     expect(post).not.toHaveBeenCalled();
   });
