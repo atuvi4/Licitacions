@@ -125,7 +125,9 @@ class Tender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # organismes diferents poden fer servir el mateix (verificat a dades reals).
     expediente_number: Mapped[str | None] = mapped_column(sa.String(200))
 
-    title: Mapped[str] = mapped_column(sa.String(1000), nullable=False)
+    # Text lliure de la font (`ProcurementProject/Name`), sense limit: n'hi ha de
+    # 1.999 caracters. Text des de 0057; mai es trunca.
+    title: Mapped[str] = mapped_column(sa.Text, nullable=False)
     description: Mapped[str | None] = mapped_column(sa.Text)
 
     buyer_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -250,7 +252,9 @@ class TenderLot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     external_lot_id: Mapped[str] = mapped_column(sa.String(100), nullable=False)
     lot_number: Mapped[int | None] = mapped_column(sa.Integer)
-    title: Mapped[str | None] = mapped_column(sa.String(1000))
+    # Text lliure de la font, sense limit (pagina 9 del pilot: 1.017 i 1.076
+    # caracters). Text des de 0057; mai es trunca.
+    title: Mapped[str | None] = mapped_column(sa.Text)
     description: Mapped[str | None] = mapped_column(sa.Text)
 
     estimated_value: Mapped[Decimal | None] = mapped_column(MONEY)

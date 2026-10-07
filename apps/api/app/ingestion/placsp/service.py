@@ -22,6 +22,27 @@ de tocar res:
 Una lapida (`at:deleted-entry`) es presencia a la font, no un estat: marca
 `source_removed_at` (si `when` >= U*) i mai toca `Tender.status`. Les absencies
 de documents i lots nomes es dedueixen d'una entrada completa que s'aplica.
+
+Aillament per unitat (hotfix radar, 2026-10-07). Cada entrada i cada lapida
+s'aplica dins d'un SAVEPOINT (`session.begin_nested()`) i es confirma sola. Si
+falla, nomes es desfa aquella unitat: la transaccio exterior continua viva, el
+SourceRecord cru es desa igualment com a `failed` (amb un missatge segur de
+`app.ingestion.errors`) i la seguent unitat continua en la mateixa sessio. Abans
+es feia `session.rollback()` sencer, que EXPIRAVA la font i el run que el servei
+te en memoria entre unitats: la seguent llegia `source.id`, SQLAlchemy intentava
+recarregar-lo sincronament dins la sessio async (MissingGreenlet) i totes les
+entrades i lapides posteriors fallaven.
+
+Reintents (mateix contingut, mateix hash; el registre fallit es reutilitza, no
+es duplica): una fallada transitoria (`network_source`, `unexpected`) es torna a
+provar sempre; una de determinista (`db_data`, `integrity_constraint`,
+`parse_validation`) nomes si ha canviat el `parser_version` o la revisio
+d'esquema del codi (`app.db.revision.SCHEMA_REVISION`, desada a
+`failed_schema_revision`). Si no, es una fallada coneguda: compta a
+`records_failed_known`, surt al resum i NO fa el run `partial` ni frena la marca
+d'aigua. Identitat dels comptadors: `fetched = new + changed + unchanged + failed
++ failed_known + superseded + conflicted + tombstones_applied` (excepcio: una
+entrada que adopta una lapida orfena compta `new` i `tombstones_applied`).
 """
 
 from __future__ import annotations
@@ -38,6 +59,17 @@ from pathlib import Path
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.revision import SCHEMA_REVISION
+from app.ingestion.errors import (
+    PARSE_VALIDATION,
+    TRANSIENT_CLASSES,
+    SafeError,
+    classify_exception,
+    error_class_of_message,
+    known_failures_line,
+    safe_error_line,
+    summary_line,
+)
 from app.ingestion.placsp import parser as placsp_parser
 from app.ingestion.placsp.client import FeedFetchError, PlacspClient
 from app.ingestion.placsp.normalizer import NormalizedTender, normalize
@@ -96,14 +128,17 @@ _REASONS = {
 }
 
 
-def _safe_reason(exc: BaseException) -> str:
-    """Nom de la classe i un motiu fix i curt; mai el `str(exc)` (SQL, parametres)."""
-    name = type(exc).__name__
-    return f"{name}: {_REASONS.get(name, 'error inesperat')}"
-
-
 def _safe_line(line: str) -> str:
-    """Una linia d'error reduida a `[pagina N: ]Classe: motiu` (<= 200 caracters)."""
+    """Una linia d'error segura (<= 200 caracters).
+
+    Les linies que produeix el servei ja venen classificades
+    (`[pagina N: ]classe: Excepcio[ (SQLSTATE)][ taula.columna]`) i passen tal
+    qual si compleixen la gramatica estricta. Qualsevol altre text (heretat o
+    inesperat) es redueix a `[pagina N: ]Classe: motiu`, sense el missatge.
+    """
+    classified = safe_error_line(line)
+    if classified is not None:
+        return classified
     page = _PAGE_PREFIX.match(line)
     klass = _CLASS_IN_LINE.match(line)
     name = klass.group(1) if klass else "Error"
@@ -173,7 +208,30 @@ class RunCounters:
     conflicted: int = 0
     tombstones_applied: int = 0
     entries_restored: int = 0
+    #: Fallades deterministes ja conegudes que no es reintenten (no fan `partial`).
+    failed_known: int = 0
+    #: Linies d'error ja segures (`SafeError.line`), en ordre d'aparicio.
     errors: list[str] = field(default_factory=list)
+    #: Els errors classificats (per al resum per classe del run).
+    failures: list[SafeError] = field(default_factory=list)
+    #: Classe de cada fallada coneguda (per al resum «N fallades conegudes (...)»).
+    known_classes: list[str] = field(default_factory=list)
+
+    def add_failure(self, error: SafeError, prefix: str | None = None) -> None:
+        self.failures.append(error)
+        self.errors.append(error.line(prefix))
+
+    def add_known_failure(self, error_class: str) -> None:
+        self.failed_known += 1
+        self.known_classes.append(error_class)
+
+    def merge(self, other: RunCounters) -> None:
+        """Suma els comptadors d'una unitat ja confirmada."""
+        for name in self.as_log():
+            setattr(self, name, getattr(self, name) + getattr(other, name))
+        self.errors.extend(other.errors)
+        self.failures.extend(other.failures)
+        self.known_classes.extend(other.known_classes)
 
     def as_log(self) -> dict[str, int]:
         return {
@@ -182,6 +240,7 @@ class RunCounters:
             "changed": self.changed,
             "unchanged": self.unchanged,
             "failed": self.failed,
+            "failed_known": self.failed_known,
             "tenders_created": self.tenders_created,
             "tenders_updated": self.tenders_updated,
             "superseded": self.superseded,
@@ -189,6 +248,66 @@ class RunCounters:
             "tombstones_applied": self.tombstones_applied,
             "entries_restored": self.entries_restored,
         }
+
+
+@dataclass(slots=True)
+class UnitTrace:
+    """El que una unitat ha fet fora de la base abans de fallar.
+
+    El raw ja pujat a l'storage es reutilitza (mateixa clau i mateix id) per
+    desar el SourceRecord fallit: cap pujada duplicada.
+    """
+
+    external_id: str | None = None
+    record_id: uuid.UUID | None = None
+    storage_key: str | None = None
+
+
+#: Veredictes sobre un registre amb el mateix contingut que ja es a casa.
+UNCHANGED, RETRY, KNOWN_FAILURE = "unchanged", "retry", "known_failure"
+
+
+def _existing_verdict(record: SourceRecord) -> str:
+    """Que es fa quan torna a arribar un contingut (mateix hash) que ja tenim.
+
+    * No fallit -> UNCHANGED.
+    * Fallit per una classe transitoria (`network_source`, `unexpected`) -> RETRY.
+    * Fallit per una classe determinista (`db_data`, `integrity_constraint`,
+      `parse_validation`, o un missatge antic sense classe): RETRY nomes si ha
+      canviat el `parser_version` o la revisio d'esquema del codi des de la
+      fallada; si no, KNOWN_FAILURE (es compta a part i no fa el run `partial`).
+    """
+    if record.processing_status != ProcessingStatus.FAILED:
+        return UNCHANGED
+    if error_class_of_message(record.error_message) in TRANSIENT_CLASSES:
+        return RETRY
+    if (
+        record.parser_version != placsp_parser.PARSER_VERSION
+        or record.failed_schema_revision != SCHEMA_REVISION
+    ):
+        return RETRY
+    return KNOWN_FAILURE
+
+
+def _known_class(record: SourceRecord) -> str:
+    """La classe d'una fallada coneguda (els missatges antics son de parseig)."""
+    return error_class_of_message(record.error_message) or PARSE_VALIDATION
+
+
+def _unit_external_id(element: ET.Element, tombstone: bool) -> str | None:
+    if tombstone:
+        value = element.get("ref")
+    else:
+        value = element.findtext(f"{placsp_parser.ATOM}id")
+    return (value or "").strip() or None
+
+
+def _unit_updated(element: ET.Element, tombstone: bool) -> datetime | None:
+    """L'`updated` (entrada) o el `when` (lapida) tal com el publica la font."""
+    if tombstone:
+        parsed = placsp_parser.parse_deleted_entry(element)
+        return parsed.updated_at if parsed is not None else None
+    return placsp_parser._datetime(element.findtext(f"{placsp_parser.ATOM}updated"))  # noqa: SLF001
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,9 +464,15 @@ class PlacspIngestionService:
                             # anteriors es valid, pero el run queda `partial`.
                             incomplete = True
                             reached_end = True
-                            counters.errors.append(f"pagina {page_index + 1}: {_safe_reason(exc)}")
+                            error = classify_exception(exc)
+                            counters.add_failure(error, prefix=f"pagina {page_index + 1}")
                             logger.error(
-                                "placsp.page.failed", extra={"url": url, "error": str(exc)}
+                                "placsp.page.failed",
+                                extra={
+                                    "url": url,
+                                    "error_class": error.error_class,
+                                    "error": error.line(),
+                                },
                             )
                             break
 
@@ -424,13 +549,31 @@ class PlacspIngestionService:
                     source.updated_watermark = max_updated
 
         except FeedFetchError as exc:
+            error = classify_exception(exc)
+            await self._reset_session(source, run)
             run.status = IngestionStatus.FAILED
-            counters.errors.append(_safe_reason(exc))
-            logger.error("placsp.run.failed", extra={"run_id": str(run.id), "error": str(exc)})
+            counters.add_failure(error)
+            logger.error(
+                "placsp.run.failed",
+                extra={
+                    "run_id": str(run.id),
+                    "error_class": error.error_class,
+                    "error": error.line(),
+                },
+            )
         except Exception as exc:  # noqa: BLE001 - qualsevol error deixa rastre auditable
+            error = classify_exception(exc)
+            await self._reset_session(source, run)
             run.status = IngestionStatus.FAILED
-            counters.errors.append(_safe_reason(exc))
-            logger.exception("placsp.run.crashed", extra={"run_id": str(run.id)})
+            counters.add_failure(error)
+            logger.error(
+                "placsp.run.crashed",
+                extra={
+                    "run_id": str(run.id),
+                    "error_class": error.error_class,
+                    "error": error.line(),
+                },
+            )
 
         run.finished_at = datetime.now(UTC)
         run.duration_ms = int((time.monotonic() - started) * 1000)
@@ -446,9 +589,16 @@ class PlacspIngestionService:
         run.records_conflicted = counters.conflicted
         run.tombstones_applied = counters.tombstones_applied
         run.entries_restored = counters.entries_restored
+        run.records_failed_known = counters.failed_known
         run.checkpoint_after = checkpoint_after
-        summary_lines = [_safe_line(line) for line in counters.errors[:50]]
-        run.error_summary = "\n".join(summary_lines) or None
+        # Primera linia: recompte per classe amb el primer error representatiu
+        # de cadascuna; despres, si n'hi ha, «N fallades conegudes (...)»; i les
+        # linies segures diferents (com a molt 50).
+        summary = summary_line(counters.failures)
+        known = known_failures_line(counters.known_classes)
+        lines = [_safe_line(line) for line in dict.fromkeys(counters.errors)][:50]
+        head = [line for line in (summary, known) if line]
+        run.error_summary = "\n".join(head + lines) or None
 
         await self.session.commit()
         logger.info(
@@ -480,14 +630,7 @@ class PlacspIngestionService:
             if limit is not None and counters.fetched >= limit:
                 break
             counters.fetched += 1
-            try:
-                await self._process_entry(element, url, source, run, counters, dry_run)
-            except Exception as exc:  # noqa: BLE001 - una entrada dolenta no atura el feed
-                counters.failed += 1
-                message = f"{type(exc).__name__}: {exc}"
-                counters.errors.append(message[:500])
-                logger.warning("placsp.entry.failed", extra={"url": url, "error": message})
-                await self.session.rollback()
+            await self._process_unit(element, url, source, run, counters, dry_run, tombstone=False)
 
         # Les lapides despres de les entrades: l'ordre per `updated`/`when` fa
         # que el resultat no depengui de la posicio, pero aixi una entrada i la
@@ -496,17 +639,185 @@ class PlacspIngestionService:
             if limit is not None and counters.fetched >= limit:
                 break
             counters.fetched += 1
-            try:
-                await self._process_tombstone(element, url, source, run, counters, dry_run)
-            except Exception as exc:  # noqa: BLE001 - una lapida dolenta no atura el feed
-                counters.failed += 1
-                message = f"{type(exc).__name__}: {exc}"
-                counters.errors.append(message[:500])
-                logger.warning("placsp.tombstone.failed", extra={"url": url, "error": message})
-                await self.session.rollback()
+            await self._process_unit(element, url, source, run, counters, dry_run, tombstone=True)
 
         return feed.next_url
 
+    # ------------------------------------------------------- aillament
+    async def _process_unit(
+        self,
+        element: ET.Element,
+        feed_url: str,
+        source: Source,
+        run: IngestionRun,
+        counters: RunCounters,
+        dry_run: bool,
+        *,
+        tombstone: bool,
+    ) -> None:
+        """Una entrada o una lapida, aillada: SAVEPOINT propi i commit propi.
+
+        Els comptadors de la unitat nomes se sumen als del run un cop
+        confirmada; si falla, nomes compta com a `failed` (comptadors exactes).
+        """
+        unit = RunCounters()
+        trace = UnitTrace()
+        process = self._process_tombstone if tombstone else self._process_entry
+        committing = False
+        try:
+            async with self.session.begin_nested():
+                await process(element, feed_url, source, run, unit, dry_run, trace=trace)
+            committing = True
+            await self.session.commit()
+        except Exception as exc:  # noqa: BLE001 - una unitat dolenta no atura el feed
+            error = classify_exception(exc)
+            if committing:
+                # El SAVEPOINT ja s'havia alliberat: ha fallat el COMMIT i la
+                # transaccio sencera (nomes aquesta unitat) queda desfeta.
+                await self._reset_session(source, run)
+            else:
+                # El context ja ha fet ROLLBACK TO SAVEPOINT: la transaccio
+                # exterior continua viva. Nomes cal assegurar que la font i el run
+                # (els unics objectes que viuen entre unitats) no han quedat expirats.
+                try:
+                    await self._ensure_loaded(source, run)
+                except Exception:  # noqa: BLE001 - p. ex. el ROLLBACK TO no ha anat be
+                    await self._reset_session(source, run)
+            counters.failed += 1
+            counters.add_failure(error)
+            logger.warning(
+                "placsp.tombstone.failed" if tombstone else "placsp.entry.failed",
+                extra={
+                    "url": feed_url,
+                    "external_id": trace.external_id,
+                    "error_class": error.error_class,
+                    "error": error.line(),
+                },
+            )
+            if not dry_run:
+                await self._persist_failed_unit(
+                    element, feed_url, source, run, trace, error, tombstone=tombstone
+                )
+            return
+        counters.merge(unit)
+
+    async def _ensure_loaded(self, *instances) -> None:
+        """Recarrega (amb await) els objectes que un rollback ha deixat expirats.
+
+        Amb la sessio async, llegir un atribut expirat fa IO implicita i peta amb
+        MissingGreenlet: aixo es el que enverinava totes les unitats seguents.
+        """
+        for instance in instances:
+            state = sa.inspect(instance)
+            if state.expired or state.expired_attributes:
+                await self.session.refresh(instance)
+
+    async def _reset_session(self, source: Source, run: IngestionRun) -> None:
+        """Rollback sencer i recarrega de la font i del run (mai llanca)."""
+        try:
+            await self.session.rollback()
+            await self._ensure_loaded(source, run)
+        except Exception:  # noqa: BLE001 - nomes es registra
+            logger.exception("placsp.session.reset_failed")
+
+    async def _persist_failed_unit(
+        self,
+        element: ET.Element,
+        feed_url: str,
+        source: Source,
+        run: IngestionRun,
+        trace: UnitTrace,
+        error: SafeError,
+        *,
+        tombstone: bool,
+    ) -> None:
+        """Desa el SourceRecord cru d'una unitat fallida (`failed`, missatge segur).
+
+        Si ja hi ha el registre d'aquest mateix contingut (un reintent que torna a
+        fallar), s'actualitza: mai no es duplica. Sense identificador de l'entrada
+        no hi ha registre possible (`external_id` es obligatori).
+        """
+        external_id = trace.external_id or _unit_external_id(element, tombstone)
+        if not external_id:
+            return
+        raw_xml = ET.tostring(element, encoding="utf-8")
+        raw_hash = compute_sha256(raw_xml)
+        message = error.line()
+        try:
+            async with self.session.begin_nested():
+                existing_id = await self.session.scalar(
+                    sa.select(SourceRecord.id).where(
+                        SourceRecord.source_id == source.id,
+                        SourceRecord.external_id == external_id,
+                        SourceRecord.raw_hash == raw_hash,
+                    )
+                )
+                if existing_id is not None:
+                    await self.session.execute(
+                        sa.update(SourceRecord)
+                        .where(SourceRecord.id == existing_id)
+                        .values(
+                            processing_status=ProcessingStatus.FAILED,
+                            error_message=message,
+                            ingestion_run_id=run.id,
+                            # El reintent ha fallat amb AQUEST parser i AQUEST esquema.
+                            parser_version=placsp_parser.PARSER_VERSION,
+                            failed_schema_revision=SCHEMA_REVISION,
+                        )
+                        .execution_options(synchronize_session=False)
+                    )
+                else:
+                    record_id = trace.record_id or uuid.uuid4()
+                    storage_key = trace.storage_key
+                    if storage_key is None:
+                        storage_key = raw_storage_key(record_id)
+                        await self.storage.upload(storage_key, raw_xml, "application/xml")
+                    previous = (
+                        await self.session.scalar(
+                            sa.select(sa.func.count())
+                            .select_from(SourceRecord)
+                            .where(
+                                SourceRecord.source_id == source.id,
+                                SourceRecord.external_id == external_id,
+                            )
+                        )
+                    ) or 0
+                    updated = _unit_updated(element, tombstone)
+                    self.session.add(
+                        SourceRecord(
+                            id=record_id,
+                            source_id=source.id,
+                            external_id=external_id,
+                            external_version_id=updated.isoformat() if updated else None,
+                            revision_number=previous + 1,
+                            source_url=feed_url,
+                            fetched_at=datetime.now(UTC),
+                            source_updated_at=_utc(updated),
+                            raw_hash=raw_hash,
+                            raw_storage_key=storage_key,
+                            raw_size=len(raw_xml),
+                            mime_type="application/xml",
+                            parser_version=placsp_parser.PARSER_VERSION,
+                            processing_status=ProcessingStatus.FAILED,
+                            error_message=message,
+                            failed_schema_revision=SCHEMA_REVISION,
+                            ingestion_run_id=run.id,
+                        )
+                    )
+                    await self.session.flush()
+            await self.session.commit()
+        except Exception as exc:  # noqa: BLE001 - el registre fallit no pot aturar el feed
+            await self._reset_session(source, run)
+            logger.error(
+                "placsp.unit.failed_record_not_saved",
+                extra={
+                    "url": feed_url,
+                    "external_id": external_id,
+                    "error_class": classify_exception(exc).error_class,
+                },
+            )
+
+    # ------------------------------------------------------- unitats
     async def _process_entry(
         self,
         element: ET.Element,
@@ -515,13 +826,18 @@ class PlacspIngestionService:
         run: IngestionRun,
         counters: RunCounters,
         dry_run: bool,
+        *,
+        trace: UnitTrace | None = None,
     ) -> None:
+        """Una entrada. No fa commit: la confirma (o la desfa) `_process_unit`."""
+        trace = trace if trace is not None else UnitTrace()
         raw_xml = ET.tostring(element, encoding="utf-8")
         raw_hash = compute_sha256(raw_xml)
         external_id = element.findtext(f"{placsp_parser.ATOM}id")
         if not external_id:
             raise placsp_parser.ParseError("Entrada sense <id>.")
         external_id = external_id.strip()
+        trace.external_id = external_id
 
         # --- CAS A: contingut identic al que ja teniem ---
         existing = (
@@ -533,7 +849,13 @@ class PlacspIngestionService:
                 )
             )
         ).scalar_one_or_none()
-        if existing is not None:
+        verdict = _existing_verdict(existing) if existing is not None else None
+        if verdict == KNOWN_FAILURE:
+            # Ja va fallar de manera determinista amb aquest parser i aquest esquema:
+            # tornar-ho a provar donaria el mateix. Visible, pero no fa `partial`.
+            counters.add_known_failure(_known_class(existing))
+            return
+        if verdict == UNCHANGED:
             counters.unchanged += 1
             if not dry_run and existing.tender_id:
                 await self.session.execute(
@@ -541,7 +863,6 @@ class PlacspIngestionService:
                     .where(Tender.id == existing.tender_id)
                     .values(last_seen_at=datetime.now(UTC))
                 )
-                await self.session.commit()
             return
 
         previous_revisions = (
@@ -554,6 +875,9 @@ class PlacspIngestionService:
                 )
             )
         ).scalar_one() or 0
+        if existing is not None:
+            # Reintent d'una publicacio fallida: el seu propi registre no compta.
+            previous_revisions -= 1
         is_first_revision = previous_revisions == 0
 
         if dry_run:
@@ -562,10 +886,9 @@ class PlacspIngestionService:
             counters.changed += 0 if is_first_revision else 1
             return
 
-        record_id = uuid.uuid4()
-        storage_key = raw_storage_key(record_id)
         parsed = None
-        parse_error: str | None = None
+        data: NormalizedTender | None = None
+        parse_error: SafeError | None = None
         try:
             parsed = placsp_parser.parse_entry(element)
             if element.find("{*}ContractFolderStatus") is None:
@@ -575,48 +898,83 @@ class PlacspIngestionService:
                 raise placsp_parser.ParseError(
                     "Entrada sense ContractFolderStatus: publicacio incompleta."
                 )
+            data = normalize(parsed)
         except Exception as exc:  # noqa: BLE001
-            parse_error = f"{type(exc).__name__}: {exc}"
+            # Qualsevol excepcio en llegir o normalitzar l'entrada es un error de
+            # dades de la font (determinista amb el mateix parser): mai
+            # `unexpected`, que es reintentaria a cada run. Nomes el text propi
+            # del ParseError es conserva.
+            parse_error = SafeError(
+                PARSE_VALIDATION,
+                type(exc).__name__,
+                detail=(
+                    classify_exception(exc).detail
+                    if isinstance(exc, placsp_parser.ParseError)
+                    else None
+                ),
+            )
 
-        # El raw es guarda SEMPRE, fins i tot si el parseig ha fallat: es
-        # justament el cas en que voldrem tornar-hi amb un parser millor.
-        await self.storage.upload(storage_key, raw_xml, "application/xml")
-
-        record = SourceRecord(
-            id=record_id,
-            source_id=source.id,
-            external_id=external_id,
-            external_version_id=(
-                parsed.updated_at.isoformat() if parsed and parsed.updated_at else None
-            ),
-            revision_number=previous_revisions + 1,
-            source_url=feed_url,
-            fetched_at=datetime.now(UTC),
-            source_updated_at=_utc(parsed.updated_at) if parsed else None,
-            source_published_at=(
-                datetime.combine(parsed.publication_date, datetime.min.time(), tzinfo=UTC)
-                if parsed and parsed.publication_date
-                else None
-            ),
-            raw_hash=raw_hash,
-            raw_storage_key=storage_key,
-            raw_size=len(raw_xml),
-            mime_type="application/xml",
-            parser_version=placsp_parser.PARSER_VERSION,
-            processing_status=ProcessingStatus.FAILED if parse_error else ProcessingStatus.PENDING,
-            error_message=parse_error,
-            ingestion_run_id=run.id,
+        external_version_id = (
+            parsed.updated_at.isoformat() if parsed and parsed.updated_at else None
         )
-        self.session.add(record)
+        source_updated_at = _utc(parsed.updated_at) if parsed else None
+        source_published_at = (
+            datetime.combine(parsed.publication_date, datetime.min.time(), tzinfo=UTC)
+            if parsed and parsed.publication_date
+            else None
+        )
+        status = ProcessingStatus.FAILED if parse_error else ProcessingStatus.PENDING
+        message = parse_error.line() if parse_error else None
+        failed_revision = SCHEMA_REVISION if parse_error else None
+
+        if existing is not None:
+            # El raw ja es a l'storage (mateix hash): es reutilitza el registre.
+            record = existing
+            record.external_version_id = external_version_id
+            record.source_updated_at = source_updated_at
+            record.source_published_at = source_published_at
+            record.parser_version = placsp_parser.PARSER_VERSION
+            record.processing_status = status
+            record.error_message = message
+            record.failed_schema_revision = failed_revision
+            record.ingestion_run_id = run.id
+        else:
+            record_id = uuid.uuid4()
+            storage_key = raw_storage_key(record_id)
+            # El raw es guarda SEMPRE, fins i tot si el parseig ha fallat: es
+            # justament el cas en que voldrem tornar-hi amb un parser millor.
+            await self.storage.upload(storage_key, raw_xml, "application/xml")
+            trace.record_id, trace.storage_key = record_id, storage_key
+
+            record = SourceRecord(
+                id=record_id,
+                source_id=source.id,
+                external_id=external_id,
+                external_version_id=external_version_id,
+                revision_number=previous_revisions + 1,
+                source_url=feed_url,
+                fetched_at=datetime.now(UTC),
+                source_updated_at=source_updated_at,
+                source_published_at=source_published_at,
+                raw_hash=raw_hash,
+                raw_storage_key=storage_key,
+                raw_size=len(raw_xml),
+                mime_type="application/xml",
+                parser_version=placsp_parser.PARSER_VERSION,
+                processing_status=status,
+                error_message=message,
+                failed_schema_revision=failed_revision,
+                ingestion_run_id=run.id,
+            )
+            self.session.add(record)
         await self.session.flush()
 
-        if parse_error or parsed is None:
+        if parse_error or data is None:
             counters.failed += 1
-            counters.errors.append(f"{external_id}: {parse_error}")
-            await self.session.commit()
+            if parse_error:
+                counters.add_failure(parse_error)
             return
 
-        data = normalize(parsed)
         tender = await self._find_tender(source, data.external_id)
 
         # --- Ordre (spec 4.2): es decideix ABANS de tocar res del Tender ---
@@ -651,7 +1009,7 @@ class PlacspIngestionService:
                             "raw_hash": raw_hash,
                         },
                     )
-                await self.session.commit()
+                await self.session.flush()
                 return
 
         outcome = await self._apply(data, source, record, tender)
@@ -671,7 +1029,7 @@ class PlacspIngestionService:
         if outcome.tombstone_adopted:
             counters.tombstones_applied += 1
 
-        await self.session.commit()
+        await self.session.flush()
 
     async def _process_tombstone(
         self,
@@ -681,29 +1039,37 @@ class PlacspIngestionService:
         run: IngestionRun,
         counters: RunCounters,
         dry_run: bool,
+        *,
+        trace: UnitTrace | None = None,
     ) -> None:
         """Una lapida: l'entrada ja no es accessible a la font (spec 4.3).
 
         Es desa com a SourceRecord (provenance) i, si no es anterior a la
         publicacio canonica, marca `source_removed_at`. L'estat contractual no es
         toca: una lapida no diu si l'expedient s'ha anul.lat, nomes que ja no hi
-        es.
+        es. No fa commit: la confirma (o la desfa) `_process_unit`.
         """
+        trace = trace if trace is not None else UnitTrace()
         external_id = (element.get("ref") or "").strip()
         if not external_id:
             raise placsp_parser.ParseError("Lapida sense ref.")
+        trace.external_id = external_id
         raw_xml = ET.tostring(element, encoding="utf-8")
         raw_hash = compute_sha256(raw_xml)
 
         # --- CAS A: la mateixa lapida ja es a casa ---
         existing = await self.session.scalar(
-            sa.select(SourceRecord.id).where(
+            sa.select(SourceRecord).where(
                 SourceRecord.source_id == source.id,
                 SourceRecord.external_id == external_id,
                 SourceRecord.raw_hash == raw_hash,
             )
         )
-        if existing is not None:
+        verdict = _existing_verdict(existing) if existing is not None else None
+        if verdict == KNOWN_FAILURE:
+            counters.add_known_failure(_known_class(existing))
+            return
+        if verdict == UNCHANGED:
             counters.unchanged += 1
             return
 
@@ -723,39 +1089,55 @@ class PlacspIngestionService:
         parsed = placsp_parser.parse_deleted_entry(element)
         when = _utc(parsed.updated_at) if parsed else None
         tender = await self._find_tender(source, external_id)
-
-        record_id = uuid.uuid4()
-        storage_key = raw_storage_key(record_id)
-        await self.storage.upload(storage_key, raw_xml, "application/xml")
-        record = SourceRecord(
-            id=record_id,
-            source_id=source.id,
-            external_id=external_id,
-            external_version_id=(
-                parsed.updated_at.isoformat() if parsed and parsed.updated_at else None
-            ),
-            revision_number=previous_revisions + 1,
-            source_url=feed_url,
-            fetched_at=datetime.now(UTC),
-            source_updated_at=when,
-            raw_hash=raw_hash,
-            raw_storage_key=storage_key,
-            raw_size=len(raw_xml),
-            mime_type="application/xml",
-            parser_version=placsp_parser.PARSER_VERSION,
-            processing_status=ProcessingStatus.PENDING,
-            ingestion_run_id=run.id,
-            tender_id=tender.id if tender is not None else None,
+        external_version_id = (
+            parsed.updated_at.isoformat() if parsed and parsed.updated_at else None
         )
-        self.session.add(record)
+
+        if existing is not None:
+            # Reintent d'una lapida fallida: el raw ja es a l'storage.
+            record = existing
+            record.external_version_id = external_version_id
+            record.source_updated_at = when
+            record.parser_version = placsp_parser.PARSER_VERSION
+            record.processing_status = ProcessingStatus.PENDING
+            record.error_message = None
+            record.failed_schema_revision = None
+            record.ingestion_run_id = run.id
+            record.tender_id = tender.id if tender is not None else None
+        else:
+            record_id = uuid.uuid4()
+            storage_key = raw_storage_key(record_id)
+            await self.storage.upload(storage_key, raw_xml, "application/xml")
+            trace.record_id, trace.storage_key = record_id, storage_key
+            record = SourceRecord(
+                id=record_id,
+                source_id=source.id,
+                external_id=external_id,
+                external_version_id=external_version_id,
+                revision_number=previous_revisions + 1,
+                source_url=feed_url,
+                fetched_at=datetime.now(UTC),
+                source_updated_at=when,
+                raw_hash=raw_hash,
+                raw_storage_key=storage_key,
+                raw_size=len(raw_xml),
+                mime_type="application/xml",
+                parser_version=placsp_parser.PARSER_VERSION,
+                processing_status=ProcessingStatus.PENDING,
+                ingestion_run_id=run.id,
+                tender_id=tender.id if tender is not None else None,
+            )
+            self.session.add(record)
         await self.session.flush()
 
         if when is None:
+            error = SafeError(PARSE_VALIDATION, "ParseError", detail="lapida sense when valid")
             record.processing_status = ProcessingStatus.FAILED
-            record.error_message = "ParseError: lapida sense `when` valid."
+            record.error_message = error.line()
+            record.failed_schema_revision = SCHEMA_REVISION
             counters.failed += 1
-            counters.errors.append(f"{external_id}: {record.error_message}")
-            await self.session.commit()
+            counters.add_failure(error)
+            await self.session.flush()
             return
 
         record.processing_status = ProcessingStatus.PROCESSED
@@ -766,14 +1148,14 @@ class PlacspIngestionService:
             # `records_new`): aixi els comptadors sumen `records_fetched`.
             record.error_message = ORPHAN_TOMBSTONE
             counters.new += 1
-            await self.session.commit()
+            await self.session.flush()
             return
 
         if publication_order(when, tender.source_updated_at) == OLDER:
             # Una lapida antiga no amaga una publicacio mes nova.
             record.error_message = SUPERSEDED
             counters.superseded += 1
-            await self.session.commit()
+            await self.session.flush()
             return
 
         now = datetime.now(UTC)
@@ -791,7 +1173,7 @@ class PlacspIngestionService:
             "ingestion.tombstone",
             extra={"source": source.code, "external_id": external_id, "when": when.isoformat()},
         )
-        await self.session.commit()
+        await self.session.flush()
 
     async def _find_tender(self, source: Source, external_id: str) -> Tender | None:
         return (

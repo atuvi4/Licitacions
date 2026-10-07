@@ -191,6 +191,7 @@ async def test_cli_codis_de_sortida(monkeypatch, session_factory):
                 records_fetched=2,
                 tombstones_applied=0,
                 records_failed=0,
+                records_failed_known=0,
             )
 
         return _fake
@@ -224,6 +225,7 @@ async def test_cli_codis_de_sortida(monkeypatch, session_factory):
             records_fetched=0,
             tombstones_applied=0,
             records_failed=0,
+            records_failed_known=0,
         )
 
     monkeypatch.setattr(sync_module, "run_source_sync", counting)
@@ -231,6 +233,56 @@ async def test_cli_codis_de_sortida(monkeypatch, session_factory):
         amain(["--every", "0.01"], session_factory=session_factory, stop_event=stop), timeout=5
     )
     assert code == 0 and len(cycles) == 2
+
+
+async def test_cli_mostra_sempre_les_fallades_conegudes(monkeypatch, session_factory, capsys):
+    """El resum final porta sempre `conegudes=N`; si N > 0, una advertencia factual.
+
+    Ni el codi de sortida ni res mes canvia: nomes presentacio. Cap valor del run
+    (resum d'errors, payload) surt per la CLI.
+    """
+    SECRET = "ParseError: payload-sensible-que-no-ha-de-sortir"
+
+    def fake(status: IngestionStatus, known: int, failed: int = 0):
+        async def _fake(factory, code, **kwargs):
+            return SimpleNamespace(
+                status=status,
+                id="r",
+                pages_processed=1,
+                records_fetched=10,
+                tombstones_applied=0,
+                records_failed=failed,
+                records_failed_known=known,
+                error_summary=SECRET,
+            )
+
+        return _fake
+
+    # 1. success sense fallades conegudes: mostra 0, cap advertencia, rc normal.
+    monkeypatch.setattr(sync_module, "run_source_sync", fake(IngestionStatus.SUCCESS, 0))
+    assert await amain(["--source", CODE], session_factory=session_factory) == 0
+    out = capsys.readouterr().out
+    assert "Sync SUCCESS" in out and "conegudes=0" in out
+    assert "known deterministic failures" not in out
+
+    # 2. success amb fallades conegudes: rc de success, resum explicit i advertencia.
+    monkeypatch.setattr(sync_module, "run_source_sync", fake(IngestionStatus.SUCCESS, 3))
+    assert await amain(["--source", CODE], session_factory=session_factory) == 0
+    out = capsys.readouterr().out
+    assert "Sync SUCCESS" in out and "conegudes=3" in out
+    assert (
+        "known deterministic failures: 3 - watermark advanced; affected records require "
+        "retry after parser/schema change or explicit backfill"
+    ) in out
+    assert SECRET not in out and "payload-sensible" not in out
+
+    # 3. partial per errors transitoris (amb conegudes a mes): continua partial (rc 2).
+    monkeypatch.setattr(sync_module, "run_source_sync", fake(IngestionStatus.PARTIAL, 2, failed=1))
+    assert await amain(["--source", CODE], session_factory=session_factory) == 2
+    out = capsys.readouterr().out
+    assert "Sync PARTIAL" in out and "fallides=1" in out and "conegudes=2" in out
+    assert "known deterministic failures: 2 - watermark held;" in out
+    assert SECRET not in out
 
 
 async def test_get_platform_sources_mostra_salut(client_factory, session_factory, db, client_a):
@@ -269,7 +321,8 @@ async def test_excepcio_dins_run_allibera_lease_i_no_filtra_detall(
     src = await get_source(db)
     assert src.sync_lease_until is None and src.sync_lease_owner is None
     assert src.last_sync_status == "failed"
-    assert src.last_sync_error.startswith("RuntimeError")
+    # Hotfix radar: classe estable + nom de la classe, mai el missatge.
+    assert src.last_sync_error == "unexpected: RuntimeError"
     assert "SELECT" not in src.last_sync_error and "B12345678" not in src.last_sync_error
     assert len(src.last_sync_error) <= 200
 

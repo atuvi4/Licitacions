@@ -493,7 +493,11 @@ async def test_una_primera_entrada_que_peta_no_esborra_el_run(db, storage, monke
     runs = (await db.execute(sa.select(IngestionRun))).scalars().all()
     assert [r.id for r in runs] == [run.id]
     records = (await db.execute(sa.select(SourceRecord))).scalars().all()
-    assert len(records) == 3 and {r.ingestion_run_id for r in records} == {run.id}
+    # Hotfix radar: el cru de l'entrada fallida tambe es conserva (`failed`, missatge segur).
+    assert len(records) == 4 and {r.ingestion_run_id for r in records} == {run.id}
+    failed = [r for r in records if r.processing_status == ProcessingStatus.FAILED]
+    assert len(failed) == 1 and failed[0].error_message == "unexpected: RuntimeError"
+    assert failed[0].tender_id is None
     assert (await db.execute(sa.select(sa.func.count()).select_from(Tender))).scalar_one() == 3
 
 

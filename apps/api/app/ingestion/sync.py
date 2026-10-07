@@ -37,6 +37,12 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import configure_logging
+from app.ingestion.errors import (
+    KNOWN_FAILURES_RE,
+    SUMMARY_RE,
+    classify_exception,
+    safe_error_line,
+)
 from app.ingestion.placsp.service import PlacspIngestionService
 from app.ingestion.sources import SOURCES
 from app.matching.service import MatchingService
@@ -163,13 +169,26 @@ _CLASS_RE = re.compile(r"^([A-Za-z_][\w.]*(?:Error|Exception)):")
 
 
 def _safe_summary(run: IngestionRun) -> str | None:
-    """Resum curt i sense dades crues (SQL, parametres) de l'estat d'un run."""
+    """Resum curt (<= 200) i sense dades crues (SQL, parametres, XML) d'un run.
+
+    Primer el recompte per classe que escriu el servei (`1 db_data
+    (StringDataRightTruncationError 22001, tender_lots.title) + ...`), nomes si
+    compleix la gramatica estricta; despres les pagines fallides i el nombre
+    d'entrades fallides; i, si n'hi ha, `N fallades conegudes (classe, ...)`
+    (fallades deterministes ja conegudes que no s'han reintentat i que no fan el
+    run `partial`). Les linies d'un run antic sense classificar es redueixen com
+    abans a `Classe: error inesperat`.
+    """
     parts: list[str] = []
     for line in (run.error_summary or "").splitlines():
         page = _PAGE_RE.match(line)
         klass = _CLASS_RE.match(line)
-        if page:
+        if SUMMARY_RE.match(line) or KNOWN_FAILURES_RE.match(line):
+            parts.append(line)
+        elif page:
             parts.append(f"pagina {page.group(1)} fallida")
+        elif safe_error_line(line) is not None:
+            continue  # ja compta al recompte per classe
         elif klass:
             parts.append(f"{klass.group(1)}: error inesperat")
         else:
@@ -338,7 +357,7 @@ async def run_source_sync(
                 logger.exception("sync.prefit.crashed", extra={"source": source_code})
         return run
     except Exception as exc:
-        error = f"{type(exc).__name__}: error inesperat"
+        error = classify_exception(exc).line()
         raise
     finally:
         # El batec acaba la renovacio en curs i surt; mai `beat.cancel()`, que
@@ -494,8 +513,17 @@ async def _cycle(session_factory, args: argparse.Namespace, **kwargs) -> int:
     print(
         f"Sync {run.status.value.upper()} (run_id={run.id}) pagines={run.pages_processed} "
         f"entrades={run.records_fetched} lapides={run.tombstones_applied} "
-        f"fallides={run.records_failed}"
+        f"fallides={run.records_failed} conegudes={run.records_failed_known}"
     )
+    if run.records_failed_known:
+        # Nomes presentacio: les fallades conegudes no canvien l'estat del run ni la
+        # marca d'aigua (success l'avanca; partial/failed no). Cap detall del run.
+        watermark = "advanced" if run.status == IngestionStatus.SUCCESS else "held"
+        print(
+            f"WARNING known deterministic failures: {run.records_failed_known} - "
+            f"watermark {watermark}; affected records require retry after "
+            "parser/schema change or explicit backfill"
+        )
     return EXIT_CODES.get(run.status.value, 1)
 
 

@@ -110,6 +110,12 @@ class IngestionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     entries_restored: Mapped[int] = mapped_column(
         sa.Integer, nullable=False, default=0, server_default="0"
     )
+    #: Publicacions que ja havien fallat de manera determinista (mateix contingut,
+    #: mateix parser i mateix esquema) i que no es reintenten (0057). No fan el run
+    #: `partial` ni bloquegen la marca d'aigua.
+    records_failed_known: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
 
     error_summary: Mapped[str | None] = mapped_column(sa.Text)
     checkpoint_before: Mapped[str | None] = mapped_column(sa.String(1000))
@@ -173,6 +179,9 @@ class SourceRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=ProcessingStatus.PENDING,
     )
     error_message: Mapped[str | None] = mapped_column(sa.Text)
+    #: Revisio d'esquema (cap d'Alembic del codi) quan el registre va fallar (0057).
+    #: Un error determinista nomes es reintenta si canvia aixo o el `parser_version`.
+    failed_schema_revision: Mapped[str | None] = mapped_column(sa.String(64))
 
     ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("ingestion_runs.id", ondelete="SET NULL")

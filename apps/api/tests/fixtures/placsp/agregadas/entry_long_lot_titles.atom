@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:cbc="urn:dgpe:names:draft:codice:schema:xsd:CommonBasicComponents-2" xmlns:cac="urn:dgpe:names:draft:codice:schema:xsd:CommonAggregateComponents-2" xmlns:cac-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonAggregateComponents-2" xmlns:cbc-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonBasicComponents-2" xmlns:at="http://purl.org/atompub/tombstones/1.0" xmlns:ns7="urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2">
+    <id>https://contrataciondelestado.es/sindicacion/sindicacion_1044/PlataformasAgregadasSinMenores.atom</id>
+    <link href="https://contrataciondelestado.es/sindicacion/sindicacion_1044/PlataformasAgregadasSinMenores.atom" rel="self"/>
+    <title>Licitaciones publicadas en la Plataforma de Contratación del Sector Público: Plataformas Agregadas Sin Menores</title>
+    <updated>2026-10-06T03:00:35.423+02:00</updated>
+    <entry>
+        <id>https://contrataciondelestado.es/sindicacion/PlataformasAgregadasSinMenores/14362883</id>
+        <link href="https://contratos-publicos.comunidad.madrid/contrato-publico/pa-2024-0-9-suministro-material-fungible-equipamiento-realizacion-tratamiento"/>
+        <summary type="text">Id licitación: P.A. 2024-0-9;Órgano de Contratación: Hospital Universitario La Paz;Importe: 2630676.26 EUR;</summary>
+        <title>P.A. 2024-0-9. Suministro de material fungible y equipamiento para la realización de tratamiento de Hemodiálisis en paciente adultos</title>
+        <updated>2026-10-02T09:26:13.539+02:00</updated>
+        <cac-place-ext:ContractFolderStatus>
+            <cbc:ContractFolderID>P.A. 2024-0-9</cbc:ContractFolderID>
+            <cbc-place-ext:ContractFolderStatusCode languageID="es" listURI="https://contrataciondelestado.es/codice/cl/2.04/SyndicationContractFolderStatusCode-2.04.gc">RES</cbc-place-ext:ContractFolderStatusCode>
+            <cac-place-ext:LocatedContractingParty>
+                <cbc:BuyerProfileURIID>https://contratos-publicos.comunidad.madrid/perfil-contratante/publicidad-contrataciones</cbc:BuyerProfileURIID>
+                <cac:Party>
+                    <cac:PartyIdentification>
+                        <cbc:ID schemeName="ID_OC_PLAT">9000193</cbc:ID>
+                    </cac:PartyIdentification>
+                    <cac:PartyName>
+                        <cbc:Name>Hospital Universitario La Paz</cbc:Name>
+                    </cac:PartyName>
+                    <cac:AgentParty>
+                        <cac:PartyIdentification>
+                            <cbc:ID>121</cbc:ID>
+                        </cac:PartyIdentification>
+                        <cac:PartyName>
+                            <cbc:Name>Comunidad de Madrid</cbc:Name>
+                        </cac:PartyName>
+                    </cac:AgentParty>
+                </cac:Party>
+                <cac-place-ext:ParentLocatedParty>
+                    <cac:PartyName>
+                        <cbc:Name>Consejería de Sanidad</cbc:Name>
+                    </cac:PartyName>
+                    <cac-place-ext:ParentLocatedParty>
+                        <cac:PartyName>
+                            <cbc:Name>Servicio Madrileño de Salud</cbc:Name>
+                        </cac:PartyName>
+                        <cac-place-ext:ParentLocatedParty>
+                            <cac:PartyName>
+<cbc:Name>Dirección General Asistencial</cbc:Name>
+                            </cac:PartyName>
+                            <cac-place-ext:ParentLocatedParty>
+<cac:PartyName>
+    <cbc:Name>Gerencia Asistencial de Hospitales</cbc:Name>
+</cac:PartyName>
+                            </cac-place-ext:ParentLocatedParty>
+                        </cac-place-ext:ParentLocatedParty>
+                    </cac-place-ext:ParentLocatedParty>
+                </cac-place-ext:ParentLocatedParty>
+            </cac-place-ext:LocatedContractingParty>
+            <cac:ProcurementProject>
+                <cbc:Name>suministro de material fungible y equipamiento para la realización de tratamiento de Hemodiálisis en paciente adultos</cbc:Name>
+                <cbc:TypeCode listURI="http://contrataciondelestado.es/codice/cl/2.08/ContractCode-2.08.gc">1</cbc:TypeCode>
+                <cbc:MixContractIndicator>false</cbc:MixContractIndicator>
+                <cac:BudgetAmount>
+                    <cbc:EstimatedOverallContractAmount currencyID="EUR">2630676.26</cbc:EstimatedOverallContractAmount>
+                    <cbc:TaxExclusiveAmount currencyID="EUR">626351.49</cbc:TaxExclusiveAmount>
+                </cac:BudgetAmount>
+                <cac:RequiredCommodityClassification>
+                    <cbc:ItemClassificationCode listURI="http://contrataciondelestado.es/codice/cl/2.04/CPV2008-2.04.gc">33140000</cbc:ItemClassificationCode>
+                </cac:RequiredCommodityClassification>
+                <cac:RealizedLocation>
+                    <cbc:CountrySubentityCode listURI="http://contrataciondelestado.es/codice/cl/2.08/NUTS-2021.gc">ES300</cbc:CountrySubentityCode>
+                </cac:RealizedLocation>
+                <cac:PlannedPeriod>
+                    <cbc:DurationMeasure unitCode="MON">12</cbc:DurationMeasure>
+                </cac:PlannedPeriod>
+            </cac:ProcurementProject>
+            <cac:ProcurementProjectLot>
+                <cbc:ID schemeName="ID_LOTE">1</cbc:ID>
+                <cac:ProcurementProject>
+                    <cbc:Name>Dializador de superficie mayor o igual a 2,3 m2 para Hemodiálisis y Hemodiafiltración en línea.&amp;nbsp;Dializador de superficie mayor o igual a 2,0 m2 para Hemodiálisis y Hemodiafiltración en línea.&amp;nbsp;
+
+Dializador de superficie mayor o igual a 1,8 m2 para Hemodiálisis y Hemodiafiltración.&amp;nbsp;Set de líneas arterial y venosa o casete arteriovenoso.&amp;nbsp;Concentrado de bicarbonato en bolsa, cartucho o botella de cantidad necesaria para la realización de un tratamiento.&amp;nbsp;Concentrado ácido en diferentes fórmulas en bolsas o garrafas entre 3,9 y 5 l para la obtención del líquido de diálisis con el concentrado de bicarbonato.&amp;nbsp;Material de desinfección-desincrustación (cartuchos o líquidos antisépticos) para membrana de ósmosis inversa.&amp;nbsp;Filtro o filtros de detección de endotoxinas de duración 100 tratamientos o 12 semanas y superficie igual o mayor a 2,1 m2 o 2 filtros de 0,6 m2.&amp;nbsp;Tiras reactivas para determinación semicuantitativa de residuos de desinfectante en caso de que sean necesarias</cbc:Name>
+                </cac:ProcurementProject>
+            </cac:ProcurementProjectLot>
+            <cac:ProcurementProjectLot>
+                <cbc:ID schemeName="ID_LOTE">2</cbc:ID>
+                <cac:ProcurementProject>
+                    <cbc:Name>Agujas venosas para fistula necesarias para la realización de los tratamientos. Calibre 14G, con conexión luer-lock, no fenestradas, sin óxido de etileno, con capa de silicona y de bioseguridad con protector antipinchazo que no interfiera en la selección del punto de punción.&amp;nbsp;Agujas venosas para fistula necesarias para la realización de los tratamientos. Calibre 15G, con conexión luer-lock, no fenestradas, sin óxido de etileno, con capa de silicona y de bioseguridad con protector antipinchazo que no interfiera en la selección del punto de punción.&amp;nbsp;Agujas venosas para fistula necesarias para la realización de los tratamientos. Calibre 16G, con conexión luer-lock, no fenestradas, sin óxido de etileno, con capa de silicona y de bioseguridad con protector antipinchazo que no interfiera en la selección del punto de punción.&amp;nbsp;Agujas unipunción con rama venosa y rama arterial para fistula necesarias para la realización de los tratamientos Calibre 15G, con conexión luer-lock, fenestradas o no fenestradas, sin óxido de etileno, con capa de silicona.&amp;nbsp;</cbc:Name>
+                </cac:ProcurementProject>
+            </cac:ProcurementProjectLot>
+            <cac:ProcurementProjectLot>
+                <cbc:ID schemeName="ID_LOTE">3</cbc:ID>
+                <cac:ProcurementProject>
+                    <cbc:Name>Dializador de membrana de triacetato de celulosa asimétrico de alta permeabilidad válido para HDF para pacientes con alergia a membranas sintéticas</cbc:Name>
+                </cac:ProcurementProject>
+            </cac:ProcurementProjectLot>
+            <cac:ProcurementProjectLot>
+                <cbc:ID schemeName="ID_LOTE">4</cbc:ID>
+                <cac:ProcurementProject>
+                    <cbc:Name>Dializador de membrana sintética adsortiva de alto flujo. superficie &amp;gt; 2.0m2</cbc:Name>
+                </cac:ProcurementProject>
+            </cac:ProcurementProjectLot>
+            <cac:ProcurementProjectLot>
+                <cbc:ID schemeName="ID_LOTE">5</cbc:ID>
+                <cac:ProcurementProject>
+                    <cbc:Name>Dializador membrana sintética de alto flujo, antitrombótica, sin heparina en su interior. superficie &amp;gt; 2.0m2</cbc:Name>
+                </cac:ProcurementProject>
+            </cac:ProcurementProjectLot>
+            <cac:ProcurementProjectLot>
+                <cbc:ID schemeName="ID_LOTE">6</cbc:ID>
+                <cac:ProcurementProject>
+                    <cbc:Name>Catéteres dotados de bioseguridad para punción de fístulas arteriovenosas</cbc:Name>
+                </cac:ProcurementProject>
+            </cac:ProcurementProjectLot>
+            <cac:TenderingTerms>
+                <cbc:FundingProgramCode name="No hay financiación con fondos de la UE" listURI="http://contrataciondelestado.es/codice/cl/2.08/FundingProgramCode-2.08.gc">NO-EU</cbc:FundingProgramCode>
+                <cbc:ProcurementNationalLegislationCode listURI="https://contrataciondelestado.es/codice/cl/2.08/ProcurementNationalLegislationCode-2.08.gc">3</cbc:ProcurementNationalLegislationCode>
+            </cac:TenderingTerms>
+            <cac:TenderingProcess>
+                <cbc:ProcedureCode listURI="https://contrataciondelestado.es/codice/cl/2.07/SyndicationTenderingProcessCode-2.07.gc">1</cbc:ProcedureCode>
+                <cbc:UrgencyCode listURI="http://contrataciondelestado.es/codice/cl/1.04/DiligenceTypeCode-1.04.gc">1</cbc:UrgencyCode>
+                <cbc:ContractingSystemCode listURI="http://contrataciondelestado.es/codice/cl/2.08/ContractingSystemTypeCode-2.08.gc">0</cbc:ContractingSystemCode>
+                <cbc:SubmissionMethodCode listURI="http://contrataciondelestado.es/codice/cl/1.04/TenderDeliveryCode-1.04.gc">1</cbc:SubmissionMethodCode>
+                <cbc:OverThresholdIndicator>true</cbc:OverThresholdIndicator>
+                <cac:TenderSubmissionDeadlinePeriod>
+                    <cbc:EndDate>2024-03-18</cbc:EndDate>
+                    <cbc:EndTime>18:00:00</cbc:EndTime>
+                </cac:TenderSubmissionDeadlinePeriod>
+                <cac:ParticipationRequestReceptionPeriod>
+                    <cbc:EndDate>2024-03-18</cbc:EndDate>
+                    <cbc:EndTime>18:00:00</cbc:EndTime>
+                </cac:ParticipationRequestReceptionPeriod>
+                <cac:AuctionTerms>
+                    <cbc:AuctionConstraintIndicator>false</cbc:AuctionConstraintIndicator>
+                </cac:AuctionTerms>
+            </cac:TenderingProcess>
+            <cac:LegalDocumentReference>
+                <cbc:ID>pcap_pa_2024-0-9_hemodialisis.pdf</cbc:ID>
+                <cac:Attachment>
+                    <cac:ExternalReference>
+                        <cbc:URI>https://contratos-publicos.comunidad.madrid/sites/default/files/PCON/2024-02/pcap_pa_2024-0-9_hemodialisis.pdf</cbc:URI>
+                    </cac:ExternalReference>
+                </cac:Attachment>
+            </cac:LegalDocumentReference>
+            <cac:TechnicalDocumentReference>
+                <cbc:ID>ppt_pa_2024-0-9.pdf</cbc:ID>
+                <cac:Attachment>
+                    <cac:ExternalReference>
+                        <cbc:URI>https://contratos-publicos.comunidad.madrid/sites/default/files/PCON/2024-02/ppt_pa_2024-0-9.pdf</cbc:URI>
+                    </cac:ExternalReference>
+                </cac:Attachment>
+            </cac:TechnicalDocumentReference>
+            <cac-place-ext:ValidNoticeInfo>
+                <cbc-place-ext:NoticeTypeCode listURI="http://contrataciondelestado.es/codice/cl/2.11/TenderingNoticeTypeCode-2.11.gc">DOC_CN</cbc-place-ext:NoticeTypeCode>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>PCPCM – Perfil contratante</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2024-02-16</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>Perfil del contratante</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2024-02-16</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+            </cac-place-ext:ValidNoticeInfo>
+            <cac-place-ext:ValidNoticeInfo>
+                <cbc-place-ext:NoticeIssueDate>2024-02-16+01:00</cbc-place-ext:NoticeIssueDate>
+                <cbc-place-ext:NoticeTypeCode listURI="http://contrataciondelestado.es/codice/cl/2.11/TenderingNoticeTypeCode-2.11.gc">DOC_CN</cbc-place-ext:NoticeTypeCode>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>Perfil del contratante</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2024-02-16</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>DOUE</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2024-02-16</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                    <cac-place-ext:AdditionalPublicationRequest>
+                        <cbc:AgencyID>DOUE</cbc:AgencyID>
+                        <cbc-place-ext:SendDate>2024-02-14+01:00</cbc-place-ext:SendDate>
+                        <cbc-place-ext:SendTime>00:00:00</cbc-place-ext:SendTime>
+                    </cac-place-ext:AdditionalPublicationRequest>
+                </cac-place-ext:AdditionalPublicationStatus>
+            </cac-place-ext:ValidNoticeInfo>
+            <cac-place-ext:ValidNoticeInfo>
+                <cbc-place-ext:NoticeIssueDate>2024-02-16+01:00</cbc-place-ext:NoticeIssueDate>
+                <cbc-place-ext:NoticeTypeCode listURI="http://contrataciondelestado.es/codice/cl/2.11/TenderingNoticeTypeCode-2.11.gc">DOC_CN</cbc-place-ext:NoticeTypeCode>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>Perfil del contratante</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2024-02-16</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>BOCM</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2024-02-23</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+            </cac-place-ext:ValidNoticeInfo>
+            <cac-place-ext:ValidNoticeInfo>
+                <cbc-place-ext:NoticeIssueDate>2024-02-23+01:00</cbc-place-ext:NoticeIssueDate>
+                <cbc-place-ext:NoticeTypeCode listURI="http://contrataciondelestado.es/codice/cl/2.11/TenderingNoticeTypeCode-2.11.gc">DOC_CAN_ADJ</cbc-place-ext:NoticeTypeCode>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>PCPCM – Perfil contratante</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2024-05-31</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>Perfil del contratante</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2024-05-31</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+            </cac-place-ext:ValidNoticeInfo>
+            <cac-place-ext:ValidNoticeInfo>
+                <cbc-place-ext:NoticeIssueDate>2024-05-31+02:00</cbc-place-ext:NoticeIssueDate>
+                <cbc-place-ext:NoticeTypeCode listURI="http://contrataciondelestado.es/codice/cl/2.11/TenderingNoticeTypeCode-2.11.gc">DOC_FORM</cbc-place-ext:NoticeTypeCode>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>PCPCM – Perfil contratante</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2024-10-30</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>Perfil del contratante</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2024-10-30</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+            </cac-place-ext:ValidNoticeInfo>
+        </cac-place-ext:ContractFolderStatus>
+    </entry>
+</feed>

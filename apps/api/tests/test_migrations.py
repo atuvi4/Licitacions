@@ -2110,7 +2110,8 @@ def test_0056_es_reversible_i_mai_esborra_l_extensio():
     assert "pg_trgm" not in sql
 
 
-def test_0056_es_l_unic_cap_i_penja_de_0055():
+def test_0057_es_l_unic_cap_i_penja_de_0056():
+    """0056 penjava de 0055; el hotfix 0057 (titols a Text) es el nou cap unic."""
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
         capture_output=True,
@@ -2120,8 +2121,14 @@ def test_0056_es_l_unic_cap_i_penja_de_0055():
     )
     assert result.returncode == 0, result.stderr[-1000:]
     assert [line.split()[0] for line in result.stdout.splitlines() if line.strip()] == [
-        "0056_radar_search"
+        "0057_lot_title_text"
     ]
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(Config(str(API_ROOT / "alembic.ini")))
+    assert script.get_revision("0057_lot_title_text").down_revision == "0056_radar_search"
+    assert script.get_revision("0056_radar_search").down_revision == "0055_radar_ingestion"
 
 
 def _load_0056():
@@ -2253,3 +2260,193 @@ async def test_0056_round_trip_real_a_postgres(engine):
         await conn.run_sync(run, m56.upgrade)
         assert await index_exists(conn)
         await conn.run_sync(run, m56.downgrade)
+
+
+# --------------------------------------------------------------------------- #
+# 0057: titols de la font sense limit (hotfix radar, pagina 9 del pilot)       #
+# --------------------------------------------------------------------------- #
+
+_TITLES_UP = "0056_radar_search:0057_lot_title_text"
+_TITLES_DOWN = "0057_lot_title_text:0056_radar_search"
+
+
+_FAILED_REVISION_ADD = (
+    "ALTER TABLE source_records ADD COLUMN failed_schema_revision VARCHAR(64)"
+)
+_FAILED_KNOWN_ADD = (
+    "ALTER TABLE ingestion_runs ADD COLUMN records_failed_known INTEGER DEFAULT '0' NOT NULL"
+)
+
+
+def test_0057_passa_els_dos_titols_a_text_sense_cap_cast():
+    sql = _offline_sql("upgrade", _TITLES_UP)
+    assert "ALTER TABLE tender_lots ALTER COLUMN title TYPE TEXT" in sql
+    assert "ALTER TABLE tenders ALTER COLUMN title TYPE TEXT" in sql
+    body = sql.replace("alembic_version", "")
+    # Nomes aquestes dues columnes: cap altra ampliacio.
+    assert len(re.findall(r"ALTER TABLE \w+ ALTER COLUMN \w+ TYPE", body)) == 2
+    assert "USING" not in body and "DROP" not in body.upper()
+
+
+def test_0057_afegeix_les_columnes_de_fallades_conegudes():
+    """Fix round 1: revisio d'esquema de la fallada i comptador de fallades conegudes."""
+    sql = _offline_sql("upgrade", _TITLES_UP)
+    assert _FAILED_REVISION_ADD in sql
+    assert _FAILED_KNOWN_ADD in sql
+    body = sql.replace("alembic_version", "")
+    assert len(re.findall(r"ADD COLUMN", body)) == 2
+    # Cap backfill: neixen NULL / 0.
+    assert "UPDATE source_records" not in body and "UPDATE ingestion_runs" not in body
+
+
+def test_0057_downgrade_refusa_en_comptes_de_truncar():
+    """Tornar a VARCHAR(1000) amb titols mes llargs fallaria o truncaria: es refusa abans."""
+    sql = _offline_sql("downgrade", _TITLES_DOWN)
+    assert "ALTER TABLE tender_lots ALTER COLUMN title TYPE VARCHAR(1000)" in sql
+    assert "ALTER TABLE tenders ALTER COLUMN title TYPE VARCHAR(1000)" in sql
+    guard = sql.index("RAISE EXCEPTION")
+    assert guard < sql.index("TYPE VARCHAR(1000)")
+    # El refus va abans de qualsevol canvi, tambe abans d'esborrar les columnes noves.
+    assert guard < sql.index("ALTER TABLE ingestion_runs DROP COLUMN records_failed_known")
+    assert "ALTER TABLE source_records DROP COLUMN failed_schema_revision" in sql
+    assert "char_length(title) > 1000" in sql
+    lowered = sql.lower()
+    # Cap cast explicit (`USING title::varchar(1000)` trunca en silenci) ni retall.
+    assert "using" not in lowered and "substr" not in lowered and "left(" not in lowered
+
+
+def test_0057_a_sqlite_nomes_afegeix_i_treu_les_columnes_noves():
+    """A SQLite VARCHAR(n) i TEXT son el mateix (sense limit): els titols no es toquen."""
+    up = _offline_sql_sqlite("upgrade", _TITLES_UP).replace("alembic_version", "")
+    down = _offline_sql_sqlite("downgrade", _TITLES_DOWN).replace("alembic_version", "")
+    for sql in (up, down):
+        for forbidden in ("ALTER COLUMN", "RAISE", "CREATE TABLE", "COLUMN title"):
+            assert forbidden not in sql, forbidden
+    assert "ADD COLUMN failed_schema_revision VARCHAR(64)" in up
+    assert "ADD COLUMN records_failed_known INTEGER DEFAULT '0' NOT NULL" in up
+    assert "DROP COLUMN failed_schema_revision" in down
+    assert "DROP COLUMN records_failed_known" in down
+
+
+def test_les_columnes_de_fallades_conegudes_al_model():
+    from app.models.sources import IngestionRun, SourceRecord
+
+    column = SourceRecord.__table__.c.failed_schema_revision
+    assert isinstance(column.type, sa.String) and column.type.length == 64
+    assert column.nullable is True
+    known = IngestionRun.__table__.c.records_failed_known
+    assert isinstance(known.type, sa.Integer) and known.nullable is False
+    assert known.server_default.arg == "0"
+
+
+def test_la_revisio_d_esquema_del_codi_es_el_cap_d_alembic():
+    """`SCHEMA_REVISION` (desada a les fallades) no pot divergir de `alembic heads`."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    from app.db.revision import SCHEMA_REVISION
+
+    script = ScriptDirectory.from_config(Config(str(API_ROOT / "alembic.ini")))
+    assert script.get_heads() == [SCHEMA_REVISION]
+
+
+def test_els_titols_de_la_font_son_text_al_model():
+    from app.models.tenders import Tender, TenderLot
+
+    assert isinstance(TenderLot.__table__.c.title.type, sa.Text)
+    assert isinstance(Tender.__table__.c.title.type, sa.Text)
+    assert Tender.__table__.c.title.nullable is False
+    assert TenderLot.__table__.c.title.nullable is True
+
+
+@pytest.mark.postgres
+async def test_0057_round_trip_real_a_postgres(engine):
+    """0056 -> 0057 -> 0056 -> 0057 amb les funcions reals, i el downgrade que refusa.
+
+    El harness crea l'schema amb `create_all` (estat del cap = 0057). El primer
+    `downgrade()` el porta a l'estat 0056 (VARCHAR(1000)).
+    """
+    import importlib.util
+    import uuid as uuid_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.models.sources import Source
+    from app.models.tenders import Tender, TenderLot
+
+    path = API_ROOT / "alembic" / "versions" / "0057_lot_title_text.py"
+    spec = importlib.util.spec_from_file_location("mig_0057_lot_title_text", path)
+    m57 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m57)
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def types(conn) -> dict[str, tuple[str, int | None]]:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT table_name, data_type, character_maximum_length "
+                "FROM information_schema.columns WHERE table_schema = current_schema() "
+                "AND column_name = 'title' AND table_name IN ('tenders', 'tender_lots')"
+            )
+        )
+        return {row[0]: (row[1], row[2]) for row in rows}
+
+    async def new_columns(conn) -> set[tuple[str, str]]:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT table_name, column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND column_name IN "
+                "('failed_schema_revision', 'records_failed_known')"
+            )
+        )
+        return {(row[0], row[1]) for row in rows}
+
+    text_types = {"tenders": ("text", None), "tender_lots": ("text", None)}
+    varchar = {"tenders": ("character varying", 1000), "tender_lots": ("character varying", 1000)}
+    added = {
+        ("source_records", "failed_schema_revision"),
+        ("ingestion_runs", "records_failed_known"),
+    }
+
+    async with engine.begin() as conn:
+        assert await types(conn) == text_types  # cap (create_all)
+        assert await new_columns(conn) == added
+        await conn.run_sync(run, m57.downgrade)  # -> 0056
+        assert await types(conn) == varchar and await new_columns(conn) == set()
+        await conn.run_sync(run, m57.upgrade)  # -> 0057
+        assert await types(conn) == text_types and await new_columns(conn) == added
+        await conn.run_sync(run, m57.downgrade)  # -> 0056
+        assert await types(conn) == varchar and await new_columns(conn) == set()
+        await conn.run_sync(run, m57.upgrade)  # -> 0057
+        assert await types(conn) == text_types and await new_columns(conn) == added
+
+    # Amb un titol de lot de mes de 1.000 caracters, el downgrade refusa i no toca res.
+    long_title = "Agujas venosas para fístula, calibre 14G, con conexión luer-lock. " * 16
+    assert len(long_title) > 1000
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        source = Source(code=f"t57-{uuid_module.uuid4().hex[:6]}", name="Font 0057")
+        session.add(source)
+        await session.flush()
+        tender = Tender(source_id=source.id, external_id="t57", title="Expedient curt")
+        session.add(tender)
+        await session.flush()
+        session.add(TenderLot(tender_id=tender.id, external_lot_id="1", title=long_title))
+        await session.commit()
+
+    with pytest.raises(DBAPIError) as caught:
+        async with engine.begin() as conn:
+            await conn.run_sync(run, m57.downgrade)
+    assert "0057" in str(caught.value) and "1000" in str(caught.value)
+    async with engine.begin() as conn:
+        assert await types(conn) == text_types
+        assert await new_columns(conn) == added  # el refus no ha esborrat res
+        stored = (
+            await conn.execute(sa.text("SELECT title FROM tender_lots WHERE external_lot_id = '1'"))
+        ).scalar_one()
+    assert stored == long_title

@@ -58,3 +58,25 @@ entrades triades). Només queden dades públiques de licitacions i d'òrgans.
 | `tombstone_cerrada.atom` / `tombstone_anulada.atom` | Una làpida cadascuna (`CERRADA` real; `ANULADA` sintètica). |
 | `tombstone_old.atom` | Làpida de l'entrada base amb `when` anterior al seu `updated`. |
 | `page1.atom` / `page2.atom` | Pàgina 1 (2 entrades de 2026-10-05 + 1 làpida, `next` → pàgina 2); pàgina 2 (2 entrades de 2026-10-02, sense `next`). |
+| `entry_long_lot_titles.atom` | Hotfix radar: l'entrada 193 de la pàgina 9 (vegeu a sota), sola. Dos títols de lot de 1.017 i 1.076 caràcters. |
+| `page9_regression.atom` | Hotfix radar: A (entrada base d'`entry_lots`), B (l'entrada 193), C1–C3 (les altres tres d'`entry_lots`) i la làpida de `tombstone_cerrada` (ref A). |
+
+## Pàgina 9 del primer sync real (hotfix radar, 2026-10-07)
+
+Origen: pàgina `PlataformasAgregadasSinMenores_20261003_030037_1.atom` del mateix feed
+1044 (499 entrades + 1 làpida), capturada pel run 357b640e del pilot. L'entrada amb
+índex 193 (`atom:id` `…/14362883`, expedient `P.A. 2024-0-9`) té dos lots amb
+`ProcurementProject/Name` de **1.017** i **1.076** caràcters, que superaven
+`tender_lots.title` VARCHAR(1000). Es copia el **text cru** de l'XML (mateixos prefixos
+i escapaments, `&amp;nbsp;` inclosos), amb aquests retalls:
+
+* **Sense adjudicatàries**: s'han tret els 6 blocs `cac:TenderResult` (NIF i noms
+  d'empreses reals). El parser no els llegeix.
+* **`ID_OC_PLAT` sintètic**: el valor real (amb forma de NIF) s'ha substituït per
+  `9000193`.
+* Cap `ElectronicMail`/`Telephone`/`Telefax`/`cac:Contact` ni cap `@` a l'entrada.
+  Els títols de lot es conserven: són text públic de l'objecte del contracte.
+
+La capçalera de tots dos fitxers és la d'`entry_lots.atom`. Les variants que fan servir
+els tests (lot duplicat, nom d'expedient llarg, `next` cap a la pàgina 2) es generen al
+vol a `tests/test_ingestion_regression_page9.py`; no són fitxers.

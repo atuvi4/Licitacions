@@ -311,6 +311,8 @@ class IngestionRunRead(ORMModel):
     records_changed: int
     records_unchanged: int
     records_failed: int
+    #: Fallades deterministes ja conegudes, no reintentades (0057).
+    records_failed_known: int = 0
     tenders_created: int
     tenders_updated: int
     checkpoint_before: str | None = None

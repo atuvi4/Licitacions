@@ -159,7 +159,11 @@ async def test_pagina_no_parsejable_es_partial_i_no_compta(db, storage, monkeypa
     r = await PlacspIngestionService(db, storage).run(source_code=CODE, mode="incremental")
     assert r.status == IngestionStatus.PARTIAL and r.pages_processed == 1
     assert (await get_source(db)).updated_watermark is None
-    assert r.error_summary.startswith("pagina 2: ParseError") and len(r.error_summary) <= 200
+    # Hotfix radar: primer el recompte per classe, despres la linia de la pagina.
+    summary, page_line = r.error_summary.splitlines()
+    assert summary == "1 parse_validation (ParseError)"
+    assert page_line.startswith("pagina 2: parse_validation: ParseError")
+    assert len(summary) <= 200 and len(page_line) <= 200
 
 
 async def test_el_limit_a_mitja_pagina_no_mou_el_checkpoint_i_es_partial(db, storage, two_pages):
@@ -274,6 +278,13 @@ async def test_backfill_acotat_partial_i_resume(db, storage, two_pages):
         ),
         ("RuntimeError: ParseError: B12345678", "RuntimeError: error inesperat"),
         ("text sense classe ParseError: B12345678", "Error: error inesperat"),
+        # Hotfix radar: les linies ja classificades passen tal qual (abans tot
+        # acabava en «Error: error inesperat»).
+        (
+            "db_data: StringDataRightTruncationError (22001) tender_lots.title",
+            "db_data: StringDataRightTruncationError (22001) tender_lots.title",
+        ),
+        ("pagina 9: unexpected: MissingGreenlet", "pagina 9: unexpected: MissingGreenlet"),
     ],
 )
 def test_safe_line_nomes_llegeix_la_classe_a_l_inici(line, expected):

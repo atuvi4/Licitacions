@@ -231,7 +231,9 @@ def normalize(entry: ParsedEntry) -> NormalizedTender:
 
     return NormalizedTender(
         external_id=entry.external_id,
-        title=title[:1000],
+        # Sense retall: `ProcurementProject/Name` es text lliure sense limit a la
+        # font (n'hi ha de 1.999 caracters) i `tenders.title` es Text (0057).
+        title=title,
         expediente_number=(entry.contract_folder_id or None),
         description=entry.summary,
         procedure_type=codes.map_procedure_type(entry.procedure_code),
