@@ -8,12 +8,15 @@ reals sense scripts.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Query, Response, status
 
 from app.api.deps import PlatformAdmin, SessionDep
 from app.models.enums import CompanyPlatformStatus
+from app.models.sources import Source
 from app.schemas.platform import (
     CompanyOnboardingRead,
     CompanyOnboardingRequest,
@@ -22,6 +25,7 @@ from app.schemas.platform import (
     PlatformCompanyDetail,
     PlatformCompanyList,
     PlatformStatusChangeRequest,
+    SourceHealthRead,
 )
 from app.services import platform_companies, platform_onboarding
 
@@ -108,3 +112,22 @@ async def change_company_status(
         status=payload.status,
         pilot_ends_at=payload.pilot_ends_at,
     )
+
+
+@router.get(
+    "/sources",
+    response_model=list[SourceHealthRead],
+    summary="Salut de la sincronitzacio de cada font",
+)
+async def list_sources(_: PlatformAdmin, session: SessionDep) -> list[SourceHealthRead]:
+    now = datetime.now(UTC)
+    rows = (await session.execute(sa.select(Source).order_by(Source.code))).scalars().all()
+    result: list[SourceHealthRead] = []
+    for source in rows:
+        item = SourceHealthRead.model_validate(source, from_attributes=True)
+        until = source.sync_lease_until
+        if until is not None and until.tzinfo is None:
+            until = until.replace(tzinfo=UTC)
+        item.lease_active = until is not None and until > now
+        result.append(item)
+    return result

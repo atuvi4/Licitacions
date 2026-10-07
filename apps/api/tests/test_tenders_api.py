@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
 
 from app.ingestion.placsp.service import PlacspIngestionService
+from app.models.tenders import Tender
 
 FIXTURES = Path(__file__).parent / "fixtures" / "placsp"
 
@@ -110,13 +113,35 @@ class TestDetail:
         assert detail["source_publication_count"] == 1
         assert detail["first_seen_at"] and detail["last_seen_at"]
 
+    async def test_la_fitxa_porta_la_presencia_a_la_font_com_la_fila(self, db, client_a, ingested):
+        """`source_removed_at`, `source_updated_at` i `source_code`, igual que la fila."""
+        tender = (
+            await db.execute(sa.select(Tender).where(Tender.expediente_number == "26-002735"))
+        ).scalar_one()
+        removed_at = datetime(2026, 10, 2, 8, 30, tzinfo=UTC)
+        tender.source_removed_at = removed_at
+        await db.commit()
+
+        detail = (await client_a.get(f"/api/v1/tenders/{tender.id}")).json()
+        row = next(
+            item
+            for item in (await client_a.get("/api/v1/tenders")).json()["items"]
+            if item["id"] == str(tender.id)
+        )
+        returned = datetime.fromisoformat(detail["source_removed_at"])
+        # SQLite no desa la zona horaria; PostgreSQL si. El valor es el mateix (UTC).
+        assert returned.replace(tzinfo=returned.tzinfo or UTC) == removed_at
+        assert detail["source_code"] == "PLACSP"  # el codi tal com esta desat
+        for field in ("source_removed_at", "source_updated_at", "source_code"):
+            assert detail[field] == row[field], field
+
     async def test_la_fitxa_inclou_tracabilitat(self, client_a, ingested):
         items = (await client_a.get("/api/v1/tenders")).json()["items"]
         detail = (await client_a.get(f"/api/v1/tenders/{items[0]['id']}")).json()
 
         trace = detail["traceability"]
         assert trace["source_code"] == "PLACSP"
-        assert trace["parser_version"] == "placsp-v1"
+        assert trace["parser_version"] == "placsp-v2"
         assert len(trace["raw_hash"]) == 64
         assert trace["external_id"].startswith("https://")
 
@@ -182,6 +207,39 @@ class TestIngestionRuns:
         """La ingesta s'engega per CLI, no exposada a la xarxa."""
         response = await client_a.post("/api/v1/ingestion/placsp/run", json={})
         assert response.status_code in {404, 405}
+
+
+async def test_els_documents_retirats_de_la_font_no_es_presenten_com_a_vigents(
+    client_a, tenant_a, session, tender_document
+):
+    """Fitxa i llista de plecs exclouen `removed_at` per defecte; l'historial ho explica."""
+    from app.models.enums import TenderDocumentType
+    from app.models.tenders import TenderDocument
+
+    removed = TenderDocument(
+        tender_id=tender_document.tender_id,
+        name="PPT retirat.pdf",
+        document_type=TenderDocumentType.TECHNICAL_TERMS,
+        url="https://example.com/ppt-antic.pdf",
+        removed_at=datetime(2026, 10, 6, 18, 0, tzinfo=UTC),
+    )
+    session.add(removed)
+    await session.commit()
+    _, company = tenant_a
+    tender_id = tender_document.tender_id
+
+    detail = (await client_a.get(f"/api/v1/tenders/{tender_id}")).json()
+    assert [d["id"] for d in detail["documents"]] == [str(tender_document.id)]
+    assert detail["documents"][0]["removed_at"] is None
+
+    base = f"/api/v1/companies/{company.id}/tenders/{tender_id}/documents"
+    listed = (await client_a.get(base)).json()
+    assert [d["id"] for d in listed] == [str(tender_document.id)]
+
+    everything = (await client_a.get(f"{base}?include_removed=true")).json()
+    by_id = {d["id"]: d for d in everything}
+    assert set(by_id) == {str(tender_document.id), str(removed.id)}
+    assert by_id[str(removed.id)]["removed_at"].startswith("2026-10-06")
 
 
 async def test_the_tender_detail_reports_the_documental_state(client_a, tender_document):

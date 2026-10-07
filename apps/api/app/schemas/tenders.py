@@ -165,6 +165,9 @@ class TenderDocumentRead(ORMModel):
     url: str
     mime_type: str | None = None
     published_at: date | None = None
+    #: Data en que una publicacio completa posterior ja no el portava. Les
+    #: llistes vigents l'exclouen per defecte; `None` = vigent a la font.
+    removed_at: datetime | None = None
     #: Versio actual descarregada, si n'hi ha cap. `None` = mai processat.
     latest_file: TenderDocumentFileSummary | None = None
 
@@ -181,6 +184,9 @@ class TenderListItem(ORMModel):
     contract_type: ContractType
     estimated_value: Decimal | None = None
     base_budget: Decimal | None = None
+    #: Pressupost base sense IVA: el filtre i l'ordre d'import usen
+    #: `coalesce(estimated_value, base_budget_without_tax, base_budget)`.
+    base_budget_without_tax: Decimal | None = None
     currency: str
     publication_date: date | None = None
     deadline_at: datetime | None = None
@@ -197,6 +203,24 @@ class TenderListItem(ORMModel):
     source_code: str | None = None
     # True quan l'expedient ha canviat despres de la primera vegada que el vam veure.
     is_modified: bool = False
+    #: El `updated` de la font de l'ultima entrada aplicada (0055).
+    source_updated_at: datetime | None = None
+    #: Ja no disponible a la font (lapida). NO es un estat: `status` no canvia.
+    source_removed_at: datetime | None = None
+    #: Documents vigents (els retirats de la font no compten).
+    document_count: int = 0
+
+
+class CataloguePage(Page[T], Generic[T]):  # noqa: UP046 - mateix patro que `Page`
+    """Pagina del cataleg (`/tenders` i `/companies/{c}/matches`).
+
+    `excluded_without_amount` nomes te valor quan l'usuari ha fixat un filtre
+    d'import: quantes files, amb la resta de filtres aplicats, no es mostren
+    nomes perque no tenen import conegut. Sense filtre d'import es `None`: no
+    s'exclou res per manca de dada.
+    """
+
+    excluded_without_amount: int | None = None
 
 
 class TenderRevisionRead(ORMModel):
@@ -252,6 +276,12 @@ class TenderDetail(ORMModel):
     last_changed_at: datetime | None = None
     #: Publicacions rebudes de la font. Veure la nota a `TenderListItem`.
     source_publication_count: int
+    #: Codi de la font tal com esta desat (el que accepta el filtre `source`).
+    source_code: str
+    #: Com a la fila del cataleg (`TenderListItem`): `updated` de la font i
+    #: presencia a la font (lapida; NO es un estat, `status` no canvia).
+    source_updated_at: datetime | None = None
+    source_removed_at: datetime | None = None
     buyer: BuyerRead | None = None
     cpvs: list[TenderCPVRead] = []
     lots: list[TenderLotRead] = []
@@ -289,6 +319,14 @@ class IngestionRunRead(ORMModel):
     error_summary: str | None = None
 
 
+class SourceFacet(BaseModel):
+    """Una font del cataleg visible, per al filtre `source`."""
+
+    code: str
+    name: str
+    count: int
+
+
 class TenderFacets(BaseModel):
     """Valors disponibles per als filtres del feed, calculats sobre les dades reals."""
 
@@ -297,6 +335,11 @@ class TenderFacets(BaseModel):
     contract_types: list[str]
     nuts_codes: list[str] = Field(default_factory=list)
     total_tenders: int
+    #: Fonts amb licitacions visibles, amb el codi tal com esta desat (el que
+    #: accepta el filtre `source`) i el nom per mostrar.
+    sources: list[SourceFacet] = Field(default_factory=list)
+    #: Licitacions visibles per estat (`status` -> recompte).
+    status_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class TenderChangeEventRead(ORMModel):

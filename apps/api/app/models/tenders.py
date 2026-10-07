@@ -18,6 +18,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column
@@ -94,6 +95,8 @@ class Tender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.Index("ix_tenders_estimated_value", "estimated_value"),
         sa.Index("ix_tenders_expediente_number", "expediente_number"),
         sa.Index("ix_tenders_owner_company_id", "owner_company_id"),
+        sa.Index("ix_tenders_first_seen_at", "first_seen_at"),
+        sa.Index("ix_tenders_source_updated_at", "source_updated_at"),
         sa.CheckConstraint(
             "estimated_value IS NULL OR estimated_value >= 0", name="tender_estimated_value_positive"
         ),
@@ -189,6 +192,18 @@ class Tender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: Inici previst de l'execucio, si el plec el dona.
     planned_start_date: Mapped[date | None] = mapped_column(sa.Date)
 
+    # --- Provenance canonica i cerca (0055). ---------------------------------
+    #: El `updated` de la font de l'entrada aplicada. Un `updated` anterior no regressa.
+    source_updated_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    #: Presencia a la font (tombstone). NO es un estat: no canvia `status`.
+    source_removed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    #: Provenance especifica de la font, claus tancades (res de PLACSP com a columna).
+    source_metadata: Mapped[dict | None] = mapped_column(
+        sa.JSON(none_as_null=True).with_variant(postgresql.JSONB(none_as_null=True), "postgresql")
+    )
+    #: Text de cerca normalitzat a l'aplicacio (NFKD, sense diacritics, casefold).
+    search_text: Mapped[str | None] = mapped_column(sa.Text)
+
     buyer: Mapped[Buyer | None] = relationship(lazy="joined")
     lots: Mapped[list[TenderLot]] = relationship(
         back_populates="tender",
@@ -270,6 +285,7 @@ class TenderCPV(TimestampMixin, Base):
     """
 
     __tablename__ = "tender_cpvs"
+    __table_args__ = (sa.Index("ix_tender_cpvs_cpv_code", "cpv_code"),)
 
     tender_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), primary_key=True
@@ -286,6 +302,7 @@ class TenderLotCPV(TimestampMixin, Base):
     """CPV d'un lot concret."""
 
     __tablename__ = "tender_lot_cpvs"
+    __table_args__ = (sa.Index("ix_tender_lot_cpvs_cpv_code", "cpv_code"),)
 
     tender_lot_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("tender_lots.id", ondelete="CASCADE"), primary_key=True
@@ -329,6 +346,8 @@ class TenderDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     url: Mapped[str] = mapped_column(sa.String(1000), nullable=False)
     mime_type: Mapped[str | None] = mapped_column(sa.String(160))
     published_at: Mapped[date | None] = mapped_column(sa.Date)
+    #: Absencia observada en una publicacio completa posterior (0055). Mai delete fisic.
+    removed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
     source_record_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("source_records.id", ondelete="SET NULL")

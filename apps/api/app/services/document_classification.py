@@ -60,6 +60,7 @@ from app.models.tender_documents import (
 )
 from app.models.tenders import Tender, TenderDocument
 from app.services.storage import get_storage
+from app.tenders.documents import ACTIVE_DOCUMENT, removed_document_ids
 
 
 @dataclass(slots=True)
@@ -74,7 +75,11 @@ class _Input:
 async def _inputs(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> list[_Input]:
-    """Els documents amb contingut desat, en l'ordre en que van arribar."""
+    """Els documents VIGENTS amb contingut desat, en l'ordre en que van arribar.
+
+    Un plec retirat de la font no es classifica ni apareix entre els rols
+    vigents; les runs de classificacio anteriors el conserven tal com era.
+    """
     rows = (
         await session.execute(
             sa.select(TenderDocument, TenderDocumentContent)
@@ -86,7 +91,7 @@ async def _inputs(
                 ),
             )
             .join(TenderDocumentContent, TenderDocumentContent.id == TenderDocumentFile.content_id)
-            .where(TenderDocument.tender_id == tender_id)
+            .where(TenderDocument.tender_id == tender_id, ACTIVE_DOCUMENT)
         )
     ).all()
     if not rows:
@@ -200,6 +205,25 @@ async def current_run(
     )
 
 
+async def run_includes_removed_document(
+    session: AsyncSession, run: TenderDocumentClassificationRun
+) -> bool:
+    """Cert si la run de classificacio va classificar un document ja retirat de la font."""
+    removed = await removed_document_ids(session, run.tender_id)
+    if not removed:
+        return False
+    return bool(
+        await session.scalar(
+            sa.select(
+                sa.exists().where(
+                    TenderDocumentRoleSuggestion.run_id == run.id,
+                    TenderDocumentRoleSuggestion.tender_document_id.in_(removed),
+                )
+            )
+        )
+    )
+
+
 async def _decisions(
     session: AsyncSession, company_id: uuid.UUID, document_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, TenderDocumentRoleDecision]:
@@ -241,6 +265,13 @@ async def classify_tender(
     """Classifica tots els documents de la licitacio. `None` si no n'hi ha cap."""
     inputs = await _inputs(session, company_id, tender.id)
     if not inputs:
+        # Si ja no queda cap plec vigent perque s'han retirat de la font, la
+        # classificacio que en parlava deixa de ser vigent: no pot quedar com a
+        # base de cap analisi nova. (Es conserva sencera com a historia.)
+        previous = await current_run(session, company_id, tender.id)
+        if previous is not None and await run_includes_removed_document(session, previous):
+            previous.is_current = False
+            await session.commit()
         return None
     fingerprint = _fingerprint(inputs)
     previous = await current_run(session, company_id, tender.id)

@@ -1,11 +1,14 @@
 "use client";
 
-import { Plus, SlidersHorizontal } from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
-import { ImportTenderWizard } from "@/components/ImportTenderWizard";
+import { CatalogueTabs } from "@/components/catalogue/CatalogueTabs";
+import { CatalogueView } from "@/components/catalogue/CatalogueView";
+import { DeadlineCell } from "@/components/catalogue/CatalogueRow";
+import { TendersHeader } from "@/components/catalogue/TendersHeader";
 import { PreFitDisclaimer, ScoreValue } from "@/components/PreFit";
 import { useSession } from "@/components/SessionProvider";
 import {
@@ -17,7 +20,6 @@ import {
   Input,
   LinkButton,
   LoadingRows,
-  PageHeader,
   PageSkeleton,
   Select,
   StatusPill,
@@ -25,10 +27,9 @@ import {
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { api } from "@/lib/api";
-import { canImportTender } from "@/lib/import-wizard";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatMoney } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
-import { TENDER_STATUS_LEVEL, deadlineLevel } from "@/lib/labels";
+import { TENDER_STATUS_LEVEL } from "@/lib/labels";
 import {
   MATCH_STATUS_HELP,
   MATCH_STATUS_LABELS,
@@ -41,8 +42,9 @@ import {
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
   TENDER_STATUS_LABELS,
-  daysUntilDeadline,
-  type Page,
+  labelOf,
+  sourceLabel,
+  type CataloguePage,
   type TenderFacets,
 } from "@/lib/tenders";
 import type { DashboardSummary } from "@/lib/types";
@@ -56,6 +58,7 @@ import {
   countApplied,
   feedQuery,
   modeFromParam,
+  tabFromParams,
   type Filters,
 } from "./query";
 
@@ -67,27 +70,7 @@ import {
  */
 
 const COLUMN_HEADERS = ["Encaix", "Licitació", "Termini", "Import", "Estat"];
-const INGEST_COMMAND = "python -m app.ingestion.placsp --limit 100";
-
-function DeadlineCell({ value }: { value: string | null }) {
-  const days = daysUntilDeadline(value);
-  if (!value || days === null) {
-    return (
-      <StatusPill level="neutral" size="sm">
-        Sense termini
-      </StatusPill>
-    );
-  }
-  const text = days < 0 ? "Tancat" : days === 0 ? "Avui" : `${days} ${days === 1 ? "dia" : "dies"}`;
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-      <StatusPill level={deadlineLevel(days)} size="sm">
-        {text}
-      </StatusPill>
-      <span className="text-caption whitespace-nowrap text-muted tabular-nums">{formatDate(value)}</span>
-    </div>
-  );
-}
+const INGEST_COMMAND = "python -m app.ingestion.sync --source placsp_agregadas --max-pages 2";
 
 function FitCell({ match }: { match: TenderMatchListItem["match"] }) {
   if (!match) return <span className="text-caption text-faint">Sense calcular</span>;
@@ -109,8 +92,8 @@ function FitCell({ match }: { match: TenderMatchListItem["match"] }) {
   );
 }
 
-function TendersFeed() {
-  const { companyId, membership } = useSession();
+function ReviewFeed() {
+  const { companyId } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
   const urlQ = searchParams.get("q") ?? "";
@@ -122,8 +105,6 @@ function TendersFeed() {
   const [sort, setSort] = useState("score");
   const [offset, setOffset] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(urlQ !== "");
-  const [importOpen, setImportOpen] = useState(false);
-  const canImport = canImportTender(membership?.role);
   const recalculation = useMutation();
 
   // La cerca global i «Avui» arriben per la URL. Si la URL canvia sense
@@ -146,7 +127,7 @@ function TendersFeed() {
   // El feed sempre porta el pre-fit al costat: és el mateix catàleg públic,
   // però llegit des del perfil de l'empresa. Els criteris de cerca són
   // exactament els mateixos que a `/tenders`.
-  const list = useResource<Page<TenderMatchListItem>>(
+  const list = useResource<CataloguePage<TenderMatchListItem>>(
     companyId ? `/companies/${companyId}/matches?${query}` : null,
   );
   const facets = useResource<TenderFacets>(
@@ -235,7 +216,8 @@ function TendersFeed() {
             {[tender.expediente_number, tender.buyer?.name].filter(Boolean).join(" · ") || "—"}
           </p>
           <p className="text-caption text-muted">
-            {PROCEDURE_TYPE_LABELS[tender.procedure_type]} · {CONTRACT_TYPE_LABELS[tender.contract_type]}
+            {labelOf(PROCEDURE_TYPE_LABELS, tender.procedure_type, "Tipus desconegut")} ·{" "}
+            {labelOf(CONTRACT_TYPE_LABELS, tender.contract_type, "Tipus desconegut")}
             {tender.lot_count > 0 && ` · ${tender.lot_count} ${tender.lot_count === 1 ? "lot" : "lots"}`}
           </p>
         </div>
@@ -249,7 +231,7 @@ function TendersFeed() {
       align: "right",
       cell: ({ tender }) => (
         <span className="whitespace-nowrap tabular-nums">
-          {formatMoney(tender.estimated_value ?? tender.base_budget, tender.currency)}
+          {formatMoney(tender.estimated_value ?? tender.base_budget_without_tax ?? tender.base_budget, tender.currency)}
         </span>
       ),
     },
@@ -259,8 +241,11 @@ function TendersFeed() {
       width: "14%",
       cell: ({ tender }) => (
         <div className="flex flex-col items-start gap-1">
-          <StatusPill level={TENDER_STATUS_LEVEL[tender.status]} size="sm">
-            {TENDER_STATUS_LABELS[tender.status]}
+          <StatusPill
+            level={Object.hasOwn(TENDER_STATUS_LEVEL, tender.status) ? TENDER_STATUS_LEVEL[tender.status] : "neutral"}
+            size="sm"
+          >
+            {labelOf(TENDER_STATUS_LABELS, tender.status, "Estat desconegut")}
           </StatusPill>
           {tender.is_modified && tender.source_publication_count > 1 && (
             <StatusPill level="attention" size="sm">
@@ -365,26 +350,13 @@ function TendersFeed() {
 
   return (
     <>
-      <PageHeader
-        title="Oportunitats"
-        description="Licitacions publicades a la Plataforma de Contratación del Sector Público, amb el pre-fit calculat sobre el vostre perfil."
-        actions={
-          canImport ? (
-            <Button variant="secondary" onClick={() => setImportOpen(true)}>
-              <Plus size={15} strokeWidth={1.5} aria-hidden /> Importa licitació
-            </Button>
-          ) : null
-        }
-      />
-
-      <ImportTenderWizard
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-        onFinished={() => {
+      <TendersHeader
+        onImported={() => {
           void list.reload();
           void summary.reload();
         }}
       />
+      <CatalogueTabs value="revisar" className="mb-4" />
 
       {recalculation.error ? (
         <Banner
@@ -416,7 +388,7 @@ function TendersFeed() {
       ) : null}
 
       <div className="mb-1 flex flex-wrap items-center gap-2" role="group" aria-label="Vistes">
-        {MODES.map((option) => {
+        {MODES.filter((option) => option.value !== "all").map((option) => {
           const pressed = option.value === mode;
           const count = summary.data ? summary.data[option.count] : null;
           return (
@@ -669,8 +641,22 @@ function TendersFeed() {
         El pre-fit compara metadades (CPV, territori, import i terminis) amb el vostre perfil
         d&apos;empresa. No amaga cap licitació: la vista «Totes» les mostra igualment.
         {summary.data && ` · Regles: ${summary.data.rules_version}`}
-        {items.length > 0 && items[0].tender.source_code && ` · Font: ${items[0].tender.source_code}`}
+        {items.length > 0 && items[0].tender.source_code && ` · Font: ${sourceLabel(items[0].tender.source_code, facets.data?.sources)}`}
       </p>
+    </>
+  );
+}
+
+function TendersPage() {
+  const searchParams = useSearchParams();
+  const tab = tabFromParams(searchParams);
+  const [reloadKey, setReloadKey] = useState(0);
+  if (tab === "revisar") return <ReviewFeed />;
+  return (
+    <>
+      <TendersHeader onImported={() => setReloadKey((key) => key + 1)} />
+      <CatalogueTabs value="totes" className="mb-4" />
+      <CatalogueView key={reloadKey} />
     </>
   );
 }
@@ -678,7 +664,7 @@ function TendersFeed() {
 export default function TendersFeedPage() {
   return (
     <Suspense fallback={<PageSkeleton variant="table" title="Oportunitats" columns={COLUMN_HEADERS} />}>
-      <TendersFeed />
+      <TendersPage />
     </Suspense>
   );
 }

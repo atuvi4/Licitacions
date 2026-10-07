@@ -28,6 +28,9 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-used-in-production")
 os.environ.setdefault("STORAGE_BACKEND", "local")
 os.environ.setdefault("ENVIRONMENT", "test")
+# Cap test no surt a la xarxa per construccio: el client de PLACSP refusa el
+# cami real si no se li injecta un client o transport (`app/ingestion/placsp/client.py`).
+os.environ["TUVI_TESTS_NO_NETWORK"] = "1"
 
 import pytest  # noqa: E402
 import sqlalchemy as sa  # noqa: E402

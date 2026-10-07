@@ -217,6 +217,9 @@ class ProcessingStatus(StrEnum):
     PENDING = "pending"
     PROCESSED = "processed"
     FAILED = "failed"
+    #: Mateix `updated` que l'estat canonic i hash diferent: es conserven tots dos
+    #: `SourceRecord`, no s'aplica cap (0055, radar 3B-1).
+    CONFLICT = "conflict"
 
 
 # ---------------------------------------------------------------------------

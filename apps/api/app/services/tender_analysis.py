@@ -45,7 +45,7 @@ from app.analysis.fingerprint import (
 )
 from app.analysis.registry import RULES_VERSION
 from app.analysis.territory import Area, Coverage
-from app.core.errors import NotFoundError
+from app.core.errors import AnalysisPrerequisitesMissingError, NotFoundError
 from app.models.classification import TenderDocumentClassificationRun
 from app.models.enums import KnowledgeLifecycle
 from app.models.knowledge import CompanyPartner, PartnerRoleRow
@@ -62,7 +62,13 @@ from app.models.tender_analysis import (
 )
 from app.models.tender_structure import TenderSite
 from app.models.tenders import Tender
-from app.services import company_knowledge, manual_requirement, tender_lifecycle
+from app.services import (
+    company_knowledge,
+    document_classification,
+    manual_requirement,
+    requirement_analysis,
+    tender_lifecycle,
+)
 from app.services import tender_scope as scope
 from app.services.knowledge_coverage import coverage_input
 from app.tenders.visibility import visible_to_company
@@ -260,7 +266,7 @@ async def load_structure_view(
             for f in facts
         ),
     )
-    revision = await tender_lifecycle.latest_revision(session, tender.id)
+    revision = await tender_lifecycle.latest_analysis_affecting_revision(session, tender.id)
     versions = {
         "tender_revision_id": revision.id if revision else None,
         "extraction_run_id": effective.run.id if effective.run else None,
@@ -395,6 +401,42 @@ async def _classification_run_id(
     )
 
 
+#: Codis tancats de `details["missing"]` (mateix contracte que `requirements` del router).
+MISSING_REQUIREMENTS_OUTDATED = "requirements_outdated"
+MISSING_CLASSIFICATION_OUTDATED = "classification_outdated"
+
+
+async def assert_inputs_are_current(
+    session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
+) -> None:
+    """Cap analisi nova sobre una run que va llegir un plec ja retirat de la font.
+
+    La run d'extraccio vigent (i la de classificacio) es la base de la vista del
+    plec. Si va llegir o cita un document que ja no es a la publicacio vigent,
+    analitzar-la ara faria una analisi NOVA alimentada per aquell document. Es
+    refusa amb el mateix error de prerequisits que ja coneix la interficie; el
+    remei es el flux normal: tornar a analitzar els plecs (l'extraccio nova ja no
+    el llegeix).
+    """
+    missing: list[str] = []
+    effective = await manual_requirement.effective_requirements(session, tender_id)
+    if effective.run is not None and await requirement_analysis.run_includes_removed_document(
+        session, effective.run
+    ):
+        missing.append(MISSING_REQUIREMENTS_OUTDATED)
+    classification = await document_classification.current_run(session, company_id, tender_id)
+    if classification is not None and await document_classification.run_includes_removed_document(
+        session, classification
+    ):
+        missing.append(MISSING_CLASSIFICATION_OUTDATED)
+    if missing:
+        raise AnalysisPrerequisitesMissingError(
+            "Els requisits vigents inclouen un document que ja no es a la font: "
+            "cal tornar a processar els plecs.",
+            details={"missing": missing},
+        )
+
+
 async def current_run(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> TenderAnalysisRun | None:
@@ -527,8 +569,12 @@ async def analyze_tender(
 
     `persist_hook` nomes serveix als tests per provocar un error enmig de la
     persistencia i comprovar que no queda res a mitges.
+
+    Refusa (`AnalysisPrerequisitesMissingError`) si la base vigent va llegir un
+    plec ja retirat de la font: vegeu `assert_inputs_are_current`.
     """
     tender = await _visible_tender(session, company_id, tender_id)
+    await assert_inputs_are_current(session, company_id, tender_id)
     view, versions = await load_structure_view(session, tender)
     fingerprint = structure_fingerprint(view)
     company = await load_company_view(session, company_id, on=on)

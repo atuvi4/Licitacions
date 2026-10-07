@@ -28,6 +28,7 @@ from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
 from app.models.profile import CompanyContractPreferences, CompanyTerritory
 from app.models.sources import Source
 from app.models.tenders import Buyer, Tender, TenderCPV, TenderLot, TenderLotCPV
+from app.tenders.search import build_search_text
 
 TELECOM = "45314320"   # Instal.lacio de cablejat informatic
 SANITAT = "85100000"   # Serveis de salut
@@ -88,6 +89,9 @@ async def make_tender(
         first_seen_at=now,
         last_seen_at=now,
     )
+    # Com ho fan els camins d'escriptura reals (ingesta, alta manual): `q` cerca
+    # sobre `search_text` normalitzat (spec 3B-1 §7.2).
+    tender.search_text = build_search_text(tender, buyer.name if buyer else None, [])
     db.add(tender)
     await db.flush()
     for index, code in enumerate(cpv_codes):

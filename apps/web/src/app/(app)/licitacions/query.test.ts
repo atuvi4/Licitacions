@@ -3,13 +3,22 @@ import { describe, expect, it } from "vitest";
 import { buildQuery } from "@/lib/tenders";
 
 import {
+  CATALOGUE_SORT_OPTIONS,
+  DEFAULT_CATALOGUE_SORT,
+  EMPTY_CATALOGUE_FILTERS,
   EMPTY_FILTERS,
   MODES,
   PAGE_SIZE,
   SORT_OPTIONS,
+  catalogueQuery,
+  catalogueSortOptions,
   countApplied,
+  countCatalogueFilters,
   feedQuery,
+  hasAmountFilter,
   modeFromParam,
+  tabFromParams,
+  type CatalogueFilters,
   type Filters,
 } from "./query";
 
@@ -140,10 +149,10 @@ describe("lectura de la URL i recompte de filtres", () => {
   it("?match_status= només accepta els modes reals; «all», buit o desconegut és «Totes»", () => {
     expect(modeFromParam("candidate")).toBe("candidate");
     expect(modeFromParam("closed")).toBe("closed");
-    expect(modeFromParam("all")).toBe("all");
-    expect(modeFromParam("")).toBe("all");
-    expect(modeFromParam(null)).toBe("all");
-    expect(modeFromParam("go_candidate")).toBe("all");
+    expect(modeFromParam("all")).toBe("candidate");
+    expect(modeFromParam("")).toBe("candidate");
+    expect(modeFromParam(null)).toBe("candidate");
+    expect(modeFromParam("go_candidate")).toBe("candidate");
   });
 
   it("countApplied compta cada filtre amb valor i «només obertes» si és cert", () => {
@@ -151,5 +160,71 @@ describe("lectura de la URL i recompte de filtres", () => {
     expect(countApplied({ ...EMPTY_FILTERS, q: "fibra" })).toBe(1);
     expect(countApplied({ ...EMPTY_FILTERS, q: "fibra", only_open: true, has_lots: "false" })).toBe(3);
     expect(countApplied(FILTER_CASES[9].filters)).toBe(12);
+  });
+});
+
+describe("«Totes»: el contracte de consulta del catàleg", () => {
+  it("sense filtres: mode=all, ordre neutral per publicació, pàgina de 25, mai min_score ni match_status", () => {
+    const query = catalogueQuery({ applied: EMPTY_CATALOGUE_FILTERS, offset: 0 });
+    expect(query).toBe("mode=all&sort=published&limit=25&offset=0");
+    expect(DEFAULT_CATALOGUE_SORT).toBe("published");
+    expect(query).not.toContain("min_score");
+    expect(query).not.toContain("match_status");
+  });
+
+  it("cap combinació de filtres ni d'ordres no afegeix min_score ni match_status", () => {
+    const all: CatalogueFilters = {
+      q: "fibra òptica",
+      cpv: "4531",
+      buyer_q: "Sabadell",
+      nuts: "ES51",
+      place_q: "Vallès",
+      min_amount: "1000",
+      max_amount: "9000",
+      published_from: "2026-01-01",
+      published_to: "2026-06-30",
+      deadline_from: "2026-07-01",
+      deadline_to: "2026-12-31",
+      contract_type: "services",
+      procedure_type: "open",
+      status: "open",
+      source: "PLACSP",
+      source_removed: "false",
+    };
+    for (const sort of [...CATALOGUE_SORT_OPTIONS.map((option) => option.value), "recent"]) {
+      const params = new URLSearchParams(catalogueQuery({ applied: all, sort, offset: 50 }));
+      expect(params.has("min_score")).toBe(false);
+      expect(params.has("match_status")).toBe(false);
+      expect(params.get("sort")).toBe(sort);
+      expect(params.get("offset")).toBe("50");
+    }
+    expect(catalogueQuery({ applied: all, offset: 0 })).toBe(
+      "mode=all&q=fibra+%C3%B2ptica&cpv=4531&buyer_q=Sabadell&nuts=ES51&place_q=Vall%C3%A8s&min_amount=1000&max_amount=9000&published_from=2026-01-01&published_to=2026-06-30&deadline_from=2026-07-01&deadline_to=2026-12-31T23%3A59%3A59&contract_type=services&procedure_type=open&status=open&source=PLACSP&source_removed=false&sort=published&limit=25&offset=0",
+    );
+  });
+
+  it("els filtres buits o amb només espais no viatgen", () => {
+    expect(catalogueQuery({ applied: { ...EMPTY_CATALOGUE_FILTERS, q: "   ", buyer_q: " " }, offset: 0 })).toBe(
+      "mode=all&sort=published&limit=25&offset=0",
+    );
+  });
+
+  it("compta els filtres fixats i només ofereix «Rellevància» amb text", () => {
+    expect(countCatalogueFilters(EMPTY_CATALOGUE_FILTERS)).toBe(0);
+    expect(countCatalogueFilters({ ...EMPTY_CATALOGUE_FILTERS, q: "x", source_removed: "true" })).toBe(2);
+    expect(catalogueSortOptions(EMPTY_CATALOGUE_FILTERS).map((option) => option.value)).not.toContain("relevance");
+    expect(catalogueSortOptions({ ...EMPTY_CATALOGUE_FILTERS, q: "x" }).map((option) => option.value)).toContain("relevance");
+    expect(hasAmountFilter({ ...EMPTY_CATALOGUE_FILTERS, max_amount: "5" })).toBe(true);
+    expect(hasAmountFilter(EMPTY_CATALOGUE_FILTERS)).toBe(false);
+  });
+
+  it("pestanya: ?vista= mana; ?match_status= és «Per revisar»; ?q= i res és «Totes»", () => {
+    const params = (value: string) => new URLSearchParams(value);
+    expect(tabFromParams(params(""))).toBe("totes");
+    expect(tabFromParams(params("q=fibra"))).toBe("totes");
+    expect(tabFromParams(params("match_status=candidate"))).toBe("revisar");
+    expect(tabFromParams(params("vista=revisar"))).toBe("revisar");
+    expect(tabFromParams(params("vista=totes&match_status=candidate"))).toBe("totes");
+    expect(tabFromParams(params("vista=inventada"))).toBe("totes");
   });
 });

@@ -50,6 +50,8 @@ export function openOpportunities(summary: MatchSummary): number | undefined {
 export interface ShellCounts {
   avui?: number;
   oportunitats?: number;
+  /** Licitacions visibles al catàleg (no les candidates): el comptador de la cerca global. */
+  catalogue?: number;
   candidatures?: number;
   /** «96 %»: la completitud del perfil, que a L8 només viu aquí i al peu de la taula. */
   perfil?: string;
@@ -81,6 +83,7 @@ export function useShellCounts(companyId: string, pathname: string): ShellCounts
       setCounts({
         avui: workspaces.status === "fulfilled" ? countPendingDecisions(workspaces.value) : undefined,
         candidatures: workspaces.status === "fulfilled" ? workspaces.value.length : undefined,
+        catalogue: summary.status === "fulfilled" ? summary.value.total_tenders : undefined,
         oportunitats: summary.status === "fulfilled" ? openOpportunities(summary.value) : undefined,
         perfil: profile.status === "fulfilled" ? `${profile.value.completeness.score} %` : undefined,
         profileLine: profile.status === "fulfilled" ? profileFooterLine(profile.value.completeness.sections) : undefined,

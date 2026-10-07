@@ -38,6 +38,7 @@ from app.models.enums import MembershipRole
 from app.models.tender_documents import TenderDocumentContent, TenderDocumentFile
 from app.models.tenders import TenderDocument
 from app.models.workspace import BidWorkspace
+from app.tenders.documents import ACTIVE_DOCUMENT
 
 #: Qui pot afirmar que ha revisat els plecs. Es una constatacio sobre la
 #: candidatura, no una edicio tecnica: els mateixos que decideixen.
@@ -91,6 +92,9 @@ async def fingerprint_of(session: AsyncSession, tender_id: uuid.UUID) -> Documen
 
     S'ordena abans d'agregar perque l'ordre d'una consulta no ha de canviar la
     identitat del conjunt.
+
+    Un plec retirat de la font (`removed_at`) ja no es del conjunt vigent: la
+    seva retirada canvia l'empremta i la revisio humana torna a caducar.
     """
     rows = (
         await session.execute(
@@ -113,7 +117,7 @@ async def fingerprint_of(session: AsyncSession, tender_id: uuid.UUID) -> Documen
                 TenderDocumentContent.id == TenderDocumentFile.content_id,
                 isouter=True,
             )
-            .where(TenderDocument.tender_id == tender_id)
+            .where(TenderDocument.tender_id == tender_id, ACTIVE_DOCUMENT)
         )
     ).all()
 

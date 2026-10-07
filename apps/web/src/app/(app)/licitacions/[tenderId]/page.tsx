@@ -36,13 +36,14 @@ import { type AnalysisLimits, jobErrorMessage, requestProcessing, useJobRequest 
 import { DOCUMENT_STATE_LEVEL, TENDER_STATUS_LEVEL, jobErrorAction, shortSummary } from "@/lib/labels";
 import type { TenderMatch } from "@/lib/matching";
 import type { RequirementAnalysis } from "@/lib/requirements";
-import type { TenderHistoryRevision } from "@/lib/tender-changes";
+import { publicationStatusLabel, type TenderHistoryRevision } from "@/lib/tender-changes";
 import {
   CONTRACT_TYPE_LABELS,
   DOCUMENT_STATE_LABELS,
   PROCEDURE_TYPE_LABELS,
   TENDER_DOCUMENT_LABELS,
   TENDER_STATUS_LABELS,
+  labelOf,
   documentState,
   formatBytes,
   formatDateTime,
@@ -433,7 +434,8 @@ function TenderDetail() {
             <div className="min-w-0 flex-1">
               <h1 className="font-heading text-[22px] leading-tight font-semibold text-ink">{data.title}</h1>
               <p className="mt-1.5 text-[13.5px] text-muted">
-                {PROCEDURE_TYPE_LABELS[data.procedure_type]} · {CONTRACT_TYPE_LABELS[data.contract_type]}
+                {labelOf(PROCEDURE_TYPE_LABELS, data.procedure_type, "Tipus desconegut")} ·{" "}
+                {labelOf(CONTRACT_TYPE_LABELS, data.contract_type, "Tipus desconegut")}
                 {data.lots.length > 0 && ` · ${data.lots.length} ${data.lots.length === 1 ? "lot" : "lots"}`}
                 {data.publication_date && ` · publicada el ${formatDate(data.publication_date)}`}
                 {data.source_url && (
@@ -452,9 +454,16 @@ function TenderDetail() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 lg:shrink-0">
-              <StatusPill level={TENDER_STATUS_LEVEL[data.status]}>{TENDER_STATUS_LABELS[data.status]}</StatusPill>
+              <StatusPill level={Object.hasOwn(TENDER_STATUS_LEVEL, data.status) ? TENDER_STATUS_LEVEL[data.status] : "neutral"}>
+                {labelOf(TENDER_STATUS_LABELS, data.status, "Estat desconegut")}
+              </StatusPill>
               {data.source_publication_count > 1 && (
                 <StatusPill level="attention">Publicada {data.source_publication_count} cops</StatusPill>
+              )}
+              {data.source_removed_at && (
+                <StatusPill level="neutral">
+                  Ja no disponible a la font (des del {formatDate(data.source_removed_at)})
+                </StatusPill>
               )}
               {companyId && (!cancelled || candidature.workspace) && (
                 <WorkspaceLauncher
@@ -558,8 +567,8 @@ function TenderDetail() {
               <Fact label="Número d'expedient">
                 <span className="font-mono">{data.expediente_number ?? "—"}</span>
               </Fact>
-              <Fact label="Tipus de contracte">{CONTRACT_TYPE_LABELS[data.contract_type]}</Fact>
-              <Fact label="Procediment">{PROCEDURE_TYPE_LABELS[data.procedure_type]}</Fact>
+              <Fact label="Tipus de contracte">{labelOf(CONTRACT_TYPE_LABELS, data.contract_type, "Tipus desconegut")}</Fact>
+              <Fact label="Procediment">{labelOf(PROCEDURE_TYPE_LABELS, data.procedure_type, "Tipus desconegut")}</Fact>
 
               <Fact label="Valor estimat">
                 <span className="tabular-nums">{formatMoney(data.estimated_value, data.currency)}</span>
@@ -932,8 +941,8 @@ function TenderDetail() {
                     header: "Estat",
                     width: "12%",
                     cell: (revision) => (
-                      <StatusPill level={revision.processing_status === "processed" ? "ready" : "blocking"} size="sm">
-                        {revision.processing_status === "processed" ? "Processada" : "Amb error"}
+                      <StatusPill level={revision.processing_status === "processed" ? "ready" : revision.processing_status === "failed" ? "blocking" : "attention"} size="sm">
+                        {publicationStatusLabel(revision.processing_status)}
                       </StatusPill>
                     ),
                   },

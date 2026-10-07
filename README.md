@@ -253,10 +253,18 @@ Els binaris i les dades viuen fora del repositori
 
 ```bash
 cd apps/api
-python -m app.ingestion.placsp --limit 300        # mostra del feed viu
-python -m app.ingestion.placsp --resume --max-files 3
-python -m app.ingestion.placsp --dry-run --limit 20
+python -m app.ingestion.sync --source placsp_agregadas --every 1800 --max-pages 50   # producció (recomanat)
+python -m app.ingestion.sync --source placsp_agregadas --max-pages 2        # NOMÉS proves (sincronització acotada)
+python -m app.ingestion.sync --source placsp_agregadas --backfill-until 2025-10-01 --max-pages 10 --resume
+python -m app.ingestion.sync --status                                      # salut de cada font
+python -m app.ingestion.placsp --source placsp_agregadas --fixture tests/fixtures/placsp/agregadas/entry_lots.atom   # desenvolupament
 ```
+
+En producció el sync incremental pagina fins al solapament de 48 h amb la marca
+d'aigua; `--max-pages` (defecte 50) només és un topall de seguretat. Si s'assoleix
+abans del solapament, el run queda `partial` i la marca no avança. El primer run
+(sense marca) la fixa a partir del que ha processat, i l'històric es completa amb
+`--backfill-until`.
 
 La font, el mapatge camp a camp, el mecanisme de checkpoint i les incerteses
 conegudes estan documentats a [`docs/placsp.md`](docs/placsp.md).

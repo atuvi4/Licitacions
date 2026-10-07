@@ -697,6 +697,43 @@ async def test_an_invented_citation_is_refused(client_a, candidacy):
     assert response.status_code == 404
 
 
+async def test_a_citation_of_a_removed_document_is_refused(client_a, db, candidacy):
+    """Una observacio nova es un input nou: mai sobre un plec retirat de la font (3B-1).
+
+    La cita es va fer mentre el document era vigent i es conserva; el que es
+    refusa es fer-la servir de nou.
+    """
+    from datetime import UTC
+
+    from app.models.tenders import TenderDocument
+
+    company_id, tender_id = candidacy["company_id"], candidacy["tender_id"]
+    uploaded = await _upload(
+        client_a, company_id, tender_id, name="inventari.xlsx", data=XLSX_V1, mime=XLSX
+    )
+    cited = await client_a.post(
+        FILE_REF.format(company=company_id, tender=tender_id),
+        json={"tender_document_file_id": uploaded["file"]["file_id"]},
+    )
+    assert cited.status_code == 201, cited.text
+    document = await db.get(TenderDocument, uuid.UUID(uploaded["id"]))
+    document.removed_at = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    await db.commit()
+
+    created = await _create(client_a, candidacy)
+    response = await _observe(
+        client_a, candidacy, created["id"], revision=0, value="151", num="151",
+        kind="supplier", source_ref_id=cited.json()["id"],
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "source_ref_document_removed"
+    listed = await client_a.get(
+        DIMENSIONS.format(company=company_id, workspace=candidacy["workspace_id"])
+    )
+    assert listed.json()[0]["observations"] == []
+
+
 # --------------------------------------------------------------------------- #
 # G. Una empresa no veu el dimensionament d'una altra                           #
 # --------------------------------------------------------------------------- #

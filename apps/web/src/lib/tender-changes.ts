@@ -61,6 +61,9 @@ export const CHANGE_LABELS: Record<string, string> = {
   LOT_TITLE_CHANGED: "Títol d'un lot modificat",
   LOT_DEADLINE_CHANGED: "Termini d'un lot modificat",
   LOT_METADATA_CHANGED: "Dades d'un lot modificades",
+  // Presència a la font (làpida), no un estat de la licitació: mai «retirada».
+  SOURCE_ENTRY_REMOVED: "Ja no disponible a la font",
+  SOURCE_ENTRY_RESTORED: "Torna a estar disponible a la font",
   DOCUMENT_ADDED: "Document nou",
   DOCUMENT_REMOVED: "Document retirat",
   DOCUMENT_REPLACED: "Document substituït",
@@ -130,10 +133,43 @@ export function formatChangeValue(value: unknown): string {
 /** "Termini de presentació modificat: 20/09/2026 → 27/09/2026". */
 export function describeChange(event: TenderChangeEvent): string {
   const label = changeLabel(event.change_code);
+  // Presència a la font: la frase ja ho diu tot; mai booleans ni el camp intern.
+  if (PRESENCE_CODES.has(event.change_code)) return label;
+  // Documents afegits o retirats: el nom (mai la URL, que és el subject).
+  if (DOCUMENT_NAME_CODES.has(event.change_code)) {
+    const name = event.change_code === "DOCUMENT_ADDED" ? event.new_value : event.old_value;
+    return `${label}: ${typeof name === "string" && name.trim() ? name : "Document"}`;
+  }
   const before = formatChangeValue(event.old_value);
   const after = formatChangeValue(event.new_value);
   if (before === "—" && after === "—") return label;
   if (before === "—") return `${label}: ${after}`;
   if (after === "—") return `${label}: ${before}`;
   return `${label}: ${before} → ${after}`;
+}
+
+const PRESENCE_CODES = new Set(["SOURCE_ENTRY_REMOVED", "SOURCE_ENTRY_RESTORED"]);
+const DOCUMENT_NAME_CODES = new Set(["DOCUMENT_ADDED", "DOCUMENT_REMOVED"]);
+
+/** El `subject` d'aquests canvis és tècnic (camp intern o URL de descàrrega): no es mostra. */
+export function hidesSubject(event: TenderChangeEvent): boolean {
+  return PRESENCE_CODES.has(event.change_code) || DOCUMENT_NAME_CODES.has(event.change_code);
+}
+
+/** Estat d'una publicació rebuda de la font, en paraules. */
+export function publicationStatusLabel(status: string): string {
+  switch (status) {
+    case "processed":
+      return "Processada";
+    case "failed":
+      return "Amb error";
+    case "conflict":
+      return "En conflicte (mateix instant, contingut diferent)";
+    case "superseded":
+      return "Publicació anterior (no aplicada)";
+    case "pending":
+      return "Pendent";
+    default:
+      return "Estat desconegut";
+  }
 }

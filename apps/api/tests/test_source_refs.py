@@ -831,3 +831,53 @@ async def test_bulk_resolution_equals_single_resolution(client_a, db, tenant_a):
     assert bulk[page_ref.id].version_number == 1
     assert bulk[doomed_ref.id].document_name is None
     assert bulk[doomed_ref.id].version_number is None
+
+
+# --------------------------------------------------------------------------- #
+# Un document retirat de la font no admet cites noves (3B-1)                    #
+# --------------------------------------------------------------------------- #
+
+PAGE_REF = "/api/v1/companies/{company}/tenders/{tender}/source-refs/extracted-page"
+FILE_REF = "/api/v1/companies/{company}/tenders/{tender}/source-refs/document-file"
+
+
+async def test_a_removed_document_cannot_be_cited_over_http(client_a, db, tenant_a):
+    """El contracte que veura la web: 422 amb `source_ref_document_removed`.
+
+    `removed_at` nomes el posa la ingesta; aqui es marca a ma sobre una licitacio
+    manual perque els endpoints de cites nomes accepten licitacions editables.
+    """
+    from datetime import UTC, datetime
+
+    from app.models.tenders import TenderDocument
+
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    plec = await _upload(client_a, company, tender_id, name="PCAP.pdf", data=PLEC)
+    sheet = await _upload(client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX)
+    page = await _page_of(db, plec["file"]["extraction_id"])
+    for uploaded in (plec, sheet):
+        document = await db.get(TenderDocument, uuid.UUID(uploaded["id"]))
+        document.removed_at = datetime.now(UTC)
+    await db.commit()
+
+    by_page = await client_a.post(
+        PAGE_REF.format(company=company.id, tender=tender_id),
+        json={"extraction_id": plec["file"]["extraction_id"], "page_id": str(page.id)},
+    )
+    by_file = await client_a.post(
+        FILE_REF.format(company=company.id, tender=tender_id),
+        json={"tender_document_file_id": sheet["file"]["file_id"]},
+    )
+
+    for response in (by_page, by_file):
+        assert response.status_code == 422, response.text
+        error = response.json()["error"]
+        assert error["code"] == "source_ref_document_removed"
+        assert "ja no es vigent a la font" in error["message"]
+    count = await db.scalar(
+        sa.select(sa.func.count())
+        .select_from(TenderSourceRef)
+        .where(TenderSourceRef.tender_id == uuid.UUID(tender_id))
+    )
+    assert count == 0

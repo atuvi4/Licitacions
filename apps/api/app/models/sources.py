@@ -37,6 +37,29 @@ class Source(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     checkpoint: Mapped[str | None] = mapped_column(sa.String(1000))
     checkpoint_updated_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
+    # --- Salut de la sincronitzacio (0055). Tot `NULL`/0 = encara no s'ha sincronitzat.
+    #: El `<updated>` del feed a l'ultima lectura.
+    last_feed_updated_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    last_sync_started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    last_sync_finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    #: `success` | `partial` | `failed`. Text pla, no un enum.
+    last_sync_status: Mapped[str | None] = mapped_column(sa.String(20))
+    last_sync_pages: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    last_sync_entries: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    last_sync_tombstones: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    last_sync_error: Mapped[str | None] = mapped_column(sa.Text)
+    #: Marca d'aigua de l'`updated` de les entrades ja processades amb exit.
+    updated_watermark: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    #: Lease per font: qui sincronitza ara i fins quan.
+    sync_lease_owner: Mapped[str | None] = mapped_column(sa.String(120))
+    sync_lease_until: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Source {self.code}>"
 
@@ -71,6 +94,22 @@ class IngestionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     records_failed: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
     tenders_created: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
     tenders_updated: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    # Comptadors de la sincronitzacio radar (0055).
+    pages_processed: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    records_superseded: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    records_conflicted: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    tombstones_applied: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    entries_restored: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
 
     error_summary: Mapped[str | None] = mapped_column(sa.Text)
     checkpoint_before: Mapped[str | None] = mapped_column(sa.String(1000))

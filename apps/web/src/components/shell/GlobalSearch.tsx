@@ -9,16 +9,16 @@ import { cn } from "@/components/ui";
 /**
  * Cerca global del Sprint 1 (handoff L4, diferència B): no hi ha endpoint de
  * cerca, així que porta el text a Oportunitats com a `?q=`, que és el filtre
- * que el feed ja entén. La cerca de documents queda fora fins que hi hagi
+ * que el catàleg («Totes») ja entén. La cerca de documents queda fora fins que hi hagi
  * contracte.
  */
 export function GlobalSearch({
-  candidates,
+  catalogueTotal,
   autoFocus = false,
   className,
 }: {
-  /** `summary.candidates`; sense dada, el text genèric. */
-  candidates: number | null | undefined;
+  /** Licitacions del catàleg visible (`summary.total_tenders`), no les candidates; sense dada, no hi ha comptador. */
+  catalogueTotal: number | null | undefined;
   autoFocus?: boolean;
   className?: string;
 }) {
@@ -39,12 +39,13 @@ export function GlobalSearch({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const placeholder =
-    typeof candidates === "number"
-      ? candidates === 1
-        ? "Cerca entre 1 oportunitat oberta"
-        : `Cerca entre les ${candidates} oportunitats obertes`
-      : "Cerca licitació, expedient, organisme";
+  const placeholder = "Cerca per títol, expedient, organisme o descripció";
+  const counter =
+    typeof catalogueTotal === "number"
+      ? catalogueTotal === 1
+        ? "1 licitació al catàleg"
+        : `${catalogueTotal} licitacions al catàleg`
+      : null;
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -75,6 +76,7 @@ export function GlobalSearch({
         autoFocus={autoFocus}
         className="min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-muted"
       />
+      {counter && <span className="hidden shrink-0 text-[12px] text-muted md:inline">{counter}</span>}
       <kbd className="hidden shrink-0 border border-neutral-400 px-1.5 font-sans text-[11.5px] text-muted lg:inline">
         {shortcut}
       </kbd>

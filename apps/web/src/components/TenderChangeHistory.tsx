@@ -20,6 +20,7 @@ import { Button, Card, CardHeader, EmptyState, LoadErrorState, PageSkeleton, Sta
 import { changeLevel } from "@/lib/labels";
 import {
   describeChange,
+  hidesSubject,
   IMPACT_LABELS,
   triggerLabel,
   type TenderChangeEvent,
@@ -34,7 +35,7 @@ function ChangeRow({ event }: { event: TenderChangeEvent }) {
         {event.is_material ? "Material" : "Informatiu"}
       </StatusPill>
       <span className="text-sm text-ink">{describeChange(event)}</span>
-      {event.subject && (
+      {event.subject && !hidesSubject(event) && (
         <span className="max-w-full truncate text-[12px] text-faint" title={event.subject}>
           {event.subject}
         </span>

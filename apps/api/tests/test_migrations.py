@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
 
 from app.models import Base
 
@@ -2007,3 +2008,248 @@ def test_les_columnes_d_analisi_de_la_decisio_es_poden_aplicar_i_desfer():
     statements = down.replace("UPDATE alembic_version", "")
     for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM"):
         assert forbidden not in statements, forbidden
+
+
+def test_0055_afegeix_salut_de_font_provenance_i_cerca():
+    """0054 -> 0055. Salut de font, comptadors d'ingesta, provenance canonica, presencia
+    a la font, cerca i indexs. Additiva: cap backfill; res a `work_jobs` ni cap taula de
+    descart."""
+    sql = _offline_sql("upgrade", "0054_decision_analysis_v3:0055_radar_ingestion")
+    for fragment in (
+        "ALTER TABLE sources ADD COLUMN last_feed_updated_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE sources ADD COLUMN last_sync_started_at",
+        "ALTER TABLE sources ADD COLUMN last_sync_finished_at",
+        "ALTER TABLE sources ADD COLUMN last_sync_status VARCHAR(20)",
+        "ALTER TABLE sources ADD COLUMN last_sync_pages INTEGER DEFAULT '0' NOT NULL",
+        "ALTER TABLE sources ADD COLUMN last_sync_entries INTEGER DEFAULT '0' NOT NULL",
+        "ALTER TABLE sources ADD COLUMN last_sync_tombstones INTEGER DEFAULT '0' NOT NULL",
+        "ALTER TABLE sources ADD COLUMN last_sync_error TEXT",
+        "ALTER TABLE sources ADD COLUMN updated_watermark",
+        "ALTER TABLE sources ADD COLUMN sync_lease_owner VARCHAR(120)",
+        "ALTER TABLE sources ADD COLUMN sync_lease_until",
+        "ALTER TABLE ingestion_runs ADD COLUMN pages_processed INTEGER DEFAULT '0' NOT NULL",
+        "ALTER TABLE ingestion_runs ADD COLUMN records_superseded",
+        "ALTER TABLE ingestion_runs ADD COLUMN records_conflicted",
+        "ALTER TABLE ingestion_runs ADD COLUMN tombstones_applied",
+        "ALTER TABLE ingestion_runs ADD COLUMN entries_restored",
+        "ALTER TABLE tenders ADD COLUMN source_updated_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE tenders ADD COLUMN source_removed_at",
+        "ALTER TABLE tenders ADD COLUMN source_metadata JSONB",
+        "ALTER TABLE tenders ADD COLUMN search_text TEXT",
+        "ALTER TABLE tender_documents ADD COLUMN removed_at",
+        "CREATE INDEX ix_tender_cpvs_cpv_code ON tender_cpvs (cpv_code)",
+        "CREATE INDEX ix_tender_lot_cpvs_cpv_code ON tender_lot_cpvs (cpv_code)",
+        "CREATE INDEX ix_tenders_first_seen_at ON tenders (first_seen_at)",
+        "CREATE INDEX ix_tenders_source_updated_at ON tenders (source_updated_at)",
+    ):
+        assert fragment in sql, fragment
+    assert "work_jobs" not in sql and "company_tender_dismissals" not in sql
+    statements = sql.replace("UPDATE alembic_version", "")
+    for forbidden in ("INSERT INTO", "UPDATE ", "DELETE FROM", "CREATE TABLE"):
+        assert forbidden not in statements, forbidden
+
+
+def test_0055_es_reversible():
+    sql = _offline_sql("downgrade", "0055_radar_ingestion:0054_decision_analysis_v3")
+    for fragment in (
+        "DROP COLUMN search_text",
+        "DROP COLUMN source_metadata",
+        "DROP COLUMN source_removed_at",
+        "DROP COLUMN source_updated_at",
+        "DROP COLUMN removed_at",
+        "DROP COLUMN sync_lease_until",
+        "DROP COLUMN last_sync_status",
+        "DROP COLUMN records_conflicted",
+        "DROP INDEX ix_tender_cpvs_cpv_code",
+        "DROP INDEX ix_tender_lot_cpvs_cpv_code",
+        "DROP INDEX ix_tenders_first_seen_at",
+        "DROP INDEX ix_tenders_source_updated_at",
+    ):
+        assert fragment in sql, fragment
+    # Els indexs cauen abans que les columnes que indexen.
+    assert sql.index("DROP INDEX ix_tenders_source_updated_at") < sql.index(
+        "DROP COLUMN source_updated_at"
+    )
+
+
+def _offline_sql_sqlite(*args: str) -> str:
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", *args, "--sql"],
+        capture_output=True,
+        text=True,
+        cwd=API_ROOT,
+        env={**os.environ, "DATABASE_URL": "sqlite+aiosqlite:///:memory:"},
+    )
+    assert result.returncode == 0, f"alembic ha fallat:\n{result.stderr[-2000:]}"
+    return result.stdout
+
+
+def test_0056_crea_extensio_i_index_trigram_a_postgres():
+    sql = _offline_sql("upgrade", "0055_radar_ingestion:0056_radar_search")
+    assert "CREATE EXTENSION IF NOT EXISTS pg_trgm" in sql
+    assert (
+        "CREATE INDEX ix_tenders_search_text_trgm ON tenders USING gin "
+        "(search_text gin_trgm_ops)"
+    ) in sql
+    assert sql.index("CREATE EXTENSION") < sql.index("CREATE INDEX ix_tenders_search_text_trgm")
+
+
+def test_0056_no_emet_res_a_sqlite():
+    up = _offline_sql_sqlite("upgrade", "0055_radar_ingestion:0056_radar_search")
+    down = _offline_sql_sqlite("downgrade", "0056_radar_search:0055_radar_ingestion")
+    for sql in (up, down):
+        statements = sql.replace("alembic_version", "")
+        for forbidden in ("pg_trgm", "CREATE INDEX", "DROP INDEX", "CREATE EXTENSION"):
+            assert forbidden not in statements, forbidden
+
+
+def test_0056_es_reversible_i_mai_esborra_l_extensio():
+    sql = _offline_sql("downgrade", "0056_radar_search:0055_radar_ingestion")
+    assert "DROP INDEX ix_tenders_search_text_trgm" in sql
+    assert "DROP EXTENSION" not in sql.upper()
+    assert "pg_trgm" not in sql
+
+
+def test_0056_es_l_unic_cap_i_penja_de_0055():
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "heads"],
+        capture_output=True,
+        text=True,
+        cwd=API_ROOT,
+        env={**os.environ, "DATABASE_URL": OFFLINE_URL},
+    )
+    assert result.returncode == 0, result.stderr[-1000:]
+    assert [line.split()[0] for line in result.stdout.splitlines() if line.strip()] == [
+        "0056_radar_search"
+    ]
+
+
+def _load_0056():
+    import importlib.util
+
+    path = API_ROOT / "alembic" / "versions" / "0056_radar_search.py"
+    spec = importlib.util.spec_from_file_location("mig_0056_radar_search_unit", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _FakeOrig(Exception):
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__(f"sqlstate {sqlstate}")
+        self.sqlstate = sqlstate
+        self.pgcode = sqlstate
+
+
+class _FakeBind:
+    """`CREATE EXTENSION` falla amb el SQLSTATE donat; `pg_extension` no la te."""
+
+    def __init__(self, sqlstate: str) -> None:
+        self.sqlstate = sqlstate
+
+    def execute(self, statement):
+        from sqlalchemy.exc import ProgrammingError
+
+        text = str(statement)
+        if text.startswith("SELECT 1 FROM pg_extension"):
+            return type("R", (), {"scalar": staticmethod(lambda: None)})()
+        raise ProgrammingError(text, None, _FakeOrig(self.sqlstate))
+
+    def begin_nested(self):
+        import contextlib
+
+        return contextlib.nullcontext()
+
+
+@pytest.mark.parametrize(
+    ("sqlstate", "expected"),
+    [("42501", RuntimeError), ("58P01", "ProgrammingError"), ("42P01", "ProgrammingError")],
+)
+def test_0056_nomes_l_error_de_permisos_es_el_missatge_de_prerequisit(
+    monkeypatch, sqlstate, expected
+):
+    """Permisos (42501) -> missatge de prerequisit; qualsevol altre error es propaga tal qual."""
+    from sqlalchemy.exc import ProgrammingError
+
+    module = _load_0056()
+    context = type("Ctx", (), {"as_sql": False})()
+    fake_op = type(
+        "Op",
+        (),
+        {
+            "get_context": staticmethod(lambda: context),
+            "get_bind": staticmethod(lambda: _FakeBind(sqlstate)),
+        },
+    )
+    monkeypatch.setattr(module, "op", fake_op)
+    if expected is RuntimeError:
+        with pytest.raises(RuntimeError, match="CREATE EXTENSION pg_trgm") as caught:
+            module._ensure_pg_trgm()
+        assert isinstance(caught.value.__cause__, ProgrammingError)
+    else:
+        with pytest.raises(ProgrammingError):
+            module._ensure_pg_trgm()
+
+
+@pytest.mark.postgres
+async def test_0056_round_trip_real_a_postgres(engine):
+    """Cadena real 0056 -> 0055 -> 0054 i de tornada, sobre l'schema aillat de PG.
+
+    El harness crea l'schema amb `create_all` (estat del cap, sense l'index trigram);
+    s'executen les funcions reals `upgrade()`/`downgrade()` de 0056, 0055 i 0054 amb
+    `Operations` sobre la connexio. L'extensio no s'esborra mai.
+    """
+    import importlib.util
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    versions = API_ROOT / "alembic" / "versions"
+
+    def load(name: str):
+        spec = importlib.util.spec_from_file_location(f"mig_{name}", versions / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    m54 = load("0054_decision_analysis_v3")
+    m55 = load("0055_radar_ingestion")
+    m56 = load("0056_radar_search")
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def index_exists(conn) -> bool:
+        res = await conn.execute(
+            sa.text(
+                "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() "
+                "AND indexname = 'ix_tenders_search_text_trgm'"
+            )
+        )
+        return res.scalar() is not None
+
+    async def has_extension(conn) -> bool:
+        res = await conn.execute(sa.text("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'"))
+        return res.scalar() is not None
+
+    async with engine.begin() as conn:
+        # Si l'extensio ja existeix en un altre schema, ha de ser visible per als operadors.
+        await conn.execute(
+            sa.text("SELECT set_config('search_path', current_schema() || ',public', true)")
+        )
+        assert not await index_exists(conn)
+        await conn.run_sync(run, m56.upgrade)
+        assert await index_exists(conn)
+        assert await has_extension(conn)
+        # Idempotencia del guard: l'extensio ja hi es.
+        await conn.run_sync(run, m56.downgrade)
+        assert not await index_exists(conn)
+        assert await has_extension(conn)  # mai s'esborra
+        await conn.run_sync(run, m55.downgrade)
+        await conn.run_sync(run, m54.downgrade)
+        await conn.run_sync(run, m54.upgrade)
+        await conn.run_sync(run, m55.upgrade)
+        await conn.run_sync(run, m56.upgrade)
+        assert await index_exists(conn)
+        await conn.run_sync(run, m56.downgrade)

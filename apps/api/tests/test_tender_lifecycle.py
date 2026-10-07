@@ -60,9 +60,11 @@ from app.services.tender_lifecycle import build_snapshot
 from app.tenders.changes import (
     COMPARED_FIELDS,
     DOCUMENT_FIELDS,
+    DOCUMENT_PRESENCE_FIELDS,
     IMPACT_MATRIX,
     LOT_FIELDS,
     MANUAL_ONLY_FIELDS,
+    SOURCE_PRESENCE_FIELDS,
     ChangeCode,
     ChangeImpact,
     canonical_instant,
@@ -195,7 +197,64 @@ class TestDeteccioPura:
         """
         snapshot = await build_snapshot(db, tender)
 
-        assert set(snapshot) == COMPARED_FIELDS - MANUAL_ONLY_FIELDS
+        assert set(snapshot) == COMPARED_FIELDS - MANUAL_ONLY_FIELDS - SOURCE_PRESENCE_FIELDS
+
+        # Retirada de la font (lapida): la marca entra a la fotografia i es compara.
+        tender.source_removed_at = datetime.now(UTC)
+        removed = await build_snapshot(db, tender)
+
+        assert set(removed) == COMPARED_FIELDS - MANUAL_ONLY_FIELDS
+        assert removed["source_removed"] is True
+
+    async def test_la_presencia_a_la_font_no_canvia_la_fotografia_de_les_que_ja_hi_ha(
+        self, db, tender
+    ):
+        """Radar 3B-1 no pot fer semblar canviades les licitacions d'abans.
+
+        `source_removed` i el `removed` dels documents nomes hi son quan valen
+        `True`: una licitacio present amb documents presents dona exactament la
+        mateixa fotografia que abans, i per tant cap revisio buida el dia del
+        desplegament.
+        """
+        db.add(
+            TenderDocument(
+                tender_id=tender.id,
+                url="https://x/pcap.pdf",
+                name="PCAP",
+                document_type=TenderDocumentType.ADMINISTRATIVE_TERMS,
+            )
+        )
+        await db.commit()
+        first = await lifecycle.record_revision(db, tender)
+
+        snapshot = first.revision.normalized_snapshot
+        assert "source_removed" not in snapshot
+        assert "removed" not in snapshot["documents"][0]
+        assert (await lifecycle.record_revision(db, tender)).unchanged is True
+
+    def test_la_presencia_a_la_font_dona_els_dos_codis_informatius(self):
+        removed = diff_snapshots({"title": "X"}, {"title": "X", "source_removed": True})
+        restored = diff_snapshots({"title": "X", "source_removed": True}, {"title": "X"})
+
+        assert [change.code for change in removed] == [ChangeCode.SOURCE_ENTRY_REMOVED]
+        assert [change.code for change in restored] == [ChangeCode.SOURCE_ENTRY_RESTORED]
+        for change in removed + restored:
+            assert change.impacts == frozenset({ChangeImpact.INFORMATIONAL})
+            assert change.is_material is False
+
+    def test_un_document_marcat_com_a_retirat_dona_removed_i_added(self):
+        present = {"url": "https://x/ppt.pdf", "name": "PPT", "sha256": None}
+        gone = {**present, "removed": True}
+
+        removed = diff_snapshots({"documents": [present]}, {"documents": [gone]})
+        back = diff_snapshots({"documents": [gone]}, {"documents": [present]})
+        still_gone = diff_snapshots(
+            {"documents": [gone]}, {"documents": [{**gone, "name": "PPT v2"}]}
+        )
+
+        assert [change.code for change in removed] == [ChangeCode.DOCUMENT_REMOVED]
+        assert [change.code for change in back] == [ChangeCode.DOCUMENT_ADDED]
+        assert still_gone == []
 
     async def test_una_de_sindicada_no_canvia_gens_amb_els_camps_nous(self, db, tender):
         """Les que ja hi ha no poden semblar canviades perque hem ampliat res.
@@ -235,7 +294,7 @@ class TestDeteccioPura:
 
         snapshot = await build_snapshot(db, tender)
 
-        assert set(snapshot) == COMPARED_FIELDS
+        assert set(snapshot) == COMPARED_FIELDS - SOURCE_PRESENCE_FIELDS
         assert MANUAL_ONLY_FIELDS <= set(snapshot)
 
     async def test_tot_el_que_entra_al_hash_dun_lot_i_dun_document_es_compara(
@@ -259,12 +318,24 @@ class TestDeteccioPura:
                 document_type=TenderDocumentType.ADMINISTRATIVE_TERMS,
             )
         )
+        db.add(
+            TenderDocument(
+                tender_id=tender.id,
+                url="https://x/ppt.pdf",
+                name="PPT",
+                document_type=TenderDocumentType.TECHNICAL_TERMS,
+                removed_at=datetime.now(UTC),
+            )
+        )
         await db.commit()
 
         snapshot = await build_snapshot(db, tender)
 
         assert set(snapshot["lots"][0]) == LOT_FIELDS
-        assert set(snapshot["documents"][0]) == DOCUMENT_FIELDS
+        present, removed = snapshot["documents"]
+        assert set(present) == DOCUMENT_FIELDS - DOCUMENT_PRESENCE_FIELDS
+        assert set(removed) == DOCUMENT_FIELDS
+        assert removed["removed"] is True
 
     def test_dos_camps_amb_el_mateix_codi_es_distingeixen_pel_subjecte(self):
         """Un pressupost amb IVA i un sense son el mateix fet, camps diferents."""

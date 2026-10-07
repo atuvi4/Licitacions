@@ -14,14 +14,22 @@ puntuacio, ni Go/No-Go. Nomes el que publica la font.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Literal
+from typing import Annotated
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.orm import noload, selectinload
 
 from app.api.deps import CompanyCtx, CurrentUser, SessionDep
-from app.api.v1.tender_filters import TenderFilters, tender_filters
+from app.api.v1.tender_filters import (
+    DEFAULT_SORT,
+    CatalogueSort,
+    TenderFilters,
+    catalogue_order,
+    list_item,
+    load_row_context,
+    tender_filters,
+)
 from app.core.config import settings
 from app.core.errors import NotFoundError, PayloadTooLargeError
 from app.matching.service import MatchingService
@@ -40,12 +48,14 @@ from app.schemas.tender_structure import TenderBlockRead, TenderSiteRead
 from app.schemas.tenders import (
     BuyerRead,
     BuyerSummary,
+    CataloguePage,
     IngestionRunRead,
     ManualTenderCreate,
     ManualTenderCreateResult,
     ManualTenderUpdate,
     ManualTenderUpdateResult,
     Page,
+    SourceFacet,
     TenderChangeEventRead,
     TenderCPVRead,
     TenderDetail,
@@ -61,6 +71,7 @@ from app.schemas.tenders import (
     analysis_status_for,
 )
 from app.services import audit, manual_tender, tender_document_upload
+from app.tenders.documents import is_active_document
 from app.tenders.visibility import (
     buyer_visible_to_company,
     visible_to_company,
@@ -68,8 +79,6 @@ from app.tenders.visibility import (
 )
 
 router = APIRouter(tags=["licitacions"])
-
-SortOption = Literal["recent", "deadline", "amount", "published"]
 
 
 def _cpv_reads(tender: Tender, descriptions: dict[str, str]) -> list[TenderCPVRead]:
@@ -393,32 +402,42 @@ async def upload_tender_document_version(
     )
 
 
-@router.get("/tenders", response_model=Page[TenderListItem], summary="Feed de licitacions")
+@router.get(
+    "/tenders", response_model=CataloguePage[TenderListItem], summary="Feed de licitacions"
+)
 async def list_tenders(
     session: SessionDep,
     user: CurrentUser,
     criteria: Annotated[TenderFilters, Depends(tender_filters)],
-    sort: SortOption = Query(default="recent"),
+    sort: CatalogueSort = Query(default=DEFAULT_SORT),
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
-    filters = [visible_to_user(user.id), *criteria.criteria()]
+    """El cataleg public: qualsevol licitacio visible, sense cap pre-fit.
+
+    Mateix contracte de filtres, ordre i fila que `/companies/{c}/matches`
+    (`app.api.v1.tender_filters`). Aqui no hi ha empresa: `sort=score` cau a
+    l'ordre neutral.
+    """
+    visible = visible_to_user(user.id)
+    filters = [visible, *criteria.criteria()]
 
     total = (
         await session.execute(
             sa.select(sa.func.count()).select_from(Tender).where(*filters)
         )
     ).scalar_one()
+    excluded_without_amount = None
+    if criteria.filters_amount:
+        excluded_without_amount = (
+            await session.execute(
+                sa.select(sa.func.count())
+                .select_from(Tender)
+                .where(visible, *criteria.without_amount_criteria())
+            )
+        ).scalar_one()
 
-    order = {
-        "recent": (Tender.first_seen_at.desc(), Tender.id.desc()),
-        "published": (Tender.publication_date.desc().nullslast(), Tender.id.desc()),
-        "deadline": (Tender.deadline_at.asc().nullslast(), Tender.id.desc()),
-        "amount": (
-            sa.func.coalesce(Tender.estimated_value, Tender.base_budget).desc().nullslast(),
-            Tender.id.desc(),
-        ),
-    }[sort]
+    order = catalogue_order(sort, criteria.q, dialect_name=session.bind.dialect.name)
 
     rows = (
         await session.execute(
@@ -436,39 +455,14 @@ async def list_tenders(
         )
     ).scalars().unique().all()
 
-    codes = {item.cpv_code for tender in rows for item in tender.cpvs}
-    descriptions = await _cpv_descriptions(session, codes)
-    source_codes = {
-        source_id: code
-        for source_id, code in await session.execute(sa.select(Source.id, Source.code))
-    }
-
-    items = [
-        TenderListItem(
-            id=tender.id,
-            external_id=tender.external_id,
-            expediente_number=tender.expediente_number,
-            title=tender.title,
-            status=tender.status,
-            procedure_type=tender.procedure_type,
-            contract_type=tender.contract_type,
-            estimated_value=tender.estimated_value,
-            base_budget=tender.base_budget,
-            currency=tender.currency,
-            publication_date=tender.publication_date,
-            deadline_at=tender.deadline_at,
-            nuts_code=tender.nuts_code,
-            place_of_execution=tender.place_of_execution,
-            buyer=BuyerSummary.model_validate(tender.buyer) if tender.buyer else None,
-            cpvs=_cpv_reads(tender, descriptions),
-            lot_count=len(tender.lots),
-            source_publication_count=tender.revision_count,
-            source_code=source_codes.get(tender.source_id),
-            is_modified=tender.revision_count > 1,
-        )
-        for tender in rows
-    ]
-    return Page[TenderListItem](items=items, total=total, limit=limit, offset=offset)
+    context = await load_row_context(session, list(rows))
+    return CataloguePage[TenderListItem](
+        items=[list_item(tender, context) for tender in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+        excluded_without_amount=excluded_without_amount,
+    )
 
 
 @router.get(
@@ -504,12 +498,33 @@ async def tender_facets(session: SessionDep, ctx: CompanyCtx):
     total = (
         await session.execute(sa.select(sa.func.count()).select_from(Tender).where(visible))
     ).scalar_one()
+    sources = (
+        await session.execute(
+            sa.select(Source.code, Source.name, sa.func.count(Tender.id))
+            .join(Tender, Tender.source_id == Source.id)
+            .where(visible)
+            .group_by(Source.code, Source.name)
+        )
+    ).all()
+    status_counts = (
+        await session.execute(
+            sa.select(Tender.status, sa.func.count()).where(visible).group_by(Tender.status)
+        )
+    ).all()
     return TenderFacets(
         statuses=await distinct(Tender.status),
         procedure_types=await distinct(Tender.procedure_type),
         contract_types=await distinct(Tender.contract_type),
         nuts_codes=await distinct(Tender.nuts_code),
         total_tenders=total,
+        # Ordenades a Python: l'ordre de la col·lacio de la BD no ha de canviar la UI.
+        sources=sorted(
+            (SourceFacet(code=code, name=name, count=count) for code, name, count in sources),
+            key=lambda facet: facet.code,
+        ),
+        status_counts={
+            str(getattr(value, "value", value)): count for value, count in status_counts
+        },
     )
 
 
@@ -621,7 +636,10 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
             )
         ).scalar_one_or_none()
 
-    summaries = await _document_summaries(session, [doc.id for doc in tender.documents])
+    # Nomes els plecs vigents: un document retirat de la font (`removed_at`) ja no
+    # es part de la publicacio; l'historial de revisions en conserva el rastre.
+    documents = [doc for doc in tender.documents if is_active_document(doc)]
+    summaries = await _document_summaries(session, [doc.id for doc in documents])
 
     return TenderDetail(
         id=tender.id,
@@ -647,6 +665,9 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
         last_seen_at=tender.last_seen_at,
         last_changed_at=tender.last_changed_at,
         source_publication_count=tender.revision_count,
+        source_code=source.code,
+        source_updated_at=tender.source_updated_at,
+        source_removed_at=tender.source_removed_at,
         buyer=BuyerRead.model_validate(tender.buyer) if tender.buyer else None,
         cpvs=_cpv_reads(tender, descriptions),
         lots=[
@@ -678,7 +699,7 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
             TenderDocumentRead.model_validate(document).model_copy(
                 update={"latest_file": summaries.get(document.id)}
             )
-            for document in tender.documents
+            for document in documents
         ],
         traceability=TenderTraceability(
             source_code=source.code,
@@ -743,13 +764,20 @@ async def list_tender_lots(tender_id: uuid.UUID, session: SessionDep, user: Curr
     response_model=list[TenderDocumentRead],
     summary="Documents d'una licitacio (nomes metadata i URL)",
 )
-async def list_tender_documents(tender_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
+async def list_tender_documents(
+    tender_id: uuid.UUID,
+    session: SessionDep,
+    ctx: CompanyCtx,
+    include_removed: bool = Query(
+        default=False, description="Inclou els documents retirats de la font (`removed_at`)."
+    ),
+):
     """Dins d'una empresa, com tota la lectura de plecs.
 
     La metadata d'un plec ja diu prou —nom, tipus, mida, estat— com perque
     llegir-la des d'una altra empresa sigui una fuita. Les licitacions
     publicades hi continuen sent: `visible_to_company` inclou les que no tenen
-    propietari.
+    propietari. Per defecte nomes els plecs vigents a la font.
     """
     tender = (
         await session.execute(
@@ -760,7 +788,11 @@ async def list_tender_documents(tender_id: uuid.UUID, session: SessionDep, ctx: 
     ).scalars().unique().one_or_none()
     if tender is None:
         raise NotFoundError("Licitacio no trobada.")
-    return [TenderDocumentRead.model_validate(document) for document in tender.documents]
+    return [
+        TenderDocumentRead.model_validate(document)
+        for document in tender.documents
+        if include_removed or is_active_document(document)
+    ]
 
 
 @router.get(

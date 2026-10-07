@@ -41,6 +41,7 @@ from app.models.tender_documents import (
     TenderDocumentPage,
 )
 from app.models.tenders import Tender, TenderDocument
+from app.tenders.documents import is_active_document
 
 
 class SourceRefChainError(ValidationError):
@@ -53,6 +54,32 @@ class SourceRefSpanError(ValidationError):
     """El tros citat no cau dins del text d'aquella pagina."""
 
     code = "source_ref_span_invalid"
+
+
+class SourceRefDocumentRemovedError(ValidationError):
+    """El document ja no es vigent a la font (`removed_at`): no admet cites noves.
+
+    Les cites que ja hi apuntaven es conserven tal com eren (historia); el que es
+    refusa es crear-ne o enllacar-ne de noves, que serien inputs nous.
+    """
+
+    code = "source_ref_document_removed"
+
+
+def _assert_active(document: TenderDocument) -> None:
+    if not is_active_document(document):
+        raise SourceRefDocumentRemovedError(
+            "Aquest document ja no es vigent a la font: no s'hi poden afegir cites noves."
+        )
+
+
+async def assert_ref_citable(session: AsyncSession, ref: TenderSourceRef) -> None:
+    """Refusa enllacar a una entitat nova una cita d'un document retirat."""
+    if ref.tender_document_id is None:
+        return
+    document = await session.get(TenderDocument, ref.tender_document_id)
+    if document is not None:
+        _assert_active(document)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +167,9 @@ async def _page_of_this_tender(
                 TenderDocumentPage.extraction_id == extraction_id,
                 TenderDocument.tender_id == tender_id,
             )
+            # Si els mateixos bytes pengen d'un document vigent i d'un de retirat,
+            # la cita nova s'ancora al vigent.
+            .order_by(TenderDocument.removed_at.is_not(None))
             .limit(1)
         )
     ).first()
@@ -197,6 +227,7 @@ async def create_document_file_ref(
     """
     await _assert_tender(session, tender_id)
     file, document, content = await _file_of_this_tender(session, tender_id, file_id)
+    _assert_active(document)
 
     ref = TenderSourceRef(
         tender_id=tender_id,
@@ -235,6 +266,7 @@ async def create_extracted_page_ref(
     page, extraction, document, content = await _page_of_this_tender(
         session, tender_id, extraction_id, page_id
     )
+    _assert_active(document)
     quote = _quote_for(page, char_start, char_end)
 
     ref = TenderSourceRef(

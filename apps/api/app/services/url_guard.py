@@ -22,7 +22,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+# `anyio` no importa `to_thread` tot sol: sense `anyio.to_thread`, un proces que no
+# l'hagi importat abans (un script, fora de l'API i del worker) dona `dns_error`.
 import anyio
+import anyio.to_thread
 
 from app.core.config import settings
 

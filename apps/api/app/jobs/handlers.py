@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.profiles import PROFILES
@@ -47,6 +46,7 @@ from app.services.requirement_analysis import analyze_tender_requirements
 from app.services.requirement_chunking import DEFAULT_DOCUMENT_TYPES
 from app.services.tender_document_processing import process_tender_document
 from app.services.url_guard import Resolver
+from app.tenders.documents import active_documents
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,9 @@ Handler = Callable[[JobContext], Awaitable[JobCompletion | None]]
 async def process_tender_documents(ctx: JobContext) -> JobCompletion | None:
     params = ProcessParams.model_validate(ctx.job.parameters)
     async with ctx.session_factory() as session:
-        query = sa.select(TenderDocument).where(TenderDocument.tender_id == ctx.job.tender_id)
+        # Un plec retirat de la font (`removed_at`) ja no es de la publicacio
+        # vigent: no es torna a baixar ni extreure, ni tan sols si es demana.
+        query = active_documents(ctx.job.tender_id)
         if params.document_ids:
             query = query.where(TenderDocument.id.in_(params.document_ids))
         else:

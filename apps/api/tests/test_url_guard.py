@@ -5,11 +5,42 @@ Cap d'aquests tests toca la xarxa: el resolutor de DNS s'injecta.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from app.services.url_guard import BlockedURLError, is_blocked_address, validate_url
 
 PUBLIC_IP = "93.184.216.34"
+
+_STANDALONE = """
+import asyncio, sys
+assert "anyio.to_thread" not in sys.modules
+from app.services.url_guard import validate_url
+resolver = lambda h, p: ["93.184.216.34"]
+result = asyncio.run(validate_url("https://contractaciopublica.cat/plec.pdf", resolver=resolver))
+print(result.addresses[0])
+"""
+
+
+def test_validate_url_works_in_a_process_that_never_imported_anyio_to_thread():
+    """Un script sol (sense API ni worker) no depen d'una importacio transitiva."""
+    api_root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "PYTHONPATH": str(api_root), "LLM_PROVIDER": "fake"}
+    completed = subprocess.run(
+        [sys.executable, "-c", _STANDALONE],
+        cwd=api_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    assert completed.stdout.strip() == PUBLIC_IP
 
 
 def resolver_returning(*addresses: str):

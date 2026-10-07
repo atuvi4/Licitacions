@@ -48,6 +48,7 @@ from app.models.identity import User
 from app.models.provenance import RequirementSourceRefLink, TenderSourceRef
 from app.models.requirements import Requirement, RequirementExtractionRun
 from app.models.tenders import Tender, TenderLot
+from app.services.source_refs import assert_ref_citable
 
 #: Qui pot escriure requisits. Es feina TECNICA, no una decisio economica: per
 #: aixo `technical` hi es, igual que a les solucions tecniques, i no es
@@ -378,6 +379,8 @@ async def link_source_ref(
     )
     if existing is not None:
         return existing
+    # Un enllac nou es un input nou: mai cap a un document retirat de la font.
+    await assert_ref_citable(session, ref)
 
     link = RequirementSourceRefLink(
         requirement_id=requirement.id, source_ref_id=ref.id, created_by=user.id if user else None

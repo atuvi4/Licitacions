@@ -109,6 +109,10 @@ class NormalizedTender:
     lots: list[NormalizedLot] = field(default_factory=list)
     documents: list[NormalizedDocument] = field(default_factory=list)
     is_deleted: bool = False
+    # `atom:updated` de la publicacio, sempre amb zona horaria (None si la font no la dona).
+    source_updated_at: datetime | None = None
+    # Provenance especifica de la font; claus tancades (vegeu `SOURCE_METADATA_KEYS`).
+    source_metadata: dict[str, str] = field(default_factory=dict)
 
 
 def _deadline(entry: ParsedEntry) -> datetime | None:
@@ -158,7 +162,8 @@ def _normalize_buyer(entry: ParsedEntry) -> NormalizedBuyer | None:
     party = entry.buyer
     # Identitat: ID_PLATAFORMA identifica l'organ de contractacio. El NIF no
     # serveix, perque un mateix ajuntament te diversos organs amb el mateix NIF.
-    identifier = party.platform_id or party.registry_id or party.tax_id
+    # ID_OC_PLAT (feed agregat 1044) nomes s'usa quan no n'hi ha cap dels altres.
+    identifier = party.platform_id or party.registry_id or party.tax_id or party.oc_plat_id
     if not identifier or not party.name:
         return None
     return NormalizedBuyer(
@@ -189,6 +194,37 @@ def _normalize_document(document: ParsedDocument) -> NormalizedDocument:
     )
 
 
+SOURCE_METADATA_KEYS = (
+    "ted_uuid",
+    "contract_subtype_code",
+    "contract_type_code",
+    "procedure_code",
+    "placsp_organ_id",
+    "pscp_id_intern",
+)
+
+
+def _source_metadata(entry: ParsedEntry) -> dict[str, str]:
+    """Provenance de la font amb claus tancades; les absents no hi son."""
+    candidates = {
+        "ted_uuid": entry.ted_uuid,
+        "contract_subtype_code": entry.contract_subtype_code,
+        "contract_type_code": entry.contract_type_code,
+        "procedure_code": entry.procedure_code,
+        "placsp_organ_id": entry.buyer.oc_plat_id,
+        "pscp_id_intern": entry.pscp_id_intern,
+    }
+    return {key: value for key, value in candidates.items() if value}
+
+
+def _source_updated_at(entry: ParsedEntry) -> datetime | None:
+    value = entry.updated_at
+    if value is not None and value.tzinfo is None:
+        # Les dates ATOM porten offset; si el parseig de reserva n'ha perdut, hora d'Espanya.
+        value = value.replace(tzinfo=SPAIN_TZ)
+    return value
+
+
 def normalize(entry: ParsedEntry) -> NormalizedTender:
     """ParsedEntry -> NormalizedTender. No toca la base de dades."""
     title = entry.project_name or entry.title or entry.contract_folder_id or entry.external_id
@@ -217,4 +253,6 @@ def normalize(entry: ParsedEntry) -> NormalizedTender:
         lots=[_normalize_lot(lot, index) for index, lot in enumerate(entry.lots)],
         documents=[_normalize_document(document) for document in entry.documents],
         is_deleted=entry.deleted,
+        source_updated_at=_source_updated_at(entry),
+        source_metadata=_source_metadata(entry),
     )

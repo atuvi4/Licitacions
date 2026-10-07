@@ -17,6 +17,7 @@ Principis:
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -24,7 +25,7 @@ from decimal import Decimal, InvalidOperation
 
 from defusedxml.ElementTree import fromstring as safe_fromstring
 
-PARSER_VERSION = "placsp-v1"
+PARSER_VERSION = "placsp-v2"
 
 ATOM_NS = "http://www.w3.org/2005/Atom"
 TOMBSTONE_NS = "http://purl.org/atompub/tombstones/1.0"
@@ -46,6 +47,9 @@ class ParsedParty:
     platform_id: str | None = None
     tax_id: str | None = None
     registry_id: str | None = None
+    # `ID_OC_PLAT`: identificador de l'organ a la plataforma agregada (feed 1044),
+    # l'unic que hi ha quan no venen ni ID_PLATAFORMA, ni DIR3, ni NIF.
+    oc_plat_id: str | None = None
     name: str | None = None
     website: str | None = None
     profile_url: str | None = None
@@ -106,6 +110,8 @@ class ParsedEntry:
     title: str | None = None
     summary: str | None = None
     detail_url: str | None = None
+    # `id_intern` de l'URL de detall de la PSCP (nomes feed 1044).
+    pscp_id_intern: str | None = None
 
     contract_folder_id: str | None = None
     status_code: str | None = None
@@ -127,7 +133,8 @@ class ParsedEntry:
     lots: list[ParsedLot] = field(default_factory=list)
     documents: list[ParsedDocument] = field(default_factory=list)
 
-    # `at:deleted-entry`: la font marca l'expedient com anul.lat/tancat/arxivat.
+    # `at:deleted-entry`: l'entrada ja no es accessible a la font. Nomes aixo:
+    # no diu res de l'estat contractual (mai es dedueix cap estat d'una lapida).
     deleted: bool = False
 
 
@@ -177,6 +184,17 @@ def _datetime(value: str | None) -> datetime | None:
         return datetime.strptime(text[:19], "%Y-%m-%dT%H:%M:%S")
     except ValueError:
         return None
+
+
+_PSCP_ID_INTERN = re.compile(r"/detall-publicacio/([0-9a-f-]{36})/")
+
+
+def extract_pscp_id_intern(url: str | None) -> str | None:
+    """`id_intern` de la PSCP dins l'URL de detall; None si l'URL no te aquesta forma."""
+    if not url:
+        return None
+    match = _PSCP_ID_INTERN.search(url)
+    return match.group(1) if match else None
 
 
 def _currency_of(element: ET.Element | None) -> str | None:
@@ -253,6 +271,8 @@ def _parse_party(located: ET.Element | None) -> ParsedParty:
                 party.tax_id = value
             elif scheme == "DIR3":
                 party.registry_id = value
+            elif scheme == "ID_OC_PLAT":
+                party.oc_plat_id = value
         address = node.find("{*}PostalAddress")
         if address is not None:
             party.city = _text(address, "{*}CityName")
@@ -369,6 +389,7 @@ def parse_entry(element: ET.Element) -> ParsedEntry:
     link = element.find(f"{ATOM}link")
     if link is not None:
         entry.detail_url = link.get("href")
+        entry.pscp_id_intern = extract_pscp_id_intern(entry.detail_url)
 
     status = element.find("{*}ContractFolderStatus")
     if status is None:
@@ -450,7 +471,10 @@ def parse_feed(content: bytes) -> ParsedFeed:
 
 
 def parse_deleted_entry(element: ET.Element) -> ParsedEntry | None:
-    """Una lapida (`at:deleted-entry`): l'expedient ha quedat anul.lat o tancat."""
+    """Una lapida (`at:deleted-entry`): l'entrada ja no es accessible a la font.
+
+    No diu per que (ni estat contractual): nomes presencia a la font (spec 4.3).
+    """
     external_id = element.get("ref")
     if not external_id:
         return None

@@ -159,6 +159,12 @@ class ChangeCode(StrEnum):
     #: Numero de lot i companyia: canvia com se'n parla, no que es.
     LOT_METADATA_CHANGED = "LOT_METADATA_CHANGED"
 
+    #: Presencia a la font (tombstone): la font ha retirat l'entrada del feed. NO es un
+    #: estat de la licitacio ni vol dir que s'hagi anul.lat: informatiu.
+    SOURCE_ENTRY_REMOVED = "SOURCE_ENTRY_REMOVED"
+    #: L'entrada torna a ser a la font despres d'un tombstone.
+    SOURCE_ENTRY_RESTORED = "SOURCE_ENTRY_RESTORED"
+
     DOCUMENT_ADDED = "DOCUMENT_ADDED"
     DOCUMENT_REMOVED = "DOCUMENT_REMOVED"
     #: Mateixa URL, contingut nou: una versio real del document.
@@ -281,6 +287,8 @@ IMPACT_MATRIX: dict[ChangeCode, frozenset[ChangeImpact]] = {
         }
     ),
     ChangeCode.LOT_METADATA_CHANGED: frozenset({ChangeImpact.INFORMATIONAL}),
+    ChangeCode.SOURCE_ENTRY_REMOVED: frozenset({ChangeImpact.INFORMATIONAL}),
+    ChangeCode.SOURCE_ENTRY_RESTORED: frozenset({ChangeImpact.INFORMATIONAL}),
 
     #: Un plec NOU diu que hi ha material per llegir, no que el que ja sabiem
     #: hagi canviat. Obliga a tornar a extreure requisits —per aixo es
@@ -440,11 +448,17 @@ _SCALAR_FIELDS: tuple[tuple[str, ChangeCode], ...] = (
 #: que llegeixen la mateixa revisio poden escriure tots dos sense saber-ho.
 MANUAL_ONLY_FIELDS: frozenset[str] = frozenset({"expediente_number", "country_code"})
 
+#: Presencia a la font (lapides, radar 3B-1). `source_removed` nomes entra a la
+#: fotografia quan val `True`: amb l'estat neutre omes, la fotografia de totes
+#: les licitacions que ja hi ha no canvia, i el dia del desplegament no apareix
+#: cap revisio sense cap canvi que l'expliqui. L'absencia equival a `False`.
+SOURCE_PRESENCE_FIELDS: frozenset[str] = frozenset({"source_removed"})
+
 #: Els camps de la fotografia que NO son escalars i els compara un detector
 #: propi. Amb `_SCALAR_FIELDS` han de cobrir la fotografia sencera.
 _STRUCTURED_FIELDS: frozenset[str] = frozenset(
     {"status", "deadline_at", "cpvs", "lots", "documents"}
-)
+) | SOURCE_PRESENCE_FIELDS
 
 #: Tot el que es compara. El test de cobertura hi compara les claus reals.
 COMPARED_FIELDS: frozenset[str] = frozenset(
@@ -470,6 +484,18 @@ def _deadline_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Cha
         # calculable, i seguir ensenyant el calcul antic seria mentir.
         return [Change(ChangeCode.DEADLINE_REMOVED, old, None)]
     return [Change(ChangeCode.DEADLINE_CHANGED, old, new)]
+
+
+def _source_presence_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Change]:
+    """La font ha retirat l'entrada (lapida) o la torna a publicar.
+
+    No es un estat contractual: l'estat no es toca i el codi es informatiu.
+    """
+    was, now = bool(before.get("source_removed")), bool(after.get("source_removed"))
+    if was == now:
+        return []
+    code = ChangeCode.SOURCE_ENTRY_REMOVED if now else ChangeCode.SOURCE_ENTRY_RESTORED
+    return [Change(code, was, now, subject="source_removed")]
 
 
 def _status_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Change]:
@@ -568,9 +594,17 @@ def _lot_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Change]:
 #: Camps d'un document que son metadada i no contingut.
 _DOCUMENT_METADATA = ("name", "document_type", "published_at")
 
+#: Marca d'un document que ja no es a la publicacio completa vigent (radar
+#: 3B-1). Com `source_removed`, nomes hi es quan val `True`: els documents
+#: presents donen la mateixa fotografia que abans.
+DOCUMENT_PRESENCE_FIELDS: frozenset[str] = frozenset({"removed"})
+
 #: Tot el que un document aporta a la fotografia. `url` i `sha256` son la seva
-#: identitat i els compara `_document_changes`; la resta, metadada.
-DOCUMENT_FIELDS: frozenset[str] = frozenset({"url", "sha256"} | set(_DOCUMENT_METADATA))
+#: identitat i els compara `_document_changes`; `removed` decideix si hi es; la
+#: resta, metadada.
+DOCUMENT_FIELDS: frozenset[str] = (
+    frozenset({"url", "sha256"} | set(_DOCUMENT_METADATA)) | DOCUMENT_PRESENCE_FIELDS
+)
 
 
 def _document_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Change]:
@@ -585,17 +619,19 @@ def _document_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Cha
     Per aixo mana el SHA-256 quan el coneixem. Als documents que encara no s'han
     baixat, el SHA es `None` i nomes es pot comparar la URL: es una limitacio
     real i es preferible a inventar-se una identitat.
+
+    Un document marcat `removed` (absent d'una publicacio completa posterior)
+    es tracta com si no hi fos: marcar-lo dona `DOCUMENT_REMOVED` i desmarcar-lo
+    `DOCUMENT_ADDED`, pels mateixos camins que una URL que desapareix o apareix.
     """
-    old = {entry["url"]: entry for entry in before.get("documents", [])}
-    new = {entry["url"]: entry for entry in after.get("documents", [])}
+    present_before = [entry for entry in before.get("documents", []) if not entry.get("removed")]
+    present_after = [entry for entry in after.get("documents", []) if not entry.get("removed")]
+    old = {entry["url"]: entry for entry in present_before}
+    new = {entry["url"]: entry for entry in present_after}
     changes: list[Change] = []
 
-    old_by_sha = {
-        entry["sha256"]: entry for entry in before.get("documents", []) if entry.get("sha256")
-    }
-    new_by_sha = {
-        entry["sha256"]: entry for entry in after.get("documents", []) if entry.get("sha256")
-    }
+    old_by_sha = {entry["sha256"]: entry for entry in present_before if entry.get("sha256")}
+    new_by_sha = {entry["sha256"]: entry for entry in present_after if entry.get("sha256")}
 
     for url in sorted(set(new) - set(old)):
         entry = new[url]
@@ -660,6 +696,7 @@ def diff_snapshots(before: dict[str, Any], after: dict[str, Any]) -> list[Change
             # El `subject` es el nom del camp, no per decorar: dos camps poden
             # compartir codi i cal poder dir quin s'ha mogut.
             changes.append(Change(code, old, new, subject=field_name))
+    changes += _source_presence_changes(before, after)
     changes += _status_changes(before, after)
     changes += _deadline_changes(before, after)
     changes += _cpv_changes(before, after)

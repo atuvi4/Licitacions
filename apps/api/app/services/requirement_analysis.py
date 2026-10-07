@@ -126,6 +126,7 @@ from app.services.requirement_chunking import (
     render_chunk,
 )
 from app.services.tender_lifecycle import latest_revision
+from app.tenders.documents import ACTIVE_DOCUMENT, removed_document_ids
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +216,9 @@ async def collect_analyzable_documents(
                 TenderDocumentContent.id == TenderDocumentFile.content_id,
                 isouter=True,
             )
-            .where(TenderDocument.tender_id == tender_id)
+            # Un plec retirat de la font no es input de cap analisi nova, ni si
+            # algu el demana explicitament (les runs que el van llegir es queden).
+            .where(TenderDocument.tender_id == tender_id, ACTIVE_DOCUMENT)
             .order_by(TenderDocument.name)
         )
     ).all()
@@ -320,6 +323,39 @@ async def analysis_input(
         fingerprint=compute_input_fingerprint(capped),
         pages_total=pages_total,
     )
+
+
+async def run_includes_removed_document(
+    session: AsyncSession, run: RequirementExtractionRun
+) -> bool:
+    """Cert si una run d'extraccio va llegir o cita un document ja retirat de la font.
+
+    Una run aixi no pot ser la base de cap analisi nova: els seus requisits i
+    criteris parlen, en part, d'un plec que ja no es de la publicacio vigent. Es
+    mira el que la run va llegir (`chunk_coverage`, nul a les runs antigues) i el
+    que cita (evidencies de requisits i criteris).
+    """
+    removed = await removed_document_ids(session, run.tender_id)
+    if not removed:
+        return False
+    read = {
+        str(chunk.get("tender_document_id"))
+        for chunk in (run.chunk_coverage or {}).get("chunks") or []
+        if chunk.get("tender_document_id")
+    }
+    if read & {str(document_id) for document_id in removed}:
+        return True
+    cited_requirement = sa.exists().where(
+        RequirementEvidence.requirement_id == Requirement.id,
+        Requirement.run_id == run.id,
+        RequirementEvidence.tender_document_id.in_(removed),
+    )
+    cited_criterion = sa.exists().where(
+        AwardCriterionEvidence.award_criterion_id == AwardCriterion.id,
+        AwardCriterion.run_id == run.id,
+        AwardCriterionEvidence.tender_document_id.in_(removed),
+    )
+    return bool(await session.scalar(sa.select(sa.or_(cited_requirement, cited_criterion))))
 
 
 def _cap_pages(documents: list[AnalyzableDocument]) -> list[AnalyzableDocument]:

@@ -300,6 +300,33 @@ describe("Fitxa de licitació", () => {
     expect(screen.getByRole("link", { name: /Recalcula el pre-fit/ }).getAttribute("href")).toBe("/licitacions");
   });
 
+  it("estat i tipus que el diccionari no coneix: fallbacks catalans, mai el codi cru", async () => {
+    respondWith(base({ "/tenders/t1": { ...detail, status: "nou_estat", procedure_type: "nou_proc", contract_type: "toString" } }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    expect(container.textContent).toContain("Estat desconegut");
+    expect(container.textContent).toContain("Tipus desconegut");
+    expect(container.textContent).not.toMatch(/nou_estat|nou_proc|toString/);
+  });
+
+  it("ja no disponible a la font: etiqueta amb la data al capçal, sense canviar l'estat ni dir «retirada»", async () => {
+    respondWith(base({ "/tenders/t1": { ...detail, source_removed_at: "2026-09-20T08:00:00Z" } }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    const header = container.querySelector("[data-tender-header]")!;
+    expect(header.textContent).toContain("Ja no disponible a la font (des del ");
+    expect(header.textContent).toMatch(/\(des del [^)]+2026\)/);
+    expect(header.textContent).toContain("En termini");
+    expect(header.textContent).not.toMatch(/retirada|anul·lada/i);
+  });
+
+  it("sense làpida, el capçal no diu res de la disponibilitat a la font", async () => {
+    respondWith(base());
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    expect(container.querySelector("[data-tender-header]")!.textContent).not.toContain("Ja no disponible");
+  });
+
   it("licitació anul·lada: bàner de bloqueig i cap acció d'obrir candidatura", async () => {
     respondWith(base({ "/tenders/t1": { ...detail, status: "cancelled" }, "/companies/c1/tenders/t1/workspace": notFound() }));
     render(<TenderDetailPage />);

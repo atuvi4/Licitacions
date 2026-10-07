@@ -39,6 +39,7 @@ from app.models.tender_structure import (
     TenderSiteSourceRefLink,
 )
 from app.models.tenders import Tender, TenderLot
+from app.services.source_refs import assert_ref_citable
 
 #: Les dades estructurals del contracte que es corregeixen per aqui. Fora de la
 #: fotografia de `tender_lifecycle` a proposit: no son el que publica l'organ
@@ -400,6 +401,8 @@ async def link_source_ref(
     )
     if existing is not None:
         return existing
+    # Un enllac nou es un input nou: mai cap a un document retirat de la font.
+    await assert_ref_citable(session, ref)
     link = link_model(source_ref_id=ref.id, created_by=user.id if user else None)
     setattr(link, column.key, entity.id)
     session.add(link)

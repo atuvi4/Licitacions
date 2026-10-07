@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     # --- Identitat davant de fonts externes ---
     # Adreca de contacte que s'anuncia al User-Agent. Buida = "sense-contacte".
     INGESTION_CONTACT_EMAIL: str = ""
+    # Pausa de cortesia entre pagines consecutives d'un feed.
+    INGESTION_PAGE_PAUSE_SECONDS: float = 1.0
 
     # --- Descarrega de plecs de licitacio ---
     # Aquests limits son l'unica autoritat: cap altre modul defineix numeros.

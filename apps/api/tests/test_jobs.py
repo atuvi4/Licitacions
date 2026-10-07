@@ -1186,3 +1186,64 @@ async def test_pg_a_zombie_finalising_and_the_reconciler_serialise(
     _, job, request = await reconciling
     assert job.status == WorkJobStatus.SUCCEEDED and job.outcome == JobOutcome.EXECUTED
     assert request.result_run_id == run.id
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_processing_skips_documents_removed_from_the_source(
+    session, session_factory, tender_document, monkeypatch, explicit
+):
+    """Un plec retirat de la font (`removed_at`) no es torna a baixar ni extreure."""
+    from types import SimpleNamespace
+
+    from app.jobs import handlers
+    from app.models.tenders import TenderDocument
+
+    tender_id = tender_document.tender_id
+    current = TenderDocument(
+        tender_id=tender_id,
+        name="PPT vigent.pdf",
+        document_type=TenderDocumentType.TECHNICAL_TERMS,
+        url="https://example.com/ppt-nou.pdf",
+    )
+    removed = TenderDocument(
+        tender_id=tender_id,
+        name="PPT retirat.pdf",
+        document_type=TenderDocumentType.TECHNICAL_TERMS,
+        url="https://example.com/ppt-antic.pdf",
+        removed_at=datetime.now(UTC),
+    )
+    session.add_all([current, removed])
+    await session.commit()
+
+    processed: list[uuid.UUID] = []
+
+    async def fake_process(_session, document, **_kwargs):
+        processed.append(document.id)
+        file = SimpleNamespace(id=uuid.uuid4(), download_status="downloaded", error_code=None)
+        return SimpleNamespace(file=file, reused=False)
+
+    async def yes() -> bool:
+        return True
+
+    async def progress(_done: int, _total: int) -> None:
+        return None
+
+    monkeypatch.setattr(handlers, "process_tender_document", fake_process)
+    parameters = {"document_ids": [str(current.id), str(removed.id)]} if explicit else {}
+    ctx = handlers.JobContext(
+        session_factory=session_factory,
+        job=handlers.JobSnapshot(
+            id=uuid.uuid4(),
+            job_type=WorkJobType.PROCESS_TENDER_DOCUMENTS,
+            tender_id=tender_id,
+            parameters=parameters,
+            input_fingerprint=None,
+            provider=None,
+            model=None,
+        ),
+        should_continue=yes,
+        report_progress=progress,
+        provider_factory=fake.FakeProvider,
+    )
+    await handlers.process_tender_documents(ctx)
+    assert processed == [current.id]

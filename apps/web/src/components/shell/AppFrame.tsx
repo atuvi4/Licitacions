@@ -69,7 +69,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
           mobileOpen={mobileOpen}
           onToggleMenu={() => setMobileOpen((open) => !open)}
           companySwitcher={<CompanySwitcher membership={membership} companies={companies} selectCompany={selectCompany} />}
-          search={<GlobalSearch candidates={counts.oportunitats ?? null} />}
+          search={<GlobalSearch catalogueTotal={counts.catalogue ?? null} />}
           workCenter={<JobCenter companyId={companyId} />}
           user={<UserSummary user={user} role={membership.role} logout={logout} />}
         />

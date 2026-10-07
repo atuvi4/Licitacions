@@ -49,6 +49,7 @@ from app.schemas.requirements import (
 from app.services import audit, manual_requirement, manual_tender, source_refs, tender_structure
 from app.services.requirement_analysis import (
     analysis_input,
+    run_includes_removed_document,
 )
 from app.services.source_refs import resolve_source_ref, resolve_source_refs
 from app.tenders.visibility import visible_to_user
@@ -214,10 +215,14 @@ async def read_analysis(tender_id: uuid.UUID, session: SessionDep, user: Current
     # requisit manual no hi entra: una afirmacio humana no caduca perque s'hagi
     # tornat a llegir un PDF, i crear-ne un tampoc no fa que l'analisi cobreixi
     # els documents d'ara.
+    # Una run que va llegir un plec ja retirat de la font tambe es obsoleta, encara
+    # que ja no quedi cap plec vigent per tornar a analitzar.
     is_stale = False
     if run is not None:
         current = await analysis_input(session, tender_id)
-        is_stale = bool(current.documents) and current.fingerprint != run.input_fingerprint
+        is_stale = (
+            bool(current.documents) and current.fingerprint != run.input_fingerprint
+        ) or await run_includes_removed_document(session, run)
 
     return RequirementAnalysisRead(
         run=ExtractionRunRead.model_validate(run) if run is not None else None,

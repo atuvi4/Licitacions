@@ -154,3 +154,25 @@ class PlatformStatusChangeRequest(APIModel):
     status: CompanyPlatformStatus
     #: Nomes per a `pilot`: la fi nova (allargar) o la d'un pilot que comenca.
     pilot_ends_at: date | None = None
+
+
+# --------------------------------------------------------------------------- #
+# Salut de les fonts                                                           #
+# --------------------------------------------------------------------------- #
+
+
+class SourceHealthRead(APIModel):
+    code: str
+    name: str
+    enabled: bool
+    last_feed_updated_at: datetime | None = None
+    last_sync_started_at: datetime | None = None
+    last_sync_finished_at: datetime | None = None
+    last_sync_status: str | None = None
+    last_sync_pages: int = 0
+    last_sync_entries: int = 0
+    last_sync_tombstones: int = 0
+    last_sync_error: str | None = None
+    updated_watermark: datetime | None = None
+    #: Hi ha un sync en curs (lease vigent).
+    lease_active: bool = False

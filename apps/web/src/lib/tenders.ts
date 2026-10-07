@@ -65,6 +65,12 @@ export interface Page<T> {
   offset: number;
 }
 
+/** Pàgina del catàleg (`/tenders` i `/companies/{c}/matches`). */
+export interface CataloguePage<T> extends Page<T> {
+  /** Només amb filtre d'import: files que no es mostren per no tenir import conegut. */
+  excluded_without_amount?: number | null;
+}
+
 export interface BuyerSummary {
   id: string;
   name: string;
@@ -200,6 +206,8 @@ export interface TenderListItem {
   contract_type: ContractType;
   estimated_value: string | null;
   base_budget: string | null;
+  /** Opcional: el filtre d'import coalesceix estimat, base sense IVA i base. */
+  base_budget_without_tax?: string | null;
   currency: string;
   publication_date: string | null;
   deadline_at: string | null;
@@ -213,6 +221,12 @@ export interface TenderListItem {
   source_publication_count: number;
   source_code: string | null;
   is_modified: boolean;
+  /** El `updated` de la font de l'última entrada aplicada. */
+  source_updated_at?: string | null;
+  /** Ja no disponible a la font (làpida). NO és un estat: `status` no canvia. */
+  source_removed_at?: string | null;
+  /** Documents vigents. */
+  document_count?: number;
 }
 
 export interface TenderRevision {
@@ -259,6 +273,8 @@ export interface TenderDetail {
   nuts_code: string | null;
   country_code: string | null;
   source_url: string | null;
+  /** Ja no disponible a la font (làpida), si el servei ho publica. NO és un estat. */
+  source_removed_at?: string | null;
   first_seen_at: string;
   last_seen_at: string;
   last_changed_at: string | null;
@@ -278,6 +294,33 @@ export interface TenderFacets {
   contract_types: string[];
   nuts_codes: string[];
   total_tenders: number;
+  sources?: SourceFacet[];
+  status_counts?: Record<string, number>;
+}
+
+export interface SourceFacet {
+  /** Codi tal com està desat: el que accepta el filtre `source`. */
+  code: string;
+  name: string;
+  count: number;
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  PLACSP: "PLACSP · perfils de contractant",
+  placsp_agregadas: "PLACSP · plataformes agregades (PSCP)",
+  manual: "Importació manual",
+};
+
+/** Etiqueta d'un diccionari: només claus pròpies, i mai el codi cru si no hi és. */
+export function labelOf(map: Record<string, string>, code: string | null | undefined, fallback: string): string {
+  return code != null && Object.hasOwn(map, code) ? map[code] : fallback;
+}
+
+/** Nom de la font per mostrar: primer el diccionari català, si no el de les facetes, si no «Font desconeguda» (mai el codi cru). */
+export function sourceLabel(code: string | null | undefined, sources?: SourceFacet[]): string | null {
+  if (!code) return null;
+  const facet = sources?.find((source) => source.code === code);
+  return labelOf(SOURCE_LABELS, code, facet?.name || "Font desconeguda");
 }
 
 /* -------------------------------------------------------------------------- */

@@ -42,6 +42,7 @@ from app.models.identity import User
 from app.models.sources import Source
 from app.models.tenders import Buyer, Tender
 from app.services import tender_lifecycle
+from app.tenders.search import refresh_search_text
 from app.tenders.visibility import buyer_visible_to_company, visible_to_company
 
 #: Qui pot obrir un expedient. Coincideix amb qui decideix, no amb qui edita
@@ -352,6 +353,8 @@ async def create_manual_tender(
     )
     session.add(tender)
     await session.flush()
+    # Cerca normalitzada (spec 3B-1 §7.2): titol, expedient i organisme.
+    await refresh_search_text(session, tender)
     # Revisio 1 des del primer moment. Sense aquesta linia, una licitacio manual
     # no tindria historia: el primer PATCH no tindria amb que comparar-se i
     # `evaluate_staleness` d'un paquet congelat diria `tender_revision_unknown`
@@ -471,6 +474,9 @@ async def update_manual_tender(
             else (await _resolve_existing_buyer(session, company_id, buyer_id)).id  # type: ignore[arg-type]
         )
 
+    # Titol, expedient, descripcio o organisme poden haver canviat: la cerca
+    # normalitzada es recalcula sempre (si no ha canviat res, dona el mateix).
+    await refresh_search_text(session, tender)
     await session.flush()
     outcome = await tender_lifecycle.record_revision(
         session, tender, trigger=MANUAL_EDIT_TRIGGER

@@ -24,7 +24,7 @@ export type Mode = {
 };
 
 export const MODES: Mode[] = [
-  { value: "all", label: "Totes", count: "total_tenders" },
+  { value: "all", label: "Totes amb pre-fit", count: "total_tenders" },
   // «Per revisar» és l'etiqueta del mockup 03 per al mode `candidate` (B).
   { value: "candidate", label: "Per revisar", status: "candidate", count: "candidates" },
   { value: "low_fit", label: "Encaix baix", status: "low_fit", count: "low_fit" },
@@ -90,13 +90,120 @@ export function feedQuery({
   });
 }
 
-/** `?match_status=` de la URL (cerca global, «Avui»): només un mode real; la resta és «Totes». */
+/** `?match_status=` de la URL (cerca global, «Avui»): només un mode real; la resta, «Per revisar». */
 export function modeFromParam(value: string | null): string {
-  if (!value) return "all";
-  return MODES.some((option) => option.value === value && option.status) ? value : "all";
+  if (!value) return "candidate";
+  return MODES.some((option) => option.value === value && option.status) ? value : "candidate";
 }
 
 /** Quants filtres tenen valor: el rètol «Filtres · N actius». */
 export function countApplied(filters: Filters): number {
   return Object.values(filters).filter((value) => value !== "" && value !== false).length;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pestanyes: «Totes» (catàleg complet) i «Per revisar» (vista del pre-fit)     */
+/* -------------------------------------------------------------------------- */
+
+export type CatalogueTab = "totes" | "revisar";
+
+export const TAB_PARAM = "vista";
+
+/**
+ * Quina pestanya toca. `?vista=` mana; sense ell, `?match_status=` (que ve
+ * d'«Avui») és la vista del pre-fit i la resta —inclosa la cerca `?q=`— és el
+ * catàleg complet.
+ */
+export function tabFromParams(params: { get(name: string): string | null }): CatalogueTab {
+  const explicit = params.get(TAB_PARAM);
+  if (explicit === "revisar" || explicit === "totes") return explicit;
+  return params.get("match_status") ? "revisar" : "totes";
+}
+
+/* -------------------------------------------------------------------------- */
+/* «Totes»: contracte de consulta únic (spec 3B-1 §7)                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * «Totes» no porta mai `min_score` ni `match_status`: el pre-fit acompanya
+ * cada fila però no decideix què hi surt ni en quin ordre.
+ */
+export const CATALOGUE_SORT_OPTIONS = [
+  { value: "published", label: "Publicació més recent" },
+  { value: "first_seen", label: "Vistes més recentment" },
+  { value: "deadline", label: "Termini més proper" },
+  { value: "amount", label: "Import més alt" },
+  { value: "relevance", label: "Rellevància del text" },
+];
+
+export const DEFAULT_CATALOGUE_SORT = "published";
+
+export const EMPTY_CATALOGUE_FILTERS = {
+  q: "",
+  cpv: "",
+  buyer_q: "",
+  nuts: "",
+  place_q: "",
+  min_amount: "",
+  max_amount: "",
+  published_from: "",
+  published_to: "",
+  deadline_from: "",
+  deadline_to: "",
+  contract_type: "",
+  procedure_type: "",
+  status: "",
+  source: "",
+  /** Tri-estat: "" (tot), "true" (només els que ja no hi són), "false" (només els vigents). */
+  source_removed: "",
+};
+
+export type CatalogueFilters = typeof EMPTY_CATALOGUE_FILTERS;
+
+/** Amb filtre d'import fixat, el servei diu quantes files queden fora per no tenir import. */
+export function hasAmountFilter(filters: CatalogueFilters): boolean {
+  return filters.min_amount !== "" || filters.max_amount !== "";
+}
+
+export function countCatalogueFilters(filters: CatalogueFilters): number {
+  return Object.values(filters).filter((value) => value !== "").length;
+}
+
+/** `relevance` només té sentit amb text: sense `q` el servei ordena de manera neutral. */
+export function catalogueSortOptions(filters: CatalogueFilters) {
+  return filters.q.trim() ? CATALOGUE_SORT_OPTIONS : CATALOGUE_SORT_OPTIONS.filter((option) => option.value !== "relevance");
+}
+
+export function catalogueQuery({
+  applied,
+  sort = DEFAULT_CATALOGUE_SORT,
+  offset,
+}: {
+  applied: CatalogueFilters;
+  sort?: string;
+  offset: number;
+}): string {
+  return buildQuery({
+    mode: "all",
+    q: applied.q.trim(),
+    cpv: applied.cpv.trim(),
+    buyer_q: applied.buyer_q.trim(),
+    nuts: applied.nuts.trim(),
+    place_q: applied.place_q.trim(),
+    min_amount: applied.min_amount,
+    max_amount: applied.max_amount,
+    published_from: applied.published_from,
+    published_to: applied.published_to,
+    deadline_from: applied.deadline_from,
+    // La data final és inclosa: el servei compara datetimes.
+    deadline_to: applied.deadline_to ? `${applied.deadline_to}T23:59:59` : "",
+    contract_type: applied.contract_type,
+    procedure_type: applied.procedure_type,
+    status: applied.status,
+    source: applied.source,
+    source_removed: applied.source_removed,
+    sort,
+    limit: PAGE_SIZE,
+    offset,
+  });
 }

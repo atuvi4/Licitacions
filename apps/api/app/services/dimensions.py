@@ -37,6 +37,7 @@ from app.models.enums import DimensionStatus, MembershipRole, ObservationSourceK
 from app.models.identity import User
 from app.models.provenance import TenderSourceRef
 from app.models.workspace import BidWorkspace
+from app.services.source_refs import assert_ref_citable
 
 #: Qui prepara la candidatura. Els mateixos que editen solucions tecniques:
 #: dimensionar es feina tecnica, i deixar-ho nomes als rols de decisio
@@ -385,6 +386,9 @@ async def add_observation(
             # Els mateixos bytes poden ser de dues licitacions. Que el SHA
             # coincideixi no fa que la cita sigui d'aquesta.
             raise SourceRefTenderMismatchError("Aquesta cita es d'una altra licitacio.")
+        # Una observacio nova es un input nou (pot fer `disputed` la dimensio i
+        # arriba a la preparacio): mai sobre un plec ja retirat de la font.
+        await assert_ref_citable(session, ref)
 
     await _claim(session, dimension, expected_revision)
     observation = WorkspaceDimensionObservation(

@@ -175,22 +175,33 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
             }
             for lot in lots
         ],
-        "documents": [
-            {
-                "url": document.url,
-                "name": document.name,
-                "document_type": str(document.document_type),
-                "published_at": canonical_instant(document.published_at),
-                "sha256": shas.get(document.id),
-            }
-            for document in documents
-        ],
+        "documents": [_document_entry(document, shas) for document in documents],
     }
+
+    # Presencia a la font: nomes quan la font ha retirat l'entrada. L'estat
+    # neutre s'omet perque la fotografia de les que ja hi ha no canvii.
+    if tender.source_removed_at is not None:
+        snapshot["source_removed"] = True
 
     if await is_manual_tender(session, tender):
         snapshot["expediente_number"] = tender.expediente_number
         snapshot["country_code"] = tender.country_code
     return snapshot
+
+
+def _document_entry(document: TenderDocument, shas: dict[uuid.UUID, str]) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "url": document.url,
+        "name": document.name,
+        "document_type": str(document.document_type),
+        "published_at": canonical_instant(document.published_at),
+        "sha256": shas.get(document.id),
+    }
+    # Un document absent de la publicacio completa vigent es queda a la
+    # fotografia marcat (no s'esborra mai); el present no porta la marca.
+    if document.removed_at is not None:
+        entry["removed"] = True
+    return entry
 
 
 async def is_manual_tender(session: AsyncSession, tender: Tender) -> bool:
@@ -210,6 +221,40 @@ async def latest_revision(session: AsyncSession, tender_id: uuid.UUID) -> Tender
         sa.select(TenderRevision)
         .where(TenderRevision.tender_id == tender_id)
         .order_by(TenderRevision.revision_number.desc())
+        .limit(1)
+    )
+
+
+#: Impactes que fan que una revisio sigui base de l'analisi (spec 3B-1 §4.5).
+ANALYSIS_BASIS_IMPACTS = frozenset(
+    {str(ChangeImpact.REQUIREMENTS_AFFECTING), str(ChangeImpact.COMPLIANCE_AFFECTING)}
+)
+
+
+async def latest_analysis_affecting_revision(
+    session: AsyncSession, tender_id: uuid.UUID
+) -> TenderRevision | None:
+    """L'ultima revisio amb algun event `requirements_affecting` o `compliance_affecting`.
+
+    Si cap revisio afecta l'analisi, la base es la primera revisio (o `None`
+    si el tender encara no en te cap). Filtre en Python sobre els impactes
+    desats: portable entre SQLite i PostgreSQL i amb pocs events per expedient.
+    """
+    rows = (
+        await session.execute(
+            sa.select(TenderRevision, TenderChangeEvent.impacts)
+            .join(TenderChangeEvent, TenderChangeEvent.to_revision_id == TenderRevision.id)
+            .where(TenderRevision.tender_id == tender_id)
+            .order_by(TenderRevision.revision_number.desc())
+        )
+    ).all()
+    for revision, impacts in rows:
+        if ANALYSIS_BASIS_IMPACTS.intersection(str(i) for i in (impacts or [])):
+            return revision
+    return await session.scalar(
+        sa.select(TenderRevision)
+        .where(TenderRevision.tender_id == tender_id)
+        .order_by(TenderRevision.revision_number.asc())
         .limit(1)
     )
 

@@ -139,9 +139,9 @@ Coses que hem decidit **no** endevinar:
 | `TotalAmount = 0` | Alguns expedients (acords marc, contractes centralitzats) publiquen import base 0. Es guarda tal qual: no és un error nostre. |
 | Termini dels lots | La font no publica termini per lot al feed de licitacions. `TenderLot.deadline_at` queda a null. |
 | Descripció | S'omple amb el `summary` de l'ATOM, que és un resum generat, no l'objecte del contracte redactat. |
-| `at:deleted-entry` | Implementat i testat, però no s'ha vist cap làpida a les mostres reals descarregades. El comportament (marcar `cancelled`) està cobert per fixtures. |
+| `at:deleted-entry` | Presència a la font, no estat: vegeu «Presència a la font» a la secció 8. Mai marca `cancelled`. |
 | Contractes menors i encàrrecs | Tenen feeds propis (`contratosMenores…`, encàrrecs a mitjà propi, consultes preliminars). No s'ingereixen. |
-| Plataformes agregades | Les comunitats autònomes amb plataforma pròpia s'agreguen en un altre feed. No s'ingereix encara. |
+| Plataformes agregades | Les comunitats autònomes amb plataforma pròpia s'agreguen al feed 1044, que s'ingereix com a font `placsp_agregadas` (radar 3B-1). |
 | Catàleg CPV | Els codis entren amb descripció provisional (`CPV 45314320`) perquè el feed només dona el codi. Falta importar el catàleg oficial. |
 
 ## 7. Seguretat del parser
@@ -156,21 +156,94 @@ Coses que hem decidit **no** endevinar:
 
 ## 8. Ús
 
+Des d'`apps/api`:
+
 ```bash
-# mostra controlada del feed viu
-python -m app.ingestion.placsp --limit 300
+# sincronització incremental (fins al solapament de 48 h, màxim 50 pàgines)
+python -m app.ingestion.sync --source placsp_agregadas [--max-pages N]
 
-# recorre 3 fitxers encadenats cap enrere en el temps
-python -m app.ingestion.placsp --max-files 3 --limit 500
+# backfill acotat i represa des del checkpoint (--resume exigeix --backfill-until)
+python -m app.ingestion.sync --source placsp_agregadas --backfill-until 2026-09-01 --max-pages 200 [--resume]
 
-# continua des de l'últim checkpoint
-python -m app.ingestion.placsp --resume --max-files 2
+# bucle propi cada S segons (fins a SIGINT/SIGTERM)
+python -m app.ingestion.sync --source placsp_agregadas --every 900
 
-# sense escriure res
-python -m app.ingestion.placsp --dry-run --limit 20
+# salut de les fonts (només lectura, sense lease)
+python -m app.ingestion.sync --status [--source placsp_agregadas]
 
-# des d'un fitxer local (tests, reproduccions)
-python -m app.ingestion.placsp --fixture tests/fixtures/placsp/feed_sample.atom
+# desenvolupament: un fitxer local, directe, sense lease ni salut
+python -m app.ingestion.placsp --source placsp_agregadas --fixture tests/fixtures/placsp/agregadas/page1.atom
+
+# després de desplegar 0056, o si cal refer la cerca (idempotent)
+python -m app.tenders.search_backfill
 ```
 
-No hi ha planificador ni endpoint públic per llançar ingestes: s'engeguen a mà.
+Codi de sortida: **0** `success`, **2** `partial`, **1** `failed` (també si la font
+està desactivada o un altre sync té el lease). La CLI antiga `app.ingestion.placsp`
+contra el feed viu passa pel mateix `run_source_sync` (lease i salut); `--feed-url`
+només s'admet amb `--dry-run`. No hi ha endpoint públic per llançar ingestes.
+
+### Sincronització de font
+
+* **Lease per font**: un UPDATE condicional sobre `sources` (15 min, renovat per un
+  batec). Dos syncs de la mateixa font no corren mai alhora: el segon surt amb codi 1.
+* **Salut** (`sources.last_sync_*`, `last_feed_updated_at`, `updated_watermark`): es
+  veu amb `--status` i a `GET /platform/sources` (operador). `last_feed_updated_at`
+  només avança.
+* **Incremental**: es llegeix des de la pàgina 1 fins que una pàgina sencera és
+  anterior a `marca d'aigua − 48 h`. Les entrades conegudes es resolen per hash.
+* **`partial`**: hi ha una pàgina posterior a la 1 que falla o respon 304, la cadena
+  `next` queda incompleta, o alguna entrada falla. També és `partial` quan s'esgota
+  `--max-pages` amb pàgines pendents o `--limit` talla el run, si ja hi ha marca
+  d'aigua o és un backfill; el primer run sense marca acaba `success`. La marca
+  d'aigua només avança amb `success`, i mai després d'un tall per `--limit`.
+  El checkpoint (només en backfill) no passa mai d'una pàgina llegida a mitges.
+  `failed`: la pàgina 1 no es pot obtenir o el run peta.
+* **Comptadors del run**: `records_fetched` = `new` + `changed` + `unchanged` +
+  `failed` + `superseded` + `conflicted` + les làpides aplicades a una licitació ja
+  coneguda (`tombstones_applied`). Una làpida d'un expedient encara desconegut
+  compta a `new`.
+* **Ordre**: una publicació amb `updated` anterior a la vigent queda `superseded`;
+  si té el mateix `updated` i un hash diferent queda en conflicte. Totes dues es
+  desen i no s'apliquen.
+* **Organisme reanomenat**: si una publicació porta un nom nou per a un organisme
+  ja conegut, el `search_text` de **totes** les seves licitacions es recalcula a la
+  mateixa transacció (en bloc), no només el de l'entrada rebuda. No cal backfill.
+
+#### En producció
+
+* El sync incremental pagina **fins al límit temporal de solapament** (48 h abans de
+  la marca d'aigua). `--max-pages` (per defecte **50**) és només un **topall de
+  seguretat**, no el criteri d'aturada.
+* Si el topall s'assoleix abans d'arribar al solapament, amb marca d'aigua ja
+  existent, el run queda **`partial`** i la marca **no avança**: un catàleg
+  incomplet no es pot fer passar per «sync complet». El run següent torna a
+  començar per la pàgina 1 i reprocessa per hash el que ja tenia.
+* El **primer** run (sense marca) fixa la marca a partir de les entrades que ha
+  processat; el catàleg històric anterior es completa amb `--backfill-until
+  YYYY-MM-DD` (amb `--resume` per continuar des del checkpoint).
+* `--max-pages 2` (o qualsevol valor petit) és **només per a proves**.
+* Recomanació per al procés de producció:
+  `python -m app.ingestion.sync --source placsp_agregadas --every 1800 --max-pages 50`.
+
+### Presència a la font
+
+Una `at:deleted-entry` només diu que l'entrada ja no és accessible a la font. Es
+desa com a `SourceRecord` i, si no és anterior a la publicació vigent, marca
+`Tender.source_removed_at`: conserva la primera data no restaurada i emet
+`SOURCE_ENTRY_REMOVED`, que és informatiu. **No hi ha cap estat `withdrawn`**:
+`status` no canvia mai per una làpida, i només `ANUL` explícit porta a
+`cancelled`. Una republicació posterior posa `source_removed_at` a nul
+(`SOURCE_ENTRY_RESTORED`). Documents i lots absents d'una publicació completa
+posterior es marquen amb `removed_at` i mai s'esborren. Una publicació completa
+llegida en una pàgina obtinguda s'aplica sencera (també les absències) encara que el
+run acabi `partial` per una pàgina posterior; el que mai s'aplica és el que hi hagi
+a les pàgines no obtingudes. La fitxa i el processament
+de plecs ignoren els documents retirats, i **cap input d'anàlisi nou** els llegeix
+(extracció de requisits, classificació, revisió documental, cites, enllaços i
+observacions de dimensionament nous: selector únic `app/tenders/documents.py`).
+Mentre la run d'extracció (o la classificació) vigent hagi llegit un plec retirat,
+`POST …/analysis/runs` es refusa (409 `analysis_prerequisites_missing`,
+`missing: requirements_outdated` / `classification_outdated`) fins que es tornen a
+analitzar els plecs. Les runs antigues i les seves cites es conserven tal com eren;
+si el document torna en una publicació completa posterior, torna a ser elegible.
