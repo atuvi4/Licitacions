@@ -48,6 +48,7 @@ from app.services import audit
 from app.services import bid_workspace as workspace_service
 from app.services import economic_offer as service
 from app.services import offer_line_option_sync as sync_service
+from app.services.workspace_gate import assert_workspace_go
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/economic-offer", tags=["economic-offer"])
 
@@ -275,6 +276,7 @@ async def create_offer(workspace_id: uuid.UUID, session: SessionDep, ctx: Compan
     Els lots inicials els determina C-1, i els posa el servidor.
     """
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     offer, created = await service.create_offer(session, workspace, user=ctx.user)
     if created:
@@ -303,6 +305,7 @@ async def update_offer(
     ctx: CompanyCtx,
 ):
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     fields = payload.model_dump(exclude_unset=True)
@@ -337,6 +340,7 @@ async def add_lot(
 ):
     """Nomes quan la candidatura es global i el plec te lots (C-1, cas C)."""
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     lot, created = await service.add_lot_from_tender_lot(
@@ -371,6 +375,7 @@ async def update_lot(
     que es exactament el que ha de passar quan ningu no sap quant dura (C-3).
     """
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     lot = await service.get_lot(session, offer, lot_id)
@@ -404,6 +409,7 @@ async def archive_lot(
     una oferta sense cap bloc de preus.
     """
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     lot = await service.get_lot(session, offer, lot_id)
@@ -430,6 +436,7 @@ async def create_section(
     ctx: CompanyCtx,
 ):
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     lot = await service.get_lot(session, offer, lot_id)
@@ -456,6 +463,7 @@ async def update_section(
     ctx: CompanyCtx,
 ):
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     section = await service.get_section(session, offer, section_id)
@@ -492,6 +500,7 @@ async def archive_section(
     arxivar la seccio, no cadascuna de les seves linies. Deixen de comptar perque
     la seva seccio no compta."""
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     section = await service.get_section(session, offer, section_id)
@@ -515,6 +524,7 @@ async def create_line(
     ctx: CompanyCtx,
 ):
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     section = await service.get_section(session, offer, section_id)
@@ -544,6 +554,7 @@ async def update_line(
     ctx: CompanyCtx,
 ):
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     line = await service.get_line(session, offer, line_id)
@@ -574,6 +585,7 @@ async def archive_line(
     ctx: CompanyCtx,
 ):
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     line = await service.get_line(session, offer, line_id)
@@ -630,6 +642,7 @@ async def apply_target(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     line = await service.get_line(session, offer, line_id)
 
@@ -677,6 +690,7 @@ async def sync_from_option(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await service.get_offer(session, workspace)
     line = await service.get_line(session, offer, line_id)
 

@@ -27,6 +27,7 @@ import pytest
 import sqlalchemy as sa
 
 from app.ai.provider import StructuredResult, Usage
+from app.core.config import settings
 from app.core.errors import NothingAnalyzableError
 from app.ingestion.placsp.service import PlacspIngestionService
 from app.jobs import requests as job_requests
@@ -84,6 +85,7 @@ from app.services import tender_structure as structure
 from app.services.requirement_analysis import analysis_input
 from tests.fixtures.company_twin import build_company_twin
 from tests.jobs_support import run_worker
+from tests.structure_support import FIXTURE_RUN_ID, PROV
 from tests.test_ingestion_pagination import PAGE2_URL, Feed, _install
 
 pytestmark = pytest.mark.asyncio
@@ -115,6 +117,18 @@ async def seeded_vocabulary(db):
     await db.flush()
 
 
+@pytest.fixture(autouse=True)
+def pinned_test_model(monkeypatch):
+    """`ByExtractionProvider` es diu `anthropic`: pel worker (3B-2 §6.7) un proveidor
+    real nomes s'executa amb el model pinat (`LLM_ALLOWED_MODELS`) i amb preu."""
+    monkeypatch.setattr(settings, "LLM_ALLOWED_MODELS", [ByExtractionProvider.model])
+    monkeypatch.setattr(
+        settings,
+        "LLM_MODEL_PRICES",
+        {ByExtractionProvider.model: {"input": 3.0, "output": 15.0}},
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Ajudants                                                                      #
 # --------------------------------------------------------------------------- #
@@ -128,7 +142,10 @@ class ByExtractionProvider:
     recalcul nomes pot treure requisits de B si algu li torna a passar B.
     """
 
-    name = "fake"
+    #: Nom de proveidor REAL (cap xarxa: respon d'un diccionari). Des de 3B-2 §6.3
+    #: una simulacio (`fake`) mai no passa a vigent, i aquest recorregut necessita
+    #: una extraccio vigent (vegeu `tests/real_provider.py`).
+    name = "anthropic"
     model = "fake-model-v1"
 
     def __init__(self, responses: dict[str, dict[str, list[dict[str, Any]]]]) -> None:
@@ -499,7 +516,9 @@ async def test_document_retirat_no_alimenta_cap_input_nou(
     ref_b = await source_refs.create_extracted_page_ref(
         db, tender_id=tender.id, extraction_id=extraction_b.id, page_id=page_b.id
     )
-    block = await structure.create_block(db, tender, {"code": "B1", "name": "Bloc unic"})
+    block = await structure.create_block(
+        db, tender, {"code": "B1", "name": "Bloc unic"}, provenance=PROV
+    )
     manual = await manual_requirement.create_manual_requirement(
         db,
         tender=tender,
@@ -682,10 +701,12 @@ async def test_document_retirat_no_alimenta_cap_input_nou(
         await source_refs.create_document_file_ref(db, tender_id=tender.id, file_id=file_b.id)
     block = await db.get(TenderBlock, block.id)
     with pytest.raises(source_refs.SourceRefDocumentRemovedError):
-        await structure.link_source_ref(db, entity=block, source_ref_id=ref_b.id)
+        await structure.link_source_ref(db, entity=block, source_ref_id=ref_b.id, provenance=PROV)
     manual = await db.get(Requirement, manual.id)
     with pytest.raises(source_refs.SourceRefDocumentRemovedError):
-        await manual_requirement.link_source_ref(db, requirement=manual, source_ref_id=ref_b.id)
+        await manual_requirement.link_source_ref(
+            db, requirement=manual, source_ref_id=ref_b.id, producer_run_id=FIXTURE_RUN_ID
+        )
     refs_to_b = set(
         (
             await db.execute(

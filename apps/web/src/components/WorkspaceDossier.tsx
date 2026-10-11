@@ -39,10 +39,14 @@ import {
   COVERAGE_LABELS,
   EVIDENCE_STATUS_LABELS,
   GROUP_LABELS,
+  NO_ANALYSIS_ACTION,
+  NO_ANALYSIS_COUNTER,
+  NO_ANALYSIS_TEXT,
   RELEVANCE_ESTABLISHED,
   RELEVANCE_HINTS,
   RELEVANCE_LABELS,
   VALIDITY_LABELS,
+  hasNoAnalysis,
   readinessBlockerLabel,
   reconciliationMessage,
   type Dossier,
@@ -224,7 +228,9 @@ export function DossierSection({
   const { coverage, readiness } = dossier;
   const requirementsHref = `/licitacions/${workspace.tender_id}?tab=requisits`;
   const openTasks = workspace.tasks.filter((task) => task.status === "pending" || task.status === "in_progress").length;
-  const isReady = readiness.state === "ready_for_final_review";
+  const noAnalysis = hasNoAnalysis(coverage);
+  // Sense anàlisi del plec, mai «Dossier complet» (el backend ja hi posa el blocador).
+  const isReady = readiness.state === "ready_for_final_review" && !noAnalysis;
   const alreadyInFinalReview = workspace.status === "ready_for_final_review";
   const advanceBlockers =
     mutation.apiError?.code === "workspace_not_ready"
@@ -432,17 +438,29 @@ export function DossierSection({
             level="attention"
             kicker="Dossier incomplet"
             action={
-              <LinkButton href="#tasques" variant="secondary" size="sm">
+              <LinkButton href={`/candidatures/${workspace.id}?pas=preparar&area=pla#tasques`} variant="secondary" size="sm">
                 {openTasks > 0 ? `${plural(openTasks, "tasca oberta", "tasques obertes")} →` : "Crea una tasca →"}
               </LinkButton>
             }
           >
-            <p>
-              <strong>
-                {coverage.covered} de {coverage.mandatory_total} requisits obligatoris coberts i confirmats.
-              </strong>{" "}
-              Per passar a la revisió final:
-            </p>
+            {noAnalysis ? (
+              // Sense anàlisi no hi ha fracció: «0 de 0» volia dir «ningú no ha llegit el plec».
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <strong>{NO_ANALYSIS_COUNTER}</strong>
+                <span>{NO_ANALYSIS_TEXT}</span>
+                <span>· no se sap quins requisits obligatoris té.</span>
+                <LinkButton href={requirementsHref} variant="secondary" size="sm">
+                  {NO_ANALYSIS_ACTION} →
+                </LinkButton>
+              </p>
+            ) : (
+              <p>
+                <strong>
+                  {coverage.covered} de {coverage.mandatory_total} requisits obligatoris coberts i confirmats.
+                </strong>{" "}
+                Per passar a la revisió final:
+              </p>
+            )}
             {readiness.blockers.length > 0 && (
               <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-[13px] leading-5">
                 {readiness.blockers.map((code) => (

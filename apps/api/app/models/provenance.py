@@ -198,6 +198,9 @@ class RequirementSourceRefLink(UUIDPrimaryKeyMixin, Base):
             "users.id", ondelete="SET NULL", name="fk_requirement_source_ref_author"
         ),
     )
+    #: Sense actor (via interna d'un productor, p. ex. el gold), la passada que
+    #: l'ha enllacat (0060). Mai NULL alhora que `created_by` en un enllac nou.
+    producer_run_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )

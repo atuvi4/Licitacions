@@ -245,7 +245,7 @@ async def apply_exact(
         preview = await rec.preview(session, company_id=company_id, tender_id=tender_id)
         return _result(existing, changed=False, applied=0, preview=preview)
 
-    current = await review_runs.current_run_id(session, tender_id)
+    current = await review_runs.current_run_id(session, tender_id, company_id)
     if current != target_run_id:
         raise _stale(
             "current_run_changed",

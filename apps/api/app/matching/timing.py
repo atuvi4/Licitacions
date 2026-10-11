@@ -8,7 +8,7 @@ vencut o que l'expedient ja no sigui accionable (adjudicat, resolt, anul.lat).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 from app.matching.rules import (
     DEADLINE_COMFORTABLE_DAYS,
@@ -21,6 +21,7 @@ from app.matching.rules import (
     ReasonCode,
 )
 from app.models.enums import DimensionResult
+from app.tenders.deadline import days_until_deadline, deadline_has_passed
 
 # Fraccio del pes segons el marge disponible.
 _BANDS = (
@@ -32,12 +33,7 @@ _BANDS = (
 
 
 def days_left(deadline: datetime | None, now: datetime | None = None) -> int | None:
-    if deadline is None:
-        return None
-    reference = now or datetime.now(UTC)
-    if deadline.tzinfo is None:
-        deadline = deadline.replace(tzinfo=UTC)
-    return (deadline - reference).days
+    return days_until_deadline(deadline, now)
 
 
 def evaluate(
@@ -68,7 +64,8 @@ def evaluate(
             )
         )
 
-    if remaining < 0:
+    # Vencut: o ja ha passat l'instant (encara que sigui avui mateix), o falten dies negatius.
+    if remaining < 0 or deadline_has_passed(deadline, now):
         return DimensionOutcome(
             Factor(
                 dimension="timing",

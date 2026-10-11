@@ -28,6 +28,11 @@ from app.api.v1.routers import (
     matching,
     people,
     platform,
+    platform_analysis,
+    platform_classification,
+    platform_documents,
+    platform_llm_budget,
+    platform_structure,
     profile,
     projects,
     readiness,
@@ -94,6 +99,15 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 # Administracio de la plataforma: alta d'empresa i propietari (nomes superusuaris).
 api_router.include_router(platform.router)
+# Documents publics oficials que el feed no enumera: nomes l'operador (3B-2 §2.6).
+api_router.include_router(platform_documents.router)
+api_router.include_router(platform_classification.router)
+# Estructura i abast d'un tender public amb provenance: nomes l'operador (3B-2 §4).
+api_router.include_router(platform_structure.router)
+# Caps de despesa d'LLM i autoritzacions: nomes l'operador (3B-2 §6.7).
+api_router.include_router(platform_llm_budget.router)
+# `force` d'un tender public: nomes l'operador, i mai canonic (3B-2 §6.4).
+api_router.include_router(platform_analysis.router)
 api_router.include_router(config.router)
 api_router.include_router(companies.router)
 api_router.include_router(cpv.catalog_router)

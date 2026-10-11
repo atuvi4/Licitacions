@@ -20,6 +20,7 @@ from app.models.enums import (
     DocumentFileOrigin,
     DownloadStatus,
     SourceType,
+    TenderDocumentOrigin,
     TenderDocumentType,
     TenderStatus,
 )
@@ -69,6 +70,8 @@ async def apply_change(db, tender: Tender, change: str) -> None:
                 name="Nou",
                 document_type=TenderDocumentType.OTHER,
                 url="https://x/nou.pdf",
+                origin=TenderDocumentOrigin.FEED,
+                governing_source_id=tender.source_id,
             )
         )
     elif change == "document_removed":

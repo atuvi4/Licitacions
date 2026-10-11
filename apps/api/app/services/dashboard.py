@@ -17,7 +17,12 @@ from app.models.credentials import CompanyCertification, CompanyInsurance, Compa
 from app.models.documents import Document, DocumentLink
 from app.models.identity import Company
 from app.models.people import CompanyPerson, PersonQualification
-from app.models.profile import CompanyFinancialYear, CompanyService, CompanyTerritory
+from app.models.profile import (
+    CompanyContractPreferences,
+    CompanyFinancialYear,
+    CompanyService,
+    CompanyTerritory,
+)
 from app.models.projects import CompanyProject
 from app.schemas.common import compute_temporal_status
 from app.schemas.dashboard import (
@@ -65,6 +70,7 @@ async def build_summary(
         people=people_count,
         qualifications=qualifications_count,
         cpv_preferences=await _count(session, CompanyCPVPreference, company_id),
+        contract_preferences=await _count(session, CompanyContractPreferences, company_id),
         projects=await _count(session, CompanyProject, company_id),
         documents=await _count(session, Document, company_id),
         document_links=await _count(session, DocumentLink, company_id),
@@ -115,7 +121,9 @@ async def collect_expiry_alerts(
 
     cert_rows = (
         await session.execute(
-            sa.select(CompanyCertification.id, CompanyCertification.name, CompanyCertification.expires_at)
+            sa.select(
+                CompanyCertification.id, CompanyCertification.name, CompanyCertification.expires_at
+            )
             .where(
                 CompanyCertification.company_id == company_id,
                 CompanyCertification.expires_at.is_not(None),
@@ -151,7 +159,9 @@ async def collect_expiry_alerts(
 
     registration_rows = (
         await session.execute(
-            sa.select(CompanyRegistration.id, CompanyRegistration.name, CompanyRegistration.expires_at)
+            sa.select(
+                CompanyRegistration.id, CompanyRegistration.name, CompanyRegistration.expires_at
+            )
             .where(
                 CompanyRegistration.company_id == company_id,
                 CompanyRegistration.expires_at.is_not(None),

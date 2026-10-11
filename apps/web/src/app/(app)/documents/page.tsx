@@ -60,6 +60,21 @@ const LINKABLE: Array<{ type: LinkedEntityType; endpoint: string; label: (row: R
   },
 ];
 
+/**
+ * Abans d'eliminar, quants vincles d'evidència es perden i de quines dades
+ * (addendum 3B-2, D7): un document vinculat no desapareix en silenci.
+ */
+function deleteMessage(document: DocumentItem | null): string {
+  if (!document) return "";
+  const count = document.links.length;
+  if (count === 0) return `Segur que vols eliminar «${document.name}»? S'esborrarà el fitxer.`;
+  const targets = [...new Set(document.links.map((link) => ENTITY_TYPE_LABELS[link.entity_type] ?? "una dada"))].join(", ");
+  return (
+    `«${document.name}» és evidència de ${count} ${count === 1 ? "dada" : "dades"} (${targets}). ` +
+    `Si l'elimines, aquestes dades perdran aquesta evidència. S'esborrarà el fitxer i ${count === 1 ? "el vincle" : `els ${count} vincles`}.`
+  );
+}
+
 const EMPTY_UPLOAD = {
   name: "",
   category: "other",
@@ -244,6 +259,7 @@ export default function DocumentsPage() {
             size="sm"
             variant="ghost"
             className="min-h-11 md:min-h-0"
+            title="Fes d'aquest document l'evidència d'una dada de l'empresa (certificació, projecte, pòlissa, registre…)."
             onClick={() => {
               reset();
               setLinkTarget(null);
@@ -617,7 +633,7 @@ export default function DocumentsPage() {
       <ConfirmDialog
         open={toDelete !== null}
         title="Elimina el document"
-        message={`Segur que vols eliminar «${toDelete?.name}»? S'esborrarà el fitxer i tots els seus vincles d'evidència.`}
+        message={deleteMessage(toDelete)}
         loading={saving}
         onConfirm={() => void confirmDelete()}
         onCancel={() => setToDelete(null)}

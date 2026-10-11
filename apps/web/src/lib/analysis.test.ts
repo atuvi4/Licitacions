@@ -42,10 +42,18 @@ describe("vocabulari del motor", () => {
 
   it("les explicacions són el text canònic del backend, tal com és", () => {
     const tables = vocabulary.explanations as Record<string, Record<string, string>>;
-    expect(vocabulary.rules_version).toBe("phase3a-analysis-v3");
+    // 3B-2: regles v4 (forats del paquet, divergència de rols) amb el copy de la v3.
+    expect(vocabulary.rules_version).toBe("phase3b-analysis-v4");
     // Cada run, amb el copy de la seva versió.
     expect(explanation("TURNOVER_UNKNOWN", "phase3a-analysis-v2")).toBe(tables["phase3a-analysis-v2"].TURNOVER_UNKNOWN);
     expect(explanation("TURNOVER_UNKNOWN", "phase3a-analysis-v3")).toBe(tables["phase3a-analysis-v3"].TURNOVER_UNKNOWN);
+    // Task 9: els dos codis nous de la v4 tenen text propi (només a la v4; la v3 queda congelada).
+    for (const code of ["PACKAGE_GAP", "ROLE_OVERRIDE_DIVERGES"]) {
+      expect(explanation(code, "phase3b-analysis-v4")).toBe(tables["phase3b-analysis-v4"][code]);
+      expect(explanation(code, "phase3b-analysis-v4")).not.toBe("Explicació no disponible.");
+      expect(explanation(code, "phase3b-analysis-v4")).not.toContain(code);
+      expect(tables["phase3a-analysis-v3"][code]).toBeUndefined();
+    }
     // Un codi que el JSON encara no coneix: text neutre, mai el codi.
     expect(explanation("SOME_NEW_CODE", vocabulary.rules_version)).toBe("Explicació no disponible.");
     // Una versió desconeguda: text neutre, mai la taula d'una altra versió.
@@ -75,6 +83,16 @@ describe("vocabulari del motor", () => {
     expect(dimensionValue("assessment_verification", "unexpected")).toBe("valor no disponible");
     // Les etiquetes llargues de les altres superfícies no canvien.
     expect(label("territory_verdict", "not_applicable")).toBe("Sense territori");
+  });
+
+  it("cap destí «Resol» apunta a una pestanya que ja no existeix: el declarat sense verificar va a l'ítem de Coneixement actual (B5)", () => {
+    for (const code of ["FACT_TRUE_DECLARED", "CERT_CURRENT_DECLARED", "DECLARED_NOT_VERIFIED"]) {
+      expect(resolveFor(code), code).toEqual({ href: "/empresa/coneixement?tab=actual", label: "Coneixement › Coneixement actual" });
+    }
+    for (const [code, destination] of Object.entries(RESOLVE)) {
+      expect(destination.href, code).not.toMatch(/tab=pendents/);
+      expect(destination.label, code).not.toMatch(/Pendents/);
+    }
   });
 
   it("«On es resol» només on el destí és inequívoc", () => {

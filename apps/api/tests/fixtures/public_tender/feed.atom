@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:cbc="urn:dgpe:names:draft:codice:schema:xsd:CommonBasicComponents-2" xmlns:cac="urn:dgpe:names:draft:codice:schema:xsd:CommonAggregateComponents-2" xmlns:cac-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonAggregateComponents-2" xmlns:cbc-place-ext="urn:dgpe:names:draft:codice-place-ext:schema:xsd:CommonBasicComponents-2" xmlns:at="http://purl.org/atompub/tombstones/1.0">
+    <id>https://feed.example.test/sindicacion/PlataformasAgregadas/public-tender.atom</id>
+    <link href="https://feed.example.test/sindicacion/PlataformasAgregadas/public-tender.atom" rel="self"/>
+    <title>Fixture sintetica: una licitacio publica amb PCAP i PPT (cap dada real)</title>
+    <updated>2026-10-06T03:00:00.000+02:00</updated>
+    <entry>
+        <id>https://feed.example.test/sindicacion/PlataformasAgregadas/90000001</id>
+        <link href="https://perfil.example.test/ca/detall-publicacio/90000001"/>
+        <summary type="text">Id licitación: EXP-2026/0042; Órgano de Contratación: Ajuntament de Vilaquimera; Importe: 84000.00 EUR; Estado: EN PLAZO</summary>
+        <title>Servei de manteniment de la xarxa de fibra òptica municipal i de la telefonia IP</title>
+        <updated>2026-10-05T12:00:00.000+02:00</updated>
+        <cac-place-ext:ContractFolderStatus>
+            <cbc:ContractFolderID>EXP-2026/0042</cbc:ContractFolderID>
+            <cbc-place-ext:ContractFolderStatusCode languageID="es" listURI="https://codis.example.test/cl/SyndicationContractFolderStatusCode.gc">PUB</cbc-place-ext:ContractFolderStatusCode>
+            <cac-place-ext:LocatedContractingParty>
+                <cbc:BuyerProfileURIID>https://perfil.example.test/perfil/9000001</cbc:BuyerProfileURIID>
+                <cac:Party>
+                    <cac:PartyIdentification>
+                        <cbc:ID schemeName="ID_OC_PLAT">9000001</cbc:ID>
+                    </cac:PartyIdentification>
+                    <cac:PartyName>
+                        <cbc:Name>Ajuntament de Vilaquimera</cbc:Name>
+                    </cac:PartyName>
+                </cac:Party>
+                <cac-place-ext:ParentLocatedParty>
+                    <cac:PartyName>
+                        <cbc:Name>Entitats de l'administració local</cbc:Name>
+                    </cac:PartyName>
+                    <cac-place-ext:ParentLocatedParty/>
+                </cac-place-ext:ParentLocatedParty>
+            </cac-place-ext:LocatedContractingParty>
+            <cac:ProcurementProject>
+                <cbc:Name>Servei de manteniment de la xarxa de fibra òptica municipal i de la telefonia IP</cbc:Name>
+                <cbc:TypeCode listURI="https://codis.example.test/cl/ContractCode.gc">2</cbc:TypeCode>
+                <cbc:MixContractIndicator>false</cbc:MixContractIndicator>
+                <cac:BudgetAmount>
+                    <cbc:EstimatedOverallContractAmount currencyID="EUR">84000.00</cbc:EstimatedOverallContractAmount>
+                    <cbc:TaxExclusiveAmount currencyID="EUR">84000.00</cbc:TaxExclusiveAmount>
+                </cac:BudgetAmount>
+                <cac:RequiredCommodityClassification>
+                    <cbc:ItemClassificationCode listURI="https://codis.example.test/cl/CPV2008.gc">64200000</cbc:ItemClassificationCode>
+                </cac:RequiredCommodityClassification>
+                <cac:RealizedLocation>
+                    <cbc:CountrySubentityCode listURI="https://codis.example.test/cl/NUTS-2021.gc">ES511</cbc:CountrySubentityCode>
+                </cac:RealizedLocation>
+                <cac:PlannedPeriod>
+                    <cbc:DurationMeasure unitCode="MON">24</cbc:DurationMeasure>
+                </cac:PlannedPeriod>
+            </cac:ProcurementProject>
+            <cac:TenderingTerms>
+                <cbc:FundingProgramCode name="No hay financiación con fondos de la UE" listURI="https://codis.example.test/cl/FundingProgramCode.gc">NO-EU</cbc:FundingProgramCode>
+            </cac:TenderingTerms>
+            <cac:TenderingProcess>
+                <cbc:ProcedureCode listURI="https://codis.example.test/cl/SyndicationTenderingProcessCode.gc">1</cbc:ProcedureCode>
+                <cbc:UrgencyCode listURI="https://codis.example.test/cl/DiligenceTypeCode.gc">1</cbc:UrgencyCode>
+                <cbc:SubmissionMethodCode listURI="https://codis.example.test/cl/TenderDeliveryCode.gc">1</cbc:SubmissionMethodCode>
+                <cbc:OverThresholdIndicator>false</cbc:OverThresholdIndicator>
+                <cac:TenderSubmissionDeadlinePeriod>
+                    <cbc:EndDate>2027-01-15</cbc:EndDate>
+                    <cbc:EndTime>14:00:00</cbc:EndTime>
+                </cac:TenderSubmissionDeadlinePeriod>
+            </cac:TenderingProcess>
+            <cac:LegalDocumentReference>
+                <cbc:ID>PCAP.pdf</cbc:ID>
+                <cac:Attachment>
+                    <cac:ExternalReference>
+                        <cbc:URI>https://docs.example.test/public-tender/EXP-2026-0042/PCAP.pdf</cbc:URI>
+                        <cbc:FileName>PCAP.pdf</cbc:FileName>
+                    </cac:ExternalReference>
+                </cac:Attachment>
+            </cac:LegalDocumentReference>
+            <cac:TechnicalDocumentReference>
+                <cbc:ID>PPT.pdf</cbc:ID>
+                <cac:Attachment>
+                    <cac:ExternalReference>
+                        <cbc:URI>https://docs.example.test/public-tender/EXP-2026-0042/PPT.pdf</cbc:URI>
+                        <cbc:FileName>PPT.pdf</cbc:FileName>
+                    </cac:ExternalReference>
+                </cac:Attachment>
+            </cac:TechnicalDocumentReference>
+            <cac-place-ext:ValidNoticeInfo>
+                <cbc-place-ext:NoticeTypeCode listURI="https://codis.example.test/cl/TenderingNoticeTypeCode.gc">DOC_CN</cbc-place-ext:NoticeTypeCode>
+                <cac-place-ext:AdditionalPublicationStatus>
+                    <cbc-place-ext:PublicationMediaName>Perfil del contractant</cbc-place-ext:PublicationMediaName>
+                    <cac-place-ext:AdditionalPublicationDocumentReference>
+                        <cbc:IssueDate>2026-10-05</cbc:IssueDate>
+                    </cac-place-ext:AdditionalPublicationDocumentReference>
+                </cac-place-ext:AdditionalPublicationStatus>
+            </cac-place-ext:ValidNoticeInfo>
+        </cac-place-ext:ContractFolderStatus>
+    </entry>
+</feed>

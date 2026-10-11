@@ -42,7 +42,7 @@ from app.models.tenders import Tender, TenderDocument
 from tests import test_requirement_analysis as base
 from tests.conftest import TEST_PASSWORD, login
 from tests.test_requirement_analysis import PAGE_27, PAGE_28
-from tests.test_requirement_analysis_v3 import _evidence, _requirement, _run_v3
+from tests.test_requirement_analysis_v3 import _evidence, _requirement, _run_v3_real
 
 analyzable = base.analyzable
 _clean_provider = base._clean_provider
@@ -62,7 +62,7 @@ async def m09(session, analyzable, tenant_a, client_a):
     p28.text = PAGE_28 + P22_LINE + "\n"
     await session.commit()
     x = analyzable["extraction"].id
-    await _run_v3(session, analyzable, {"requirements": [_requirement(
+    await _run_v3_real(session, analyzable, {"requirements": [_requirement(
         x, category="technical_requirement", operator=None, title=TITLE, claims=[],
         claims_complete="complete", evidence=[_evidence(x, quote=P31_LINE)],
     )], "award_candidates": []})

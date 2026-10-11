@@ -25,11 +25,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from app.models.enums import StrEnum
+
+logger = logging.getLogger(__name__)
 
 
 def canonical_instant(value: datetime | str | None) -> str | None:
@@ -94,6 +97,50 @@ def _same_field(name: str, old: Any, new: Any) -> bool:
     if name in _INSTANT_FIELDS:
         return same_instant(old, new)
     return old == new
+
+
+#: D'on surt una revisio de l'estat (3B-2 §7.1.1): el que la font ha publicat
+#: (`source`), el que Tuvi ha processat per dins (`internal`) o el que una persona
+#: ha escrit en una licitacio oberta a ma (`manual`). **Mapa tancat**:
+#: `test_public_intake_ux` falla si el codi escriu un trigger nou sense origen. En
+#: execucio, un trigger que no hi sigui (fila escrita per una versio posterior, un
+#: script) es llegeix com a `internal` amb un avis: l'historial no pot respondre
+#: 500, i mai es diu `source` per defecte, perque dir «publicat per la font» d'un
+#: canvi intern es exactament l'atribucio a l'organ que aquest camp existeix per
+#: evitar.
+REVISION_ORIGINS: dict[str, str] = {
+    "ingestion": "source",
+    "tombstone": "source",
+    "document_processing": "internal",
+    "document_intake": "internal",
+    #: Correccions de normalitzacio sobre dades ja desades (backfills).
+    "normalization": "internal",
+    "manual_create": "manual",
+    "manual_edit": "manual",
+}
+
+
+#: L'origen que es llegeix quan el trigger no es al mapa: processament intern, mai
+#: la font.
+REVISION_ORIGIN_FALLBACK = "internal"
+
+
+def revision_origin(trigger: str) -> str:
+    """L'origen d'una revisio pel seu `trigger`.
+
+    Un trigger fora del mapa cau a `internal` i s'avisa al registre: la guarda contra
+    triggers nous sense origen es el test que escaneja el codi, no una excepcio en
+    llegir l'historial.
+    """
+    origin = REVISION_ORIGINS.get(trigger)
+    if origin is None:
+        logger.warning(
+            "trigger de revisio sense origen: %r; es llegeix com a %s",
+            trigger,
+            REVISION_ORIGIN_FALLBACK,
+        )
+        return REVISION_ORIGIN_FALLBACK
+    return origin
 
 
 class ChangeImpact(StrEnum):
@@ -176,6 +223,23 @@ class ChangeCode(StrEnum):
     #: Primer cop que en sabem el contingut. NO es una modificacio de la font:
     #: es nomes que abans no l'haviem baixat. Vegeu `_document_changes`.
     DOCUMENT_CONTENT_IDENTIFIED = "DOCUMENT_CONTENT_IDENTIFIED"
+    #: Passa a ser (o deixa de ser) alies d'un altre document amb els mateixos
+    #: bytes (3B-2 §2.1). NO es una modificacio de la font: el contingut es el
+    #: mateix i nomes canvia quin document el representa a l'analisi.
+    DOCUMENT_ALIAS_CHANGED = "DOCUMENT_ALIAS_CHANGED"
+    #: Un document aportat per l'operador (3B-2 §2.2) que encara no es analitzable
+    #: (`pending_verification` o `rejected`) arriba, canvia o deixa de ser-ho. NO
+    #: es una modificacio de la font. Quan passa a analitzable (verificat), el
+    #: material nou es `DOCUMENT_ADDED`, a part.
+    DOCUMENT_CONTRIBUTION_CHANGED = "DOCUMENT_CONTRIBUTION_CHANGED"
+    #: L'operador revisa (o torna a revisar) el rol global d'un document, o la
+    #: revisio deixa de valer perque el fitxer es nou (3B-2 §3.2). NO es una
+    #: modificacio de la font: es la lectura revisada que fa la plataforma.
+    DOCUMENT_ROLE_REVIEWED = "DOCUMENT_ROLE_REVIEWED"
+    #: El feed canvia el `document_type` d'un document amb un rol revisat per
+    #: l'operador per a la mateixa versio (3B-2 §3.2). La revisio continua manant:
+    #: es registra perque ningu no se'n sorprengui, pero no canvia cap lectura.
+    SOURCE_TYPE_CHANGED_AFTER_REVIEW = "SOURCE_TYPE_CHANGED_AFTER_REVIEW"
 
 
 #: **La matriu d'impacte.** Escrita, no deduida.
@@ -324,6 +388,22 @@ IMPACT_MATRIX: dict[ChangeCode, frozenset[ChangeImpact]] = {
     #: humanes el dia que ens posem al dia amb les descarregues, i el motiu
     #: seria fals: el document sempre havia sigut aquell.
     ChangeCode.DOCUMENT_CONTENT_IDENTIFIED: frozenset({ChangeImpact.INFORMATIONAL}),
+    #: Mateix criteri: quin document representa uns bytes que ja hi eren es
+    #: organitzacio NOSTRA. El contingut analitzable no canvia; si l'alies es
+    #: promou perque el canonic s'ha retirat, el canonic retirat no dona
+    #: `DOCUMENT_REMOVED` (el sha continua present; vegeu `_document_changes`).
+    ChangeCode.DOCUMENT_ALIAS_CHANGED: frozenset({ChangeImpact.INFORMATIONAL}),
+    #: Un document pendent de verificacio (o rebutjat) no es input de cap
+    #: analisi: la seva arribada no pot fer caducar res (3B-2 §2.2, "un
+    #: `pending_verification` no canvia empremtes de ningu"). El que es material
+    #: es la verificacio, i aquella dona `DOCUMENT_ADDED`.
+    ChangeCode.DOCUMENT_CONTRIBUTION_CHANGED: frozenset({ChangeImpact.INFORMATIONAL}),
+    #: La revisio d'un rol no toca la font. Si canvia quins documents llegeix
+    #: l'extraccio, ho diu l'empremta del corpus (que llegeix el resolutor), no
+    #: l'historial de la licitacio.
+    ChangeCode.DOCUMENT_ROLE_REVIEWED: frozenset({ChangeImpact.INFORMATIONAL}),
+    #: Mateix criteri: el tipus del feed ha canviat, pero mana la revisio.
+    ChangeCode.SOURCE_TYPE_CHANGED_AFTER_REVIEW: frozenset({ChangeImpact.INFORMATIONAL}),
 }
 
 
@@ -599,12 +679,102 @@ _DOCUMENT_METADATA = ("name", "document_type", "published_at")
 #: presents donen la mateixa fotografia que abans.
 DOCUMENT_PRESENCE_FIELDS: frozenset[str] = frozenset({"removed"})
 
+#: Estat intern del document que tambe entra a la fotografia: `duplicate_of` (URL
+#: del canonic quan el document es un alies, 3B-2 §2.1). Com `removed`, nomes hi
+#: es quan val; el compara `_document_changes` (`DOCUMENT_ALIAS_CHANGED`).
+DOCUMENT_INTERNAL_FIELDS: frozenset[str] = frozenset({"duplicate_of"})
+
+#: Aportacio de l'operador encara no analitzable (3B-2 §2.2): `contribution` val
+#: `pending_verification` o `rejected`, i NOMES hi es llavors. Els documents del
+#: feed, les pujades propies i les aportacions verificades no la porten, de
+#: manera que cap fotografia d'abans de 0058 canvia i un document verificat es
+#: indistingible d'un del feed. Un document amb la marca es tracta com `removed`
+#: (no es material de la licitacio); els seus canvis son
+#: `DOCUMENT_CONTRIBUTION_CHANGED`, informatiu, i treure la marca (verificar) dona
+#: el `DOCUMENT_ADDED` de sempre. Vegeu `_contribution_changes`.
+DOCUMENT_CONTRIBUTION_FIELDS: frozenset[str] = frozenset({"contribution"})
+
+#: Rol global revisat per l'operador per a la versio vigent (3B-2 §3.2, 0059).
+#: Nomes hi es quan n'hi ha (cap fotografia d'abans canvia). Quan canvia dona
+#: `DOCUMENT_ROLE_REVIEWED`; mentre hi es, un canvi del `document_type` del feed
+#: dona a mes `SOURCE_TYPE_CHANGED_AFTER_REVIEW`. Tots dos informatius.
+DOCUMENT_REVIEW_FIELDS: frozenset[str] = frozenset({"reviewed_role"})
+
 #: Tot el que un document aporta a la fotografia. `url` i `sha256` son la seva
-#: identitat i els compara `_document_changes`; `removed` decideix si hi es; la
-#: resta, metadada.
+#: identitat i els compara `_document_changes`; `removed` i `contribution`
+#: decideixen si hi es; `duplicate_of` diu si es un alies; `reviewed_role`, el
+#: rol revisat per l'operador; la resta, metadada.
 DOCUMENT_FIELDS: frozenset[str] = (
-    frozenset({"url", "sha256"} | set(_DOCUMENT_METADATA)) | DOCUMENT_PRESENCE_FIELDS
+    frozenset({"url", "sha256"} | set(_DOCUMENT_METADATA))
+    | DOCUMENT_PRESENCE_FIELDS
+    | DOCUMENT_INTERNAL_FIELDS
+    | DOCUMENT_CONTRIBUTION_FIELDS
+    | DOCUMENT_REVIEW_FIELDS
 )
+
+
+def _is_document_present(entry: dict[str, Any]) -> bool:
+    """Si el document compta com a material de la licitacio en aquesta fotografia."""
+    return not entry.get("removed") and not entry.get("contribution")
+
+
+def _contribution_state(entry: dict[str, Any] | None) -> str | None:
+    """Una paraula per a l'historial: on es una aportacio no analitzable."""
+    if entry is None:
+        return None
+    if entry.get("removed"):
+        return "removed"
+    return entry.get("contribution") or "analyzable"
+
+
+def _contribution_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Change]:
+    """Canvis d'un document que, a banda o banda, era una aportacio no analitzable.
+
+    Un document amb `contribution` no es material (§2.2): arribar, canviar de
+    bytes, passar a alies, ser rebutjat o retirat mentre es pendent ho explica un
+    `DOCUMENT_CONTRIBUTION_CHANGED` informatiu, de manera que cap camp que entra
+    al hash queda sense explicar. Quan deixa de portar la marca (verificat), a
+    mes d'aquest canvi hi ha el `DOCUMENT_ADDED` de `_document_changes`; quan la
+    guanya un document present (rebutjar-ne un de verificat), el `DOCUMENT_REMOVED`.
+    """
+    old = {entry["url"]: entry for entry in before.get("documents", [])}
+    new = {entry["url"]: entry for entry in after.get("documents", [])}
+    changes: list[Change] = []
+    for url in sorted(set(old) | set(new)):
+        previous, current = old.get(url), new.get(url)
+        staged = (previous or {}).get("contribution") or (current or {}).get("contribution")
+        if not staged or previous == current:
+            continue
+        changes.append(
+            Change(
+                ChangeCode.DOCUMENT_CONTRIBUTION_CHANGED,
+                _contribution_state(previous),
+                _contribution_state(current),
+                subject=url,
+            )
+        )
+    return changes
+
+
+def _review_changes(url: str, previous: dict[str, Any], current: dict[str, Any]) -> list[Change]:
+    """El rol revisat per l'operador i el tipus del feed d'un document present (3B-2 §3.2).
+
+    * `reviewed_role` canvia (revisio nova, rectificada, o sense efecte perque el
+      fitxer es nou): `DOCUMENT_ROLE_REVIEWED`.
+    * El feed canvia el `document_type` d'un document que segueix revisat:
+      `SOURCE_TYPE_CHANGED_AFTER_REVIEW`, a mes del `DOCUMENT_METADATA_CHANGED`
+      de sempre. El feed mai sobreescriu en silenci un rol revisat.
+    """
+    changes: list[Change] = []
+    old_role, new_role = previous.get("reviewed_role"), current.get("reviewed_role")
+    if old_role != new_role:
+        changes.append(Change(ChangeCode.DOCUMENT_ROLE_REVIEWED, old_role, new_role, subject=url))
+    old_type, new_type = previous.get("document_type"), current.get("document_type")
+    if old_role and new_role and old_type != new_type:
+        changes.append(
+            Change(ChangeCode.SOURCE_TYPE_CHANGED_AFTER_REVIEW, old_type, new_type, subject=url)
+        )
+    return changes
 
 
 def _document_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Change]:
@@ -623,9 +793,11 @@ def _document_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Cha
     Un document marcat `removed` (absent d'una publicacio completa posterior)
     es tracta com si no hi fos: marcar-lo dona `DOCUMENT_REMOVED` i desmarcar-lo
     `DOCUMENT_ADDED`, pels mateixos camins que una URL que desapareix o apareix.
+    Una aportacio de l'operador no verificada (`contribution`) tampoc hi es: la
+    verificacio es la que la fa apareixer (3B-2 §2.2).
     """
-    present_before = [entry for entry in before.get("documents", []) if not entry.get("removed")]
-    present_after = [entry for entry in after.get("documents", []) if not entry.get("removed")]
+    present_before = [e for e in before.get("documents", []) if _is_document_present(e)]
+    present_after = [e for e in after.get("documents", []) if _is_document_present(e)]
     old = {entry["url"]: entry for entry in present_before}
     new = {entry["url"]: entry for entry in present_after}
     changes: list[Change] = []
@@ -649,12 +821,25 @@ def _document_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Cha
         entry = old[url]
         sha = entry.get("sha256")
         if sha and sha in new_by_sha:
-            # Ja s'ha reportat com a canvi d'adreça al bucle anterior.
+            # Ja s'ha reportat com a canvi d'adreça al bucle anterior. Tambe es el
+            # cas d'un canonic retirat que conserva un alies amb els mateixos bytes
+            # (3B-2 §2.1): el contingut continua al tender, aixi que NO es
+            # `DOCUMENT_REMOVED`; la promocio de l'alies es `DOCUMENT_ALIAS_CHANGED`.
+            # Ho fixa `test_si_el_canonic_es_retira_l_alies_es_promou_amb_revisio_document_intake`.
             continue
         changes.append(Change(ChangeCode.DOCUMENT_REMOVED, entry.get("name"), None, subject=url))
 
     for url in sorted(set(old) & set(new)):
         previous, current = old[url], new[url]
+        old_alias, new_alias = previous.get("duplicate_of"), current.get("duplicate_of")
+        if old_alias != new_alias:
+            # Passa a ser (o deixa de ser) alies d'un altre document amb els
+            # mateixos bytes. Es independent dels casos de contingut de sota (un
+            # processat pot identificar el contingut i fer-lo alies alhora).
+            changes.append(
+                Change(ChangeCode.DOCUMENT_ALIAS_CHANGED, old_alias, new_alias, subject=url)
+            )
+        changes += _review_changes(url, previous, current)
         old_sha, new_sha = previous.get("sha256"), current.get("sha256")
         if old_sha and new_sha and old_sha != new_sha:
             # Sabiem que hi havia dins i ara hi ha una altra cosa. Aixo si que
@@ -702,6 +887,7 @@ def diff_snapshots(before: dict[str, Any], after: dict[str, Any]) -> list[Change
     changes += _cpv_changes(before, after)
     changes += _lot_changes(before, after)
     changes += _document_changes(before, after)
+    changes += _contribution_changes(before, after)
     return changes
 
 

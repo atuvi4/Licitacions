@@ -11,7 +11,10 @@ Principis que no es negocien:
 * una dada declarada pot satisfer, pero queda `not_verified` i demana revisio;
 * cap `blocker_confirmed`: el motor nomes diu `blocker_potential`;
 * `unknown` mai es `lost`; `lost` nomes amb una dada actual que ho demostri;
-* cap recomanacio, cap puntuacio global, cap decisio de presentar-se.
+* cap recomanacio, cap puntuacio global, cap decisio de presentar-se;
+* un forat del paquet documental es `missing_information` del plec, i la seccio que
+  deixa `unknown` no dona cap avaluacio positiva (3B-2 §4.4); el motor no infereix
+  mai l'estructura que falta.
 """
 
 from __future__ import annotations
@@ -29,10 +32,12 @@ from app.analysis import territory as terr
 from app.analysis.fingerprint import (
     CriterionView,
     NeedView,
+    PackageGapView,
     RequirementView,
     ScopeItemView,
     TenderStructureView,
     canonical_json,
+    gap_unknown_sections,
     plain_jsonable,
 )
 from app.analysis.registry import ExplanationCode as X
@@ -141,6 +146,14 @@ QUALIFICATION_RULES = frozenset(
 #: valor per defecte: nomes es posa quan la regla demostra d'on falta; si no, cap camp.
 MISSING_FROM_COMPANY = "company"
 MISSING_FROM_TENDER = "tender"
+
+#: Motiu d'una comparacio territorial `unknown` perque la seccio de l'estructura que
+#: la sostindria es `unknown` per culpa d'un forat del paquet.
+SECTION_UNKNOWN_REASON = "package_section_unknown"
+#: Seccions que, `unknown` (buides i afectades per un forat), impedeixen que una via de
+#: prestacio sigui disponible. Una seccio amb files sempre es `present`: mai suprimeix.
+#: Els territoris nomes quan el context territorial de l'element no es `not_applicable`.
+DELIVERY_SECTIONS = frozenset({"sites", "territories"})
 #: Explicacions d'un fit `unknown` en que la dada que falta per decidir (`DATA_MISSING`) es
 #: de l'empresa: la part del plec ja es estructurada (fet, norma, llindar, limits, abast,
 #: perfils o equips) i el que no consta, no consta al coneixement de l'empresa (o n'hi
@@ -250,6 +263,31 @@ class PartnerRoleView:
 
 
 @dataclass(frozen=True, slots=True)
+class RoleDivergenceView:
+    """Un document analitzable on el rol efectiu de l'empresa (el seu override) no es
+    el global (el que llegeix l'extraccio compartida, opcio A de 3B-2 §3.2)."""
+
+    document_id: str
+    document_name: str
+    company_role: str | None
+    company_document_type: str
+    global_role: str | None
+    global_document_type: str
+    global_source: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "document_id": self.document_id,
+            "document_name": self.document_name,
+            "company_role": self.company_role,
+            "company_document_type": self.company_document_type,
+            "global_role": self.global_role,
+            "global_document_type": self.global_document_type,
+            "global_source": self.global_source,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CompanyView:
     """La fotografia del coneixement mes el que el motor necessita amb id."""
 
@@ -257,6 +295,9 @@ class CompanyView:
     snapshot: KnowledgeSnapshot
     services: tuple[ServiceClaimView, ...] = ()
     partner_roles: tuple[PartnerRoleView, ...] = ()
+    #: Documents on els rols de l'empresa difereixen dels globals. No entra al
+    #: `knowledge_fingerprint`: l'`inputs_hash` ja porta `role_overrides_hash`.
+    role_divergences: tuple[RoleDivergenceView, ...] = ()
 
     @property
     def knowledge_fingerprint(self) -> str:
@@ -796,6 +837,17 @@ def assess_territory(
     requirement: RequirementView, tender: TenderStructureView, company: CompanyView
 ) -> tuple[terr.TerritoryComparison, str | None]:
     coverage, basis = coverage_for_requirement(requirement, tender, company)
+    if (
+        "territories" in gap_unknown_sections(tender)
+        and requirement.territory_completeness != TerritoryCompleteness.NOT_APPLICABLE.value
+    ):
+        # 3B-2 §4.4: cap requisit porta territoris i el document que falta els
+        # aportaria: el `unknown` d'un requisit territorial es per culpa del forat. Un
+        # requisit que el plec diu que no es territorial continua `not_applicable`.
+        return (
+            terr.TerritoryComparison(TerritoryVerdict.UNKNOWN.value, SECTION_UNKNOWN_REASON),
+            basis,
+        )
     return (
         terr.compare_territories(
             territories=_areas(requirement),
@@ -1713,8 +1765,17 @@ def assess_delivery(
     candidates: list[CandidateOut] = []
     findings: list[FindingOut] = []
     questions: list[QuestionOut] = []
+    # 3B-2 §4.4: si no hi ha seus (o territoris) i el document que falta les aportaria,
+    # cap via de prestacio pot ser disponible: el veredicte es `unknown`.
+    unknown = gap_unknown_sections(tender) & DELIVERY_SECTIONS
+    if completeness == TerritoryCompleteness.NOT_APPLICABLE.value:
+        # El context territorial de l'element no es territorial: nomes hi compten les seus.
+        unknown -= {"territories"}
+    section_unknown = bool(unknown)
 
     def verdict_for(coverage: terr.Coverage | None) -> terr.TerritoryComparison:
+        if section_unknown:
+            return terr.TerritoryComparison(TerritoryVerdict.UNKNOWN.value, SECTION_UNKNOWN_REASON)
         if completeness is None:
             return terr.TerritoryComparison(
                 TerritoryVerdict.UNKNOWN.value, "no_requirement_correspondence"
@@ -1871,7 +1932,11 @@ def assess_delivery(
                 details={"service_line": item.service_line_code},
             )
         )
-    if any(c.readiness == CandidateReadiness.PENDING_COVERAGE.value for c in candidates):
+    # Amb la seccio `unknown`, el que falta es del plec (troballa del forat), no de
+    # l'empresa: no se li demana que confirmi una cobertura que no es pot comparar.
+    if not section_unknown and any(
+        c.readiness == CandidateReadiness.PENDING_COVERAGE.value for c in candidates
+    ):
         questions.append(
             QuestionOut(
                 QuestionAudience.COMPANY.value,
@@ -2244,6 +2309,57 @@ def criterion_findings(
 
 
 # --------------------------------------------------------------------------- #
+# Paquet documental i rols (3B-2 §4.4 i §3.2)                                   #
+# --------------------------------------------------------------------------- #
+
+
+def _gap_order(gap: PackageGapView) -> tuple[str, str]:
+    return canonical_json(gap.canonical()), canonical_json(gap.detail or {})
+
+
+def package_findings(tender: TenderStructureView) -> list[FindingOut]:
+    """Una `missing_information` (`missing_from=tender`) per forat obert del paquet,
+    amb el codi, el detall i les seccions que aportaria el document que falta (o
+    `impact_unknown` si no se sap). El motor no infereix mai l'estructura que falta."""
+    findings: list[FindingOut] = []
+    for gap in sorted(tender.gaps, key=_gap_order):
+        would_provide = sorted(set(gap.would_provide))
+        findings.append(
+            FindingOut(
+                FindingType.MISSING_INFORMATION.value,
+                R.MISSING_INFORMATION,
+                X.PACKAGE_GAP,
+                details={
+                    "missing_from": MISSING_FROM_TENDER,
+                    "gap_code": gap.code,
+                    "gap_detail": plain_jsonable(gap.detail or {}),
+                    "would_provide": would_provide,
+                    "impact_unknown": not would_provide,
+                    "producer": gap.producer,
+                },
+            )
+        )
+    return findings
+
+
+def role_divergence_findings(company: CompanyView) -> list[FindingOut]:
+    """`ROLE_OVERRIDE_DIVERGES` (informativa): els rols de l'empresa difereixen dels
+    globals. L'extraccio compartida llegeix els globals (opcio A); aquesta analisi
+    tambe, i ho diu, amb la llista de documents."""
+    if not company.role_divergences:
+        return []
+    documents = sorted(company.role_divergences, key=lambda d: (d.document_name, d.document_id))
+    return [
+        FindingOut(
+            FindingType.WARNING.value,
+            R.REVIEW_REQUIRED,
+            X.ROLE_OVERRIDE_DIVERGES,
+            details={"documents": [d.as_dict() for d in documents]},
+        )
+    ]
+
+
+# --------------------------------------------------------------------------- #
 # Tot junt                                                                      #
 # --------------------------------------------------------------------------- #
 
@@ -2284,6 +2400,9 @@ def analyze(tender: TenderStructureView, company: CompanyView) -> AnalysisResult
         findings.extend(f)
         questions.extend(q)
 
+    findings.extend(package_findings(tender))
+    findings.extend(role_divergence_findings(company))
+
     unique: dict[str, QuestionOut] = {}
     for question in questions:
         unique.setdefault(question.dedupe_key, question)
@@ -2305,6 +2424,8 @@ def summary(result: AnalysisResult, tender: TenderStructureView) -> dict[str, An
     fits = [f for f in result.fit_assessments if f.requirement_id in mandatory]
     count = lambda value: sum(1 for f in fits if f.fit_result == value)  # noqa: E731
     return {
+        # 3B-2 §4.4: el paquet documental te algun forat obert.
+        "package_incomplete": bool(tender.gaps),
         "mandatory_satisfies": count(FitResult.SATISFIES.value),
         "mandatory_unknown": count(FitResult.UNKNOWN.value),
         "mandatory_does_not_satisfy": count(FitResult.DOES_NOT_SATISFY.value),

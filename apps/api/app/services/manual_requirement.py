@@ -33,6 +33,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.models.company_runs import CompanyTenderRequirementRun
 from app.models.enums import (
     ExtractionConfidence,
     MembershipRole,
@@ -49,6 +50,7 @@ from app.models.provenance import RequirementSourceRefLink, TenderSourceRef
 from app.models.requirements import Requirement, RequirementExtractionRun
 from app.models.tenders import Tender, TenderLot
 from app.services.source_refs import assert_ref_citable
+from app.services.title_keys import normalized_title
 
 #: Qui pot escriure requisits. Es feina TECNICA, no una decisio economica: per
 #: aixo `technical` hi es, igual que a les solucions tecniques, i no es
@@ -125,7 +127,8 @@ def manual_dedup_key(tender_id: uuid.UUID, fields: dict[str, Any]) -> str:
         str(fields.get("category") or ""),
         str(fields.get("operator") or ""),
         str(fields.get("scope") or ""),
-        " ".join((fields.get("title") or "").split()).casefold(),
+        # La mateixa normalitzacio de titol que l'extractor (`title_keys`).
+        normalized_title(fields.get("title") or ""),
         str(fields.get("value_json") or ""),
     ]
     return hashlib.sha256("␟".join(parts).encode("utf-8")).hexdigest()[:64]
@@ -163,21 +166,50 @@ def manual_filter(tender_id: uuid.UUID):
     )
 
 
-async def effective_requirements(
-    session: AsyncSession, tender_id: uuid.UUID
-) -> EffectiveRequirements:
-    """La porta unica als requisits vigents.
+async def effective_run(
+    session: AsyncSession, tender_id: uuid.UUID, company_id: uuid.UUID | None
+) -> RequirementExtractionRun | None:
+    """La run extreta que llegeix aquesta empresa (3B-2 §6.5).
 
-    Run extreta VIGENT + manuals no arxivats. No els extrets historics: els
-    d'una run que ja no es vigent parlen d'uns documents que ja no son els que
-    es van analitzar.
+    La del seu punter (`company_tender_requirement_runs`) si l'ha acceptada; si no,
+    la canonica global (`is_current`). `company_id=None` es la vista global (la de
+    l'operador i la del motor d'extraccio).
     """
-    run = await session.scalar(
+    if company_id is not None:
+        pointed = await session.scalar(
+            sa.select(RequirementExtractionRun)
+            .join(
+                CompanyTenderRequirementRun,
+                CompanyTenderRequirementRun.run_id == RequirementExtractionRun.id,
+            )
+            .where(
+                CompanyTenderRequirementRun.company_id == company_id,
+                CompanyTenderRequirementRun.tender_id == tender_id,
+                RequirementExtractionRun.tender_id == tender_id,
+            )
+        )
+        if pointed is not None:
+            return pointed
+    return await session.scalar(
         sa.select(RequirementExtractionRun).where(
             RequirementExtractionRun.tender_id == tender_id,
             RequirementExtractionRun.is_current.is_(True),
         )
     )
+
+
+async def effective_requirements(
+    session: AsyncSession, tender_id: uuid.UUID, company_id: uuid.UUID | None
+) -> EffectiveRequirements:
+    """La porta unica als requisits vigents.
+
+    Run extreta EFECTIVA de l'empresa (`effective_run`: el seu punter o, si no en
+    te, la canonica) + manuals no arxivats. No els extrets historics: els d'una
+    run que ja no es vigent parlen d'uns documents que ja no son els que es van
+    analitzar. `company_id` es obligatori a proposit: `None` (la vista global)
+    s'ha de demanar explicitament.
+    """
+    run = await effective_run(session, tender_id, company_id)
     extracted: list[Requirement] = []
     if run is not None:
         extracted = list(
@@ -204,11 +236,29 @@ async def effective_requirements(
 
 
 async def effective_requirement_ids(
-    session: AsyncSession, tender_id: uuid.UUID
+    session: AsyncSession, tender_id: uuid.UUID, company_id: uuid.UUID | None
 ) -> set[uuid.UUID]:
     """Nomes els identificadors, per a qui ha de comprovar pertinenca."""
-    effective = await effective_requirements(session, tender_id)
+    effective = await effective_requirements(session, tender_id, company_id)
     return {requirement.id for requirement in effective.all}
+
+
+async def run_requirements_by_dedup_key(
+    session: AsyncSession, run_id: uuid.UUID
+) -> dict[str, Requirement]:
+    """Els requisits EXTRETS d'una run, per `dedup_key` (unic dins la run).
+
+    Es la clau amb que les anotacions d'estructura d'un requisit extret
+    sobreviuen a una re-extraccio (0060, 3B-2 §4.3): el `dedup_key` d'una fila
+    extreta no canvia mai (la run no es reescriu), a diferencia del d'un requisit
+    manual, que es recalcula en editar-lo.
+    """
+    rows = await session.scalars(
+        sa.select(Requirement)
+        .where(Requirement.run_id == run_id)
+        .order_by(Requirement.created_at, Requirement.id)
+    )
+    return {requirement.dedup_key: requirement for requirement in rows}
 
 
 # --------------------------------------------------------------------------- #
@@ -357,6 +407,7 @@ async def link_source_ref(
     requirement: Requirement,
     source_ref_id: uuid.UUID,
     user: User | None = None,
+    producer_run_id: uuid.UUID | None = None,
 ) -> RequirementSourceRefLink:
     """Enllaça una cita existent a un requisit.
 
@@ -364,7 +415,12 @@ async def link_source_ref(
     demostra: dues licitacions poden tenir els mateixos bytes, i deixar que un
     requisit d'una citi la font de l'altra faria que la prova apuntes a un
     expedient que no es el seu.
+
+    Un enllac nou porta qui el fa (`user`) o, sense persona (via interna d'un
+    productor, p. ex. el gold), la passada (`producer_run_id`, 0060): mai cap.
     """
+    if user is None and producer_run_id is None:
+        raise ValueError("Un enllac de cita necessita una persona o una passada de productor.")
     ref = await session.get(TenderSourceRef, source_ref_id)
     if ref is None:
         raise NotFoundError("Cita no trobada.")
@@ -383,7 +439,10 @@ async def link_source_ref(
     await assert_ref_citable(session, ref)
 
     link = RequirementSourceRefLink(
-        requirement_id=requirement.id, source_ref_id=ref.id, created_by=user.id if user else None
+        requirement_id=requirement.id,
+        source_ref_id=ref.id,
+        created_by=user.id if user else None,
+        producer_run_id=producer_run_id,
     )
     session.add(link)
     await session.flush()
@@ -452,10 +511,12 @@ __all__ = [
     "create_manual_requirement",
     "effective_requirement_ids",
     "effective_requirements",
+    "effective_run",
     "link_source_ref",
     "load_manual_requirement",
     "manual_dedup_key",
     "manual_filter",
+    "run_requirements_by_dedup_key",
     "source_refs_of",
     "unlink_source_ref",
     "update_manual_requirement",

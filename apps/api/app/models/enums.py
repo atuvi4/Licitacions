@@ -190,6 +190,12 @@ class AuditAction(StrEnum):
     LOGIN_FAILED = "login_failed"
     LOGOUT = "logout"
     DOWNLOAD = "download"
+    #: Paquet documental public (3B-2 §2.2, §2.4): l'operador verifica, retira o
+    #: restaura un document oficial aportat. Tampoc canvien l'amplada de la columna
+    #: (VARCHAR sense CHECK, `native_enum=False`): cap migracio.
+    VERIFY = "verify"
+    RETIRE = "retire"
+    RESTORE = "restore"
 
 
 # ---------------------------------------------------------------------------
@@ -355,8 +361,22 @@ class RoleConfidence(StrEnum):
 
 
 class RoleSource(StrEnum):
+    """D'on surt el rol d'un document. No es cap columna: nomes lectura.
+
+    Els quatre ultims son del resolutor de rols efectius (3B-2 §3.2): `person`
+    hi es l'override de l'empresa (mateixa versio del fitxer), `operator` la
+    revisio global de l'operador, `global_classifier` el suggeriment de la
+    classificacio global vigent (confianca alta, no duplicat) i `feed` el
+    `document_type` de la font. `stale_override` diu que l'empresa havia fixat un
+    rol per a una versio ANTERIOR del fitxer: s'ignora i mana la capa seguent.
+    """
+
     CLASSIFIER = "classifier"
     PERSON = "person"
+    OPERATOR = "operator"
+    GLOBAL_CLASSIFIER = "global_classifier"
+    FEED = "feed"
+    STALE_OVERRIDE = "stale_override"
 
 
 class ClassificationTrigger(StrEnum):
@@ -527,6 +547,56 @@ class AnalysisRunStatus(StrEnum):
     # Part dels chunks han fallat pero n'hi ha resultats aprofitables.
     PARTIAL = "partial"
     FAILED = "failed"
+    # 3B-2 §6.3 (0061): un run REAL acabat sense cap requisit ni criteri sobre
+    # >= 5 pagines. No es promou mai a vigent i porta `needs_review`: o el plec
+    # no en diu res, o l'extraccio ha fallat en silenci, i aixo ho decideix una
+    # persona.
+    COMPLETED_EMPTY = "completed_empty"
+
+
+#: Pagines analitzades a partir de les quals un run real buit es sospitos.
+COMPLETED_EMPTY_MIN_PAGES = 5
+
+
+class RequirementRunBasis(StrEnum):
+    """Sobre que s'ha construit un run de requisits (0061, 3B-2 §6.3).
+
+    Es desa al run (columna NOT NULL) i es deriva del proveidor que el va
+    respondre. Nomes un run `real` pot passar a vigent (`is_current`): una
+    simulacio te la forma d'una lectura del plec, pero no ho es.
+    """
+
+    REAL = "real"
+    #: `fake` o `fixture`: sortida fabricada per a desenvolupament o proves.
+    SIMULATION = "simulation"
+    #: Cap proveidor configurat (nom buit).
+    UNCONFIGURED = "unconfigured"
+    #: El carregador d'avaluacio (`gold` o `gold:*`): dades d'oracle, no un plec llegit.
+    GOLD = "gold"
+
+    @classmethod
+    def for_provider(cls, name: str | None) -> RequirementRunBasis:
+        """La base d'un run pel nom del seu proveidor. Pura; la mateixa regla que el
+        backfill de 0061."""
+        chosen = (name or "").strip().lower()
+        if not chosen:
+            return cls.UNCONFIGURED
+        if chosen in {"fake", "fixture"}:
+            return cls.SIMULATION
+        if chosen == "gold" or chosen.startswith("gold:"):
+            return cls.GOLD
+        return cls.REAL
+
+
+class LlmBudgetScope(StrEnum):
+    """A que s'aplica un cap de despesa d'LLM (0061, 3B-2 §6.7, decisio 5)."""
+
+    #: Una prova de pocs chunks (`only_chunks`): `LLM_BUDGET_CANARY_USD`.
+    CANARY = "canary"
+    #: Una analisi sencera: `LLM_BUDGET_RUN_USD`.
+    RUN = "run"
+    #: Tot el que s'ha gastat (el llibre sencer): `LLM_BUDGET_PILOT_TOTAL_USD`.
+    PILOT_TOTAL = "pilot_total"
 
 
 class RequirementCategory(StrEnum):
@@ -1713,3 +1783,126 @@ class FindingType(StrEnum):
 class QuestionAudience(StrEnum):
     BUYER = "buyer"
     COMPANY = "company"
+
+
+# ---------------------------------------------------------------------------
+# Paquet documental public (0058).
+# ---------------------------------------------------------------------------
+
+
+class TenderDocumentOrigin(StrEnum):
+    """Qui ha fet arribar un document a la licitacio."""
+
+    FEED = "feed"  # enumerat per la font (el connector que el governa)
+    OWNER_UPLOAD = "owner_upload"  # pujada/ZIP en una licitacio manual propia
+    OPERATOR_URL = "operator_url"  # obtingut per l'operador d'una URL oficial
+    OPERATOR_UPLOAD = "operator_upload"  # pujat per l'operador
+
+
+class DocumentContributionStatus(StrEnum):
+    """Verificacio d'un document aportat per l'operador."""
+
+    NOT_APPLICABLE = "not_applicable"  # feed o owner_upload: no es verifica
+    PENDING_VERIFICATION = "pending_verification"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+
+
+class PackageGapCode(StrEnum):
+    """Que falta al paquet documental d'una licitacio."""
+
+    REQUIRED_ROLE_MISSING = "required_role_missing"
+    REFERENCED_DOCUMENT_MISSING = "referenced_document_missing"
+    NO_TEXT = "no_text"
+    FORMAT_NOT_ANALYZABLE = "format_not_analyzable"
+    ANNEX_MISSING = "annex_missing"
+    DECLARED_BY_OPERATOR = "declared_by_operator"
+
+
+class PackageGapProducer(StrEnum):
+    CLASSIFICATION = "classification"
+    OPERATOR = "operator"
+
+
+# ---------------------------------------------------------------------------
+# Classificacio global i revisio de rols (0059).
+# ---------------------------------------------------------------------------
+
+
+class GlobalClassificationTrigger(StrEnum):
+    """Que ha provocat una passada de la classificacio global d'un tender."""
+
+    #: El worker acaba de processar (descarregar/extreure) els documents.
+    DOCUMENT_PROCESSING = "document_processing"
+    #: L'operador ha verificat, retirat, restaurat o cedit un document.
+    DOCUMENT_INTAKE = "document_intake"
+    #: L'operador l'ha demanat explicitament.
+    OPERATOR_REQUEST = "operator_request"
+
+
+class RoleReviewAuthority(StrEnum):
+    """Amb quina autoritat es revisa el rol global d'un document."""
+
+    PLATFORM_OPERATOR = "platform_operator"
+    #: Reservat: promocio d'una proposta d'empresa (fora d'abast de 3B-2).
+    PROMOTED_FROM_COMPANY = "promoted_from_company"
+
+
+# ---------------------------------------------------------------------------
+# Provenance de l'estructura del plec i propostes (0060, 3B-2 §4).
+# ---------------------------------------------------------------------------
+
+
+class StructureOrigin(StrEnum):
+    """D'on surt el valor VIGENT d'una fila d'estructura o d'abast del plec.
+
+    Descriu l'ultim escriptor del valor (qui la va crear queda a `created_by`)."""
+
+    #: Un productor automatic (extraccio). Cap en 3B-2 (l'LLM d'estructura es 3B-3).
+    EXTRACTED = "extracted"
+    #: L'operador de plataforma l'ha escrit directament, amb cita.
+    OPERATOR = "operator"
+    #: Una proposta immutable (amb cita) promoguda per la via interna.
+    PROMOTED = "promoted"
+    #: El propietari d'una licitacio oberta a ma (via del tenant).
+    OWNER_MANUAL = "owner_manual"
+    #: El carregador del gold d'avaluacio (font `gold:*`).
+    GOLD = "gold"
+
+
+class StructureAuthority(StrEnum):
+    """Amb quina autoritat es va escriure el valor vigent."""
+
+    PLATFORM_OPERATOR = "platform_operator"
+    TENDER_OWNER = "tender_owner"
+    #: Reservat: promocio d'una proposta d'empresa (fora d'abast de 3B-2).
+    PROMOTED_FROM_COMPANY = "promoted_from_company"
+    PRODUCER = "producer"
+
+
+class StructureProposalProducer(StrEnum):
+    """Qui proposa. `company_proposal` queda reservat (fora d'abast de 3B-2): ni
+    l'enum ni el CHECK l'accepten encara."""
+
+    OPERATOR = "operator"
+    EXTRACTION = "extraction"
+
+
+class StructureEntityKind(StrEnum):
+    """Que proposa una proposta d'estructura: la forma del `payload_json`."""
+
+    BLOCK = "block"
+    SITE = "site"
+    SCOPE_ITEM = "scope_item"
+    CAPABILITY_NEED = "capability_need"
+    AWARD_LINK = "award_link"
+    CONTRACT_FACT = "contract_fact"
+    TERRITORY = "territory"
+    REQUIREMENT_TIMING = "requirement_timing"
+    CRITERION_CITATION = "criterion_citation"
+
+
+class StructureProposalStatus(StrEnum):
+    PROPOSED = "proposed"
+    PROMOTED = "promoted"
+    REJECTED = "rejected"

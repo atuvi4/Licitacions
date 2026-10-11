@@ -184,6 +184,12 @@ export function analysisStatusOf(
   return "extracted";
 }
 
+/** D'on surt un document del paquet (3B-2 §2.1). */
+export type TenderDocumentOrigin = "feed" | "owner_upload" | "operator_url" | "operator_upload";
+
+/** Verificació d'una aportació de l'operador. `not_applicable` = feed o pujada pròpia. */
+export type DocumentContributionStatus = "not_applicable" | "pending_verification" | "verified" | "rejected";
+
 export interface TenderDocumentMeta {
   id: string;
   name: string;
@@ -192,8 +198,69 @@ export interface TenderDocumentMeta {
   url: string;
   mime_type: string | null;
   published_at: string | null;
+  /** Data en què la font el va deixar de publicar. `null` = vigent a la font. */
+  removed_at: string | null;
   /** Versió vigent descarregada. `null` = mai processat. */
   latest_file: TenderDocumentFileSummary | null;
+  origin: TenderDocumentOrigin;
+  contribution_status: DocumentContributionStatus;
+  /** Àlies: mateixos bytes que aquest altre document del mateix expedient. */
+  duplicate_of_document_id: string | null;
+  /**
+   * Si pot entrar a l'anàlisi (`ANALYZABLE_DOCUMENT` del servidor): vigent, no
+   * àlies i del feed, d'una pujada pròpia o aportat i verificat. Ho calcula el
+   * backend: aquí no es dedueix.
+   */
+  analyzable: boolean;
+}
+
+/** Estat del paquet documental (3B-2 §2.5, §4.4). */
+export type PackageStatus = "complete" | "incomplete" | "unknown";
+
+export type PackageGapCode =
+  | "required_role_missing"
+  | "referenced_document_missing"
+  | "no_text"
+  | "format_not_analyzable"
+  | "annex_missing"
+  | "declared_by_operator";
+
+/** Estat d'una secció de l'estructura del plec (`TenderStructureView.section_status`). */
+export type SectionStatus = "unknown" | "none_declared" | "present";
+
+export interface TenderPackageGap {
+  code: PackageGapCode;
+  /** El rol que falta, el codi citat (`DOC-03`) o el document afectat. */
+  key: string | null;
+  /** Seccions que aportaria el document que falta. Buit = impacte desconegut. */
+  would_provide: string[];
+}
+
+export interface TenderPackage {
+  status: PackageStatus;
+  /** Només els forats oberts. */
+  gaps: TenderPackageGap[];
+  /** Secció de l'estructura → estat (M2): la regla és `section_status_for` del motor. */
+  section_status: Record<string, SectionStatus>;
+}
+
+/** D'on surt el rol efectiu d'un document (`RoleSource` del servidor). */
+export type RoleSource = "classifier" | "person" | "operator" | "global_classifier" | "feed" | "stale_override";
+
+export const ROLE_SOURCE_LABELS: Record<RoleSource, string> = {
+  classifier: "Classificació automàtica",
+  person: "Fixat per l'empresa",
+  operator: "Revisat per l'operador de la plataforma",
+  global_classifier: "Classificació automàtica de la plataforma",
+  feed: "Tipus publicat per la font",
+  // 3B-2 §3.2: l'empresa l'havia fixat per a una versió anterior del fitxer.
+  stale_override: "Fixat per l'empresa per a una versió anterior del fitxer: no s'aplica",
+};
+
+export function roleSourceLabel(source: string | null | undefined): string {
+  return source && Object.hasOwn(ROLE_SOURCE_LABELS, source)
+    ? ROLE_SOURCE_LABELS[source as RoleSource]
+    : "Origen del tipus desconegut";
 }
 
 export interface TenderListItem {
@@ -285,6 +352,10 @@ export interface TenderDetail {
   cpvs: TenderCPV[];
   lots: TenderLot[];
   documents: TenderDocumentMeta[];
+  /** Retirats de la font, a part: `documents` és només la publicació vigent. */
+  removed_documents: TenderDocumentMeta[];
+  /** Estat del paquet documental i forats oberts (global, com la licitació). */
+  package: TenderPackage | null;
   traceability: TenderTraceability | null;
 }
 
@@ -394,23 +465,58 @@ export const TENDER_DOCUMENT_LABELS: Record<TenderDocumentType, string> = {
   other: "Altres",
 };
 
+/** Un tipus de document que el diccionari no conegui es diu en humà, mai el codi. */
+export function documentTypeLabel(value: unknown): string {
+  return typeof value === "string" && Object.hasOwn(TENDER_DOCUMENT_LABELS, value)
+    ? TENDER_DOCUMENT_LABELS[value as TenderDocumentType]
+    : "tipus de document desconegut";
+}
+
+/** Rols de document (`DocumentRole` del servidor): quin falta, quin s'ha revisat. */
+export const DOCUMENT_ROLE_LABELS: Record<string, string> = {
+  pcap: "plec de clàusules administratives (PCAP)",
+  ppt: "plec de prescripcions tècniques (PPT)",
+  characteristics_table: "quadre de característiques",
+  offer_model: "model d'oferta",
+  inventory_annex: "annex d'inventari",
+  justification_report: "memòria justificativa",
+  approval_resolution: "resolució d'aprovació",
+  administrative_form: "formulari administratiu",
+  notice: "anunci de licitació",
+  other: "document",
+};
+
+export function documentRoleLabel(value: unknown): string {
+  return typeof value === "string" && Object.hasOwn(DOCUMENT_ROLE_LABELS, value)
+    ? DOCUMENT_ROLE_LABELS[value]
+    : "tipus de document desconegut";
+}
+
 /* -------------------------------------------------------------------------- */
 /* Ajudes de presentació                                                       */
 /* -------------------------------------------------------------------------- */
 
-/** Dies que falten per al termini. Negatiu si ja ha passat. */
-export function daysUntilDeadline(value: string | null): number | null {
-  if (!value) return null;
-  const target = new Date(value).getTime();
-  if (Number.isNaN(target)) return null;
-  return Math.ceil((target - Date.now()) / (1000 * 60 * 60 * 24));
-}
+// El comptador de dies viu a `lib/deadline` (una sola regla per a totes les pantalles).
 
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return new Intl.DateTimeFormat(LOCALE, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+/**
+ * La descripció d'un CPV només si diu alguna cosa (addendum 3B-2, D4). El
+ * catàleg (`cpv_codes`) desa «CPV <codi>» com a descripció provisional quan
+ * no en coneix cap: pintar-la al costat del codi és repetir el codi.
+ */
+export function cpvDescription(cpv: { cpv_code: string; description?: string | null }): string | null {
+  const text = cpv.description?.trim();
+  if (!text) return null;
+  const onlyCode = /^(cpv\s*)?[\d\s-]+$/i.test(text);
+  // Els 8 dígits del codi, sense el de control (45314320-6 i 45314320 són el mateix codi).
+  const digits = (value: string) => value.replace(/\D/g, "").slice(0, 8);
+  return onlyCode && digits(text) === digits(cpv.cpv_code) ? null : text;
 }
 
 /** Construeix la query string del feed sense paràmetres buits. */

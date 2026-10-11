@@ -22,7 +22,15 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column
-from app.models.enums import ContractType, ProcedureType, TenderDocumentType, TenderStatus
+from app.models.enums import (
+    ContractType,
+    DocumentContributionStatus,
+    ProcedureType,
+    TenderDocumentOrigin,
+    TenderDocumentType,
+    TenderStatus,
+)
+from app.models.review import in_values
 
 MONEY = sa.Numeric(18, 2)
 
@@ -98,7 +106,8 @@ class Tender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.Index("ix_tenders_first_seen_at", "first_seen_at"),
         sa.Index("ix_tenders_source_updated_at", "source_updated_at"),
         sa.CheckConstraint(
-            "estimated_value IS NULL OR estimated_value >= 0", name="tender_estimated_value_positive"
+            "estimated_value IS NULL OR estimated_value >= 0",
+            name="tender_estimated_value_positive",
         ),
         sa.CheckConstraint(
             "duration_months IS NULL OR duration_months >= 0", name="tender_duration_not_negative"
@@ -331,6 +340,24 @@ class TenderDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         sa.UniqueConstraint("tender_id", "url", name="uq_tender_documents_tender_url"),
         sa.Index("ix_tender_documents_tender_id", "tender_id"),
+        # Paquet documental public (0058). La coherencia la imposa la base.
+        sa.CheckConstraint(in_values("origin", TenderDocumentOrigin), name="origin_valid"),
+        sa.CheckConstraint(
+            in_values("contribution_status", DocumentContributionStatus),
+            name="contribution_status_valid",
+        ),
+        sa.CheckConstraint(
+            "(contribution_status = 'not_applicable') = (origin IN ('feed', 'owner_upload'))",
+            name="contribution_matches_origin",
+        ),
+        sa.CheckConstraint(
+            "(verified_at IS NOT NULL) = (contribution_status = 'verified')",
+            name="verified_at_matches_status",
+        ),
+        sa.CheckConstraint(
+            "(origin = 'feed') = (governing_source_id IS NOT NULL)",
+            name="feed_has_governing_source",
+        ),
     )
 
     tender_id: Mapped[uuid.UUID] = mapped_column(
@@ -357,4 +384,85 @@ class TenderDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.Uuid(as_uuid=True), sa.ForeignKey("source_records.id", ondelete="SET NULL")
     )
 
+    # --- Paquet documental public (0058) ------------------------------------
+    #: Qui l'ha fet arribar. Els documents d'abans de 0058 son `feed` (o
+    #: `owner_upload` si la URL es `upload://`).
+    origin: Mapped[TenderDocumentOrigin] = mapped_column(
+        enum_column(TenderDocumentOrigin, "tender_document_origin"),
+        nullable=False,
+        default=TenderDocumentOrigin.FEED,
+        server_default=TenderDocumentOrigin.FEED.value,
+    )
+    #: Source ownership: el connector que governa el document. NOMES els `feed`
+    #: en tenen; la sincronitzacio d'una font nomes toca els seus.
+    governing_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("sources.id", ondelete="RESTRICT")
+    )
+    contribution_status: Mapped[DocumentContributionStatus] = mapped_column(
+        enum_column(DocumentContributionStatus, "document_contribution_status"),
+        nullable=False,
+        default=DocumentContributionStatus.NOT_APPLICABLE,
+        server_default=DocumentContributionStatus.NOT_APPLICABLE.value,
+    )
+    contributed_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    contributed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    #: Pagina oficial d'on s'ha tret (perfil del contractant, PSCP).
+    contribution_source_url: Mapped[str | None] = mapped_column(sa.String(1000))
+    verified_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    verification_note: Mapped[str | None] = mapped_column(sa.String(500))
+    #: Alies: mateixos bytes vigents que un altre document del mateix tender.
+    #: Mai se selecciona per a l'analisi.
+    duplicate_of_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("tender_documents.id", ondelete="SET NULL")
+    )
+    #: Retirada per l'operador (la del feed continua sent `removed_at` sense actor).
+    retired_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
+    )
+    retired_reason: Mapped[str | None] = mapped_column(sa.String(200))
+
     tender: Mapped[Tender] = relationship(back_populates="documents")
+
+
+@sa.event.listens_for(TenderDocument, "before_insert")
+def _default_origin(mapper, connection, target: TenderDocument) -> None:
+    """Valor per defecte TRANSITORI d'`origin` per als qui creen documents d'una font.
+
+    Les Tasks 2-3 de 3B-2 posen `origin` i `governing_source_id` explicitament (la
+    ingesta `placsp/service.py` ja ho fa des de la Task 2); el listener existeix
+    perque els altres creadors (`tender_document_upload.py`, `tender_gold.py` i
+    `scripts/seed_fixture_plec.py`) segueixin funcionant sense conixer les columnes
+    noves. Nomes cobreix feed i owner_upload; mai inventa un origen d'operador:
+
+    * `origin` informat: no es toca res.
+    * URL `upload://` -> `owner_upload` (sense font governant).
+    * URL `operator-upload://` -> error (cal `origin` explicit).
+    * resta -> `feed`, amb `governing_source_id` = font de la licitacio, tret que
+      la font sigui MANUAL (error: un document de licitacio manual no es de cap feed).
+    """
+    if target.origin is not None:
+        return
+    url = target.url or ""
+    if url.startswith("operator-upload://"):
+        raise ValueError("origin obligatori per a documents d'operador")
+    if url.startswith("upload://"):
+        target.origin = TenderDocumentOrigin.OWNER_UPLOAD
+        return
+    from app.models.enums import SourceType
+    from app.models.sources import Source
+
+    source_id, source_type = connection.execute(
+        sa.select(Tender.source_id, Source.source_type)
+        .join(Source, Source.id == Tender.source_id)
+        .where(Tender.id == target.tender_id)
+    ).one()
+    if source_type == SourceType.MANUAL:
+        raise ValueError("origin obligatori per a documents d'operador")
+    target.origin = TenderDocumentOrigin.FEED
+    if target.governing_source_id is None:
+        target.governing_source_id = source_id

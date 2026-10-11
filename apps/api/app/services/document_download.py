@@ -23,6 +23,7 @@ import hashlib
 import logging
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
 
@@ -101,6 +102,23 @@ class DownloadResult:
     http_status: int
     redirect_count: int
     download_ms: int
+
+
+def is_official_host(url: str, allowed_hosts: Iterable[str]) -> bool:
+    """Si el host de la URL es un dels oficials o un subdomini seu (3B-2 §2.2).
+
+    Coincidencia per sufix de DOMINI, no de cadena: `www.contractaciopublica.cat`
+    hi entra; `evilcontractaciopublica.cat` i `contractaciopublica.cat.evil.example`
+    no. No substitueix la guarda SSRF: s'hi afegeix.
+    """
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+    for allowed in allowed_hosts:
+        domain = allowed.strip().lower().rstrip(".")
+        if domain and (host == domain or host.endswith("." + domain)):
+            return True
+    return False
 
 
 def sniff_mime_type(head: bytes) -> str | None:
@@ -238,8 +256,15 @@ async def download_document(
     *,
     client: httpx.AsyncClient | None = None,
     resolver: Resolver | None = None,
+    allowed_hosts: Iterable[str] | None = None,
 ) -> DownloadResult:
-    """Descarrega i valida un document. Llanca `DownloadError` amb un codi estable."""
+    """Descarrega i valida un document. Llanca `DownloadError` amb un codi estable.
+
+    Amb `allowed_hosts` (allowlist de l'operador, 3B-2 §2.2), la URL i cada
+    salt de redireccio han de ser d'un host oficial (`is_official_host`); si no,
+    `host_not_official` abans de demanar-hi res. Sense, el comportament de sempre.
+    """
+    allowed = list(allowed_hosts) if allowed_hosts is not None else None
     started = time.monotonic()
     deadline = started + settings.DOCUMENT_DOWNLOAD_TOTAL_TIMEOUT_SECONDS
     max_bytes = settings.document_max_size_bytes
@@ -259,6 +284,11 @@ async def download_document(
         while True:
             if time.monotonic() >= deadline:
                 raise DownloadError("Temps total de descarrega esgotat.", "timeout")
+
+            if allowed is not None and not is_official_host(current, allowed):
+                raise DownloadError(
+                    "El host no es a la llista de fonts oficials.", "host_not_official"
+                )
 
             try:
                 await validate_url(current, resolver=resolver)

@@ -44,6 +44,7 @@ from app.models.tender_scope import (
 from app.models.tender_structure import TenderBlock, TenderSite
 from app.models.tenders import Tender, TenderLot
 from app.services import tender_scope as scope
+from tests.structure_support import PROV
 
 pytestmark = pytest.mark.asyncio
 
@@ -67,14 +68,16 @@ async def _public_tender(db, title="Expedient public sintetic") -> Tender:
 
 
 async def _block(db, tender: Tender, code: str) -> TenderBlock:
-    block = TenderBlock(tender_id=tender.id, code=code, name=f"Bloc {code}")
+    block = TenderBlock(tender_id=tender.id, code=code, name=f"Bloc {code}", **PROV.create_kwargs())
     db.add(block)
     await db.flush()
     return block
 
 
 async def _site(db, tender: Tender, code: str, role=TenderSiteRole.REMOTE) -> TenderSite:
-    site = TenderSite(tender_id=tender.id, code=code, name=f"Seu {code}", role=role)
+    site = TenderSite(
+        tender_id=tender.id, code=code, name=f"Seu {code}", role=role, **PROV.create_kwargs()
+    )
     db.add(site)
     await db.flush()
     return site
@@ -148,6 +151,7 @@ async def test_scope_items_follow_the_model_rules_and_cross_tender_protection(db
             "quantity": Decimal("15"),
             "unit": "accessos",
         },
+        provenance=PROV,
     )
     await db.flush()
     await db.refresh(item)
@@ -162,6 +166,7 @@ async def test_scope_items_follow_the_model_rules_and_cross_tender_protection(db
             "unit": "m",
             "unit_base_price_ex_vat": Decimal("12.50"),
         },
+        provenance=PROV,
     )
     assert (metres.block_id, metres.tender_lot_id) == (None, None)  # tot el contracte
 
@@ -171,6 +176,7 @@ async def test_scope_items_follow_the_model_rules_and_cross_tender_protection(db
             db,
             tender,
             {"service_line_code": "voice_pbx", "block_id": b1.id, "tender_lot_id": lot.id},
+            provenance=PROV,
         )
     with pytest.raises(IntegrityError):
         async with db.begin_nested():
@@ -180,6 +186,7 @@ async def test_scope_items_follow_the_model_rules_and_cross_tender_protection(db
                     service_line_code="voice_pbx",
                     block_id=b1.id,
                     tender_lot_id=lot.id,
+                    **PROV.create_kwargs(),
                 )
             )
             await db.flush()
@@ -190,14 +197,24 @@ async def test_scope_items_follow_the_model_rules_and_cross_tender_protection(db
         ({"site_id": foreign_site.id}, scope.SiteTenderMismatchError),
     ):
         with pytest.raises(error):
-            await scope.create_scope_item(db, tender, {"service_line_code": "voice_pbx", **fields})
-    assert await scope.update_scope_item(db, tender, item, {"site_id": site.id}) is True
+            await scope.create_scope_item(
+                db, tender, {"service_line_code": "voice_pbx", **fields}, provenance=PROV
+            )
+    assert (
+        await scope.update_scope_item(db, tender, item, {"site_id": site.id}, provenance=PROV)
+        is True
+    )
     with pytest.raises(scope.SiteTenderMismatchError):
-        await scope.update_scope_item(db, tender, item, {"site_id": foreign_site.id})
+        await scope.update_scope_item(
+            db, tender, item, {"site_id": foreign_site.id}, provenance=PROV
+        )
     # Especificacions sense versio, quantitats i preus negatius: la base ho refusa.
     with pytest.raises(scope.ScopeSpecsUnversionedError):
         await scope.create_scope_item(
-            db, tender, {"service_line_code": "voice_pbx", "specs_json": {"ports": 24}}
+            db,
+            tender,
+            {"service_line_code": "voice_pbx", "specs_json": {"ports": 24}},
+            provenance=PROV,
         )
     for values in (
         {"quantity": -1},
@@ -207,13 +224,22 @@ async def test_scope_items_follow_the_model_rules_and_cross_tender_protection(db
         with pytest.raises(IntegrityError):
             async with db.begin_nested():
                 db.add(
-                    TenderScopeItem(tender_id=tender.id, service_line_code="voice_pbx", **values)
+                    TenderScopeItem(
+                        tender_id=tender.id,
+                        service_line_code="voice_pbx",
+                        **values,
+                        **PROV.create_kwargs(),
+                    )
                 )
                 await db.flush()
     # Una linia fora del vocabulari no entra (clau forana).
     with pytest.raises(IntegrityError):
         async with db.begin_nested():
-            db.add(TenderScopeItem(tender_id=tender.id, service_line_code="teleport"))
+            db.add(
+                TenderScopeItem(
+                    tender_id=tender.id, service_line_code="teleport", **PROV.create_kwargs()
+                )
+            )
             await db.flush()
     await db.rollback()
 
@@ -223,10 +249,13 @@ async def test_deleting_a_block_takes_its_scope_items_and_a_site_only_detaches(d
     b1 = await _block(db, tender, "B1")
     site = await _site(db, tender, "S1")
     owned = await scope.create_scope_item(
-        db, tender, {"service_line_code": "access_ftth", "block_id": b1.id, "site_id": site.id}
+        db,
+        tender,
+        {"service_line_code": "access_ftth", "block_id": b1.id, "site_id": site.id},
+        provenance=PROV,
     )
     wide = await scope.create_scope_item(
-        db, tender, {"service_line_code": "voice_pbx", "site_id": site.id}
+        db, tender, {"service_line_code": "voice_pbx", "site_id": site.id}, provenance=PROV
     )
     await db.flush()
     await db.delete(await db.get(TenderSite, site.id))
@@ -262,23 +291,33 @@ async def test_territories_are_stored_as_a_set_with_mode_and_same_tender_sites(d
         "code_system": "INE",
         "qualifier": "trama urbana",
     }
-    assert await scope.set_territories(db, tender, requirement, [d, d]) is True
-    assert await scope.set_territories(db, tender, requirement, [d]) is False  # mateix contingut
+    assert await scope.set_territories(db, tender, requirement, [d, d], provenance=PROV) is True
+    assert (
+        await scope.set_territories(db, tender, requirement, [d], provenance=PROV) is False
+    )  # mateix contingut
     assert scope.set_territory_match_mode(requirement, TerritoryMatchMode.ALL) is True
     by_sites = [{"kind": AreaKind.ADDRESS, "site_id": s.id} for s in sites]
-    assert await scope.set_territories(db, tender, requirement, by_sites) is True
+    assert await scope.set_territories(db, tender, requirement, by_sites, provenance=PROV) is True
     await db.flush()
     await db.refresh(requirement)
     assert sorted(t.site_id for t in requirement.territories) == sorted(s.id for s in sites)
     assert requirement.territory_match_mode == TerritoryMatchMode.ALL
     with pytest.raises(scope.SiteTenderMismatchError):
         await scope.set_territories(
-            db, tender, requirement, [{"kind": AreaKind.ADDRESS, "site_id": foreign_site.id}]
+            db,
+            tender,
+            requirement,
+            [{"kind": AreaKind.ADDRESS, "site_id": foreign_site.id}],
+            provenance=PROV,
         )
     # Un territori ha d'apuntar a alguna cosa; i el mode nomes accepta l'enum.
     with pytest.raises(IntegrityError):
         async with db.begin_nested():
-            db.add(RequirementTerritory(requirement_id=requirement.id, kind=AreaKind.CUSTOM))
+            db.add(
+                RequirementTerritory(
+                    requirement_id=requirement.id, kind=AreaKind.CUSTOM, **PROV.create_kwargs()
+                )
+            )
             await db.flush()
     sqlite = db.bind.dialect.name == "sqlite"
     await _rejected_by_db(
@@ -324,16 +363,25 @@ async def test_territories_are_a_set_with_a_canonical_identity(db):
         {**escala, "label": "L'Escala"}
     )
 
-    assert await scope.set_territories(db, tender, requirement, [escala, same, escala]) is True
+    assert (
+        await scope.set_territories(
+            db, tender, requirement, [escala, same, escala], provenance=PROV
+        )
+        is True
+    )
     await db.refresh(requirement, attribute_names=["territories"])
     assert [(t.label, t.code_system) for t in requirement.territories] == [("Municipi E", "INE")]
     # Ordre diferent, mateix conjunt: cap canvi.
     assert (
-        await scope.set_territories(db, tender, requirement, [with_qualifier, escala, at_s1, at_s2])
+        await scope.set_territories(
+            db, tender, requirement, [with_qualifier, escala, at_s1, at_s2], provenance=PROV
+        )
         is True
     )
     assert (
-        await scope.set_territories(db, tender, requirement, [at_s2, same, at_s1, spaced_qualifier])
+        await scope.set_territories(
+            db, tender, requirement, [at_s2, same, at_s1, spaced_qualifier], provenance=PROV
+        )
         is False
     )
     await db.refresh(requirement, attribute_names=["territories"])
@@ -347,7 +395,10 @@ async def test_territories_are_a_set_with_a_canonical_identity(db):
     # Desduplicar no toca el mode.
     scope.set_territory_match_mode(requirement, TerritoryMatchMode.ALL)
     assert (
-        await scope.set_territories(db, tender, requirement, [escala, escala, at_s1, at_s1]) is True
+        await scope.set_territories(
+            db, tender, requirement, [escala, escala, at_s1, at_s1], provenance=PROV
+        )
+        is True
     )
     await db.refresh(requirement, attribute_names=["territories"])
     assert (
@@ -363,10 +414,14 @@ async def test_territories_are_a_set_with_a_canonical_identity(db):
             label=first.label,
             code=first.code,
             code_system=first.code_system,
+            **PROV.create_kwargs(),
         )
     )
     await db.flush()
-    assert await scope.set_territories(db, tender, requirement, [escala, at_s1]) is True
+    assert (
+        await scope.set_territories(db, tender, requirement, [escala, at_s1], provenance=PROV)
+        is True
+    )
     await db.refresh(requirement, attribute_names=["territories"])
     assert len(requirement.territories) == 2
 
@@ -384,6 +439,7 @@ async def test_contract_facts_are_unique_per_code_and_exact_block_scope(db):
         value_json=value or {"v": 1},
         value_schema="v1",
         block_ids=blocks,
+        provenance=PROV,
     )
     p13 = await create(ContractFactCode.PENALTIES, [b1.id, b3.id])
     await create(ContractFactCode.PENALTIES, [b2.id])  # mateix codi, altre abast
@@ -405,20 +461,29 @@ async def test_contract_facts_are_unique_per_code_and_exact_block_scope(db):
 
     # Un UPDATE que col·lisiona es refusa sencer: ni valor ni blocs canvien.
     with pytest.raises(scope.ContractFactScopeConflictError):
-        await scope.update_fact(db, tender, p13, value_json={"v": 2}, block_ids=[b2.id])
+        await scope.update_fact(
+            db, tender, p13, value_json={"v": 2}, block_ids=[b2.id], provenance=PROV
+        )
     await db.refresh(p13)
     assert p13.value_json == {"v": 1} and set(await scope._fact_block_ids(db, p13)) == {
         b1.id,
         b3.id,
     }
     with pytest.raises(scope.ContractFactScopeConflictError):
-        await scope.update_fact(db, tender, wide, fact_code=ContractFactCode.BILLING_TERMS)
+        await scope.update_fact(
+            db, tender, wide, fact_code=ContractFactCode.BILLING_TERMS, provenance=PROV
+        )
     await db.refresh(wide)
     assert wide.fact_code == ContractFactCode.LIABILITY_INSURANCE
     # Canviar nomes el valor o moure's a un abast lliure si que es pot.
-    assert await scope.update_fact(db, tender, p13, value_json={"v": 3}) is True
-    assert await scope.update_fact(db, tender, p13, block_ids=[b1.id]) is True
-    assert await scope.update_fact(db, tender, billing, value_json={"period": "monthly"}) is True
+    assert await scope.update_fact(db, tender, p13, value_json={"v": 3}, provenance=PROV) is True
+    assert await scope.update_fact(db, tender, p13, block_ids=[b1.id], provenance=PROV) is True
+    assert (
+        await scope.update_fact(
+            db, tender, billing, value_json={"period": "monthly"}, provenance=PROV
+        )
+        is True
+    )
     assert await db.scalar(sa.select(sa.func.count()).select_from(TenderContractFact)) == 5
 
 
@@ -477,6 +542,7 @@ async def test_capability_needs_are_mapped_xor_unmapped_with_a_closed_comparator
             "comparator": NeedComparator.PRESENT,
             "need_type": NeedType.MINIMUM,
         },
+        provenance=PROV,
     )
     scored = await scope.create_need(
         db,
@@ -491,6 +557,7 @@ async def test_capability_needs_are_mapped_xor_unmapped_with_a_closed_comparator
             "points": 2.0,
             "award_criterion_id": criterion.id,
         },
+        provenance=PROV,
     )
     demo = await scope.create_need(
         db,
@@ -502,6 +569,7 @@ async def test_capability_needs_are_mapped_xor_unmapped_with_a_closed_comparator
             "need_type": NeedType.DEMO,
             "points": 2.0,
         },
+        provenance=PROV,
     )
     await db.flush()
     assert (minimum.tender_id, scored.award_criterion_id, demo.capability_code) == (
@@ -535,13 +603,14 @@ async def test_capability_needs_are_mapped_xor_unmapped_with_a_closed_comparator
         {"capability_code": "pbx.queues", "points": -1},
     ):
         with pytest.raises(ValidationError):
-            await scope.create_need(db, tender, requirement, {**base, **fields})
+            await scope.create_need(db, tender, requirement, {**base, **fields}, provenance=PROV)
     with pytest.raises(scope.CriterionTenderMismatchError):
         await scope.create_need(
             db,
             tender,
             requirement,
             {**base, "capability_code": "pbx.queues", "award_criterion_id": foreign.id},
+            provenance=PROV,
         )
     # La base tambe ho garanteix: XOR, punts i capacitat del vocabulari.
     for values in (
@@ -568,7 +637,10 @@ async def test_capability_needs_are_mapped_xor_unmapped_with_a_closed_comparator
             async with db.begin_nested():
                 db.add(
                     RequirementCapabilityNeed(
-                        requirement_id=requirement.id, tender_id=tender.id, **values
+                        requirement_id=requirement.id,
+                        tender_id=tender.id,
+                        **values,
+                        **PROV.create_kwargs(),
                     )
                 )
                 await db.flush()
@@ -583,8 +655,14 @@ async def test_requirement_award_links_are_a_same_tender_set_without_copying_any
     c2 = await _criterion(db, tender, "C2", 6.0)
     foreign = await _criterion(db, other, "Aliè", 3.0)
     await db.flush()
-    assert await scope.set_award_links(db, tender, requirement, [c1.id, c2.id, c1.id]) is True
-    assert await scope.set_award_links(db, tender, requirement, [c2.id, c1.id]) is False
+    assert (
+        await scope.set_award_links(db, tender, requirement, [c1.id, c2.id, c1.id], provenance=PROV)
+        is True
+    )
+    assert (
+        await scope.set_award_links(db, tender, requirement, [c2.id, c1.id], provenance=PROV)
+        is False
+    )
     await db.flush()
     await db.refresh(requirement)
     await db.refresh(c1)
@@ -592,17 +670,21 @@ async def test_requirement_award_links_are_a_same_tender_set_without_copying_any
     assert c1.requirement_ids == [requirement.id]
     assert (c1.points, c2.points) == (10.0, 6.0)
     with pytest.raises(scope.CriterionTenderMismatchError):
-        await scope.set_award_links(db, tender, requirement, [foreign.id])
-    assert await scope.set_award_links(db, tender, requirement, []) is True
+        await scope.set_award_links(db, tender, requirement, [foreign.id], provenance=PROV)
+    assert await scope.set_award_links(db, tender, requirement, [], provenance=PROV) is True
     assert await db.scalar(sa.select(sa.func.count()).select_from(RequirementAwardLink)) == 0
     # Clau primaria composta.
-    db.add(RequirementAwardLink(requirement_id=requirement.id, award_criterion_id=c1.id))
+    db.add(
+        RequirementAwardLink(
+            requirement_id=requirement.id, award_criterion_id=c1.id, **PROV.create_kwargs()
+        )
+    )
     await db.flush()
     with pytest.raises(IntegrityError):
         async with db.begin_nested():
             await db.execute(
                 sa.insert(RequirementAwardLink).values(
-                    requirement_id=requirement.id, award_criterion_id=c1.id
+                    requirement_id=requirement.id, award_criterion_id=c1.id, origin="gold"
                 )
             )
 
@@ -627,6 +709,7 @@ async def test_contract_facts_apply_to_blocks_except_billing_terms(db):
         value_json={"amount_eur": 300000},
         value_schema="liability_insurance_v1",
         block_ids=[b1.id, b3.id, b1.id],
+        provenance=PROV,
     )
     billing = await scope.create_fact(
         db,
@@ -635,6 +718,7 @@ async def test_contract_facts_apply_to_blocks_except_billing_terms(db):
         value_json={"period": "monthly"},
         value_schema="billing_terms_v1",
         block_ids=[],
+        provenance=PROV,
     )
     await db.flush()
     assert set(await scope._fact_block_ids(db, insurance)) == {b1.id, b3.id}
@@ -649,18 +733,23 @@ async def test_contract_facts_apply_to_blocks_except_billing_terms(db):
             value_json={"period": "quarterly"},
             value_schema="billing_terms_v1",
             block_ids=[b1.id],
+            provenance=PROV,
         )
     with pytest.raises(scope.BillingTermsBlockLinkError):
-        await scope.update_fact(db, tender, billing, block_ids=[b1.id])
+        await scope.update_fact(db, tender, billing, block_ids=[b1.id], provenance=PROV)
     assert await db.scalar(sa.select(sa.func.count()).select_from(ContractFactBlock)) == 2
     with pytest.raises(scope.BlockTenderMismatchError):
-        await scope.update_fact(db, tender, insurance, block_ids=[foreign.id])
+        await scope.update_fact(db, tender, insurance, block_ids=[foreign.id], provenance=PROV)
 
     # Substituir el conjunt, i tornar a tot el contracte.
-    assert await scope.update_fact(db, tender, insurance, block_ids=[b3.id]) is True
+    assert (
+        await scope.update_fact(db, tender, insurance, block_ids=[b3.id], provenance=PROV) is True
+    )
     assert await scope._fact_block_ids(db, insurance) == [b3.id]
-    assert await scope.update_fact(db, tender, insurance, block_ids=[b3.id]) is False
-    assert await scope.update_fact(db, tender, insurance, block_ids=[]) is True
+    assert (
+        await scope.update_fact(db, tender, insurance, block_ids=[b3.id], provenance=PROV) is False
+    )
+    assert await scope.update_fact(db, tender, insurance, block_ids=[], provenance=PROV) is True
     assert await scope._fact_block_ids(db, insurance) == []
     # Un codi fora de la llista no entra ni per SQL.
     sqlite = db.bind.dialect.name == "sqlite"
@@ -672,7 +761,7 @@ async def test_contract_facts_apply_to_blocks_except_billing_terms(db):
         ).bindparams(id=insurance.id.hex if sqlite else str(insurance.id)),
     )
     # Esborrar un bloc s'emporta l'enllac del fet, no el fet.
-    await scope.update_fact(db, tender, insurance, block_ids=[b1.id])
+    await scope.update_fact(db, tender, insurance, block_ids=[b1.id], provenance=PROV)
     await db.flush()
     await db.delete(await db.get(TenderBlock, b1.id))
     await db.flush()

@@ -4,9 +4,10 @@ import { Tabs, type TabItem } from "@/components/ui";
 
 import { TAB_PARAM, type CatalogueTab } from "@/app/(app)/licitacions/query";
 
+// «Radar · prioritzades» (addendum 3B-2, D2): són les licitacions que el Radar prioritza amb el pre-fit, no una cua de revisió.
 const ITEMS: TabItem[] = [
   { key: "totes", label: "Totes" },
-  { key: "revisar", label: "Per revisar" },
+  { key: "revisar", label: "Radar · prioritzades" },
 ];
 
 /**

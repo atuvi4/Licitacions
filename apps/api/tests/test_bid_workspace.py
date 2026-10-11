@@ -69,7 +69,7 @@ from app.workspace.transitions import (
     is_human_only,
     status_for,
 )
-from tests.conftest import TEST_PASSWORD, login
+from tests.conftest import TEST_PASSWORD, grant_go, login
 
 FUTURE_DEADLINE = datetime.now(UTC) + timedelta(days=30)
 PAST_DEADLINE = datetime.now(UTC) - timedelta(days=3)
@@ -121,6 +121,8 @@ async def add_extraction_run(db, tender, *, current: bool = True) -> Requirement
         schema_version="requirements-schema-v1",
         provider="fake",
         model="fake-model-v1",
+        # Fila sintetica vigent: a PostgreSQL nomes un run real/gold ho pot ser (0061).
+        run_basis="real",
         is_current=current,
     )
     db.add(run)
@@ -514,6 +516,9 @@ async def test_a_go_records_who_when_and_why(db, tenant_a, tender, extraction_ru
         "schema_version": 1,
         "state": "absent",
         "warnings": ["analysis_missing"],
+        # 3B-2 §4.4: l'estat del paquet documental (sense passada global: `unknown`).
+        "package_status": "unknown",
+        "open_gap_count": 0,
     }
     assert workspace.status == WorkspaceStatus.GO_APPROVED
 
@@ -870,9 +875,14 @@ async def test_a_passed_deadline_is_shown_and_forces_a_justification(
 
 async def test_days_remaining_is_calculated_not_stored(db, tenant_a, tender, extraction_run):
     user, company = tenant_a
+    # Regla unica (B5): dies naturals a Europe/Madrid, no blocs de 24 h; per aixo el
+    # termini es fix (12:00 a Madrid) i no relatiu a l'hora d'execucio del test.
+    deadline = datetime(2026, 10, 21, 10, 0, tzinfo=UTC)
+    tender.deadline_at = deadline
+    await db.commit()
     workspace = await open_workspace(db, company.id, tender, user.id)
 
-    now = FUTURE_DEADLINE - timedelta(days=5, hours=2)
+    now = deadline - timedelta(days=5, hours=2)
     state = await service.load_state(db, workspace, now=now)
 
     assert state.days_remaining == 5
@@ -1033,6 +1043,7 @@ async def test_the_api_refuses_an_assignee_from_another_company(
     user_a, company_a = tenant_a
     user_b, _company_b = tenant_b
     workspace = await open_workspace(db, company_a.id, tender, user_a.id)
+    await grant_go(db, workspace, user_a)
 
     response = await client_a.post(
         f"/api/v1/companies/{company_a.id}/workspaces/{workspace.id}/tasks",
@@ -1068,7 +1079,10 @@ async def test_the_decision_history_endpoint_is_append_only(
 
 
 async def test_the_full_candidacy_workflow(db, client_a, tenant_a, tender, extraction_run):
-    """Licitacio -> workspace -> revisar -> checklist -> tasca -> nota -> GO.
+    """Licitacio -> workspace -> revisar -> checklist -> GO -> tasca -> nota.
+
+    El GO va abans de la feina: des de 3B-2 §7.1.6 cap mutacio del pas Preparar
+    (tasques i notes incloses) no s'accepta sense un GO huma vigent.
 
     I despres tornar-hi i veure la decisio, immutable, amb qui, quan i per que.
     """
@@ -1107,19 +1121,14 @@ async def test_the_full_candidacy_workflow(db, client_a, tenant_a, tender, extra
     assert len(detail["checklist"]) == 1
     assert detail["checklist"][0]["title"] == "Acreditar ISO 27001"
 
-    # 3. Assignar una tasca a algu de l'empresa.
-    task = await client_a.post(
+    # 3. Decidir GO, amb motiu. Sense GO, el pas Preparar es consulta pero no
+    # s'hi escriu (3B-2 §7.1.6): una tasca abans del GO es refusa amb 403.
+    refused = await client_a.post(
         f"{base}/tasks",
         json={"title": "Demanar certificat bancari", "assigned_to": str(user.id)},
     )
-    assert task.status_code == 200, task.text
-    assert task.json()["assigned_to_name"]
-
-    # 4. Escriure una nota.
-    note = await client_a.post(f"{base}/notes", json={"text": "Parlat amb el responsable."})
-    assert note.status_code == 200, note.text
-
-    # 5. Decidir GO, amb motiu.
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["error"]["code"] == "decision_required"
     decided = await client_a.post(
         f"{base}/decisions",
         json={
@@ -1130,6 +1139,18 @@ async def test_the_full_candidacy_workflow(db, client_a, tenant_a, tender, extra
     assert decided.status_code == 200, decided.text
     assert decided.json()["status"] == "go_approved"
     assert decided.json()["human_decision"] == "go"
+
+    # 4. Assignar una tasca a algu de l'empresa.
+    task = await client_a.post(
+        f"{base}/tasks",
+        json={"title": "Demanar certificat bancari", "assigned_to": str(user.id)},
+    )
+    assert task.status_code == 200, task.text
+    assert task.json()["assigned_to_name"]
+
+    # 5. Escriure una nota.
+    note = await client_a.post(f"{base}/notes", json={"text": "Parlat amb el responsable."})
+    assert note.status_code == 200, note.text
 
     # 6. Tornar-hi: la decisio hi es, signada i datada.
     again = (await client_a.get(base)).json()
@@ -1721,3 +1742,31 @@ async def test_0054_rehearsal_on_postgres_keeps_legacy_decisions_intact(
         await conn.run_sync(_run, migration.downgrade)
         assert await _row(conn) == before
         await conn.run_sync(_run, migration.upgrade)
+
+
+async def test_termini_passat_avui_mateix_es_vencut_i_el_go_demana_justificacio(
+    db, tenant_a, tender, extraction_run
+):
+    """D1: amb dies naturals, un termini passat avui mateix dona 0 dies, no -1."""
+    user, company = tenant_a
+    deadline = datetime(2026, 10, 21, 8, 0, tzinfo=UTC)  # 10:00 a Madrid
+    tender.deadline_at = deadline
+    await db.commit()
+    workspace = await open_workspace(db, company.id, tender, user.id)
+
+    now = datetime(2026, 10, 21, 10, 0, tzinfo=UTC)  # 12:00 a Madrid
+    state = await service.load_state(db, workspace, now=now)
+    assert state.days_remaining == 0
+    assert state.deadline_passed is True
+    assert "deadline_passed" in state.warnings.codes()
+
+    with pytest.raises(service.DecisionReasonRequiredError):
+        await service.record_decision(
+            db, workspace, decision=WorkspaceDecisionType.GO, user=user,
+            role=MembershipRole.OWNER, reason=None, now=now,
+        )
+
+    tender.deadline_at = datetime(2026, 10, 22, 8, 0, tzinfo=UTC)
+    await db.commit()
+    state = await service.load_state(db, workspace, now=now)
+    assert state.deadline_passed is False

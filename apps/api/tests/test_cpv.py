@@ -102,6 +102,34 @@ async def test_els_cpv_son_per_empresa(client_a, client_b, tenant_a, tenant_b):
     assert aliens.status_code == 404
 
 
+async def test_cerca_de_cpv_per_prefix_de_codi_o_paraula_de_la_descripcio(client_a, tenant_a):
+    """El contracte del cercador de la web (addendum 3B-2, C3): el codi (o un
+    prefix) o una paraula de la descripcio del cataleg; el filtre de la llista
+    s'aplica despres pel codi triat."""
+    _, company = tenant_a
+    for code, description in (
+        ("98765432", "Radioenllacos de prova per al cercador"),
+        ("98760000", "Cablejat de prova per al cercador"),
+    ):
+        response = await client_a.post(
+            f"/api/v1/companies/{company.id}/cpv-preferences",
+            json={"cpv_code": code, "description": description, "priority": 5},
+        )
+        assert response.status_code == 201
+
+    by_prefix = await client_a.get("/api/v1/cpv-codes", params={"q": "98765"})
+    assert [item["code"] for item in by_prefix.json()] == ["98765432"]
+
+    by_word = await client_a.get("/api/v1/cpv-codes", params={"q": "radioenlla"})
+    assert [item["code"] for item in by_word.json()] == ["98765432"]
+
+    both = await client_a.get("/api/v1/cpv-codes", params={"q": "per al cercador"})
+    assert sorted(item["code"] for item in both.json()) == ["98760000", "98765432"]
+
+    nothing = await client_a.get("/api/v1/cpv-codes", params={"q": "paraula que no hi es"})
+    assert nothing.json() == []
+
+
 async def test_no_es_pot_afegir_un_cpv_a_un_projecte_daltri(client_a, client_b, tenant_a, tenant_b):
     _, company_a = tenant_a
     _, company_b = tenant_b

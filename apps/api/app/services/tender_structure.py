@@ -12,6 +12,10 @@ hi ha les regles del model:
 * els punts d'un criteri NO es reparteixen entre els blocs que enllaça;
 * una cita es de la mateixa licitacio que el bloc o la seu que la fa servir.
 
+Tota escriptura rep una `Provenance` explicita (0060): el router del tenant hi
+passa `owner_manual`, el gold `gold`, l'operador `operator` i la promocio d'una
+proposta `promoted`. Sense provenance no s'hi arriba.
+
 Res d'aixo crea cap element d'abast, cap necessitat de capacitat, cap fet de
 contracte ni cap resultat d'analisi: aixo es 0049/0050.
 """
@@ -26,9 +30,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.models.enums import RequirementTiming
-from app.models.identity import User
 from app.models.provenance import TenderSourceRef
-from app.models.requirements import AwardCriterion, Requirement
+from app.models.requirements import AwardCriterion, Requirement, RequirementExtractionRun
 from app.models.tender_structure import (
     AwardCriterionBlock,
     AwardCriterionSourceRefLink,
@@ -40,6 +43,7 @@ from app.models.tender_structure import (
 )
 from app.models.tenders import Tender, TenderLot
 from app.services.source_refs import assert_ref_citable
+from app.services.structure_provenance import Provenance
 
 #: Les dades estructurals del contracte que es corregeixen per aqui. Fora de la
 #: fotografia de `tender_lifecycle` a proposit: no son el que publica l'organ
@@ -155,20 +159,30 @@ async def load_block(session: AsyncSession, tender: Tender, block_id: uuid.UUID)
 
 
 async def create_block(
-    session: AsyncSession, tender: Tender, fields: dict[str, Any]
+    session: AsyncSession, tender: Tender, fields: dict[str, Any], *, provenance: Provenance
 ) -> TenderBlock:
     await _assert_lot_of_tender(session, tender.id, fields.get("tender_lot_id"))
     await _assert_block_code_free(session, tender.id, fields["code"], except_id=None)
-    block = TenderBlock(tender_id=tender.id, **{k: fields.get(k) for k in BLOCK_FIELDS})
+    block = TenderBlock(
+        tender_id=tender.id,
+        **{k: fields.get(k) for k in BLOCK_FIELDS},
+        **provenance.create_kwargs(),
+    )
     session.add(block)
     await session.flush()
     return block
 
 
 async def update_block(
-    session: AsyncSession, tender: Tender, block: TenderBlock, fields: dict[str, Any]
+    session: AsyncSession,
+    tender: Tender,
+    block: TenderBlock,
+    fields: dict[str, Any],
+    *,
+    provenance: Provenance,
 ) -> bool:
-    """S'aplica nomes el que arriba. Cert si algun valor ha canviat."""
+    """S'aplica nomes el que arriba. Cert si algun valor ha canviat (i nomes
+    llavors se segella la provenance del valor nou)."""
     if "tender_lot_id" in fields:
         await _assert_lot_of_tender(session, tender.id, fields["tender_lot_id"])
     if "code" in fields and fields["code"] != block.code:
@@ -181,6 +195,7 @@ async def update_block(
             setattr(block, name, value)
             changed = True
     if changed:
+        provenance.stamp_update(block)
         await session.flush()
     return changed
 
@@ -220,25 +235,40 @@ async def load_site(session: AsyncSession, tender: Tender, site_id: uuid.UUID) -
     return site
 
 
-def _check_site_identity(code: str | None, name: str | None) -> None:
+def check_site_identity(code: str | None, name: str | None) -> None:
     if code is None and name is None:
         raise SiteIdentityError("Una seu necessita el codi del document o el nom real.")
 
 
-async def create_site(session: AsyncSession, tender: Tender, fields: dict[str, Any]) -> TenderSite:
+#: Alies privat (nom anterior a 0060).
+_check_site_identity = check_site_identity
+
+
+async def create_site(
+    session: AsyncSession, tender: Tender, fields: dict[str, Any], *, provenance: Provenance
+) -> TenderSite:
     """`is_critical` es tri-estat i NO es coacciona: `None` es «no se sap»."""
-    _check_site_identity(fields.get("code"), fields.get("name"))
+    check_site_identity(fields.get("code"), fields.get("name"))
     await _assert_site_code_free(session, tender.id, fields.get("code"), except_id=None)
-    site = TenderSite(tender_id=tender.id, **{k: fields.get(k) for k in SITE_FIELDS})
+    site = TenderSite(
+        tender_id=tender.id,
+        **{k: fields.get(k) for k in SITE_FIELDS},
+        **provenance.create_kwargs(),
+    )
     session.add(site)
     await session.flush()
     return site
 
 
 async def update_site(
-    session: AsyncSession, tender: Tender, site: TenderSite, fields: dict[str, Any]
+    session: AsyncSession,
+    tender: Tender,
+    site: TenderSite,
+    fields: dict[str, Any],
+    *,
+    provenance: Provenance,
 ) -> bool:
-    _check_site_identity(fields.get("code", site.code), fields.get("name", site.name))
+    check_site_identity(fields.get("code", site.code), fields.get("name", site.name))
     if "code" in fields and fields["code"] != site.code:
         await _assert_site_code_free(session, tender.id, fields["code"], except_id=site.id)
     changed = False
@@ -250,6 +280,7 @@ async def update_site(
             setattr(site, name, value)
             changed = True
     if changed:
+        provenance.stamp_update(site)
         await session.flush()
     return changed
 
@@ -264,12 +295,51 @@ async def delete_site(session: AsyncSession, site: TenderSite) -> None:
 # --------------------------------------------------------------------------- #
 
 
+class RequirementRunSupersededError(ConflictError):
+    """La fila es d'una run de requisits que ja no es la vigent: no s'anota."""
+
+    code = "requirement_run_superseded"
+
+
+async def _assert_annotatable(
+    session: AsyncSession, tender: Tender, entity: Requirement | AwardCriterion
+) -> None:
+    """En una licitacio PUBLICA nomes s'anoten files de la run canonica vigent.
+
+    Anotar un requisit o criteri d'una run superada (3B-2 §4.3, M6 de la Task 6)
+    deixaria l'anotacio on ja no la llegeix ningu: el carry-over nomes va de la
+    run vigent a la nova. Una licitacio manual (amb propietari) no hi entra: les
+    seves runs son del propietari i la seva politica es la de sempre. Els
+    requisits manuals (sense run) tampoc.
+    """
+    if tender.owner_company_id is not None or entity.run_id is None:
+        return
+    current = await session.scalar(
+        sa.select(RequirementExtractionRun.is_current).where(
+            RequirementExtractionRun.id == entity.run_id
+        )
+    )
+    if not current:
+        raise RequirementRunSupersededError(
+            "Aquesta fila es d'una analisi que ja no es la vigent: no s'hi poden afegir "
+            "anotacions.",
+            details={"run_id": str(entity.run_id)},
+        )
+
+
 async def load_requirement(
-    session: AsyncSession, tender: Tender, requirement_id: uuid.UUID
+    session: AsyncSession,
+    tender: Tender,
+    requirement_id: uuid.UUID,
+    *,
+    for_write: bool = True,
 ) -> Requirement:
     """Qualsevol requisit de la licitacio, extret o manual: la temporalitat i
     els blocs son anotacions d'estructura, no una reescriptura del que va
-    produir una run."""
+    produir una run.
+
+    Per escriure (`for_write`) en una licitacio publica, nomes de la run vigent
+    (`RequirementRunSupersededError`, 409)."""
     requirement = await session.scalar(
         sa.select(Requirement).where(
             Requirement.id == requirement_id, Requirement.tender_id == tender.id
@@ -277,11 +347,17 @@ async def load_requirement(
     )
     if requirement is None:
         raise NotFoundError("Requisit no trobat.")
+    if for_write:
+        await _assert_annotatable(session, tender, requirement)
     return requirement
 
 
 async def load_criterion(
-    session: AsyncSession, tender: Tender, criterion_id: uuid.UUID
+    session: AsyncSession,
+    tender: Tender,
+    criterion_id: uuid.UUID,
+    *,
+    for_write: bool = True,
 ) -> AwardCriterion:
     criterion = await session.scalar(
         sa.select(AwardCriterion).where(
@@ -290,6 +366,8 @@ async def load_criterion(
     )
     if criterion is None:
         raise NotFoundError("Criteri no trobat.")
+    if for_write:
+        await _assert_annotatable(session, tender, criterion)
     return criterion
 
 
@@ -386,10 +464,12 @@ async def link_source_ref(
     *,
     entity: TenderBlock | TenderSite | AwardCriterion,
     source_ref_id: uuid.UUID,
-    user: User | None = None,
+    provenance: Provenance,
 ) -> Any:
-    """Enllaça una cita existent. Ha de ser de la MATEIXA licitacio. Sense
-    `user` (via interna: fixtures, gold) l'enllac queda sense autor."""
+    """Enllaça una cita existent. Ha de ser de la MATEIXA licitacio. L'enllac
+    nou porta l'autor (`created_by`) o, sense persona (via interna d'un
+    productor: gold, extraccio), la passada (`producer_run_id`): mai cap dels dos
+    buit (ho garanteix `Provenance`)."""
     ref = await session.get(TenderSourceRef, source_ref_id)
     if ref is None:
         raise NotFoundError("Cita no trobada.")
@@ -403,7 +483,7 @@ async def link_source_ref(
         return existing
     # Un enllac nou es un input nou: mai cap a un document retirat de la font.
     await assert_ref_citable(session, ref)
-    link = link_model(source_ref_id=ref.id, created_by=user.id if user else None)
+    link = link_model(source_ref_id=ref.id, **provenance.link_kwargs())
     setattr(link, column.key, entity.id)
     session.add(link)
     await session.flush()

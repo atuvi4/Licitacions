@@ -79,12 +79,12 @@ describe("Indicador de preparació final", () => {
       findingFixture({ severity: "blocker" }),
       findingFixture({ severity: "blocker", code: "economic_offer_not_started", domain: "economic" }),
     ]);
-    expect(screen.getByText("2 pendents de preparació")).toBeTruthy();
+    expect(screen.getByText("2 pendents de preparació (totes les àrees)")).toBeTruthy();
     expect(screen.queryByText("A punt")).toBeNull();
     view.unmount();
 
     await mount({}, [findingFixture({ severity: "blocker" })]);
-    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació (totes les àrees)")).toBeTruthy();
   });
 
   it("els avisos i la informació no compten al capçal", async () => {
@@ -93,7 +93,7 @@ describe("Indicador de preparació final", () => {
       findingFixture({ severity: "warning", code: "technical_solution_requirement_missing", domain: "technical" }),
       findingFixture({ severity: "info", code: "economic_unit_limit_unknown", domain: "economic" }),
     ]);
-    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació (totes les àrees)")).toBeTruthy();
   });
 
   it("si no es pot llegir, no diu «A punt»: diu que no ho sap i deixa reintentar", async () => {
@@ -195,7 +195,7 @@ describe("Calaix de preparació final", () => {
 
   it("un codi desconegut es mostra amb el codi cru i la gravetat que diu el servidor", async () => {
     await mount({}, [findingFixture({ code: "economic_something_new", domain: "economic", severity: "blocker" })]);
-    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació (totes les àrees)")).toBeTruthy();
     await open();
     const row = screen.getByRole("listitem");
     expect(row.textContent).toContain("encara no reconeix aquest estat");
@@ -207,7 +207,7 @@ describe("Calaix de preparació final", () => {
 
   it("no promou ni rebaixa gravetats: un preu unitari per sobre del màxim és un pendent", async () => {
     await mount({}, [findingFixture({ code: "economic_unit_limit_exceeded", domain: "economic", severity: "blocker" })]);
-    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació (totes les àrees)")).toBeTruthy();
     await open();
     expect(screen.getByRole("listitem").textContent).toContain("Pendent");
   });
@@ -307,7 +307,7 @@ describe("Calaix de preparació final", () => {
       findingFixture({ severity: "blocker", code: "mandatory_evidence_missing", domain: "dossier" }),
       findingFixture({ severity: "warning", code: "technical_scope_stale", domain: "technical" }),
     ]);
-    expect(screen.getByText("3 pendents de preparació")).toBeTruthy();
+    expect(screen.getByText("3 pendents de preparació (totes les àrees)")).toBeTruthy();
   });
 
   it("no afegeix problemes que el servidor no digui", async () => {
@@ -326,7 +326,7 @@ describe("Una sola lectura per a tothom", () => {
 
   it("el distintiu i el calaix surten de la mateixa lectura, no de dues portes", async () => {
     await mount({}, [findingFixture({ severity: "blocker", code: "mandatory_evidence_missing" })]);
-    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació (totes les àrees)")).toBeTruthy();
     await open();
     // Obrir el calaix no torna a preguntar res: és la mateixa dada.
     expect(get).toHaveBeenCalledTimes(1);
@@ -355,7 +355,7 @@ describe("Una sola lectura per a tothom", () => {
       </ReadinessProvider>,
     );
     await flush();
-    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació (totes les àrees)")).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "desa la meva secció" }));

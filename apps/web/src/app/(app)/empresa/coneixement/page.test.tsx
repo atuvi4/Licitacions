@@ -127,19 +127,24 @@ describe("Coneixement de l'empresa", () => {
     respond();
   });
 
-  it("resumeix què se sap i obre a «Pendents de validar» quan hi ha feina", async () => {
+  it("obre a «Coneixement actual», sense cap resum global ni llista de tasques (B1–B3, B5)", async () => {
     const { container } = await renderPage();
     expect(screen.getByRole("heading", { level: 1, name: "Coneixement de l'empresa" })).toBeTruthy();
-    expect(["verified", "declared", "pending", "historic", "unknown"].map((key) => tile(container, key))).toEqual(["1", "2", "2", "4", "6"]);
-    expect(screen.getByRole("tab", { name: /Pendents de validar/ }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("heading", { name: "Dades actuals per acreditar" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Detectat a l'històric" })).toBeTruthy();
-    // Els suggeriments van per categoria, i al final els que només es poden descartar.
-    expect([...container.querySelectorAll("[data-candidates]")].map((group) => group.querySelector("p")?.textContent)).toEqual([
-      "Fets operatius · 1",
-      "Solucions · 1",
-      "Només es poden descartar · 2",
-    ]);
+    // Cap mesurador: ni KPI «Desconegut», ni «Per acreditar», ni percentatge.
+    expect(container.querySelector("[data-tile]")).toBeNull();
+    for (const key of ["verified", "declared", "pending", "historic", "unknown"]) expect(tile(container, key)).toBe("");
+    expect(container.textContent).not.toMatch(/Desconegut\s*\d|Per acreditar|completitud|%/);
+    // Cap pestanya de tasques globals: s'obre al coneixement actual.
+    expect(screen.queryByRole("tab", { name: /Pendents de validar/ })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Coneixement actual" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Coneixement actual", "Qualificació i mitjans", "Històric detectat"]);
+    expect(screen.queryByRole("heading", { name: "Dades actuals per acreditar" })).toBeNull();
+    expect(container.textContent).not.toMatch(/pendents per acreditar|tasques/i);
+    // «Declarat» és un estat vàlid: l'evidència només es demana quan una licitació la requereix (B2).
+    expect(container.textContent).toContain("L'evidència només es demana quan una licitació la requereix");
+    for (const name of ["Certificacions", "Serveis", "Fets operatius", "Solucions", "Capacitats", "Productes", "Partners"]) {
+      expect(screen.getByRole("heading", { level: 2, name })).toBeTruthy();
+    }
     // Cap codi intern a la pantalla: tot són paraules.
     expect(container.textContent).not.toMatch(RAW_CODES);
   });
@@ -153,7 +158,8 @@ describe("Coneixement de l'empresa", () => {
     expect(within(row).getByText("Declarat")).toBeTruthy();
     expect(within(row).queryByText("Verificat")).toBeNull();
     expect(row.querySelector("[data-state]")?.getAttribute("data-state")).toBe("declared");
-    expect(row.textContent).toContain("Falta evidència");
+    // «Declarat» no porta cap pastilla de tasca «Falta evidència» (B2); l'abast desconegut sí que es diu (B6).
+    expect(row.textContent).not.toContain("Falta evidència");
     expect(row.textContent).toContain("Abast desconegut");
 
     // També a «Coneixement actual».
@@ -163,20 +169,20 @@ describe("Coneixement de l'empresa", () => {
     expect(within(current).getByText("Declarat")).toBeTruthy();
   });
 
-  it("pendents: diu què hi falta a cada dada i n'ofereix la sortida", async () => {
+  it("cada ítem porta les seves accions (evidència, abast, verificar); cap llista global de tasques (B5)", async () => {
     const { container } = await renderPage();
     const ens = record(container, "cert-ens");
-    expect(ens.textContent).toContain("Encara no hi ha cap document que ho acrediti.");
-    expect(ens.textContent).toContain("No se sap quines línies de servei cobreix.");
     expect(within(ens).getByRole("button", { name: "Afegeix evidència" })).toBeTruthy();
     expect(within(ens).getByRole("button", { name: "Edita l'abast" })).toBeTruthy();
     expect(within(ens).getByRole("button", { name: "Verifica" })).toBeTruthy();
+    expect(ens.textContent).toContain("Abast pendent d'estructurar");
 
-    // El partner ja té evidència: només falta donar-la per bona.
+    // El partner ja té evidència: es mostra Declarat i l'acció Verifica, sense pastilla.
     const partner = record(container, "partner-1");
-    expect(partner.textContent).toContain("Pendent de verificar");
+    expect(partner.textContent).toContain("Declarat");
+    expect(partner.textContent).not.toContain("Pendent de verificar");
     expect(partner.textContent).not.toContain("Falta evidència");
-    // Els papers d'un partner no surten com a pendents a part.
+    // Els papers d'un partner no són cap fila pròpia.
     expect(container.querySelector('[data-record="role-1"]')).toBeNull();
   });
 
@@ -458,6 +464,7 @@ describe("Coneixement de l'empresa", () => {
 
   it("una observació negativa o ja superada per una dada actual només es pot descartar", async () => {
     await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Històric detectat/ }));
     expect(screen.queryByRole("button", { name: "Revisa i confirma: ISO 9001" })).toBeNull();
     expect(screen.getByRole("button", { name: "Descarta: ISO 9001" })).toBeTruthy();
     expect(screen.getByText(/L'històric diu que no es tenia/)).toBeTruthy();
@@ -477,6 +484,8 @@ describe("Coneixement de l'empresa", () => {
 
   it("coneixement actual: cada categoria amb els seus estats, l'històric i el que no se sap", async () => {
     const { container } = await renderPage();
+    // És la pestanya per defecte: canviar a una altra i tornar escriu la URL.
+    fireEvent.click(screen.getByRole("tab", { name: /Històric detectat/ }));
     fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
     expect(replace).toHaveBeenCalledWith("/empresa/coneixement?tab=actual", { scroll: false });
     for (const name of ["Certificacions", "Serveis", "Fets operatius", "Solucions", "Capacitats", "Productes", "Partners"]) {
@@ -697,21 +706,13 @@ describe("Coneixement de l'empresa", () => {
       fireEvent.change(search(), { target: { value: "zzzz inexistent" } });
       expect(screen.getByRole("status").textContent).toContain("No s'ha trobat cap resultat.");
       expect(screen.queryAllByRole("heading", { level: 2 })).toEqual([]);
-      fireEvent.click(screen.getByRole("tab", { name: /Pendents de validar/ }));
-      expect(screen.getByRole("status").textContent).toContain("No s'ha trobat cap resultat.");
       fireEvent.click(screen.getByRole("tab", { name: /Històric detectat/ }));
       expect(screen.getByRole("status").textContent).toContain("No s'ha trobat cap resultat.");
     });
 
-    it("la cerca es manté en canviar de pestanya i filtra pendents, actual i històric igual", async () => {
+    it("la cerca es manté en canviar de pestanya i filtra actual i històric igual", async () => {
       const { container } = await renderPage();
       fireEvent.change(search(), { target: { value: "24x7" } });
-      // Pendents: només el candidat de suport 24x7.
-      expect(screen.queryByRole("heading", { name: "Dades actuals per acreditar" })).toBeNull();
-      expect(container.querySelectorAll("[data-observation]").length).toBe(1);
-      expect(container.querySelector("[data-observation]")!.textContent).toContain("Suport 24x7");
-
-      fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
       expect(search().value).toBe("24x7");
       expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Fets operatius"]);
       expect(container.querySelector("#fets")!.textContent).toContain("Suport 24x7");
@@ -768,11 +769,11 @@ describe("Coneixement de l'empresa", () => {
     expect(screen.getByText(/^Ajuntament de Mostra · .*2025$/)).toBeTruthy();
   });
 
-  it("empresa nova, sense històric ni dades: res pendent, tot per declarar", async () => {
+  it("empresa nova, sense històric ni dades: tot per declarar, sense cap «Desconegut N» (B3)", async () => {
     respondEmpty();
     const { container } = await renderPage();
-    expect(["verified", "declared", "pending", "historic", "unknown"].map((key) => tile(container, key))).toEqual(["0", "0", "0", "0", "10"]);
-    // Sense feina pendent s'obre directament al coneixement actual.
+    expect(container.querySelector("[data-tile]")).toBeNull();
+    expect(container.textContent).not.toMatch(/Desconegut\s*\d/);
     expect(screen.getByRole("tab", { name: "Coneixement actual" }).getAttribute("aria-selected")).toBe("true");
     expect(container.querySelector("#certificacions")!.textContent).toContain("Sense cap dada (2)");
     expect(screen.getByText("Cap solució declarada.")).toBeTruthy();
@@ -780,8 +781,7 @@ describe("Coneixement de l'empresa", () => {
     expect(screen.getByText("Cap partner declarat.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Declara una capacitat" }) as HTMLButtonElement).disabled).toBe(true);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Pendents de validar" }));
-    expect(screen.getByRole("heading", { name: "Res pendent de validar" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Pendents de validar" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "Històric detectat" }));
     expect(screen.getByRole("heading", { name: "Cap dada detectada a l'històric" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Declara coneixement actual" }));
@@ -865,7 +865,7 @@ describe("Coneixement de l'empresa", () => {
     expect(within(dialog).queryByRole("note")).toBeNull();
   });
 
-  it("després d'editar una dada verificada surt «Declarat · Pendent de verificar», no «Falta evidència»", async () => {
+  it("després d'editar una dada verificada surt «Declarat» i l'acció «Verifica», sense «Pendent de verificar» ni «Falta evidència» (B2)", async () => {
     // El que torna l'API un cop editada: declarada, amb l'evidència encara enllaçada.
     const snapshot = snapshotFixture();
     const claim = snapshot.facts[0].claims[0];
@@ -875,7 +875,7 @@ describe("Coneixement de l'empresa", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
     const row = record(container, "fact-tier3");
     expect(within(row).getByText("Declarat")).toBeTruthy();
-    expect(within(row).getByText("Pendent de verificar")).toBeTruthy();
+    expect(within(row).queryByText("Pendent de verificar")).toBeNull();
     expect(within(row).queryByText("Falta evidència")).toBeNull();
     expect(within(row).queryByText("Verificat")).toBeNull();
     // I es pot tornar a verificar des de la mateixa fila.
@@ -989,8 +989,14 @@ describe("Coneixement de l'empresa", () => {
     respond({ [`${BASE}/services`]: [service] });
     const { container } = await renderPage();
     fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
-    expect(record(container, "svc-1").textContent).toContain("Accessos FTTH · Mitjans propis · Cobertura parcial: Baix Empordà");
-    expect(record(container, "fact-tier3").textContent).not.toContain("Cobertura");
+    // La línia d'abast de cada ítem (B6): cobertura amb completesa, i «Sense especificar» quan no hi ha dada.
+    expect(record(container, "svc-1").textContent).toContain("Accessos FTTH · Mitjans propis");
+    expect(within(record(container, "svc-1")).getByText(/^Abast:/).textContent).toBe("Abast: Cobertura parcial: Baix Empordà");
+    expect(within(record(container, "fact-tier3")).getByText(/^Abast:/).textContent).toBe("Abast: Sense especificar");
+    // El paper d'un partner sense cobertura ni territori també ho diu.
+    const partner = record(container, "partner-1");
+    expect(partner.textContent).toContain("Subcontractista · Obra civil · Girona");
+    expect(partner.textContent).not.toContain("Sense especificar");
 
     // En desar, el que torna l'API és el que es pinta.
     patch.mockImplementation(async () => {
@@ -1006,8 +1012,18 @@ describe("Coneixement de l'empresa", () => {
     fireEvent.change(within(dialog).getByLabelText("Nom de l'àrea 1"), { target: { value: "Girona" } });
     fireEvent.submit(dialog.querySelector("form")!);
     await flush();
-    expect(record(container, "fact-tier3").textContent).toContain("Sí · CPD en un centre Tier-3 · Cobertura completa: Girona");
+    expect(record(container, "fact-tier3").textContent).toContain("Sí · CPD en un centre Tier-3");
+    expect(within(record(container, "fact-tier3")).getByText(/^Abast:/).textContent).toBe("Abast: Cobertura completa: Girona");
     expect(container.textContent).not.toMatch(RAW_CODES);
+  });
+
+  it("un paper de partner sense territori ni cobertura diu «cobertura sense especificar» (B6)", async () => {
+    const records = recordsFixture();
+    records.partner_roles = [{ ...records.partner_roles[0], territory: null, coverage: undefined }];
+    respond({ [`${BASE}/knowledge/records`]: records });
+    const { container } = await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "Coneixement actual" }));
+    expect(record(container, "partner-1").textContent).toContain("Subcontractista · Obra civil · cobertura sense especificar");
   });
 
   it("declarar un servei o un paper nou amb cobertura l'envia; sense tocar-la, no", async () => {

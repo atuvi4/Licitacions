@@ -27,6 +27,7 @@ import sqlalchemy as sa
 
 from app.models.dimensions import WorkspaceDimension, WorkspaceDimensionObservation
 from app.models.enums import DimensionStatus
+from tests.conftest import grant_go
 from tests.fixtures.pdf_builder import build_pdf
 
 pytestmark = pytest.mark.asyncio
@@ -783,6 +784,7 @@ async def test_a_dimension_from_another_workspace_is_not_found(
             db, company_id=company.id, tender=tender, user_id=user.id
         )
     ).workspace
+    await grant_go(db, other_workspace, user)
     await db.commit()
 
     created = await _create(client_a, candidacy)

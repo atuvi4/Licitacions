@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkspaceSummary } from "@/lib/workspace";
 
@@ -41,7 +41,7 @@ function workspace(overrides: Partial<WorkspaceSummary>): WorkspaceSummary {
 }
 
 const summary = { total_tenders: 148, actionable: 100, candidates: 12, high_fit: 5, low_fit: 3, excluded: 1, closed: 2, insufficient_data: 1, stale: 0, rules_version: "v1", last_calculated_at: null };
-const HEADERS = ["Licitació", "Termini", "Encaix", "Recomanació", "Decisió", "Estat", "Acció"];
+const HEADERS = ["Licitació", "Termini", "Encaix", "Resultat de l'anàlisi", "Decisió", "Estat", "Acció"];
 
 function respondWith(map: Record<string, unknown | Deferred | Error>) {
   get.mockImplementation((path: string) => {
@@ -64,6 +64,11 @@ describe("Candidatures (llistat)", () => {
   beforeEach(() => {
     get.mockReset();
     push.mockReset();
+    // El comptador de dies es calcula al client sobre `deadline_at` (A11): data fixa.
+    vi.setSystemTime(new Date("2026-09-16T10:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("mentre carrega pinta l'esquelet amb el títol i les columnes reals, sense recomptes", async () => {
@@ -83,7 +88,7 @@ describe("Candidatures (llistat)", () => {
         workspace({ id: "far", tender_title: "Manteniment de xarxa", days_remaining: 31, deadline_at: "2026-10-17T12:00:00Z" }),
         workspace({ id: "urgent", tender_title: "Fibra òptica municipal", days_remaining: 6, deadline_at: "2026-09-22T12:00:00Z", tender_lot_id: "lot-1", analysis_outdated: true }),
         workspace({ id: "prep", tender_title: "Energia elèctrica", status: "preparing_bid", human_decision: "go", recommendation: "no_go", eligibility: "no_go", days_remaining: 20 }),
-        workspace({ id: "done", tender_title: "Neteja viària", status: "submitted", human_decision: "go", days_remaining: -4, deadline_passed: true }),
+        workspace({ id: "done", tender_title: "Neteja viària", status: "submitted", human_decision: "go", days_remaining: -4, deadline_passed: true, deadline_at: "2026-09-12T12:00:00Z" }),
         workspace({ id: "nogo", tender_title: "Consultoria", status: "no_go_approved", human_decision: "no_go" }),
       ],
       "/companies/c1/matches/summary": summary,
@@ -109,8 +114,8 @@ describe("Candidatures (llistat)", () => {
     const urgent = screen.getByText("Fibra òptica municipal").closest("tr")!;
     expect(urgent.textContent).toContain("Per lot");
     const pills = [...urgent.querySelectorAll("[data-level]")].map((pill) => `${pill.textContent?.trim()}[${pill.getAttribute("data-level")}]`);
-    expect(pills).toContain("6 dies restants[blocking]");
-    expect(pills).toContain("Pendent[attention]");
+    expect(pills).toContain("6 dies[blocking]");
+    expect(pills).toContain("Pendent de decidir[attention]");
     expect(pills).toContain("Pendent de decisió[attention]");
     expect(pills).toContain("Anàlisi endarrerida[attention]");
     expect(urgent.textContent).not.toContain("PENDENT");
@@ -119,12 +124,14 @@ describe("Candidatures (llistat)", () => {
     expect(urgentAction.textContent).toContain("Decideix");
     expect(urgentAction.getAttribute("data-variant")).toBe("primary");
 
-    // Recomanació automàtica NO-GO amb decisió humana GO: dues columnes, dos valors.
+    // Resultat de l'anàlisi amb bloqueig i decisió humana GO: dues columnes, dos valors,
+    // i cap «NO-GO» automàtic (A14): el NO-GO només el diu una persona.
     const prep = screen.getByText("Energia elèctrica").closest("tr")!;
     const prepPills = [...prep.querySelectorAll("[data-level]")].map((pill) => `${pill.textContent?.trim()}[${pill.getAttribute("data-level")}]`);
-    expect(prep.textContent).toContain("NO-GO");
+    expect(prep.textContent).toContain("Bloqueig confirmat");
+    expect(prep.textContent).not.toContain("NO-GO");
     expect(prepPills).toContain("GO[ready]");
-    expect(prepPills).toContain("Elegibilitat: NO-GO[blocking]");
+    expect(prepPills).toContain("Elegibilitat: No elegible[blocking]");
     expect(prepPills).toContain("Preparant oferta[running]");
     expect([...prep.querySelectorAll("a[href='/candidatures/prep']")].pop()?.textContent).toContain("Prepara");
 
@@ -136,6 +143,24 @@ describe("Candidatures (llistat)", () => {
     expect([...nogo.querySelectorAll("[data-level]")].map((pill) => pill.textContent?.trim())).toContain("NO-GO aprovat");
 
     expect(screen.getByText("5 candidatures · 3 obertes · 2 tancades")).toBeTruthy();
+    expect(container.textContent).not.toMatch(/recomanaci/i);
+    expect(screen.getByText(/El resultat de l.anàlisi és automàtic; la decisió sempre és d.una persona./)).toBeTruthy();
+  });
+
+  it("l'estat «analysis» s'etiqueta segons `analysis_state` de la fila (A13)", async () => {
+    respondWith({
+      "/companies/c1/workspaces": [
+        workspace({ id: "none", tender_title: "Sense anàlisi", status: "analysis", analysis_state: "absent" }),
+        workspace({ id: "old", tender_title: "Anàlisi vella", status: "analysis", analysis_state: "stale" }),
+        workspace({ id: "live", tender_title: "Anàlisi viva", status: "analysis", analysis_state: "current" }),
+      ],
+      "/companies/c1/matches/summary": summary,
+    });
+    render(<WorkspacesPage />);
+    await screen.findByText("Sense anàlisi");
+    expect(screen.getByText("Sense anàlisi").closest("tr")!.textContent).toContain("Pendent d'anàlisi");
+    expect(screen.getByText("Anàlisi vella").closest("tr")!.textContent).toContain("Anàlisi obsoleta");
+    expect(screen.getByText("Anàlisi viva").closest("tr")!.textContent).toContain("En anàlisi");
   });
 
   it("la fila sencera obre la candidatura amb el ratolí i amb Enter", async () => {

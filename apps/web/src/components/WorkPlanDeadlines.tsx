@@ -18,7 +18,10 @@ interface Props {
  * Només es llegeixen; les tasques i la checklist continuen sent on eren.
  */
 export function WorkPlanDeadlines({ workspace }: Props) {
-  const analysis = useResource<RequirementAnalysis>(`/tenders/${workspace.tender_id}/analysis/requirements`);
+  // La run que llegeix l'empresa de la candidatura (3B-2 §6.5), no la de l'empresa per defecte.
+  const analysis = useResource<RequirementAnalysis>(
+    `/tenders/${workspace.tender_id}/analysis/requirements?company_id=${workspace.company_id}`,
+  );
   // Candidatura global amb lots: sense oferta no se sap on anem, i aquí només
   // es mostren els generals (la mateixa lectura prudent que Solució tècnica).
   const deadlines = analysis.data ? requirementsRoutedTo(analysis.data.requirements, "work_plan", workspace, new Set()) : [];

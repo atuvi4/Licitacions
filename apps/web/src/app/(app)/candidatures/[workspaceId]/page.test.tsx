@@ -302,11 +302,15 @@ describe("Candidatura · stepper i Decidir", () => {
     expect([...second.container.querySelectorAll("dt")].map((el) => el.textContent)).not.toContain("Lot");
   });
 
-  it("termini: dies i data quan hi és; «no consta» quan és null", async () => {
+  it("termini: dies naturals (regla única de lib/deadline, A11) i data quan hi és; «no consta» quan és null", async () => {
+    // El pilot: a 11 dies i 18 hores, aquí es deia «11» i a la fitxa «12». Ara 12 a tot arreu.
+    vi.setSystemTime(new Date("2026-09-24T16:00:00Z"));
     get.mockResolvedValueOnce(workspaceFixture());
     const first = render(<WorkspacePage />);
     await flush();
-    expect(first.container.textContent).toContain("21 dies restants");
+    expect(first.container.textContent).toContain("12 dies");
+    expect(first.container.textContent).not.toContain("11 dies");
+    vi.useRealTimers();
     first.unmount();
     get.mockResolvedValueOnce(workspaceFixture({ deadline_at: null, days_remaining: null }));
     const second = render(<WorkspacePage />);
@@ -651,13 +655,70 @@ describe("Candidatura · Preparar per àrees", () => {
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
   });
 
-  it("la preparació final es llegeix un cop i es veu al capçal", async () => {
+  it("la preparació final es llegeix un cop i es veu al capçal; el pas Tancar diu el mateix nombre (A15)", async () => {
     readiness.mockResolvedValue(readinessFixture({ findings: [{ code: "economic_lot_empty", severity: "blocker", domain: "economic", entity_id: null, context: {} }] }));
+    // Dos blocadors al workspace, un a la preparació final: només compta la preparació final.
+    get.mockResolvedValueOnce(workspaceFixture({ readiness_blockers: ["missing_documents", "open_tasks"] }));
     render(<WorkspacePage />);
     await flush();
     expect(readiness).toHaveBeenCalledTimes(1);
     expect(readiness).toHaveBeenCalledWith("/companies/c1/workspaces/w1/final-readiness");
-    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
+    expect(screen.getAllByText(/1 pendent de preparació/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText(/2 (coses|pendents)/)).toBeNull();
+  });
+
+  it("«Veure la licitació» és a la capçalera, fora dels badges, a Decidir, Preparar i Tancar (A16)", async () => {
+    for (const pas of ["decidir", "preparar", "tancar"]) {
+      search = `pas=${pas}`;
+      get.mockResolvedValueOnce(workspaceFixture());
+      const view = render(<WorkspacePage />);
+      await flush();
+      const link = screen.getByRole("link", { name: "Veure la licitació" });
+      expect(link.getAttribute("href")).toBe("/licitacions/t1");
+      // Separat dels badges: no és dins del mateix contenidor que la pastilla d'estat.
+      const pill = screen.getByText("Pendent de decisió");
+      expect(pill.parentElement?.contains(link)).toBe(false);
+      view.unmount();
+    }
+  });
+
+  it("l'estat «analysis» del capçal s'etiqueta segons `analysis_state` del dossier (A13)", async () => {
+    get.mockResolvedValueOnce(
+      workspaceFixture({
+        status: "analysis",
+        dossier_coverage: { analysis_state: "absent", mandatory_total: null, covered: 0, missing_document: 0, needs_review: 0, not_applicable: 0, expired_documents: 0, optional_total: 0, optional_covered: 0 },
+      }),
+    );
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByText("Pendent d'anàlisi")).toBeTruthy();
+    expect(screen.queryByText("En anàlisi")).toBeNull();
+  });
+
+  it("el comptador del capçal diu que són totes les àrees, i cada pestanya de Preparar porta el seu (B6)", async () => {
+    const blocker = (code: string, domain: "dossier" | "economic") => ({ code, severity: "blocker" as const, domain, entity_id: null, context: {} });
+    readiness.mockResolvedValue(
+      readinessFixture({
+        findings: [
+          blocker("mandatory_unresolved", "dossier"),
+          blocker("mandatory_evidence_missing", "dossier"),
+          blocker("economic_lot_empty", "economic"),
+          blocker("mandatory_checklist_blocked", "dossier"),
+        ],
+      }),
+    );
+    search = "pas=preparar&area=dossier";
+    get.mockResolvedValueOnce(workspaceFixture({ status: "preparing_bid", human_decision: "go" }));
+    render(<WorkspacePage />);
+    await flush();
+    // «4» al capçal és de totes les àrees; «2» a Dossier, i les altres pestanyes sumen la resta.
+    expect(screen.getByText("4 pendents de preparació (totes les àrees)")).toBeTruthy();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Solució tècnica",
+      "Oferta econòmica1",
+      "Dossier2",
+      "Pla de treball1",
+    ]);
   });
 
   it("un desat del dossier torna a preguntar la preparació final i el capçal canvia", async () => {
@@ -666,14 +727,14 @@ describe("Candidatura · Preparar per àrees", () => {
     readiness.mockResolvedValueOnce(readinessFixture());
     render(<WorkspacePage />);
     await flush();
-    expect(screen.getByText("1 pendent de preparació")).toBeTruthy();
+    expect(screen.getByText("1 pendent de preparació (totes les àrees)")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "simula desat del dossier" }));
     await flush();
 
     expect(readiness).toHaveBeenCalledTimes(2);
     expect(screen.getByText("A punt")).toBeTruthy();
-    expect(screen.queryByText("1 pendent de preparació")).toBeNull();
+    expect(screen.queryByText("1 pendent de preparació (totes les àrees)")).toBeNull();
     // Sense recarregar la pàgina: la secció no s'ha desmuntat.
     expect(screen.getByTestId("dossier")).toBeTruthy();
   });
@@ -948,5 +1009,113 @@ describe("Candidatura · propietari únic de /analysis/current", () => {
     await flush();
     expect(screen.queryByTestId("card-spy")).toBeNull();
     expect(analysisCurrent).not.toHaveBeenCalled();
+  });
+});
+
+describe("Candidatura · Preparar sense GO és visible però només lectura (3B-2 §7.1.6, A18)", () => {
+  const COPY = "Es pot consultar; s'obre a edició amb GO";
+  const go = () => ({ status: "preparing_bid" as const, human_decision: "go" as const, latest_decision: decisionFixture(), decisions: [decisionFixture()] });
+
+  beforeEach(() => {
+    get.mockReset();
+    readiness.mockReset();
+    readiness.mockResolvedValue(readinessFixture());
+    analysisCurrent.mockReset();
+    analysisCurrent.mockRejectedValue(new ApiError(404, "not_found", "Not found"));
+    post.mockReset();
+    push.mockClear();
+    replace.mockClear();
+    leaveGuard.mockReset();
+    leaveGuard.mockResolvedValue(true);
+    search = "pas=preparar&area=solucio";
+  });
+
+  function readOnlyArea(): HTMLFieldSetElement {
+    const area = document.querySelector("fieldset[data-prepare-mode='read-only']") as HTMLFieldSetElement | null;
+    expect(area, "l'àrea de Preparar en mode lectura és un fieldset desactivat").not.toBeNull();
+    return area!;
+  }
+
+  it("sense cap decisió, ?pas=preparar es manté navegable: l'àrea es veu, els controls queden desactivats i la copy ho diu", async () => {
+    get.mockResolvedValue(workspaceFixture());
+    render(<WorkspacePage />);
+    await flush();
+    // Es veu: el pas, les quatre àrees i la secció demanada.
+    expect(step("Preparar").getAttribute("aria-current")).toBe("step");
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(screen.getByTestId("solucio")).toBeTruthy();
+    // Però no s'edita: tot control de l'àrea penja d'un fieldset desactivat.
+    const area = readOnlyArea();
+    expect(area.disabled).toBe(true);
+    const control = screen.getByRole("button", { name: "simula canvis sense desar" });
+    expect(control.closest("fieldset[disabled]")).not.toBeNull();
+    expect(screen.getByText(COPY)).toBeTruthy();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("amb NO-GO vigent, Preparar també és només lectura", async () => {
+    get.mockResolvedValue(workspaceFixture({ status: "no_go_approved", human_decision: "no_go", latest_decision: decisionFixture({ decision: "no_go" }) }));
+    render(<WorkspacePage />);
+    await flush();
+    expect(readOnlyArea().disabled).toBe(true);
+    expect(screen.getByText(COPY)).toBeTruthy();
+  });
+
+  it("un ajornament tampoc no obre l'edició", async () => {
+    get.mockResolvedValue(workspaceFixture({ human_decision: "defer", latest_decision: decisionFixture({ decision: "defer" }) }));
+    render(<WorkspacePage />);
+    await flush();
+    expect(readOnlyArea().disabled).toBe(true);
+  });
+
+  it("amb GO vigent és editable: cap fieldset desactivat i cap copy de lectura", async () => {
+    get.mockResolvedValue(workspaceFixture(go()));
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByTestId("solucio")).toBeTruthy();
+    expect(document.querySelector("fieldset[data-prepare-mode='read-only']")).toBeNull();
+    expect(document.querySelector("fieldset[disabled]")).toBeNull();
+    expect(screen.queryByText(COPY)).toBeNull();
+    expect(screen.getByRole("button", { name: "simula canvis sense desar" }).closest("fieldset[disabled]")).toBeNull();
+  });
+
+  it("cada àrea de Preparar queda en lectura sense GO, i la copy porta a Decidir", async () => {
+    get.mockResolvedValue(workspaceFixture());
+    for (const [area, testId] of [["dossier", "dossier"], ["oferta", "oferta"], ["pla", "tasks"]] as const) {
+      search = `pas=preparar&area=${area}`;
+      const { unmount } = render(<WorkspacePage />);
+      await flush();
+      expect(screen.getByTestId(testId)).toBeTruthy();
+      expect(screen.getByTestId(testId).closest("fieldset[disabled]"), area).not.toBeNull();
+      expect(screen.getByRole("link", { name: "Ves a Decidir" }).getAttribute("href")).toContain("pas=decidir");
+      unmount();
+    }
+  });
+
+  it("els dubtes es poden consultar sense GO, però no obrir-ne cap", async () => {
+    get.mockImplementation(async (path: string) => (path.endsWith("/issues") ? [] : workspaceFixture()));
+    render(<WorkspacePage />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Dubtes i discrepàncies" }));
+    await flush();
+    const drawer = screen.getByRole("dialog", { name: "Dubtes i discrepàncies" });
+    expect(drawer.textContent).toContain("Cap dubte obert");
+    expect(drawer.textContent).toContain(COPY);
+    // Tot el cos del calaix (llista i formularis) penja d'un fieldset desactivat.
+    const body = drawer.querySelector("fieldset[disabled]");
+    expect(body).not.toBeNull();
+    expect(body?.textContent).toContain("Cap dubte obert");
+    // Tancar el calaix continua sent possible: el botó de tancar no és dins del fieldset.
+    expect(screen.getByRole("button", { name: "Tanca" }).closest("fieldset[disabled]")).toBeNull();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("Tancar sense GO també és només lectura: el paquet no es genera des de la UI", async () => {
+    get.mockResolvedValue(workspaceFixture());
+    search = "pas=tancar";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByTestId("package").closest("fieldset[disabled]")).not.toBeNull();
+    expect(screen.getByText(COPY)).toBeTruthy();
   });
 });

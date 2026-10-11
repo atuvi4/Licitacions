@@ -15,6 +15,7 @@ import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 # La base de desenvolupament de qui executa els tests, si n'hi ha. Nomes es
 # guarda per poder-la REFUSAR: els tests no hi poden apuntar mai.
@@ -47,8 +48,9 @@ from app.core.security import hash_password  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import get_session  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models.enums import MembershipRole  # noqa: E402
+from app.models.enums import MembershipRole, WorkspaceDecisionType  # noqa: E402
 from app.models.identity import Company, CompanyMembership, User  # noqa: E402
+from app.models.workspace import BidWorkspace, WorkspaceDecision  # noqa: E402
 from app.services.storage import LocalFilesystemStorage, set_storage  # noqa: E402
 from tests.pg_harness import (  # noqa: E402
     DEFAULT_TEST_DATABASE,
@@ -62,6 +64,29 @@ TEST_PASSWORD = "TestPassw0rd!"
 
 #: La DSN de la base de test ja validada. Nomes existeix amb `--postgres`.
 PG_TEST_URL = pytest.StashKey[object]()
+
+#: Models dels proveidors «reals» de test (`tests/real_provider.py` i dobles amb nom
+#: `anthropic`). Cap no surt a la xarxa. Des de 3B-2 §6.7 tota analisi real passa per
+#: una sola porta (`llm_budget.provider_gate`): model pinat i amb preu. Aqui ho estan
+#: amb un preu infim (cap cap no s'acosta); qui prova la porta ho canvia.
+PINNED_TEST_MODELS = (
+    "claude-test-model",
+    "claude-test-model-2",
+    "claude-test-model-3",
+    "claude-test-rerun",
+    *(f"claude-test-rerun-{n}" for n in range(1, 10)),
+)
+TEST_MODEL_PRICE = {"input": 0.001, "output": 0.001}
+
+
+@pytest.fixture(autouse=True)
+def _pinned_test_models(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_ALLOWED_MODELS", list(PINNED_TEST_MODELS))
+    monkeypatch.setattr(
+        settings,
+        "LLM_MODEL_PRICES",
+        {model: dict(TEST_MODEL_PRICE) for model in PINNED_TEST_MODELS},
+    )
 
 
 def pytest_addoption(parser):
@@ -285,6 +310,41 @@ async def create_user_with_company(
     )
     await session.commit()
     return user, company
+
+
+async def grant_go(
+    db: AsyncSession, workspace: BidWorkspace, user: User | None = None
+) -> WorkspaceDecision:
+    """Deixa un GO huma vigent al workspace sense moure'n l'estat.
+
+    3B-2 §7.1.6: tot mutador del pas Preparar exigeix que l'ULTIMA decisio del
+    workspace sigui GO (`app.services.workspace_gate.assert_workspace_go`). Els
+    tests que exerceixen la preparacio per HTTP hi passen; els que proven la
+    decisio mateixa fan servir `record_decision`, que a mes mou l'estat. Sense
+    `user`, signa el primer membre de l'empresa del workspace.
+    """
+    decided_by = (
+        user.id
+        if user is not None
+        else await db.scalar(
+            sa.select(CompanyMembership.user_id)
+            .where(CompanyMembership.company_id == workspace.company_id)
+            .limit(1)
+        )
+    )
+    assert decided_by is not None, "cap membre a l'empresa del workspace"
+    decision = WorkspaceDecision(
+        company_id=workspace.company_id,
+        workspace_id=workspace.id,
+        decision=WorkspaceDecisionType.GO,
+        decided_by=decided_by,
+        decided_at=datetime.now(UTC),
+        reason="GO de prova: obre el pas Preparar",
+    )
+    db.add(decision)
+    await db.commit()
+    await db.refresh(decision)
+    return decision
 
 
 async def satisfy_final_gate(db, workspace, user) -> None:

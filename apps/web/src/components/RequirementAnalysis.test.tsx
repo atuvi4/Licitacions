@@ -72,6 +72,8 @@ function run(overrides: Partial<ExtractionRun> = {}): ExtractionRun {
     skipped_documents: null,
     error_code: null,
     error_message: null,
+    run_basis: "real",
+    needs_review: false,
     ...overrides,
   };
 }
@@ -146,13 +148,15 @@ describe("RequirementAnalysisSection", () => {
   });
 
   it("sense anàlisi: B3 diu que «0 bloquejos» no vol dir res i l'acció passa pel preview, mai directament", async () => {
-    const quote: AnalysisQuote = { id: "q1", tender_id: "t1", status: "open", planning_version: "1", profile: "std", provider: "anthropic", model: "claude", force: false, input_fingerprint: "f", documents: [{ tender_document_id: "d1", name: "Plec administratiu", document_type: "administrative_terms", pages: 12, chars: 20000 }], skipped_documents: [], pages_total: 12, pages_in_plan: 12, pages_truncated: false, chunks: 4, chunks_to_send: 4, reusable_run_id: null, estimated_input_tokens: null, estimated_output_tokens: null, max_chunks: 40, allowed: true, blocking_reason: null, expires_at: "2026-09-17T10:00:00Z" };
+    const quote: AnalysisQuote = { id: "q1", tender_id: "t1", status: "open", planning_version: "1", profile: "std", provider: "anthropic", model: "claude", force: false, input_fingerprint: "f", documents: [{ tender_document_id: "d1", name: "Plec administratiu", document_type: "administrative_terms", pages: 12, chars: 20000 }], skipped_documents: [], pages_total: 12, pages_in_plan: 12, pages_truncated: false, chunks: 4, chunks_to_send: 4, reusable_run_id: null, estimated_input_tokens: null, estimated_output_tokens: null, max_chunks: 40, allowed: true, blocking_reason: null, prerequisites: null, provider_basis: "real", warnings: [], estimated_cost_usd: null, accept_incomplete_package: false, expires_at: "2026-09-17T10:00:00Z" };
     previewAnalysis.mockResolvedValue(quote);
     confirmAnalysis.mockResolvedValue({ id: "j1", job_type: "analyze_tender_requirements", tender_id: "t1", status: "accepted", outcome: null, reused_existing: false, result_run_id: null, error_code: null, requested_at: "", finished_at: null, progress: null, quote_id: "q1" });
     renderSection(null);
-    expect(await screen.findByRole("heading", { name: "Aquest plec encara no s'ha llegit" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Requisits encara no analitzats" })).toBeTruthy();
     expect(screen.getByText(/«0 bloquejos» aquí no vol dir que no n'hi hagi/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Analitza els plecs" }));
+    // Una sola CTA «Analitza» (A8): la de l'estat buit; cap duplicat a la capçalera de la targeta.
+    expect(screen.getAllByRole("button", { name: /Analitza/ })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Analitza el plec" }));
     await flush();
     expect(previewAnalysis).toHaveBeenCalledWith("c1", "t1", false);
     expect(confirmAnalysis).not.toHaveBeenCalled();
@@ -166,12 +170,24 @@ describe("RequirementAnalysisSection", () => {
     expect(track).toHaveBeenCalledWith(expect.objectContaining({ id: "j1", status: "accepted" }));
   });
 
+  it("l'estat del plec segueix els documents (A5): sense text extret, text extret sense requisits, i analitzat", async () => {
+    const file = { file_id: "f1", version_number: 1, download_status: "downloaded", origin: "fetched", file_size: 10, sha256: "a", mime_type: "application/pdf", text_extraction_supported: true, analysis_status: "extracted", extraction_status: "extracted", quality: "good", page_count: 3, text_char_count: 300, ocr_candidate: false, extraction_id: "e1", processed_at: null, error_code: null } as const;
+    const document = (overrides: Record<string, unknown>) => ({ id: "d1", name: "PCAP.pdf", document_type: "administrative_terms", source_document_type_code: null, url: "https://example.org/p1", mime_type: null, published_at: null, removed_at: null, latest_file: null, origin: "feed", contribution_status: "not_applicable", duplicate_of_document_id: null, analyzable: true, ...overrides }) as import("@/lib/tenders").TenderDocumentMeta;
+    const first = renderSection(null, { documents: [document({})] });
+    expect(await screen.findByRole("heading", { name: "Sense text extret" })).toBeTruthy();
+    expect(screen.getByText(/Processa els plecs/)).toBeTruthy();
+    first.unmount();
+    renderSection(null, { documents: [document({ latest_file: file })] });
+    expect(await screen.findByRole("heading", { name: "Text extret · requisits encara no analitzats" })).toBeTruthy();
+    expect(screen.queryByText(/encara no s'ha llegit/)).toBeNull();
+  });
+
   it("sense permís de confirmar: el botó es veu, desactivat; primer què fa i després per què no", async () => {
     get.mockResolvedValue({ ...limits, can_confirm: false });
     previewAnalysis.mockResolvedValue({ id: "q1", tender_id: "t1", status: "open", planning_version: "1", profile: "std", provider: "anthropic", model: "claude", force: false, input_fingerprint: "f", documents: [], skipped_documents: [], pages_total: 0, pages_in_plan: 0, pages_truncated: false, chunks: 0, chunks_to_send: 0, reusable_run_id: null, estimated_input_tokens: null, estimated_output_tokens: null, max_chunks: 40, allowed: true, blocking_reason: null, expires_at: "" });
     renderSection(null);
     await flush();
-    fireEvent.click(screen.getByRole("button", { name: "Analitza els plecs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Analitza el plec" }));
     await flush();
     const confirm = (await screen.findByRole("button", { name: "Inicia l'anàlisi" })) as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
@@ -339,6 +355,13 @@ describe("RequirementAnalysisSection", () => {
 /* ----- Requisits escrits a mà (S3-S5) -------------------------------------- */
 
 describe("requisits escrits a mà", () => {
+  // Sense això el `jobRequest` «en curs» del bloc anterior es filtra aquí (amb claus: mai una fletxa que retorni).
+  beforeEach(() => {
+    get.mockReset();
+    get.mockResolvedValue(limits);
+    jobRequest = null;
+  });
+
   function manual(overrides: Partial<Requirement> = {}): Requirement {
     return {
       ...requirement(),
@@ -353,6 +376,27 @@ describe("requisits escrits a mà", () => {
       ...overrides,
     };
   }
+
+  it("amb `analysis_state=current` i sense run (requisits manuals) el cos no mostra l'estat buit ni la CTA: mostra els requisits (N3)", async () => {
+    renderSection({ run: null, requirements: [manual()], award_criteria: [], is_stale: false, analysis_state: "current" }, { editable: true });
+    await flush();
+
+    expect(screen.queryByRole("heading", { name: /Requisits encara no analitzats|Sense text extret|Text extret/ })).toBeNull();
+    expect(screen.queryByText(/«0 bloquejos» aquí no vol dir/)).toBeNull();
+    expect(screen.getByText("Requisits escrits a mà · 1")).toBeTruthy();
+    expect(screen.getByText("Assegurança de responsabilitat civil")).toBeTruthy();
+    expect(screen.getByText(/No s'ha fet cap anàlisi automàtica del plec/)).toBeTruthy();
+    // La targeta de la llista no contradiu la frase de dalt: cap «extrets» ni «proposats per l'anàlisi automàtica».
+    expect(screen.getByRole("heading", { name: "Requisits escrits a mà (1)" })).toBeTruthy();
+    expect(screen.queryByText(/Requisits extrets/)).toBeNull();
+    expect(screen.queryByText(/Proposats per l'anàlisi automàtica/)).toBeNull();
+    expect(screen.getByText(/cap no ve de l'anàlisi automàtica/)).toBeTruthy();
+    // L'acció continua existint, però com a botó secundari de la capçalera de la targeta, no com a CTA del cos.
+    const buttons = screen.getAllByRole("button", { name: "Analitza el plec" });
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].getAttribute("data-variant")).toBe("secondary");
+    expect(buttons[0].closest("header, [data-card-header]")).not.toBeNull();
+  });
 
   it("sense licitació editable no s'ofereix escriure'n cap", async () => {
     renderSection({ run: run(), requirements: [manual()], award_criteria: [], is_stale: false });
@@ -536,5 +580,93 @@ describe("requisits escrits a mà", () => {
       await flush();
       expect(screen.getByText(/· 3 fallits$/)).toBeTruthy();
     });
+  });
+});
+
+describe("RequirementAnalysisSection · 3B-2 (quota canònica, adopció, buits i simulacions)", () => {
+  const openQuote: AnalysisQuote = {
+    id: "q1", tender_id: "t1", status: "open", planning_version: "2", profile: "v1", provider: "anthropic", model: "claude",
+    force: false, input_fingerprint: "f", documents: [], skipped_documents: [], pages_total: 0, pages_in_plan: 0,
+    pages_truncated: false, chunks: 3, chunks_to_send: 3, reusable_run_id: null, estimated_input_tokens: null,
+    estimated_output_tokens: null, max_chunks: 40, allowed: false, blocking_reason: "package_incomplete",
+    prerequisites: { version: "v1", provider_basis: "real", failed: ["package_incomplete"], advisory: [], warnings: [], package: { status: "incomplete", issues: [], accepted: false } },
+    provider_basis: "real", warnings: [], estimated_cost_usd: 0.5, accept_incomplete_package: false, expires_at: "",
+  };
+
+  function respond(map: Record<string, unknown>) {
+    get.mockImplementation(async (path: string) => {
+      const key = Object.keys(map).find((prefix) => path.startsWith(prefix));
+      return key ? map[key] : limits;
+    });
+  }
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+    previewAnalysis.mockReset();
+    confirmAnalysis.mockReset();
+    reload.mockClear();
+    jobRequest = null;
+    role = "owner";
+    respond({});
+  });
+
+  it("en una licitació pública «Torna a analitzar» no força res: la selecció és la canònica", async () => {
+    previewAnalysis.mockResolvedValue(openQuote);
+    renderSection(analysis({ is_stale: true }));
+    await flush();
+    fireEvent.click(screen.getAllByRole("button", { name: "Torna a analitzar" })[0]);
+    await flush();
+    expect(previewAnalysis).toHaveBeenCalledWith("c1", "t1", false);
+  });
+
+  it("acceptar el paquet incomplet torna a demanar el volum amb l'acceptació explícita", async () => {
+    previewAnalysis.mockResolvedValueOnce(openQuote).mockResolvedValueOnce({
+      ...openQuote, id: "q2", allowed: true, blocking_reason: null, accept_incomplete_package: true,
+      prerequisites: { ...openQuote.prerequisites!, failed: [], accept_incomplete_package: true, package: { status: "incomplete", issues: [], accepted: true } },
+    });
+    renderSection(null);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Analitza el plec" }));
+    await flush();
+    expect((screen.getByRole("button", { name: "Inicia l'anàlisi" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Accepto analitzar un paquet incomplet/ }));
+    await flush();
+    expect(previewAnalysis).toHaveBeenLastCalledWith("c1", "t1", false, { accept_incomplete_package: true });
+    expect((screen.getByRole("button", { name: "Inicia l'anàlisi" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("hi ha una anàlisi nova del plec: «Adopta-la» mou el punter de l'empresa activa", async () => {
+    post.mockResolvedValue({ effective_run_id: "x2", previous_run_id: "x1", reconciliation_required: true });
+    renderSection(analysis({ effective_run_id: "x1", canonical_run_id: "x2", adoption_available: true }));
+    await flush();
+    expect(screen.getByText("Hi ha una anàlisi nova del plec")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Adopta-la" }));
+    await flush();
+    expect(post).toHaveBeenCalledWith("/tenders/t1/analysis/requirements/adopt", { run_id: "x2", company_id: "c1" });
+    expect(reload).toHaveBeenCalled();
+    expect(screen.getByText(/cal reconciliar la revisió/)).toBeTruthy();
+  });
+
+  it("sense rol de decisió, l'anàlisi nova es veu però no es pot adoptar", async () => {
+    role = "technical";
+    renderSection(analysis({ effective_run_id: "x1", canonical_run_id: "x2", adoption_available: true }));
+    await flush();
+    expect(screen.getByText("Hi ha una anàlisi nova del plec")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Adopta-la" })).toBeNull();
+  });
+
+  it("l'última anàlisi va acabar sense resultats: «anàlisi acabada sense resultats: cal revisar»", async () => {
+    respond({ "/tenders/t1/analysis/runs": [run({ id: "x9", status: "completed_empty", is_current: false, needs_review: true, requirements_extracted: 0 })] });
+    renderSection(null);
+    await flush();
+    expect(screen.getByText(/anàlisi acabada sense resultats: cal revisar/i)).toBeTruthy();
+  });
+
+  it("una simulació mai és vigent i es diu", async () => {
+    respond({ "/tenders/t1/analysis/runs": [run({ id: "x8", provider: "fake", analysis_basis: "simulation", run_basis: "simulation", is_current: false })] });
+    renderSection(null);
+    await flush();
+    expect(screen.getByText(/anàlisi de simulació: no és vigent/i)).toBeTruthy();
   });
 });

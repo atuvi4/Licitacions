@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Assessment, Compliance, ComplianceRun } from "@/lib/compliance";
@@ -86,7 +86,17 @@ const reload = vi.fn(async () => undefined);
 
 function renderSection(value: Compliance | null, extra: Partial<React.ComponentProps<typeof ComplianceSection>> = {}) {
   return render(
-    <ComplianceSection tenderId="t1" companyId="c1" compliance={value} loading={false} error={null} prefitScore={92} onReload={reload} {...extra} />,
+    <ComplianceSection
+      tenderId="t1"
+      companyId="c1"
+      compliance={value}
+      loading={false}
+      error={null}
+      prefitScore={92}
+      analysisState="current"
+      onReload={reload}
+      {...extra}
+    />,
   );
 }
 
@@ -120,9 +130,24 @@ describe("ComplianceSection", () => {
     expect(unknown.textContent).toContain("Valor no comparable automàticament");
     expect(unknown.querySelector("[title*='sublimit_per_victim']")).not.toBeNull();
     expect(unknown.textContent).not.toContain('{"');
+    // B1: cap verb d'onboarding; la sortida d'una dada que falta és el coneixement de l'empresa.
+    expect(within(unknown).getByRole("link", { name: /Afegeix la dada al perfil/ }).getAttribute("href")).toBe("/empresa/coneixement");
+    expect(container.textContent).not.toMatch(/Completa el perfil/);
     expect(container.textContent).not.toContain("CERT_PRESENT_V1");
-    expect(container.textContent).toContain("Recomanació automàtica");
+    // A14: cap «Recomanació»; el que surt del motor és el resultat de l'anàlisi.
+    expect(container.textContent).toContain("Resultat de l'anàlisi");
+    expect(container.textContent).not.toMatch(/Recomanaci/);
     expect(container.textContent).not.toMatch(/Decisió/);
+  });
+
+  it("sense anàlisi del plec vigent no s'ofereix calcular el compliment (A7); amb anàlisi obsoleta, tampoc recalcular", async () => {
+    const { container, unmount } = renderSection(null, { analysisState: "absent" });
+    expect(screen.queryByRole("button", { name: /Analitza compliment/ })).toBeNull();
+    expect(container.textContent).toContain("Cal una anàlisi del plec vigent");
+    unmount();
+    renderSection(compliance, { analysisState: "stale" });
+    expect(screen.queryByRole("button", { name: "Recalcula" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Analitza compliment/ })).toBeNull();
   });
 
   it("una revisió humana va signada, amb el resultat automàtic original a sota", async () => {

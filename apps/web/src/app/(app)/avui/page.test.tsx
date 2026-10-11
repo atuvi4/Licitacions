@@ -143,28 +143,67 @@ describe("Avui", () => {
     expect(buttons[0].getAttribute("href")).toBe("/candidatures/urgent?pas=decidir");
     expect(buttons[0].getAttribute("data-variant")).toBe("primary");
     expect(buttons[1].getAttribute("data-variant")).not.toBe("primary");
-    expect(decisionsCard.textContent).toContain("Recomanació automàtica: Candidata");
+    // A14: el motor dona un resultat, no una recomanació.
+    expect(decisionsCard.textContent).toContain("Resultat de l'anàlisi: Candidata");
+    expect(decisionsCard.textContent).not.toMatch(/Recomanaci/);
     expect(decisionsCard.querySelector("button, a[role='button']")?.textContent ?? "").not.toContain("Candidata");
     const blockers = screen.getByText("Bloquejos i avisos").closest("section")!;
     expect(blockers.textContent).toContain("Energia elèctrica");
-    expect(blockers.textContent).toContain("NO-GO");
-    const fresh = screen.getByText("Noves per revisar").closest("section")!;
+    expect(blockers.textContent).toContain("No elegible");
+    expect(blockers.textContent).not.toContain("NO-GO");
+    const fresh = screen.getByText("Candidates del Radar").closest("section")!;
     expect(fresh.textContent).toContain("Connectivitat per a centres educatius");
     expect(fresh.querySelector("a[href='/licitacions/t9']")).not.toBeNull();
-    expect(screen.getByText(/2 decisions pendents, 1 avís, 12 oportunitats noves/)).toBeTruthy();
+    // A17: candidates prioritzades pel Radar sobre el total de licitacions, mai «oportunitats noves».
+    expect(fresh.textContent).toContain("prioritzades pel Radar, no licitacions ingerides");
+    expect(screen.getByText(/2 decisions pendents, 1 avís, 12 candidates de 148 licitacions/)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/oportunitats noves|Noves per revisar/);
     expect(screen.getByRole("link", { name: /Veure les 12 a Oportunitats/ }).getAttribute("href")).toBe("/licitacions?match_status=candidate");
   });
 
-  it("sense cap candidatura ni cap candidata mostra el buit amb sortida", async () => {
+  it("sense cap candidatura ni cap candidata: «0 candidates de N licitacions» amb la causa del perfil i la sortida al Radar (A17, B1)", async () => {
     respondWith({
       "/companies/c1/workspaces": [],
       "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
-      "/companies/c1/matches/summary": { ...summary, candidates: 0 },
-      "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0 } },
+      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336 },
+      "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0, territories: 0, contract_preferences: 0 } },
     });
     render(<AvuiPage />);
     expect(await screen.findByRole("heading", { name: "Encara no sabem què busqueu" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: /Completa el perfil/ }).getAttribute("href")).toBe("/empresa");
+    expect(screen.getByText(/0 candidates de 17\.336 licitacions: el perfil no té CPV\/territoris/)).toBeTruthy();
+    expect(document.body.textContent).toContain("prioritzades pel Radar, no licitacions ingerides");
+    // Carry-forward del lot 9B: cap «Completa el perfil» cap a /empresa; la sortida són les Preferències del Radar.
+    expect(screen.queryByRole("link", { name: /Completa el perfil/ })).toBeNull();
+    expect(screen.getByRole("link", { name: /Defineix les preferències del Radar/ }).getAttribute("href")).toBe("/empresa/radar");
+    expect(document.body.textContent).not.toMatch(/\d+ ?% /);
+  });
+
+  it("amb perfil però sense cap candidata, la causa és «cap coincidència» i el total es diu igualment", async () => {
+    respondWith({
+      "/companies/c1/workspaces": [],
+      "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
+      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336 },
+      "/companies/c1/summary": profile,
+    });
+    render(<AvuiPage />);
+    expect(await screen.findByRole("heading", { name: "Encara no hi ha res a la cua" })).toBeTruthy();
+    expect(screen.getByText(/0 candidates de 17\.336 licitacions: cap coincidència/)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Completa el perfil/ })).toBeNull();
+  });
+
+  it("amb candidatures però cap candidata, el bloc del Radar explica el 0 amb la causa i porta al Radar", async () => {
+    respondWith({
+      "/companies/c1/workspaces": [workspace({ id: "w1", tender_title: "Fibra òptica municipal", days_remaining: 6 })],
+      "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
+      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336 },
+      "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0, territories: 0, contract_preferences: 0 } },
+    });
+    render(<AvuiPage />);
+    expect(await screen.findByText("Fibra òptica municipal")).toBeTruthy();
+    const radar = screen.getByText("Candidates del Radar").closest("section")!;
+    expect(radar.textContent).toContain("0 candidates de 17.336 licitacions: el perfil no té CPV/territoris");
+    expect(radar.querySelector("a[href='/empresa/radar']")).not.toBeNull();
+    expect(screen.getByText(/1 decisió pendent, 0 avisos, 0 candidates de 17\.336 licitacions/)).toBeTruthy();
   });
 
   it("si la càrrega falla mostra l'error amb reintent, mai un zero", async () => {

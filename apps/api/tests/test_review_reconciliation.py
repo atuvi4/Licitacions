@@ -32,8 +32,9 @@ from app.services import review_reconciliation as rec
 from app.services.requirement_analysis import analyze_tender_requirements
 from app.services.review_awards import award_snapshot_of
 from tests import test_requirement_analysis as base
+from tests.real_provider import RealNamedFake
 from tests.test_requirement_analysis import PAGE_27, PAGE_28, QUOTE_27, tender_of
-from tests.test_requirement_analysis_v3 import V3, _evidence, _requirement, _run_v3
+from tests.test_requirement_analysis_v3 import V3, _evidence, _requirement, _run_v3_real
 from tests.test_review_rerun_guard import _act, _items, _legacy_item, _state, _url
 
 analyzable = base.analyzable
@@ -88,11 +89,17 @@ async def tender(session, analyzable):
 async def _run(session, tender, requirements, *, first=False):
     payload = {"requirements": requirements, "award_candidates": []}
     if first:
-        return (await _run_v3(session, tender["analyzable"], payload)).id
+        return (await _run_v3_real(session, tender["analyzable"], payload)).id
     fake.queue_response(payload)
     doc = tender["analyzable"]["document"]
+    # Una run canonica NOVA sobre el mateix corpus: un altre model real (identitat
+    # d'analisi diferent, cap reaprofitament). No `force`: en una licitacio publica
+    # un run forcat mai es vigent (3B-2 §6.4). La reconciliacio no depen del model.
+    # Un model per run, pinat a `tests/conftest.py` (`PINNED_TEST_MODELS`).
+    tender["reruns"] = tender.get("reruns", 0) + 1
     run = (await analyze_tender_requirements(
-        session, await tender_of(session, doc), profile=V3, force=True)).run
+        session, await tender_of(session, doc), profile=V3,
+        provider=RealNamedFake(model=f"claude-test-rerun-{tender['reruns']}"))).run
     assert run.is_current
     return run.id
 

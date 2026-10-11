@@ -30,6 +30,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Protocol
 
@@ -87,12 +88,15 @@ from app.core.errors import (
     ResumeNotAllowedError,
 )
 from app.models.enums import (
+    COMPLETED_EMPTY_MIN_PAGES,
     AnalysisRunStatus,
     AwardCriterionType,
     EvidenceRole,
     ExtractionStatus,
+    LlmBudgetScope,
     RequirementCategory,
     RequirementModality,
+    RequirementRunBasis,
     RequirementScope,
     ReviewStatus,
 )
@@ -112,7 +116,9 @@ from app.models.tender_documents import (
     TenderExtractionIssue,
 )
 from app.models.tenders import Tender, TenderDocument, TenderLot
+from app.services import llm_budget
 from app.services.analysis_coverage import NOT_SELECTED, build_coverage
+from app.services.document_roles import effective_document_roles
 from app.services.evidence_validation import locate_quote
 from app.services.extraction_qa import QaStatus, combine_status
 from app.services.requirement_chunking import (
@@ -125,8 +131,10 @@ from app.services.requirement_chunking import (
     compute_input_fingerprint,
     render_chunk,
 )
+from app.services.structure_annotations import carry_over_annotations
 from app.services.tender_lifecycle import latest_revision
-from app.tenders.documents import ACTIVE_DOCUMENT, removed_document_ids
+from app.services.title_keys import normalized_title
+from app.tenders.documents import ANALYZABLE_DOCUMENT, removed_document_ids
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +226,9 @@ async def collect_analyzable_documents(
             )
             # Un plec retirat de la font no es input de cap analisi nova, ni si
             # algu el demana explicitament (les runs que el van llegir es queden).
-            .where(TenderDocument.tender_id == tender_id, ACTIVE_DOCUMENT)
+            # Tampoc un alies ni una aportacio de l'operador sense verificar
+            # (3B-2 §2.3): la seva arribada no mou l'empremta.
+            .where(TenderDocument.tender_id == tender_id, ANALYZABLE_DOCUMENT)
             .order_by(TenderDocument.name)
         )
     ).all()
@@ -227,9 +237,15 @@ async def collect_analyzable_documents(
     skipped: list[SkippedDocument] = []
     wanted = set(document_ids or [])
     default_types = {t.value for t in DEFAULT_DOCUMENT_TYPES}
+    # El tipus que llegeix l'extraccio es l'EFECTIU de la lectura compartida
+    # (3B-2 §3.2, `company_id=None`): revisio de l'operador > classificacio global
+    # amb confianca alta > tipus del feed. Cap override d'empresa hi entra (opcio
+    # A): l'extraccio es global. El `document_type` del feed no es toca mai.
+    effective = await effective_document_roles(session, tender_id, None)
 
     for document, file, content in rows:
-        document_type = str(document.document_type)
+        role = effective.get(document.id)
+        document_type = str(role.document_type if role else document.document_type)
         if wanted:
             if document.id not in wanted:
                 continue
@@ -325,6 +341,55 @@ async def analysis_input(
     )
 
 
+#: Versio del contracte de `analysis_identity`. Si canvia que hi entra, canvia aixo.
+ANALYSIS_IDENTITY_VERSION = "analysis-identity-v1"
+
+
+def analysis_identity(
+    documents: list[AnalyzableDocument],
+    *,
+    profile: ExtractorProfile,
+    provider: ProviderIdentity,
+) -> str:
+    """Identitat d'una analisi (3B-2 §6.2): sha256 del JSON canonic. Pura.
+
+    Hi entren els documents del pla (ja amb el sostre de pagines) amb el tipus
+    EFECTIU, el contingut, l'extraccio, el parser i les pagines del pla; el
+    chunking; les versions del perfil; i proveidor i model. Res del tenant: dues
+    empreses que demanen el mateix plec amb el mateix motor tenen la mateixa
+    identitat. Es desa a la quota i al run, i fa el `dedupe_key` dels tenders
+    publics.
+    """
+    payload = {
+        "fp_version": ANALYSIS_IDENTITY_VERSION,
+        "documents": sorted(
+            [
+                document.tender_document_id,
+                document.document_type,
+                document.content_sha256,
+                document.extraction_id,
+                document.parser_version,
+                document.page_count,
+            ]
+            for document in documents
+        ),
+        "chunking": {
+            "pages_per_chunk": settings.REQUIREMENTS_CHUNK_PAGES,
+            "overlap": settings.REQUIREMENTS_CHUNK_OVERLAP_PAGES,
+            "max_pages": settings.REQUIREMENTS_MAX_PAGES_PER_RUN,
+        },
+        "versions": {
+            "extractor_version": profile.extractor_version,
+            "prompt_version": profile.prompt_version,
+            "schema_version": profile.schema_version,
+        },
+        "provider": provider.name,
+        "model": provider.model,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 async def run_includes_removed_document(
     session: AsyncSession, run: RequirementExtractionRun
 ) -> bool:
@@ -356,6 +421,63 @@ async def run_includes_removed_document(
         AwardCriterionEvidence.tender_document_id.in_(removed),
     )
     return bool(await session.scalar(sa.select(sa.or_(cited_requirement, cited_criterion))))
+
+
+#: Clau de `provider_metadata` on es desa la seleccio explicita d'un run.
+SELECTION_METADATA_KEY = "document_ids"
+
+
+async def run_document_selection(
+    session: AsyncSession, run: RequirementExtractionRun
+) -> list[uuid.UUID] | None:
+    """La seleccio EXPLICITA de documents d'un run, o `None` si es mira la canonica.
+
+    La «seleccio explicita» nomes existeix en una licitacio MANUAL (els plecs son
+    del propietari, que tria que s'analitza). En una PUBLICA es `None` sempre: un
+    run que es va promoure amb una seleccio igual al corpus canonic ha de caducar
+    si despres hi entra un plec nou (fix round 2, N1); la seva obsolescencia es
+    mira amb l'empremta canonica.
+
+    Es desa a `provider_metadata` en tancar el run; per als runs anteriors, es la
+    dels parametres de la feina que el va executar (`work_jobs.parameters`). Un
+    run llancat fora de la cua sense cap de les dues es tracta com a canonic.
+    """
+    owner = await session.scalar(
+        sa.select(Tender.owner_company_id).where(Tender.id == run.tender_id)
+    )
+    if owner is None:
+        return None
+    raw = (run.provider_metadata or {}).get(SELECTION_METADATA_KEY)
+    if raw is None and run.work_job_id is not None:
+        parameters = await session.scalar(
+            sa.select(WorkJob.parameters).where(WorkJob.id == run.work_job_id)
+        )
+        raw = (parameters or {}).get("document_ids")
+    if not raw:
+        return None
+    return [uuid.UUID(str(item)) for item in raw]
+
+
+async def run_is_outdated(session: AsyncSession, run: RequirementExtractionRun) -> bool:
+    """Cert si la run ja no parla dels plecs d'ara (3B-2 §6.2).
+
+    Dues causes: l'entrada d'ara no es la que va llegir, o va llegir o cita un
+    document ja retirat de la font. L'entrada es la de la SEVA seleccio: la
+    canonica per a un run canonic (una re-extraccio amb bytes nous, un document que
+    entra o surt); per a un run amb seleccio explicita, nomes els seus documents (un
+    canvi en un plec que no va triar no el fa caducar). Si ara no hi ha res
+    analitzable, l'empremta no diu res (no es fa caducar per un document que no
+    sabem llegir); la retirada, si.
+
+    Una run `gold` no surt de cap corpus (la seva empremta es la del dataset):
+    nomes hi compta la retirada.
+    """
+    if run.run_basis != RequirementRunBasis.GOLD:
+        selection = await run_document_selection(session, run)
+        current = await analysis_input(session, run.tender_id, document_ids=selection)
+        if current.documents and current.fingerprint != run.input_fingerprint:
+            return True
+    return await run_includes_removed_document(session, run)
 
 
 def _cap_pages(documents: list[AnalyzableDocument]) -> list[AnalyzableDocument]:
@@ -396,6 +518,10 @@ def _canonical_value(value: dict[str, Any] | None) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
 
 
+# El titol entra a les claus per `title_keys.normalized_title`: la MATEIXA funcio
+# que fan servir els requisits manuals i l'eina d'acceptacio (cap copia inline).
+
+
 def requirement_dedup_key(
     item: RequirementOut, evidence: list[EvidenceOut], *, include_pages: bool = True
 ) -> str:
@@ -423,7 +549,7 @@ def requirement_dedup_key(
         ",".join(sorted(label.strip().casefold() for label in item.lot_labels)),
         _canonical_value(item.value),
         # El titol normalitzat desempata quan no hi ha valor estructurat.
-        " ".join(item.title.split()).casefold(),
+        normalized_title(item.title),
         # Camps v2: una alternativa i una exigencia amb el mateix text NO son el
         # mateix requisit, i fusionar-les perdria justament el matis.
         str(getattr(item, "modality", "")),
@@ -439,7 +565,7 @@ def requirement_dedup_key(
 
 def award_dedup_key(item: AwardCriterionOut) -> str:
     parts = [
-        " ".join(item.name.split()).casefold(),
+        normalized_title(item.name),
         str(item.points if item.points is not None else ""),
         str(item.weight_percent if item.weight_percent is not None else ""),
         str(item.evaluation_type),
@@ -635,23 +761,97 @@ async def find_reusable_run(
     provider: ProviderIdentity,
     profile: ExtractorProfile,
 ) -> RequirementExtractionRun | None:
-    """Un run completat amb la mateixa entrada i la mateixa configuracio."""
+    """Un run acabat amb la mateixa entrada i la mateixa configuracio.
+
+    Amb un proveidor real (3B-2 §6.3), nomes el canonic vigent: un run real que no
+    ho es (parcial, `completed_empty`, `input_changed`) no es reaprofita mai com si
+    fos la lectura del plec. Una simulacio no pot ser mai vigent: es reaprofita el
+    darrer run acabat de la licitacio si es exactament aquest, que es el que
+    abans feia `is_current` per a ella.
+    """
+    same_analysis = sa.and_(
+        RequirementExtractionRun.tender_id == tender_id,
+        RequirementExtractionRun.input_fingerprint == fingerprint,
+        RequirementExtractionRun.extractor_version == profile.extractor_version,
+        RequirementExtractionRun.prompt_version == profile.prompt_version,
+        RequirementExtractionRun.schema_version == profile.schema_version,
+        RequirementExtractionRun.provider == provider.name,
+        RequirementExtractionRun.model == provider.model,
+    )
+    if RequirementRunBasis.for_provider(provider.name) is RequirementRunBasis.REAL:
+        return await session.scalar(
+            sa.select(RequirementExtractionRun).where(
+                same_analysis,
+                RequirementExtractionRun.status == AnalysisRunStatus.COMPLETED,
+                RequirementExtractionRun.is_current.is_(True),
+            )
+        )
+    latest = await latest_simulation_run(session, tender_id)
+    if latest is None:
+        return None
+    return await session.scalar(
+        sa.select(RequirementExtractionRun).where(
+            same_analysis, RequirementExtractionRun.id == latest.id
+        )
+    )
+
+
+#: Estats d'un run que n'han acabat de llegir el plec (encara que no sigui sencer).
+FINISHED_RUN_STATUSES = (
+    AnalysisRunStatus.COMPLETED,
+    AnalysisRunStatus.COMPLETED_EMPTY,
+    AnalysisRunStatus.PARTIAL,
+)
+
+
+async def run_is_superseded(session: AsyncSession, run: RequirementExtractionRun) -> bool:
+    """Cert si hi ha un run acabat MES NOU de la mateixa licitacio.
+
+    Substitueix l'antiga condicio «el parcial ha de ser el vigent» de la represa:
+    un parcial ja no es mai vigent (3B-2 §6.3), pero reprendre'n un de superat
+    continuaria barrejant dues fotografies.
+
+    Nomes compten els runs `real` o `gold`: una simulacio posterior (fake/fixture)
+    no llegeix el plec i no impedeix reprendre un parcial real. Per a un run
+    simulat, compta qualsevol run acabat mes nou (com abans).
+    """
+    newer = [
+        RequirementExtractionRun.tender_id == run.tender_id,
+        RequirementExtractionRun.id != run.id,
+        RequirementExtractionRun.status.in_(FINISHED_RUN_STATUSES),
+        RequirementExtractionRun.started_at > run.started_at,
+    ]
+    if run.run_basis in TRUSTED_RUN_BASES:
+        newer.append(RequirementExtractionRun.run_basis.in_(TRUSTED_RUN_BASES))
+    return bool(await session.scalar(sa.select(sa.exists().where(*newer))))
+
+
+#: Les bases que poden ser vigents (i les uniques que una empresa pot adoptar).
+TRUSTED_RUN_BASES = (RequirementRunBasis.REAL, RequirementRunBasis.GOLD)
+
+
+async def latest_simulation_run(
+    session: AsyncSession, tender_id: uuid.UUID
+) -> RequirementExtractionRun | None:
+    """El darrer run acabat (COMPLETED o PARTIAL) no real de la licitacio.
+
+    Una simulacio mai no es vigent (§6.3): aixo es el que en fa les vegades per a
+    qui treballa nomes amb simulacions (la cache de `find_reusable_run` i la demo
+    local amb `LLM_PROVIDER=fixture`).
+    """
     return await session.scalar(
         sa.select(RequirementExtractionRun)
         .where(
             RequirementExtractionRun.tender_id == tender_id,
-            RequirementExtractionRun.input_fingerprint == fingerprint,
-            RequirementExtractionRun.extractor_version == profile.extractor_version,
-            RequirementExtractionRun.prompt_version == profile.prompt_version,
-            RequirementExtractionRun.schema_version == profile.schema_version,
-            RequirementExtractionRun.provider == provider.name,
-            RequirementExtractionRun.model == provider.model,
             RequirementExtractionRun.status.in_(
                 [AnalysisRunStatus.COMPLETED, AnalysisRunStatus.PARTIAL]
             ),
-            RequirementExtractionRun.is_current.is_(True),
+            RequirementExtractionRun.run_basis != RequirementRunBasis.REAL,
         )
-        .order_by(RequirementExtractionRun.created_at.desc())
+        .order_by(
+            RequirementExtractionRun.started_at.desc(),
+            RequirementExtractionRun.created_at.desc(),
+        )
         .limit(1)
     )
 
@@ -712,6 +912,27 @@ async def analyze_tender_requirements(
       Amb `resume_from_run_id`, es una represa selectiva (`restrict_resume`): han
       de ser chunks que la represa enviaria; un chunk ja completat al run d'origen
       es refusa, perque no es torna a pagar mai.
+
+    3B-2 §6.6-§6.7:
+
+    * **Commit per chunk.** Cada chunk respost (tambe un de caigut que el proveidor
+      va arribar a respondre) es desa en un commit propi mentre el run es RUNNING i
+      no vigent: requisits i evidencies, `chunk_coverage` (els pendents com a
+      `pending`), tokens, cost i, per a un run `real`, la linia del llibre de
+      despesa. Un worker que mor a mig run no perd la feina pagada, i
+      `plan_resume` (des de `worker_lost`/`internal_error`) envia nomes el que falta.
+    * **Porta unica.** Abans de reservar el run i de cap crida,
+      `llm_budget.provider_gate`: simulacio nomes si es permet, model pinat, preu,
+      pressupost no esgotat i estimacio dins del cap (`AnalysisNotAllowedError`). La
+      passen el worker, la sonda `--paid-run` i el benchmark, que criden aquesta funcio.
+    * **Caps.** Abans de cada chunk d'un run `real`, `llm_budget.assert_within_budget`
+      (gastat total + estimacio del chunk seguent <= cap total; gastat de la cadena de represa
+      + estimacio <= cap de l'scope:
+      `canary` per a `only_chunks` de com a molt 2 chunks, `run` per a la resta). Si se
+      supera, no s'envia res mes: el run es tanca `PARTIAL` (o `FAILED` si encara no
+      n'havia completat cap) amb `budget_exceeded` i l'scope excedit.
+    * **`force` mai canonic** en una licitacio publica (§6.4): el run es desa,
+      pero no passa a vigent (`forced_not_canonical`).
     """
     started = time.monotonic()
     llm = provider or get_provider()
@@ -741,13 +962,15 @@ async def analyze_tender_requirements(
     chunks = build_chunks(documents)
     plan: ResumePlan | None = None
     if resume_from_run_id is not None:
+        source = await session.get(RequirementExtractionRun, resume_from_run_id)
         plan = plan_resume(
-            await session.get(RequirementExtractionRun, resume_from_run_id),
+            source,
             tender_id=tender.id,
             fingerprint=fingerprint,
             chunks=chunks,
             provider=llm,
             profile=profile,
+            superseded=source is not None and await run_is_superseded(session, source),
         )
     if only_chunks is not None:
         if plan is not None:
@@ -767,6 +990,23 @@ async def analyze_tender_requirements(
         raise AnalysisTooLargeError(
             f"L'analisi enviaria {to_send} chunks i el maxim es {chunk_limit}."
         )
+    # La porta unica (3B-2 §6.3 capa 1, §6.7), ABANS de reservar el run i de cap
+    # crida: per al worker, la sonda `--paid-run` i el benchmark per igual.
+    run_scope = llm_budget.budget_scope_for(only_chunks)
+    prior_run_ids = await llm_budget.resume_chain(session, plan.source) if plan else []
+    await llm_budget.provider_gate(
+        session,
+        llm,
+        chunks=[
+            chunk
+            for chunk in chunks
+            if (only_chunks is None or chunk.index in only_chunks)
+            and (plan is None or chunk.index in plan.send)
+        ],
+        profile=profile,
+        run_scope=run_scope,
+        prior_run_ids=prior_run_ids,
+    )
     run = await _claim_run(
         session,
         tender.id,
@@ -777,6 +1017,7 @@ async def analyze_tender_requirements(
         skipped,
         profile,
         work_job_id=work_job_id,
+        identity=analysis_identity(documents, profile=profile, provider=llm),
     )
     if on_progress is not None:
         await on_progress(0, len(chunks))
@@ -822,6 +1063,44 @@ async def analyze_tender_requirements(
         )
         run.chunks_completed += len(plan.reused)
 
+    def snapshot(pending: frozenset[int] = frozenset()) -> dict[str, Any]:
+        # La fotografia dels chunks. Durant el run, els que encara no s'han tractat
+        # hi surten `pending` (no enviats): una represa des d'un worker mort els enviara.
+        return build_coverage(
+            chunks,
+            failures={**{index: CHUNK_PENDING for index in pending}, **chunk_failures},
+            usage=chunk_usage,
+            diagnostics=chunk_diagnostics,
+            normalisations=chunk_normalisations,
+            provider_errors=chunk_provider_errors,
+            rejections=chunk_rejections,
+            reused=plan.reused if plan is not None else None,
+            reused_from_run_id=str(plan.source.id) if plan is not None else None,
+            not_sent_code=CHUNK_NOT_SENT,
+            not_selected_code=CHUNK_NOT_SELECTED,
+            unsent_codes=UNSENT_CHUNK_CODES,
+            pages_per_chunk=settings.REQUIREMENTS_CHUNK_PAGES,
+            overlap_pages=settings.REQUIREMENTS_CHUNK_OVERLAP_PAGES,
+        )
+
+    real_spend = run.run_basis == RequirementRunBasis.REAL
+    if only_chunks is not None:
+        # Abans del primer commit: la fotografia d'un run a mig fer no pot donar per
+        # llegit un chunk no seleccionat que el bucle encara no ha tocat.
+        for chunk in chunks:
+            if chunk.index not in only_chunks and not (
+                plan is not None and chunk.index in plan.reused
+            ):
+                chunk_failures[chunk.index] = CHUNK_NOT_SELECTED
+    to_visit = [
+        chunk.index
+        for chunk in chunks
+        if not (plan is not None and chunk.index in plan.reused)
+        and chunk.index not in chunk_failures
+    ]
+    #: L'scope del cap que ha aturat el run (`None` si no s'ha aturat per pressupost).
+    exceeded_scope: LlmBudgetScope | None = None
+
     for position, chunk in enumerate(chunks):
         if plan is not None and chunk.index in plan.reused:
             # Ja es va llegir be al run d'origen: no es torna a enviar.
@@ -843,6 +1122,36 @@ async def analyze_tender_requirements(
             raise AnalysisInterruptedError(
                 "L'execucio ha perdut el lease: no s'inicia cap chunk mes."
             )
+        if real_spend:
+            # §6.7: abans de cada chunk, el que ja s'ha gastat (la cadena de represa
+            # d'aquest run i el total) ha de cabre als caps. Si no, res mes.
+            try:
+                budget_run_ids = [run.id, *prior_run_ids]
+                await llm_budget.assert_within_budget(
+                    session,
+                    run_ids=budget_run_ids,
+                    run_scope=run_scope,
+                    next_chunk_usd=await llm_budget.next_chunk_estimate(
+                        session,
+                        run_ids=budget_run_ids,
+                        chunk=chunk,
+                        profile=profile,
+                        model=run.model,
+                    ),
+                )
+            except llm_budget.BudgetExceededError as exc:
+                stopped = [index for index in to_visit if index not in chunk_usage]
+                stopped = [index for index in stopped if index not in chunk_failures]
+                for index in stopped:
+                    chunk_failures[index] = llm_budget.BUDGET_EXCEEDED
+                    run.chunks_failed += 1
+                last_error = f"{llm_budget.BUDGET_EXCEEDED}: {exc}"
+                exceeded_scope = exc.scope
+                logger.warning(
+                    "requirements.run.budget_exceeded",
+                    extra={"run_id": str(run.id), "before_chunk": chunk.index, **exc.details},
+                )
+                break
         if position and on_progress is not None:
             await on_progress(position, len(chunks))
         applied: list[str] = []
@@ -885,6 +1194,21 @@ async def analyze_tender_requirements(
                         "status": (exc.details or {}).get("status"),
                     },
                 )
+            if exc.usage is not None:
+                # El proveidor ha respost (i es paga), tambe abans d'un error fatal: es
+                # desa com un chunk fet i la seva linia queda al llibre.
+                await _commit_chunk(
+                    session,
+                    run=run,
+                    chunk_index=chunk.index,
+                    usage=exc.usage,
+                    tally=tally,
+                    chunk_usage=chunk_usage,
+                    coverage=snapshot(_pending(to_visit, chunk_usage, chunk_failures)),
+                    real_spend=real_spend,
+                    scope=run_scope,
+                )
+            if exc.fatal:
                 break
             continue
 
@@ -910,6 +1234,17 @@ async def analyze_tender_requirements(
         if rejections:
             chunk_rejections[chunk.index] = rejections[:MAX_CHUNK_REJECTIONS]
         run.chunks_completed += 1
+        await _commit_chunk(
+            session,
+            run=run,
+            chunk_index=chunk.index,
+            usage=usage,
+            tally=tally,
+            chunk_usage=chunk_usage,
+            coverage=snapshot(_pending(to_visit, chunk_usage, chunk_failures)),
+            real_spend=real_spend,
+            scope=run_scope,
+        )
 
     if on_progress is not None:
         await on_progress(len(chunks), len(chunks))
@@ -923,21 +1258,7 @@ async def analyze_tender_requirements(
     # La fotografia es desa sempre, tambe quan no ha fallat res: "tots els
     # chunks analitzats" es una afirmacio que despres es voldra poder comprovar,
     # no assumir per l'absencia d'errors.
-    run.chunk_coverage = build_coverage(
-        chunks,
-        failures=chunk_failures,
-        usage=chunk_usage,
-        diagnostics=chunk_diagnostics,
-        normalisations=chunk_normalisations,
-        provider_errors=chunk_provider_errors,
-        rejections=chunk_rejections,
-        reused=plan.reused if plan is not None else None,
-        reused_from_run_id=str(plan.source.id) if plan is not None else None,
-        not_sent_code=CHUNK_NOT_SENT,
-        not_selected_code=CHUNK_NOT_SELECTED,
-        pages_per_chunk=settings.REQUIREMENTS_CHUNK_PAGES,
-        overlap_pages=settings.REQUIREMENTS_CHUNK_OVERLAP_PAGES,
-    )
+    run.chunk_coverage = snapshot()
 
     conflicts = await check_deadline_consistency(session, run, tender)
 
@@ -952,13 +1273,72 @@ async def analyze_tender_requirements(
         started=started,
         last_error=failure_summary(chunk_failures, len(chunks), last_error),
         resumed_from=plan,
+        document_ids=document_ids,
+        force=force,
+        exceeded_scope=exceeded_scope,
     )
     return AnalysisOutcome(run=run, reused=False)
+
+
+def _pending(
+    to_visit: list[int], usage: Mapping[int, Usage], failures: Mapping[int, str]
+) -> frozenset[int]:
+    """Els chunks que el run ha d'enviar i que encara no han tingut resposta ni motiu."""
+    return frozenset(index for index in to_visit if index not in usage and index not in failures)
+
+
+async def _commit_chunk(
+    session: AsyncSession,
+    *,
+    run: RequirementExtractionRun,
+    chunk_index: int,
+    usage: Usage,
+    tally: _ChunkTally,
+    chunk_usage: Mapping[int, Usage],
+    coverage: dict[str, Any],
+    real_spend: bool,
+    scope: LlmBudgetScope,
+) -> None:
+    """Commit propi d'un chunk respost (3B-2 §6.6): el que ha pagat no es perd.
+
+    Hi van les files del chunk (ja a la sessio), la fotografia de la cobertura, els
+    comptadors i els tokens acumulats, el cost acumulat del run i, si el run es
+    `real`, la linia del llibre de despesa (§6.7). El run continua RUNNING i no
+    vigent: nomes `_finalise_run` el tanca i el pot promoure.
+    """
+    run.chunk_coverage = coverage
+    run.requirements_extracted = tally.requirements
+    run.requirements_rejected = tally.rejected
+    run.award_criteria_extracted = tally.award_criteria
+    run.evidence_rejected = tally.evidence_rejected
+    run.validation_errors = tally.validation_errors
+    run.input_tokens = sum(item.input_tokens or 0 for item in chunk_usage.values()) or None
+    run.output_tokens = sum(item.output_tokens or 0 for item in chunk_usage.values()) or None
+    cost = llm_budget.chunk_cost(
+        run.model, input_tokens=usage.input_tokens, output_tokens=usage.output_tokens
+    )
+    if real_spend:
+        llm_budget.record_chunk_spend(
+            session,
+            run=run,
+            chunk_index=chunk_index,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            scope=scope,
+        )
+    if cost is not None:
+        run.estimated_cost = float(llm_budget.usd(Decimal(str(run.estimated_cost or 0)) + cost))
+    await session.commit()
 
 
 # --------------------------------------------------------------------------- #
 # Represa d'un run parcial                                                      #
 # --------------------------------------------------------------------------- #
+
+
+#: Fallades d'execucio (no del model) despres de les quals el treball pagat dels
+#: chunks completats es pot reprendre (3B-2 §6.6).
+RESUMABLE_FAILURE_CODES = frozenset({"worker_lost", "internal_error"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -980,14 +1360,19 @@ def plan_resume(
     chunks: list[Chunk],
     provider: ProviderIdentity,
     profile: ExtractorProfile,
+    superseded: bool = False,
 ) -> ResumePlan:
     """Nomes es repren si es EXACTAMENT la mateixa analisi. Pura: no escriu res.
 
     Mateixa licitacio; mateix `input_fingerprint` (que ja inclou documents,
     revisio d'extraccio, contingut i parser); mateixes versions d'extractor,
     prompt i esquema; mateix proveidor i model; i el mateix pla de chunks, un a
-    un. El run ha de ser el parcial vigent: si n'hi ha un de mes nou, reprendre
-    l'antic barrejaria dues fotografies.
+    un.
+
+    Es repren un run parcial, o un de fallit per `worker_lost`/`internal_error`
+    amb algun chunk completat (3B-2 §6.6). Un parcial ja no es mai vigent
+    (§6.3): el que no pot passar es que n'hi hagi un de MES NOU (`superseded`,
+    `run_is_superseded`), perque reprendre l'antic barrejaria dues fotografies.
     """
 
     def refuse(reason: str, message: str) -> ResumeNotAllowedError:
@@ -995,10 +1380,15 @@ def plan_resume(
 
     if source is None or source.tender_id != tender_id:
         raise refuse("run_not_found", "No hi ha cap run d'aquesta licitacio per reprendre.")
-    if source.status != AnalysisRunStatus.PARTIAL:
+    resumable_failure = (
+        source.status == AnalysisRunStatus.FAILED
+        and source.error_code in RESUMABLE_FAILURE_CODES
+        and (source.chunks_completed or 0) > 0
+    )
+    if source.status != AnalysisRunStatus.PARTIAL and not resumable_failure:
         raise refuse("run_not_partial", "Nomes es pot reprendre un run parcial.")
-    if not source.is_current:
-        raise refuse("run_not_current", "Aquest run ja no es el vigent.")
+    if superseded:
+        raise refuse("run_not_current", "Hi ha un run mes nou d'aquesta licitacio.")
     if source.input_fingerprint != fingerprint:
         raise refuse("input_changed", "Els plecs han canviat des d'aquest run.")
     if (source.extractor_version, source.prompt_version, source.schema_version) != (
@@ -1165,6 +1555,14 @@ CHUNK_NOT_SENT = "not_sent"
 #: Codi d'un chunk que l'operador no va seleccionar (`only_chunks`). No es cap
 #: error del model: simplement no es va enviar, i una represa l'enviara.
 CHUNK_NOT_SELECTED = NOT_SELECTED
+#: Codi d'un chunk encara no tractat a la fotografia d'un run en curs (commit per
+#: chunk, 3B-2 §6.6). Si el worker mor, es queda aixi i una represa l'enviara.
+CHUNK_PENDING = "pending"
+#: Codis de chunks que no han arribat al proveidor (`origin = not_sent`).
+UNSENT_CHUNK_CODES = frozenset({CHUNK_PENDING, llm_budget.BUDGET_EXCEEDED})
+#: Codi d'un run real complet que no es promou perque era `force` en una licitacio
+#: publica (3B-2 §6.4): `force` nomes el fa l'operador, i mai es canonic.
+FORCED_NOT_CANONICAL = "forced_not_canonical"
 
 
 def failure_summary(
@@ -1279,11 +1677,13 @@ async def _claim_run(
     profile: ExtractorProfile,
     *,
     work_job_id: uuid.UUID | None = None,
+    identity: str | None = None,
 ) -> RequirementExtractionRun:
     """Reserva l'analisi. L'index unic parcial impedeix el doble clic.
 
     `work_job_id` s'escriu a la mateixa transaccio que crea el run: no hi ha cap
-    moment en que el run existeixi sense saber de quin job ve.
+    moment en que el run existeixi sense saber de quin job ve. La base del run
+    (`run_basis`) i la identitat d'analisi tambe hi neixen.
     """
     quality_status, quality_issues = await _source_quality_snapshot(session, documents)
     revision = await latest_revision(session, tender_id)
@@ -1302,6 +1702,8 @@ async def _claim_run(
         schema_version=profile.schema_version,
         provider=llm.name,
         model=llm.model,
+        run_basis=RequirementRunBasis.for_provider(llm.name),
+        analysis_identity=identity,
         started_at=datetime.now(UTC),
         documents_analyzed=len(documents),
         pages_analyzed=sum(d.page_count for d in documents),
@@ -2087,6 +2489,81 @@ async def check_deadline_consistency(
     return conflicts
 
 
+async def carry_over_in_savepoint(
+    session: AsyncSession, old_run_id: uuid.UUID, new_run_id: uuid.UUID
+) -> None:
+    """Les anotacions d'estructura de la run antiga passen a la nova per `dedup_key`
+    (0060, 3B-2 §4.3). En un punt de restauracio: si fallen, es registra i el que
+    les ha provocat (el tancament d'una run ja pagada, l'adopcio en una licitacio
+    manual) continua. L'unic lloc on es fa aquest pas."""
+    try:
+        async with session.begin_nested():
+            await carry_over_annotations(session, old_run_id, new_run_id)
+    except Exception:
+        logger.exception(
+            "structure_annotations.carry_over_failed",
+            extra={"old_run_id": str(old_run_id), "new_run_id": str(new_run_id)},
+        )
+
+
+#: Codi d'un run real acabat que no es promou perque el corpus ha canviat.
+INPUT_CHANGED = "input_changed"
+#: Codi d'un run real acabat que no es promou perque la seva seleccio de documents
+#: no es la canonica (3B-2 §6.4).
+SELECTION_NOT_CANONICAL = "selection_not_canonical"
+
+
+async def _may_become_current(
+    session: AsyncSession,
+    run: RequirementExtractionRun,
+    *,
+    document_ids: list[uuid.UUID] | None,
+    force: bool = False,
+) -> bool:
+    """Les tres condicions de §6.3. Si falla la del corpus, ho deixa escrit al run.
+
+    L'entrada actual es la de la seleccio del run: la canonica si no en tenia, o la
+    seva (`document_ids`). Si ha canviat mentre s'analitzava, `input_changed`. Una
+    seleccio explicita nomes es la base vigent en una licitacio MANUAL (els plecs
+    son del propietari, que tria que s'analitza); en una de publica, si no coincideix
+    amb la canonica, `selection_not_canonical` (§6.4). Igual amb `force`: en una
+    licitacio publica nomes el fa l'operador, i aquell run mai es canonic
+    (`forced_not_canonical`); en una manual, com sempre.
+    """
+    if run.status != AnalysisRunStatus.COMPLETED or run.run_basis != RequirementRunBasis.REAL:
+        return False
+    own = await analysis_input(session, run.tender_id, document_ids=document_ids or None)
+    owner = await session.scalar(
+        sa.select(Tender.owner_company_id).where(Tender.id == run.tender_id)
+    )
+    if own.fingerprint != run.input_fingerprint:
+        run.error_code = INPUT_CHANGED
+        run.error_message = (
+            "Els plecs han canviat mentre s'analitzaven: el resultat es conserva, "
+            "pero no es la base vigent."
+        )
+    elif force and owner is None:
+        run.error_code = FORCED_NOT_CANONICAL
+        run.error_message = (
+            "Run forcat en una licitacio publica: es conserva, pero mai no es la base vigent."
+        )
+    elif not document_ids:
+        return True
+    else:
+        if owner is not None:
+            return True
+        canonical = await analysis_input(session, run.tender_id)
+        if canonical.fingerprint == run.input_fingerprint:
+            return True
+        run.error_code = SELECTION_NOT_CANONICAL
+        run.error_message = "La seleccio de documents no es la canonica: no es la base vigent."
+    logger.warning(
+        "requirements.run.not_promoted",
+        extra={"run_id": str(run.id), "reason": run.error_code},
+    )
+    return False
+
+
 async def _finalise_run(
     *,
     session: AsyncSession,
@@ -2099,11 +2576,31 @@ async def _finalise_run(
     started: float,
     last_error: str | None,
     resumed_from: ResumePlan | None = None,
+    document_ids: list[uuid.UUID] | None = None,
+    force: bool = False,
+    exceeded_scope: LlmBudgetScope | None = None,
 ) -> None:
     """Tanca el run i decideix si passa a vigent.
 
-    Nomes hi passa si ha acabat be. Si no, el run anterior es queda: una analisi
-    fallida no pot deixar sense requisits una licitacio que ja en tenia.
+    Nomes hi passa (3B-2 §6.3, MUST) un run `real` + `COMPLETED` + amb l'entrada
+    canonica actual. Si no, el run anterior es queda: una analisi fallida,
+    parcial o simulada no pot deixar sense requisits (ni amb requisits falsos) una
+    licitacio que ja en tenia.
+
+    * Un run no `real` (fake/fixture) mai no es vigent.
+    * Un PARTIAL mai no es vigent (nomes el pot llegir una empresa que l'adopti).
+    * Un run real el corpus del qual ja no es l'actual en tancar-lo no es promou:
+      `error_code=input_changed`, status COMPLETED (el treball pagat es conserva).
+    * Un run real COMPLETED sense cap requisit ni criteri sobre >= 5 pagines
+      analitzades queda `completed_empty` amb `needs_review`, i no es promou.
+    * Un run aturat per un cap de despesa (`exceeded_scope`, §6.7) queda `PARTIAL`
+      (o `FAILED` sense cap chunk completat) amb `error_code=budget_exceeded` i
+      l'scope excedit a `provider_metadata.budget_exceeded_scope`: nomes una
+      autoritzacio posterior d'aquell scope o de `pilot_total` el reobre.
+    * Un run `force` d'una licitacio publica no es promou (`forced_not_canonical`).
+
+    Les anotacions d'estructura del run antic (§4.3) nomes passen al nou quan
+    aquest esdeve vigent.
 
     Primer es bloqueja la fila i es comprova que el run segueix en curs. Si
     mentrestant el reconciliador l'ha donat per perdut (`worker_lost`), aquest
@@ -2130,8 +2627,14 @@ async def _finalise_run(
     run.duration_ms = int((time.monotonic() - started) * 1000)
     metadata: dict[str, Any] = {"request_ids": request_ids[:50]} if request_ids else {}
     if resumed_from is not None:
-        metadata["resumed_from_run_id"] = str(resumed_from.source.id)
+        metadata[llm_budget.RESUMED_FROM_KEY] = str(resumed_from.source.id)
         metadata["reused_chunks"] = sorted(resumed_from.reused)
+    if exceeded_scope is not None:
+        metadata[llm_budget.EXCEEDED_SCOPE_KEY] = exceeded_scope.value
+    if document_ids:
+        # La seleccio explicita del run: la seva obsolescencia es mira nomes sobre
+        # aquests documents (`run_document_selection`).
+        metadata[SELECTION_METADATA_KEY] = sorted(str(item) for item in document_ids)
     run.provider_metadata = metadata or None
     run.completed_at = datetime.now(UTC)
 
@@ -2152,14 +2655,34 @@ async def _finalise_run(
         run.status = AnalysisRunStatus.PARTIAL
         run.error_code = "chunks_not_selected"
         run.error_message = last_error
+    elif (
+        run.run_basis == RequirementRunBasis.REAL
+        and not tally.requirements
+        and not tally.award_criteria
+        and run.pages_analyzed >= COMPLETED_EMPTY_MIN_PAGES
+    ):
+        # Cap requisit ni criteri en un plec de moltes pagines: o el plec no en
+        # diu res o l'extraccio ha fallat en silenci. Ho decideix una persona.
+        run.status = AnalysisRunStatus.COMPLETED_EMPTY
+        run.needs_review = True
     else:
         run.status = AnalysisRunStatus.COMPLETED
 
-    if run.status in (AnalysisRunStatus.COMPLETED, AnalysisRunStatus.PARTIAL):
+    if exceeded_scope is not None:
+        # No s'ha llegit tot perque s'ha superat un cap: no es cap error del model.
+        # Una represa (amb una autoritzacio nova) enviara el que falta.
+        run.status = (
+            AnalysisRunStatus.PARTIAL if run.chunks_completed else AnalysisRunStatus.FAILED
+        )
+        run.error_code = llm_budget.BUDGET_EXCEEDED
+        run.error_message = last_error
+
+    if await _may_become_current(session, run, document_ids=document_ids, force=force):
         previous = await current_run_for(session, run.tender_id)
         if previous is not None and previous.id != run.id:
             previous.is_current = False
             await session.flush()
+            await carry_over_in_savepoint(session, previous.id, run.id)
         run.is_current = True
 
     await session.commit()

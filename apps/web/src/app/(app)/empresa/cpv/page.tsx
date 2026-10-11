@@ -23,6 +23,7 @@ import {
 import { api, cleanPayload } from "@/lib/api";
 import { useMutation, useResource } from "@/lib/hooks";
 import { cpvPreferenceLevel } from "@/lib/labels";
+import { cpvDescription } from "@/lib/tenders";
 import type { CPVPreference } from "@/lib/types";
 
 const EMPTY = {
@@ -109,7 +110,8 @@ export default function CpvPage() {
       header: "Descripció",
       cell: (cpv) => (
         <span className="text-muted">
-          {cpv.description ?? "—"}
+          {/* Mai el codi repetit com a descripció (addendum 3B-2, D4). */}
+          {cpvDescription(cpv) ?? "—"}
           {cpv.notes && <p className="mt-0.5 text-[12px] text-faint">{cpv.notes}</p>}
         </span>
       ),

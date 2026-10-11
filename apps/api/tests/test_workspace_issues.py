@@ -23,6 +23,7 @@ import sqlalchemy as sa
 
 from app.models.enums import IssueStatus, MembershipRole
 from app.models.issues import WorkspaceIssue, WorkspaceIssueSourceRef
+from tests.conftest import grant_go
 from tests.fixtures.pdf_builder import build_pdf
 
 pytestmark = pytest.mark.asyncio
@@ -746,6 +747,7 @@ async def _other_workspace(client, db, tenant):
             db, company_id=company.id, tender=tender, user_id=user.id
         )
     ).workspace
+    await grant_go(db, workspace, user)
     await db.commit()
     return workspace
 
@@ -857,6 +859,7 @@ async def test_a_requirement_from_another_tender_is_refused(client_a, db, candid
         schema_version="v1",
         provider="fake",
         model="cap",
+        run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
         is_current=True,
     )
     db.add(run)

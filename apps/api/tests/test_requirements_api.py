@@ -25,7 +25,10 @@ from app.models.tender_documents import (
     TenderDocumentFile,
     TenderDocumentPage,
 )
+from app.models.tenders import Tender
+from app.services.requirement_analysis import analyze_tender_requirements
 from tests.jobs_support import request_analysis
+from tests.real_provider import RealNamedFake
 
 PAGE = (
     "8.1.2. Solvencia economica.\n"
@@ -147,11 +150,19 @@ async def test_runs_the_analysis_and_returns_the_run(
     body = final.json()
     assert body["status"] == "succeeded"
     assert body["outcome"] == "executed"
+    # Amb `LLM_PROVIDER=fake` el run es una simulacio: queda a l'historial, pero mai
+    # no es la base vigent (3B-2 §6.3) i la lectura de l'analisi vigent es buida.
     analysis = (await client_a.get(f"/api/v1/tenders/{tender_id}/analysis/requirements")).json()
-    run = analysis["run"]
+    assert analysis["run"] is None
+    runs = (await client_a.get(f"/api/v1/tenders/{tender_id}/analysis/runs")).json()
+    (run,) = runs
     assert run["id"] == body["result_run_id"]
     assert run["status"] == "completed"
-    assert run["is_current"] is True
+    assert (run["is_current"], run["run_basis"], run["needs_review"]) == (
+        False,
+        "simulation",
+        False,
+    )
     assert run["requirements_extracted"] == 1
     assert run["provider"] == "fake"
     assert run["prompt_version"] == "requirements-v1"
@@ -162,13 +173,21 @@ async def test_reads_requirements_with_full_provenance(
 ):
     fake.queue_response(payload(analyzable["extraction"].id))
     tender_id = analyzable["document"].tender_id
-    await request_analysis(client_a, tenant_a[1].id, tender_id, session_factory)
+    # La lectura nomes ensenya la run vigent, i nomes una run real ho pot ser
+    # (3B-2 §6.3): proveidor de nom real injectat, cap xarxa.
+    async with session_factory() as session:
+        tender = await session.get(Tender, tender_id)
+        run = (
+            await analyze_tender_requirements(session, tender, provider=RealNamedFake())
+        ).run
+        assert run.is_current
 
     response = await client_a.get(f"/api/v1/tenders/{tender_id}/analysis/requirements")
 
     assert response.status_code == 200
     body = response.json()
     assert body["run"]["status"] == "completed"
+    assert body["run"]["run_basis"] == "real"
     assert body["is_stale"] is False
 
     requirement = body["requirements"][0]
@@ -206,13 +225,21 @@ async def test_a_tender_without_text_returns_422(client_a, tender_document, tena
     assert response.json()["error"]["code"] == "nothing_analyzable"
 
 
-async def test_lists_the_run_history(client_a, analyzable, tenant_a, session_factory):
+async def test_lists_the_run_history(client_a, analyzable, tenant_a, session_factory, session):
     fake.queue_response(payload(analyzable["extraction"].id))
     tender_id = analyzable["document"].tender_id
     await request_analysis(client_a, tenant_a[1].id, tender_id, session_factory)
+    # En una licitacio publica, `force` nomes el fa l'operador (3B-2 §6.4): l'empresa
+    # rep 422 i el segon run el llanca la via d'operador.
+    refused = await client_a.post(
+        f"/api/v1/companies/{tenant_a[1].id}/tenders/{tender_id}/analysis-quotes",
+        json={"force": True},
+    )
+    assert refused.status_code == 422
+    assert refused.json()["error"]["code"] == "public_tender_canonical_only"
     fake.queue_response(payload(analyzable["extraction"].id))
-    await request_analysis(
-        client_a, tenant_a[1].id, tender_id, session_factory, json={"force": True}
+    await analyze_tender_requirements(
+        session, await session.get(Tender, tender_id), force=True, provider=fake.FakeProvider()
     )
 
     response = await client_a.get(f"/api/v1/tenders/{tender_id}/analysis/runs")
@@ -220,7 +247,9 @@ async def test_lists_the_run_history(client_a, analyzable, tenant_a, session_fac
     assert response.status_code == 200
     runs = response.json()
     assert len(runs) == 2
-    assert sum(1 for run in runs if run["is_current"]) == 1, "nomes un run vigent"
+    # Dues simulacions (`LLM_PROVIDER=fake`): cap no es vigent (3B-2 §6.3).
+    assert sum(1 for run in runs if run["is_current"]) == 0
+    assert {run["run_basis"] for run in runs} == {"simulation"}
 
 
 async def _review_fields(session, requirement_id):

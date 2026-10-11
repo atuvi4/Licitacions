@@ -289,7 +289,7 @@ async def start_review(
     mateix alhora, l'index unic parcial ho atura, es desfa i es torna a
     comptar: el resultat final es el mateix que una sola crida.
     """
-    effective = await effective_requirements(session, tender_id)
+    effective = await effective_requirements(session, tender_id, company_id)
     # Guarda de rerun: abans de cap escriptura, amb la MATEIXA run que es materialitza.
     await ensure_section_reconciled(
         session, company_id, tender_id, ReviewItemKind.REQUIREMENT,
@@ -765,7 +765,7 @@ async def overview(
     session: AsyncSession, *, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> ReviewOverview:
     items = list((await session.scalars(requirement_items(company_id, tender_id))).all())
-    effective = await effective_requirements(session, tender_id)
+    effective = await effective_requirements(session, tender_id, company_id)
     present = await _active_primary_requirement_ids(
         session, company_id, (r.id for r in effective.extracted)
     )

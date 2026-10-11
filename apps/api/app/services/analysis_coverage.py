@@ -24,7 +24,7 @@ pagines que ningu no sap si es van llegir.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from typing import Any
 
 from app.ai.provider import Usage
@@ -59,6 +59,7 @@ def build_coverage(
     reused_from_run_id: str | None = None,
     not_sent_code: str = "not_sent",
     not_selected_code: str | None = None,
+    unsent_codes: Collection[str] = (),
 ) -> dict[str, Any]:
     """La fotografia dels chunks d'un run, amb l'estat de cadascun.
 
@@ -82,8 +83,11 @@ def build_coverage(
     `origin` diu d'on surt el resultat de cada chunk: `sent` (s'ha enviat en
     aquest run), `reused` (copiat del run parcial `reused_from_run_id`, sense
     cap crida; els tokens queden `None` perque ja es van comptar alla) o
-    `not_sent` (un error fatal va aturar el run abans).
+    `not_sent` (un error fatal va aturar el run abans, no estava seleccionat, o
+    un dels `unsent_codes`: encara pendent en un run en curs o aturat per un cap
+    de despesa).
     """
+    not_sent = {code for code in (not_sent_code, not_selected_code, *unsent_codes) if code}
     usage = usage or {}
     diagnostics = diagnostics or {}
     normalisations = normalisations or {}
@@ -112,11 +116,7 @@ def build_coverage(
                 "output_tokens": _usage_field(usage, chunk.index, "output_tokens"),
                 "stop_reason": _usage_field(usage, chunk.index, "stop_reason"),
                 "request_id": _usage_field(usage, chunk.index, "request_id"),
-                "origin": (
-                    "not_sent"
-                    if failures.get(chunk.index) in {not_sent_code, not_selected_code}
-                    else "sent"
-                ),
+                "origin": "not_sent" if failures.get(chunk.index) in not_sent else "sent",
             }
             for chunk in chunks
         ],

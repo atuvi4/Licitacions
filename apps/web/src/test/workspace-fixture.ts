@@ -155,6 +155,7 @@ export function dossierFixture(overrides: Partial<Dossier> = {}): Dossier {
     workspace_status: "preparing_bid",
     deadline_at: "2026-09-21T12:00:00Z",
     coverage: {
+      analysis_state: "current",
       mandatory_total: 24,
       covered: 20,
       missing_document: 2,

@@ -43,6 +43,7 @@ from app.schemas.tender_structure import (
 from app.services import audit, manual_requirement, manual_tender
 from app.services import tender_structure as structure
 from app.services.source_refs import resolve_source_ref
+from app.services.structure_provenance import Provenance
 from app.tenders.visibility import visible_to_company
 
 router = APIRouter(prefix="/companies/{company_id}/tenders/{tender_id}", tags=["tender-structure"])
@@ -67,6 +68,12 @@ async def _annotatable(session, ctx: CompanyCtx, tender_id: uuid.UUID) -> Tender
     """Requisits i criteris: la politica dels requisits (tambe el perfil tecnic)."""
     manual_requirement.assert_can_edit(ctx.membership.role)
     return await manual_tender.load_editable_tender(session, ctx.company_id, tender_id)
+
+
+def _owner(ctx: CompanyCtx) -> Provenance:
+    """Tot el que s'escriu per aqui ho escriu el propietari de la licitacio oberta
+    a ma (`_editable`/`_annotatable` ja ho han comprovat)."""
+    return Provenance.owner_manual(ctx.user.id)
 
 
 async def _block_read(session, block: TenderBlock) -> TenderBlockRead:
@@ -190,7 +197,9 @@ async def create_block(
     tender_id: uuid.UUID, payload: TenderBlockCreate, session: SessionDep, ctx: CompanyCtx
 ):
     tender = await _editable(session, ctx, tender_id)
-    block = await structure.create_block(session, tender, payload.model_dump())
+    block = await structure.create_block(
+        session, tender, payload.model_dump(), provenance=_owner(ctx)
+    )
     await _audit(
         session,
         ctx,
@@ -214,7 +223,7 @@ async def update_block(
     tender = await _editable(session, ctx, tender_id)
     block = await structure.load_block(session, tender, block_id)
     fields = {name: getattr(payload, name) for name in payload.model_fields_set}
-    if await structure.update_block(session, tender, block, fields):
+    if await structure.update_block(session, tender, block, fields, provenance=_owner(ctx)):
         await _audit(
             session,
             ctx,
@@ -264,7 +273,7 @@ async def link_block_citation(
     tender = await _editable(session, ctx, tender_id)
     block = await structure.load_block(session, tender, block_id)
     await structure.link_source_ref(
-        session, entity=block, source_ref_id=payload.source_ref_id, user=ctx.user
+        session, entity=block, source_ref_id=payload.source_ref_id, provenance=_owner(ctx)
     )
     await _audit(
         session,
@@ -320,7 +329,9 @@ async def create_site(
     tender_id: uuid.UUID, payload: TenderSiteCreate, session: SessionDep, ctx: CompanyCtx
 ):
     tender = await _editable(session, ctx, tender_id)
-    site = await structure.create_site(session, tender, payload.model_dump())
+    site = await structure.create_site(
+        session, tender, payload.model_dump(), provenance=_owner(ctx)
+    )
     await _audit(
         session,
         ctx,
@@ -344,7 +355,7 @@ async def update_site(
     tender = await _editable(session, ctx, tender_id)
     site = await structure.load_site(session, tender, site_id)
     fields = {name: getattr(payload, name) for name in payload.model_fields_set}
-    if await structure.update_site(session, tender, site, fields):
+    if await structure.update_site(session, tender, site, fields, provenance=_owner(ctx)):
         await _audit(
             session,
             ctx,
@@ -394,7 +405,7 @@ async def link_site_citation(
     tender = await _editable(session, ctx, tender_id)
     site = await structure.load_site(session, tender, site_id)
     await structure.link_source_ref(
-        session, entity=site, source_ref_id=payload.source_ref_id, user=ctx.user
+        session, entity=site, source_ref_id=payload.source_ref_id, provenance=_owner(ctx)
     )
     await _audit(
         session,
@@ -533,7 +544,7 @@ async def link_criterion_citation(
     tender = await _annotatable(session, ctx, tender_id)
     criterion = await structure.load_criterion(session, tender, criterion_id)
     await structure.link_source_ref(
-        session, entity=criterion, source_ref_id=payload.source_ref_id, user=ctx.user
+        session, entity=criterion, source_ref_id=payload.source_ref_id, provenance=_owner(ctx)
     )
     await _audit(
         session,

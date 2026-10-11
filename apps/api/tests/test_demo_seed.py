@@ -507,3 +507,15 @@ async def test_despres_del_seed_es_pot_congelar_i_aprovar(db, client_a, preparad
     assert aprovat.status_code in (200, 201), aprovat.text
     await db.refresh(preparada["workspace"])
     assert preparada["workspace"].status.value != "submitted"
+
+
+def test_el_summary_del_feed_demo_es_la_plantilla_real_del_feed():
+    # La fitxa del pilot diu «Objecte no publicat al feed» perque el summary del
+    # feed real es la plantilla; el fixture de demo ha de fer el mateix.
+    from app.ingestion.placsp.parser import parse_entry, parse_feed
+    from app.tenders.search import is_feed_summary_template
+
+    feed = parse_feed(demo.render_star_feed(date.today()).encode("utf-8"))
+    summaries = [parse_entry(entry).summary for entry in feed.entries]
+    assert summaries
+    assert all(is_feed_summary_template(summary) for summary in summaries), summaries

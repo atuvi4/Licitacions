@@ -1,0 +1,5 @@
+Plec de prescripcions tecniques particulars
+Codi DOC-02
+1. Abast del servei. Manteniment preventiu i correctiu de 12 nodes de fibra optica i de 40 extensions de telefonia IP repartides en 6 equipaments municipals.
+2. Temps de resposta. Les incidencies critiques s'han d'atendre en un maxim de 4 hores i les ordinaries en un maxim de 2 dies laborables.
+3. Horari d'atencio. El servei d'atencio d'incidencies ha d'estar disponible de dilluns a divendres, de 8 a 18 hores.

@@ -27,7 +27,8 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import SourceType
+from app.models.enums import DocumentContributionStatus, SourceType
+from app.models.global_classification import review_heads, tender_reviews_query
 from app.models.sources import Source
 from app.models.tender_documents import TenderDocumentContent, TenderDocumentFile
 from app.models.tender_lifecycle import TenderChangeEvent, TenderRevision
@@ -41,6 +42,23 @@ from app.tenders.changes import (
     diff_snapshots,
     snapshot_hash,
     summarise,
+)
+
+#: Disparador de les revisions que deixa la incorporacio interna de documents
+#: (3B-2 §2.2): alies promoguts quan el canonic es retira, regrupaments despres
+#: d'un sync i, a la Task 3, les accions de l'operador. Mai es "Publicat per la
+#: font": a l'historial es `origin=internal`.
+DOCUMENT_INTAKE_TRIGGER = "document_intake"
+
+#: Disparador de les revisions que deixa una correccio de normalitzacio sobre dades
+#: ja desades (p. ex. `app.tenders.description_backfill`): la font no ha publicat
+#: res, ho ha corregit Tuvi. A l'historial es `origin=internal`.
+NORMALIZATION_TRIGGER = "normalization"
+
+#: Aportacions que no son material de la licitacio: entren a la fotografia amb la
+#: marca `contribution` i nomes en surten (`DOCUMENT_ADDED`) en verificar-les.
+UNVERIFIED_CONTRIBUTIONS = frozenset(
+    {DocumentContributionStatus.PENDING_VERIFICATION, DocumentContributionStatus.REJECTED}
 )
 
 
@@ -140,6 +158,16 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
             )
         ).all()
         shas = dict(rows)
+    #: URL de cada document: un alies hi apunta per la URL del canonic.
+    urls = {document.id: document.url for document in documents}
+    #: Rol global revisat per l'operador per al contingut VIGENT (0059). La mateixa
+    #: regla que el resolutor: per contingut dins del tender, no per document.
+    reviewed: dict[uuid.UUID, str] = {}
+    if shas:
+        heads = review_heads(await session.scalars(tender_reviews_query(tender.id)))
+        reviewed = {
+            document_id: str(heads[sha].role) for document_id, sha in shas.items() if sha in heads
+        }
 
     snapshot: dict[str, Any] = {
         "title": tender.title,
@@ -175,7 +203,9 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
             }
             for lot in lots
         ],
-        "documents": [_document_entry(document, shas) for document in documents],
+        "documents": [
+            _document_entry(document, shas, urls, reviewed) for document in documents
+        ],
     }
 
     # Presencia a la font: nomes quan la font ha retirat l'entrada. L'estat
@@ -189,7 +219,12 @@ async def build_snapshot(session: AsyncSession, tender: Tender) -> dict[str, Any
     return snapshot
 
 
-def _document_entry(document: TenderDocument, shas: dict[uuid.UUID, str]) -> dict[str, Any]:
+def _document_entry(
+    document: TenderDocument,
+    shas: dict[uuid.UUID, str],
+    urls: dict[uuid.UUID, str],
+    reviewed: dict[uuid.UUID, str] | None = None,
+) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "url": document.url,
         "name": document.name,
@@ -201,6 +236,24 @@ def _document_entry(document: TenderDocument, shas: dict[uuid.UUID, str]) -> dic
     # fotografia marcat (no s'esborra mai); el present no porta la marca.
     if document.removed_at is not None:
         entry["removed"] = True
+    # Alies (3B-2 §2.1): mateixos bytes que un altre document del tender. Com
+    # `removed`, nomes hi es quan val: les fotografies sense alies no canvien.
+    # Es la URL del canonic (cap id a la fotografia). Quan canvia dona
+    # `DOCUMENT_ALIAS_CHANGED`, informatiu: el contingut continua sent el mateix.
+    if document.duplicate_of_document_id is not None:
+        entry["duplicate_of"] = urls.get(document.duplicate_of_document_id)
+    # Aportacio de l'operador encara no analitzable (3B-2 §2.2): la marca fa que
+    # el document no compti com a material fins que es verifica (vegeu
+    # `DOCUMENT_CONTRIBUTION_FIELDS`). Els verificats, com els del feed, no la porten.
+    if document.contribution_status in UNVERIFIED_CONTRIBUTIONS:
+        entry["contribution"] = str(document.contribution_status)
+    # Rol revisat per l'operador per a la versio vigent (3B-2 §3.2). Com els
+    # anteriors, nomes hi es quan n'hi ha: cap fotografia d'abans canvia. Permet
+    # que el diff digui `SOURCE_TYPE_CHANGED_AFTER_REVIEW` quan el feed canvia el
+    # tipus d'un document revisat (el feed mai sobreescriu un rol revisat).
+    role = (reviewed or {}).get(document.id)
+    if role is not None:
+        entry["reviewed_role"] = role
     return entry
 
 

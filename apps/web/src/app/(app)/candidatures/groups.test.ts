@@ -72,8 +72,8 @@ describe("groupWorkspaces", () => {
 });
 
 describe("decisió humana vs. recomanació automàtica", () => {
-  it("sense decisió humana → «Pendent» en atenció, mai en majúscules", () => {
-    expect(decisionPill(workspace({ human_decision: null }))).toEqual({ level: "attention", label: "Pendent" });
+  it("sense decisió humana → «Pendent de decidir» en atenció, mai en majúscules (A14)", () => {
+    expect(decisionPill(workspace({ human_decision: null }))).toEqual({ level: "attention", label: "Pendent de decidir" });
   });
 
   it("amb decisió → etiqueta i nivell del diccionari; GO, NO-GO i ajornada són diferents", () => {
@@ -95,10 +95,17 @@ describe("attentionPills: només camps reals", () => {
   it("anàlisi endarrerida, elegibilitat NO-GO automàtica i termini tancat, amb els nivells del diccionari", () => {
     const pills = attentionPills(workspace({ analysis_outdated: true, eligibility: "no_go", deadline_passed: true, days_remaining: -2 }));
     expect(pills).toEqual([
-      { level: "blocking", label: "Termini tancat" },
-      { level: "blocking", label: "Elegibilitat: NO-GO" },
+      { level: "blocking", label: "Fora de termini" },
+      { level: "blocking", label: "Elegibilitat: No elegible" },
       { level: "attention", label: "Anàlisi endarrerida" },
     ]);
+  });
+
+  it("un termini que ha passat des de l'última lectura del servidor també és «Fora de termini» (A12)", () => {
+    expect(attentionPills(workspace({ deadline_passed: false, deadline_at: "2026-09-01T10:00:00Z" }))).toEqual([
+      { level: "blocking", label: "Fora de termini" },
+    ]);
+    expect(attentionPills(workspace({ deadline_passed: false, deadline_at: "2099-09-01T10:00:00Z" }))).toEqual([]);
   });
 
   it("undetermined no és cap avís ni cap «ok»", () => {

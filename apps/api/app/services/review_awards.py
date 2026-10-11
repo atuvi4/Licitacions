@@ -180,10 +180,12 @@ def award_snapshot_of(criterion: AwardCriterion) -> AwardSnapshot:
 
 
 async def current_award_criteria(
-    session: AsyncSession, tender_id: uuid.UUID
+    session: AsyncSession, tender_id: uuid.UUID, company_id: uuid.UUID | None = None
 ) -> list[AwardCriterion]:
-    """Els criteris persistits de la run VIGENT. Els de runs velles no hi entren."""
-    return await _criteria_of_run(session, await current_run_id(session, tender_id))
+    """Els criteris persistits de la run VIGENT (la de l'empresa, si se'n dona)."""
+    return await _criteria_of_run(
+        session, await current_run_id(session, tender_id, company_id)
+    )
 
 
 async def _criteria_of_run(
@@ -234,7 +236,7 @@ async def start_award_review(
 
     Neixen SENSE paper: el paper el decideix el revisor, no s'endevina.
     """
-    run_id = await current_run_id(session, tender_id)
+    run_id = await current_run_id(session, tender_id, company_id)
     # Guarda de rerun: independent de la dels requisits, abans de cap escriptura.
     await ensure_section_reconciled(
         session, company_id, tender_id, ReviewItemKind.AWARD_CRITERION, run_id
@@ -650,7 +652,7 @@ async def award_reconciliation_pending(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> bool:
     """Cert si l'estructura de puntuacio no representa (encara) la run vigent."""
-    current = await current_run_id(session, tender_id)
+    current = await current_run_id(session, tender_id, company_id)
     if needs_reconciliation(
         await represented_award_run_ids(session, company_id, tender_id), current
     ):

@@ -81,6 +81,7 @@ async def extraction_run(db, tender):
         schema_version="requirements-schema-v1",
         provider="fake",
         model="fake-model-v1",
+        run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
         is_current=True,
     )
     db.add(run)
@@ -370,6 +371,7 @@ async def test_a_new_extraction_run_forces_a_new_compliance_run(
         schema_version="requirements-schema-v1",
         provider="fake",
         model="fake-model-v1",
+        run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
         is_current=True,
     )
     db.add(newer)

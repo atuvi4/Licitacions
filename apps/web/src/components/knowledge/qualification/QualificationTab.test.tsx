@@ -155,7 +155,7 @@ describe("Qualificació i mitjans: estructura", () => {
     expect(screen.getByRole("heading", { name: "Equips" })).toBeTruthy();
   });
 
-  it("solvència: estats humans (Verificat, Declarat, Falta evidència) i cap càlcul de solvència", async () => {
+  it("solvència: estats humans (Verificat, Declarat) sense cap tasca «Falta evidència» (B2) i cap càlcul de solvència", async () => {
     const { container } = await renderSection("solvencia");
     const verified = record(container, "fy-2025");
     expect(within(verified).getByText("Exercici 2025")).toBeTruthy();
@@ -163,7 +163,9 @@ describe("Qualificació i mitjans: estructura", () => {
     expect(verified.textContent).toContain("Informació a");
     const declared = record(container, "fy-2024");
     expect(within(declared).getByText("Declarat")).toBeTruthy();
-    expect(within(declared).getByText("Falta evidència")).toBeTruthy();
+    expect(within(declared).queryByText("Falta evidència")).toBeNull();
+    // L'acció d'aportar evidència hi continua sent, per ítem.
+    expect(within(declared).getByRole("button", { name: "Afegeix evidència" })).toBeTruthy();
     expect(container.textContent).not.toMatch(/R1|compleix|mitjana|suficient/i);
   });
 
@@ -532,8 +534,8 @@ describe("Qualificació i mitjans: formularis", () => {
   });
 });
 
-describe("Qualificació i mitjans: pendents de validar", () => {
-  it("les fitxes noves surten a «Pendents» amb el seu nom, no amb el codi", async () => {
+describe("Qualificació i mitjans: cap llista global de tasques (B5)", () => {
+  it("l'antic ?tab=pendents cau al coneixement actual: les fitxes es veuen a la seva secció amb el seu nom, no amb el codi", async () => {
     const snapshot = qualificationSnapshotFixture();
     snapshot.pending_validation = [
       { kind: "accreditation_pending", subject: "execution_reference", key: "prj-1", detail: "", record_id: "prj-1", observation_id: null, superseded_by_current: false },
@@ -541,13 +543,17 @@ describe("Qualificació i mitjans: pendents de validar", () => {
     ];
     respond({ [`${BASE}/knowledge/snapshot`]: snapshot });
     search = "tab=pendents";
-    const { container } = render(<CompanyKnowledgePage />);
+    const legacy = render(<CompanyKnowledgePage />);
     await screen.findByRole("tablist");
     await flush();
+    expect(screen.queryByRole("tab", { name: /Pendents/ })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Coneixement actual" }).getAttribute("aria-selected")).toBe("true");
+    legacy.unmount();
+
+    const { container } = await renderSection("experiencia");
     const project = record(container, "prj-1");
     expect(within(project).getByText("Manteniment de xarxa de prova")).toBeTruthy();
-    expect(project.textContent).toContain("Experiència");
-    expect(within(record(container, "person-1")).getByText("Persona Prova")).toBeTruthy();
+    expect(within(project).getByText("Declarat")).toBeTruthy();
     expect(container.textContent).not.toMatch(/execution_reference/);
   });
 });

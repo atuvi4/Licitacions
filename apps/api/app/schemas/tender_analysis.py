@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
     AnalysisKnowledgeSource,
@@ -116,6 +116,9 @@ class AnalysisRunRead(ORMModel):
     knowledge_fingerprint: str
     rules_version: str
     inputs_hash: str
+    #: 3B-2 §4.4: nul si el paquet no constava com a incomplet; si constava, si qui va
+    #: demanar l'analisi ho va acceptar explicitament.
+    accepted_incomplete_package: bool | None = None
     is_current: bool
     created_at: datetime
     #: Vectors factuals; cap puntuacio global ni recomanacio.
@@ -127,6 +130,16 @@ class AnalysisRunRead(ORMModel):
     delivery_candidates: list[DeliveryCandidateRead] = Field(default_factory=list)
     findings: list[FindingRead] = Field(default_factory=list)
     questions: list[QuestionRead] = Field(default_factory=list)
+
+
+class AnalysisRunRequest(BaseModel):
+    """El cos (opcional) de `POST /analysis/runs`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: 3B-2 §4.4: analitzar encara que no hi hagi requisits, perque el paquet consta
+    #: com a incomplet i es vol veure que hi falta. Queda registrat a la run.
+    accept_incomplete_package: bool = False
 
 
 class AnalysisRunWriteRead(AnalysisRunRead):

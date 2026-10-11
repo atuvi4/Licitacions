@@ -21,6 +21,7 @@ import {
   readManifest,
   type Manifest,
 } from "@/lib/submission";
+import { NO_ANALYSIS_COUNTER, NO_ANALYSIS_TEXT } from "@/lib/workspace";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
@@ -104,6 +105,8 @@ export function ManifestView({
   const validations = manifestValidations(manifest);
   const relevance = manifestRelevance(manifest);
   const coverage = manifest?.content?.coverage;
+  const withoutAnalysis =
+    !manifest?.approval_basis?.analysis?.requirement_run_id && (coverage?.mandatory_total ?? 0) === 0;
   const currency = offer?.currency ?? "EUR";
   // El manifest tal com va quedar desat. Única excepció a la regla de lint: viu
   // plegat al detall tècnic, per a qui l'hagi de comparar o reportar.
@@ -150,10 +153,19 @@ export function ManifestView({
 
           {coverage && (
             <Section title="Cobertura">
-              <p className="text-body text-ink">
-                {coverage.mandatory_covered ?? 0} de {coverage.mandatory_total ?? 0} requisits obligatoris coberts ·{" "}
-                {coverage.document_count ?? documents.length} documents
-              </p>
+              {withoutAnalysis ? (
+                // Cap run de requisits ni cap obligatori: els zeros no volen dir res (3B-2 §7.1.3).
+                <p className="text-body text-ink">
+                  {NO_ANALYSIS_COUNTER} · {NO_ANALYSIS_TEXT} · {coverage.document_count ?? documents.length} documents
+                </p>
+              ) : (
+                <p className="text-body text-ink">
+                  {coverage.mandatory_total === undefined
+                    ? "Obligatoris coberts: no consta"
+                    : `${coverage.mandatory_covered ?? 0} de ${coverage.mandatory_total} requisits obligatoris coberts`}{" "}
+                  · {coverage.document_count ?? documents.length} documents
+                </p>
+              )}
             </Section>
           )}
 

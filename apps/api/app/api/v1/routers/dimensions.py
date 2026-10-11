@@ -34,6 +34,7 @@ from app.services import audit
 from app.services import bid_workspace as workspace_service
 from app.services import dimensions as service
 from app.services.source_refs import resolve_source_ref
+from app.services.workspace_gate import assert_workspace_go
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/dimensions", tags=["dimensionament"])
 
@@ -101,6 +102,7 @@ async def create_dimension(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
 
     dimension = await service.create_dimension(
         session, workspace=workspace, user=ctx.user, fields=payload.model_dump()
@@ -135,6 +137,7 @@ async def update_dimension(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     dimension = await service.load_dimension(session, workspace, dimension_id)
 
     fields = {
@@ -188,6 +191,7 @@ async def add_observation(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     dimension = await service.load_dimension(session, workspace, dimension_id)
 
     observation = await service.add_observation(
@@ -234,6 +238,7 @@ async def decide_dimension(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     dimension = await service.load_dimension(session, workspace, dimension_id)
 
     await service.decide_dimension(
@@ -277,6 +282,7 @@ async def archive_dimension(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     dimension = await service.load_dimension(session, workspace, dimension_id)
 
     changed = await service.archive_dimension(

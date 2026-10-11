@@ -11,6 +11,7 @@ import {
   DOMAIN_LABELS,
   UNKNOWN_FINDING_LABEL,
   blockerCount,
+  blockerCountLabel,
   findingCopy,
   groupFindings,
   type FinalReadiness,
@@ -88,7 +89,7 @@ export function ReadinessControl() {
           </StatusPill>
         ) : (
           <StatusPill level="blocking" size="sm">
-            {blockers} {blockers === 1 ? "pendent" : "pendents"} de preparació
+            {blockerCountLabel(blockers)}
           </StatusPill>
         )}
         <ChevronRight size={14} strokeWidth={1.5} aria-hidden className="text-muted" />

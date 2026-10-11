@@ -13,9 +13,10 @@ import {
   expiryRoute,
   footerLine,
   groupAreas,
-  isNewProfile,
+  isRadarSection,
   listNames,
   profileContext,
+  splitRadarSections,
 } from "./areas";
 
 // Les onze claus reals de `completeness.sections` (apps/api services/completeness.py).
@@ -102,11 +103,12 @@ describe("enllaços i textos fixos per àrea", () => {
     expect(listNames(["A", "B", "C", "D", "E", "F", "G"])).toBe("A, B, C, D i 3 més");
   });
 
-  it("l'acció depèn de l'estat real: afegir, completar o revisar", () => {
+  it("l'acció depèn de l'estat real: afegir, afegir-hi dades o revisar; mai «completar» (B1)", () => {
     expect(areaActionLabel(section("registrations", "empty"))).toBe(AREA_META.registrations.add);
-    expect(areaActionLabel(section("experience", "partial"))).toBe("Completa-ho");
+    expect(areaActionLabel(section("experience", "partial"))).toBe("Afegeix-hi dades");
     expect(areaActionLabel(section("cpv", "complete"))).toBe("Revisa");
     expect(areaActionLabel(section("desconeguda", "empty"))).toBe("Afegeix-hi dades");
+    expect(areaActionLabel(section("experience", "partial"))).not.toMatch(/Completa/);
   });
 });
 
@@ -137,14 +139,11 @@ describe("línies de context", () => {
     expect(profileContext("Empresa Demo Telecom SL", 11, null)).toBe("Empresa Demo Telecom SL · 11 àrees");
   });
 
-  it("el peu compta les àrees que demanen atenció i porta la completitud, mai com a element principal", () => {
-    expect(footerLine(SECTIONS, 78)).toBe("4 àrees demanen atenció · 7 al dia · 78 % de completitud");
-    expect(footerLine(SECTIONS.map((item) => ({ ...item, status: "complete" as const })), 100)).toBe(
-      "Les 11 àrees estan al dia · 100 % de completitud",
-    );
-    expect(footerLine([section("cpv", "empty"), ...SECTIONS.slice(1, 3)], 20)).toBe(
-      "1 àrea demana atenció · 2 al dia · 20 % de completitud",
-    );
+  it("el peu compta les àrees que demanen atenció, sense cap percentatge de completitud (B1)", () => {
+    expect(footerLine(SECTIONS)).toBe("4 àrees demanen atenció · 7 al dia");
+    expect(footerLine(SECTIONS.map((item) => ({ ...item, status: "complete" as const })))).toBe("Les 11 àrees estan al dia");
+    expect(footerLine([section("cpv", "empty"), ...SECTIONS.slice(1, 3)])).toBe("1 àrea demana atenció · 2 al dia");
+    expect(footerLine(SECTIONS)).not.toMatch(/%/);
   });
 
   it("emptyAreas dona el recompte i els noms de les àrees sense dada", () => {
@@ -152,9 +151,12 @@ describe("línies de context", () => {
     expect(emptyAreas(SECTIONS.slice(0, 3))).toEqual({ count: 0, names: [], first: null });
   });
 
-  it("un perfil és nou només quan la completitud és exactament zero", () => {
-    expect(isNewProfile({ score: 0, sections: SECTIONS })).toBe(true);
-    expect(isNewProfile({ score: 1, sections: SECTIONS })).toBe(false);
+  it("les preferències del Radar (CPV i àmbit geogràfic) van a part del coneixement corporatiu (B4)", () => {
+    expect(KEYS.filter(isRadarSection)).toEqual(["territories", "cpv"]);
+    const { radar, knowledge } = splitRadarSections(SECTIONS);
+    expect(radar.map((item) => item.key)).toEqual(["territories", "cpv"]);
+    expect(knowledge.map((item) => item.key)).toEqual(KEYS.filter((key) => !isRadarSection(key)));
+    expect(knowledge).toHaveLength(9);
   });
 });
 

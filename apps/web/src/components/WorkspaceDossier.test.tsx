@@ -215,6 +215,9 @@ describe("DossierSection · compliment ≠ dossier, triat ≠ acreditat", () => 
       "Hi ha documents triats per a requisits obligatoris sense que ningú hagi confirmat que els acrediten.",
     ]);
     expect(banner.textContent).toContain("1 tasca oberta");
+    // B7: les tasques són a l'àrea «Pla de treball»; «#tasques» sol no portava enlloc des d'aquí.
+    const tasksLink = [...banner.querySelectorAll("a")].find((a) => a.textContent?.includes("tasca oberta"))!;
+    expect(tasksLink.getAttribute("href")).toBe("/candidatures/w1?pas=preparar&area=pla#tasques");
     expect(screen.queryByRole("button", { name: /Passa a revisió final/ })).toBeNull();
     expect(container.textContent).toContain("2 ítems a l'històric");
   });
@@ -344,5 +347,34 @@ describe("DossierSection · blocadors de readiness", () => {
     expect(li.textContent?.trim()).toBe("Bloqueig de preparació no reconegut");
     expect(li.getAttribute("title")).toBe("codi_nou_del_backend");
     expect(container.textContent).not.toContain("codi_nou_del_backend");
+  });
+
+  it("sense cap anàlisi del plec: mai «0 de 0», sinó «Encara no hi ha cap anàlisi del plec» amb accés a analitzar-lo", async () => {
+    mockLoad(
+      dossier({
+        groups: [],
+        coverage: {
+          analysis_state: "absent",
+          mandatory_total: null,
+          covered: 0,
+          missing_document: 0,
+          needs_review: 0,
+          not_applicable: 0,
+          expired_documents: 0,
+          optional_total: 0,
+          optional_covered: 0,
+        },
+        readiness: { state: "not_started", blockers: ["decision_not_go", "analysis_missing"], is_submitted: false },
+      }),
+    );
+    const { container } = renderSection();
+    await flush();
+    expect(screen.getByText("Encara no hi ha cap anàlisi del plec")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Analitza el plec/ }).getAttribute("href")).toBe("/licitacions/t1?tab=requisits");
+    expect(container.textContent).not.toMatch(/\b0 de 0\b|de null/);
+    expect(container.textContent).not.toContain("Dossier complet");
+    expect(container.textContent).toContain("Encara no hi ha cap anàlisi del plec: no se sap quins requisits obligatoris té.");
+    // A6: al lloc de la fracció, el comptador diu que els requisits no s'han analitzat.
+    expect(screen.getByText("Requisits encara no analitzats")).toBeTruthy();
   });
 });

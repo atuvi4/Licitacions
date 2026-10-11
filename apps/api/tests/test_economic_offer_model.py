@@ -120,6 +120,7 @@ async def requirement(db, tender):
         schema_version="requirements-schema-v1",
         provider="fake",
         model="fake-model-v1",
+        run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
         is_current=True,
     )
     db.add(run)

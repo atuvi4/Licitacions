@@ -29,6 +29,7 @@ from app.models.requirements import (
 )
 from app.services.requirement_analysis import analyze_tender_requirements
 from tests import test_requirement_analysis as base
+from tests.real_provider import RealNamedFake
 from tests.test_requirement_analysis import (
     PAGE_27,
     PAGE_28,
@@ -87,10 +88,21 @@ def _candidate(extraction_id, **overrides):
     return payload
 
 
-async def _run_v3(session, analyzable, response):
+async def _run_v3(session, analyzable, response, provider=None):
     fake.queue_response(response)
     tender = await tender_of(session, analyzable["document"])
-    return (await analyze_tender_requirements(session, tender, profile=V3)).run
+    return (
+        await analyze_tender_requirements(session, tender, profile=V3, provider=provider)
+    ).run
+
+
+async def _run_v3_real(session, analyzable, response):
+    """Com `_run_v3`, amb un proveidor de nom real (cap xarxa): la run passa a vigent.
+
+    Des de 3B-2 §6.3 una simulacio (fake) mai no es vigent; qui prova el que es
+    llegeix de la run vigent (revisio, reconciliacio) necessita una run real.
+    """
+    return await _run_v3(session, analyzable, response, provider=RealNamedFake())
 
 
 # --------------------------------------------------------------------------- #
@@ -449,7 +461,10 @@ async def test_l_api_nomes_ensenya_criteris_formals_com_a_criteris(
     session, analyzable, client_a
 ):
     extraction_id = analyzable["extraction"].id
-    await _run_v3(session, analyzable, _three_candidates(extraction_id))
+    # La lectura nomes ensenya la run vigent: cal una run real (3B-2 §6.3).
+    await _run_v3(
+        session, analyzable, _three_candidates(extraction_id), provider=RealNamedFake()
+    )
     tender_id = analyzable["document"].tender_id
 
     body = (await client_a.get(f"/api/v1/tenders/{tender_id}/analysis/requirements")).json()
@@ -476,7 +491,7 @@ async def test_l_api_v1_no_canvia(session, analyzable, client_a):
                       "quote": QUOTE_28}],
     }]})
     tender = await tender_of(session, analyzable["document"])
-    await analyze_tender_requirements(session, tender)
+    await analyze_tender_requirements(session, tender, provider=RealNamedFake())
 
     body = (
         await client_a.get(f"/api/v1/tenders/{tender.id}/analysis/requirements")
@@ -572,3 +587,46 @@ def test_la_clau_v1_v2_de_criteri_no_canvia():
     informative = award_dedup_key_v3(SimpleNamespace(**vars(item), kind="informative"))
     assert formal != informative
     assert award_dedup_key(item) not in (formal, informative)
+
+
+def test_la_clau_v1_v2_de_requisit_no_canvia(monkeypatch):
+    """La recepta de la clau de requisit, reescrita aqui: si algu la toca, falla.
+
+    El titol hi entra per `title_keys.normalized_title`, la MATEIXA funcio que fan
+    servir els criteris, els requisits manuals i l'eina d'acceptacio.
+    """
+    import hashlib
+    from types import SimpleNamespace
+
+    from app.services import requirement_analysis, title_keys
+    from app.services.requirement_analysis import requirement_dedup_key
+
+    def digest(parts):
+        return hashlib.sha256("␟".join(parts).encode("utf-8")).hexdigest()[:64]
+
+    item = SimpleNamespace(
+        category="economic_solvency", operator=None, scope="tender", lot_labels=["Lot 1"],
+        value={"min": 1}, title="  Solvencia  ECONOMICA ", modality="required",
+        alternative_group=None, equivalence_allowed=False,
+    )
+    evidence = [SimpleNamespace(extraction_id="e1", page_number=3),
+                SimpleNamespace(extraction_id="e1", page_number=2)]
+    recipe = ["economic_solvency", "", "tender", "lot 1", '{"min": 1}', "solvencia economica",
+              "required", "", ""]
+
+    # v2/v3 (sense pagines) i v1 (amb les pagines, ordenades i sense repetits).
+    assert requirement_dedup_key(item, evidence, include_pages=False) == digest(recipe)
+    assert requirement_dedup_key(item, evidence) == digest([*recipe, "e1:2|e1:3"])
+    with_eq = SimpleNamespace(**{**vars(item), "equivalence_allowed": True})
+    assert requirement_dedup_key(with_eq, [], include_pages=False) == digest([*recipe[:-1], "eq"])
+    # El titol: espais i majuscules no hi compten; un altre titol si.
+    same = SimpleNamespace(**{**vars(item), "title": "Solvencia economica"})
+    assert requirement_dedup_key(same, [], include_pages=False) == digest(recipe)
+    other = SimpleNamespace(**{**vars(item), "title": "Solvencia tecnica"})
+    assert requirement_dedup_key(other, [], include_pages=False) != digest(recipe)
+    # I hi entra per la funcio compartida, no per cap copia inline.
+    assert requirement_analysis.normalized_title is title_keys.normalized_title
+    monkeypatch.setattr(requirement_analysis, "normalized_title", lambda _text: "stub")
+    assert requirement_dedup_key(item, [], include_pages=False) == digest(
+        [*recipe[:5], "stub", *recipe[6:]]
+    )

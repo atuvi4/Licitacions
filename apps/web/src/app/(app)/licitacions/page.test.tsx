@@ -144,12 +144,13 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     const headers = [...container.querySelectorAll("thead th")].map((th) => th.textContent?.trim());
     expect(headers).toEqual(HEADERS);
 
-    // Vistes: «Totes amb pre-fit» ja no hi és; «Per revisar» (candidate) és la vista per defecte, sempre premuda.
+    // Vistes: «Totes amb pre-fit» ja no hi és; «Prioritzades» (candidate, D2) és la vista per defecte, sempre premuda.
     expect(screen.queryByRole("button", { name: /Totes/ })).toBeNull();
     expect(container.textContent).not.toContain("Totes amb pre-fit");
+    expect(container.textContent).not.toContain("Per revisar");
     const views = screen.getAllByRole("button", { pressed: true });
     expect(views).toHaveLength(1);
-    expect(views[0].textContent).toContain("Per revisar");
+    expect(views[0].textContent).toContain("Prioritzades");
     expect(views[0].textContent).toContain("12");
     expect(views[0].querySelector("[data-level='action'][data-outline='true']")).not.toBeNull();
 
@@ -180,7 +181,7 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     respondWith(base([item("t1")], 60));
     render(<TendersFeedPage />);
     await screen.findByText("Licitació t1");
-    fireEvent.click(screen.getByRole("button", { name: /Per revisar/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Prioritzades/ }));
     await flush();
     expect(lastQuery()).toBe("match_status=candidate&sort=score&limit=25&offset=0");
     fireEvent.change(screen.getByLabelText("Ordena per"), { target: { value: "deadline" } });
@@ -205,7 +206,35 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     expect(details.open).toBe(true);
     expect(details.querySelector("summary")?.textContent).toContain("Filtres · 1 actiu");
     expect((screen.getByLabelText("Text") as HTMLInputElement).value).toBe("fibra");
-    expect(screen.getByRole("button", { name: /Per revisar/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: /Prioritzades/ }).getAttribute("aria-pressed")).toBe("true");
+    // Xips dels filtres actius (C5): treure'n un torna a consultar sense ell.
+    fireEvent.click(screen.getByRole("button", { name: "Treu el filtre Text: «fibra»" }));
+    await flush();
+    expect(lastQuery()).toBe("match_status=candidate&sort=score&limit=25&offset=0");
+    expect(screen.queryByRole("list", { name: "Filtres actius" })).toBeNull();
+  });
+
+  it("amb un filtre de CPV la fila diu quin CPV ha coincidit quan no és el principal (C4, feed)", async () => {
+    search = "match_status=candidate";
+    respondWith(
+      base([
+        item("t1", {
+          cpvs: [
+            { cpv_code: "45314320", is_main: true, description: "Instal·lació de cables" },
+            { cpv_code: "32000000", is_main: false, description: "Equip de ràdio" },
+          ],
+        }),
+      ]),
+    );
+    const { container } = render(<TendersFeedPage />);
+    await screen.findByText("Licitació t1");
+    expect(container.querySelector("[data-cpv-match]")).toBeNull();
+    fireEvent.change(screen.getByLabelText("CPV"), { target: { value: "32" } });
+    fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
+    await flush();
+    expect(lastQuery()).toBe("cpv=32&match_status=candidate&sort=score&limit=25&offset=0");
+    const row = container.querySelector("tbody tr")!;
+    expect(row.querySelector("[data-cpv-match]")!.textContent).toContain("Coincideix amb el filtre pel CPV secundari 32000000 · Equip de ràdio");
   });
 
   it("sense filtres el formulari queda plegat; aplicar i esborrar passa pel mateix formulari", async () => {
@@ -237,12 +266,13 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     expect(push).toHaveBeenCalledWith("/licitacions/t1");
   });
 
-  it("buit en candidates sense CPV al perfil → B1 amb «Completa el perfil»", async () => {
+  it("buit en candidates sense CPV al perfil → B1 amb la sortida cap a les preferències del Radar", async () => {
     search = "match_status=candidate";
     respondWith(base([], 0, { "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0 } } }));
-    render(<TendersFeedPage />);
+    const { container } = render(<TendersFeedPage />);
     expect(await screen.findByRole("heading", { name: "Encara no sabem què busqueu" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: /Completa el perfil/ }).getAttribute("href")).toBe("/empresa");
+    expect(screen.getByRole("link", { name: /Defineix les preferències del Radar/ }).getAttribute("href")).toBe("/empresa/radar");
+    expect(container.textContent).not.toMatch(/Completa el perfil|3 passos/);
   });
 
   it("buit en candidates amb CPV → «Cap candidata ara mateix» i «Mira les N obertes» passa a «Totes»", async () => {
@@ -264,6 +294,14 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Esborra els filtres" }));
     await flush();
     expect(lastQuery()).toBe("match_status=candidate&sort=score&limit=25&offset=0");
+  });
+
+  it("cap text promet un pre-fit calculat per a totes les licitacions (3B-2 §7.1.4)", async () => {
+    respondWith(base([], 0, { "/companies/c1/tenders/facets": { ...facets, total_tenders: 0 }, "/companies/c1/matches/summary": { ...summary, total_tenders: 0 } }));
+    const { container } = render(<TendersFeedPage />);
+    await screen.findByRole("heading", { name: "Encara no s'ha llegit cap licitació" });
+    expect(container.textContent).not.toMatch(/per a totes|El pre-fit no n'amaga cap|apareixeran aquí amb el pre-fit calculat/);
+    expect(container.textContent).toContain("CPV, territoris o preferències de contracte");
   });
 
   it("ingesta buida: la instrucció tècnica va al detall tècnic, no al títol", async () => {
@@ -337,7 +375,7 @@ describe("Oportunitats · Totes (catàleg complet)", () => {
       expect(call).not.toContain("match_status");
     }
     expect(screen.getByRole("tab", { name: "Totes" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("tab", { name: "Per revisar" }).getAttribute("aria-selected")).toBe("false");
+    expect(screen.getByRole("tab", { name: "Radar · prioritzades" }).getAttribute("aria-selected")).toBe("false");
     expect(screen.getByLabelText("Ordena per")).toBeTruthy();
     // El pre-fit no canvia l'ordre per defecte: només hi ha ordres explícits de l'usuari.
     expect(screen.getByText("148 licitacions · pàgina 1 de 6")).toBeTruthy();
@@ -353,21 +391,113 @@ describe("Oportunitats · Totes (catàleg complet)", () => {
     expect(screen.getByRole("tab", { name: "Totes" }).getAttribute("aria-selected")).toBe("true");
   });
 
-  it("?match_status= (d'Avui) obre «Per revisar»", async () => {
+  it("?match_status= (d'Avui) obre «Radar · prioritzades»", async () => {
     search = "match_status=candidate";
     respondWith(base([item("t1")], 1));
     render(<TendersFeedPage />);
     await screen.findByText("Licitació t1");
-    expect(screen.getByRole("tab", { name: "Per revisar" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Radar · prioritzades" }).getAttribute("aria-selected")).toBe("true");
     expect(lastQuery()).toContain("match_status=candidate");
   });
 
-  it("la pestanya «Per revisar» s'obre per la URL sense perdre el que hi ha", async () => {
+  it("la pestanya «Radar · prioritzades» s'obre per la URL sense perdre el que hi ha", async () => {
     respondWith(base([item("t1")], 1));
     render(<TendersFeedPage />);
     await screen.findByText("Licitació t1");
-    fireEvent.click(screen.getByRole("tab", { name: "Per revisar" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Radar · prioritzades" }));
     expect(push).toHaveBeenCalledWith("/licitacions?vista=revisar", { scroll: false });
+  });
+
+  it("xips dels filtres actius amb «×» (C5): treure'n un deixa la resta i torna a consultar", async () => {
+    search = "q=fibra";
+    respondWith(base([item("t1")], 1, { "/companies/c1/tenders/facets": catalogueFacets }));
+    render(<TendersFeedPage />);
+    await screen.findByText("Licitació t1");
+    fireEvent.change(screen.getByLabelText(/^Territori \(NUTS\)/), { target: { value: "ES51" } });
+    fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
+    await flush();
+    expect(lastQuery()).toBe("mode=all&q=fibra&nuts=ES51&sort=published&limit=25&offset=0");
+    const chips = screen.getByRole("list", { name: "Filtres actius" });
+    expect(chips.textContent).toContain("Text: «fibra»");
+    expect(chips.textContent).toContain("NUTS: ES51");
+    fireEvent.click(screen.getByRole("button", { name: "Treu el filtre Text: «fibra»" }));
+    await flush();
+    expect(lastQuery()).toBe("mode=all&nuts=ES51&sort=published&limit=25&offset=0");
+    expect((screen.getByLabelText("Cerca al catàleg") as HTMLInputElement).value).toBe("");
+    expect(screen.getByRole("list", { name: "Filtres actius" }).textContent).not.toContain("Text:");
+  });
+
+  it("amb text, «Ordena per rellevància» només canvia l'ordre i ho diu: cap resultat amagat (C6)", async () => {
+    search = "q=fibra";
+    respondWith(base([item("t1")], 1));
+    const { container } = render(<TendersFeedPage />);
+    await screen.findByText("Licitació t1");
+    fireEvent.click(screen.getByRole("button", { name: "Ordena per rellevància" }));
+    await flush();
+    expect(lastQuery()).toBe("mode=all&q=fibra&sort=relevance&limit=25&offset=0");
+    expect(screen.queryByRole("button", { name: "Ordena per rellevància" })).toBeNull();
+    expect(container.textContent).toContain("només canvia l'ordre, no amaga cap licitació");
+    expect((screen.getByLabelText("Ordena per") as HTMLSelectElement).value).toBe("relevance");
+  });
+
+  it("sense text no s'ofereix cap ordre per rellevància", async () => {
+    respondWith(base([item("t1")], 1));
+    render(<TendersFeedPage />);
+    await screen.findByText("Licitació t1");
+    expect(screen.queryByRole("button", { name: "Ordena per rellevància" })).toBeNull();
+  });
+
+  it("el lloc d'execució sense resultats explica la cobertura parcial i porta al filtre per NUTS (C1)", async () => {
+    respondWith(base([], 0));
+    render(<TendersFeedPage />);
+    await screen.findByRole("heading", { name: "Cap licitació al catàleg" });
+    fireEvent.change(screen.getByLabelText(/^Lloc d'execució \(cobertura parcial\)/), { target: { value: "L'Escala" } });
+    fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
+    await flush();
+    expect(lastQuery()).toBe("mode=all&place_q=L%27Escala&sort=published&limit=25&offset=0");
+    expect(await screen.findByRole("heading", { name: "Cap licitació amb aquest lloc d'execució" })).toBeTruthy();
+    expect(screen.getByText(/només indiquen el territori amb el codi NUTS/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Filtra per NUTS" }));
+    await flush();
+    expect(lastQuery()).toBe("mode=all&sort=published&limit=25&offset=0");
+    expect(document.activeElement).toBe(screen.getByLabelText(/^Territori \(NUTS\)/));
+  });
+
+  it("la cerca s'aplica sola al cap de 300 ms, i Enter l'aplica a l'instant (D1)", async () => {
+    vi.useFakeTimers();
+    try {
+      respondWith(base([item("t1")], 1));
+      render(<TendersFeedPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const before = matchCalls().length;
+      fireEvent.change(screen.getByLabelText("Cerca al catàleg"), { target: { value: "fib" } });
+      fireEvent.change(screen.getByLabelText("Cerca al catàleg"), { target: { value: "fibra" } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(matchCalls().length).toBe(before);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(lastQuery()).toBe("mode=all&q=fibra&sort=published&limit=25&offset=0");
+      expect(matchCalls().length).toBe(before + 1);
+
+      fireEvent.change(screen.getByLabelText("Cerca al catàleg"), { target: { value: "fibra òptica" } });
+      fireEvent.submit(screen.getByRole("search"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(lastQuery()).toBe("mode=all&q=fibra+%C3%B2ptica&sort=published&limit=25&offset=0");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      // El temporitzador no repeteix la consulta que Enter ja ha fet.
+      expect(matchCalls().length).toBe(before + 2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("cada fila: títol, organisme, termini, import, CPV principal, font, estat factual, accions", async () => {
@@ -405,14 +535,43 @@ describe("Oportunitats · Totes (catàleg complet)", () => {
     expect(second.textContent).toContain("Anul·lada");
     expect(second.textContent).toContain("Ja no disponible a la font");
     expect(second.textContent).toContain("Import no informat");
-    // Sense pre-fit: neutral, mai un zero ni un vermell.
-    expect(second.textContent).toContain("Sense calcular");
+    // Sense pre-fit: la fila no en diu res (A9); l'avís és un de sol, a la capçalera de la llista.
+    expect(second.textContent).not.toContain("Sense calcular");
     expect(second.textContent).not.toContain("Pre-fit 0");
+    const notices = screen.getAllByText(/El pre-fit no s'ha calculat per a 1 licitació/);
+    expect(notices).toHaveLength(1);
+    expect(notices[0].textContent).toContain("CPV, territoris o preferències de contracte");
 
-    const view = within(first).getByRole("link", { name: "Veure" });
-    const analyse = within(first).getByRole("link", { name: "Analitzar" });
-    expect(view.getAttribute("href")).toBe("/licitacions/t1");
-    expect(analyse.getAttribute("href")).toBe("/licitacions/t1?tab=analisi");
+    // Una sola acció a la targeta (D3).
+    expect(within(first).getByRole("link", { name: "Obre la fitxa" }).getAttribute("href")).toBe("/licitacions/t1");
+    expect(within(first).queryByRole("link", { name: /Analitzar|^Veure$/ })).toBeNull();
+  });
+
+  it("amb un filtre de CPV la targeta diu quin CPV ha coincidit quan no és el principal (C4)", async () => {
+    respondWith(
+      base(
+        [
+          item("t1", {
+            cpvs: [
+              { cpv_code: "45314320", is_main: true, description: "Instal·lació de cables" },
+              { cpv_code: "32000000", is_main: false, description: "Equip de ràdio" },
+            ],
+          }),
+        ],
+        1,
+        { "/cpv-codes?": [] },
+      ),
+    );
+    const { container } = render(<TendersFeedPage />);
+    await screen.findByText("Licitació t1");
+    expect(container.querySelector("[data-cpv-match]")).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^CPV/), { target: { value: "32" } });
+    fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
+    await flush();
+    expect(lastQuery()).toBe("mode=all&cpv=32&sort=published&limit=25&offset=0");
+    const line = container.querySelector("[data-cpv-match]")!;
+    expect(line.getAttribute("data-cpv-match")).toBe("secondary");
+    expect(line.textContent).toContain("Coincideix amb el filtre pel CPV secundari 32000000 · Equip de ràdio");
   });
 
   it("amb un filtre d'import, avisa de quantes no es mostren per no tenir import conegut", async () => {

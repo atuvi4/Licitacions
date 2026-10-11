@@ -566,7 +566,7 @@ async def test_un_run_v3_no_es_pot_reprendre_en_v3_1(session, palamos_like, one_
 
     with pytest.raises(probe.ProbeError, match="profile_mismatch"):
         await probe.preview_resume(session, tender, canary.id, provider_name="fake",
-                                   model=settings.LLM_MODEL)
+                                   model=settings.LLM_MODEL, profile=profiles.V3)
     assert await session.scalar(
         sa.select(RequirementExtractionRun.extractor_version).where(
             RequirementExtractionRun.id == canary.id)

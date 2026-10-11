@@ -8,15 +8,21 @@ describe("navegació del shell", () => {
     expect(NAVIGATION_GROUPS[0].items.map((item) => item.label)).toEqual(["Avui", "Oportunitats", "Candidatures"]);
     expect(NAVIGATION_GROUPS[1].items.map((item) => item.label)).toEqual(["El nostre perfil"]);
     expect(NAVIGATION_GROUPS.flatMap((group) => group.items)).toHaveLength(4);
+    // B1: «El nostre perfil» no porta cap recompte (abans el percentatge de completitud).
+    expect(NAVIGATION_GROUPS[1].items[0].countKey).toBeUndefined();
+    expect(NAVIGATION_GROUPS[0].items.map((item) => item.countKey)).toEqual(["avui", "oportunitats", "candidatures"]);
   });
 
-  it("la secció Empresa té quatre subdestins", () => {
+  it("la secció Empresa té cinc subdestins: les preferències del Radar a part del coneixement (B4)", () => {
     expect(PROFILE_SUBNAV.map((item) => [item.href, item.label])).toEqual([
       ["/empresa", "Totes les àrees"],
+      ["/empresa/radar", "Preferències del Radar"],
       ["/empresa/coneixement", "Coneixement"],
       ["/documents", "Biblioteca de documents"],
       ["/experiencia", "Experiència"],
     ]);
+    expect(isSubnavActive("/empresa/radar", "/empresa/radar")).toBe(true);
+    expect(isSubnavActive("/empresa/radar", "/empresa")).toBe(false);
   });
 
   it("«El nostre perfil» és actiu a /empresa/*, /experiencia i /documents", () => {

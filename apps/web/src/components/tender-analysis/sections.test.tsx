@@ -60,6 +60,29 @@ describe("Què cal resoldre abans de decidir", () => {
     render(<ResolveBeforeDeciding run={analysisFixture({ findings: [] })} lookup={lookup()} tenderId="t1" />);
     expect(screen.getByText(/No hi ha cap element pendent de resoldre/)).toBeTruthy();
   });
+
+  it("una dada declarada sense verificar es resol a l'ítem de Coneixement actual, mai a «Pendents de validar» (B5)", () => {
+    const base = analysisFixture().findings[0];
+    const findings = [{ ...base, id: "g-ev", finding_type: "evidence_gap", explanation_code: "DECLARED_NOT_VERIFIED", requirement_id: "r-ok", criterion_id: null, scope_item_id: null }];
+    const { container } = render(<ResolveBeforeDeciding run={analysisFixture({ findings })} lookup={lookup()} tenderId="t1" />);
+    const link = screen.getByRole("link", { name: /On es resol/ });
+    expect(link.getAttribute("href")).toBe("/empresa/coneixement?tab=actual");
+    expect(link.textContent).toContain("Coneixement actual");
+    expect(container.textContent).not.toMatch(/Pendents de validar|tab=pendents/);
+  });
+});
+
+describe("Requisits: destí «On es resol» (B5)", () => {
+  it("un requisit satisfet per una dada declarada (sense verificar) porta a Coneixement actual, no a cap pestanya de pendents", () => {
+    const fit = { ...analysisFixture().fit_assessments[0], id: "f-decl", requirement_id: "r-ok", fit_result: "satisfies", knowledge_source: "current_declared", verification_status: "not_verified", explanation_code: "CERT_CURRENT_DECLARED" };
+    const { container } = render(<RequirementsFit run={analysisFixture({ fit_assessments: [fit] })} lookup={lookup()} tenderId="t1" />);
+    // El destí viu dins del panell «Per què?», plegat per defecte.
+    fireEvent.click(screen.getByRole("button", { name: /Per què/ }));
+    const link = screen.getByRole("link", { name: /On es resol/ });
+    expect(link.getAttribute("href")).toBe("/empresa/coneixement?tab=actual");
+    expect(link.textContent).toContain("Coneixement actual");
+    expect(container.textContent).not.toMatch(/Pendents de validar|tab=pendents/);
+  });
 });
 
 describe("Què cal resoldre: ordre i etiqueta d'obligatorietat (T9)", () => {

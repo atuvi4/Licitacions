@@ -391,7 +391,29 @@ async def test_without_analysis_the_snapshot_is_absent(db, tenant_a):
         "schema_version": 1,
         "state": "absent",
         "warnings": ["analysis_missing"],
+        # 3B-2 §4.4: l'estat del paquet es del plec, hi sigui o no l'analisi. Sense
+        # passada de classificacio global: `unknown`.
+        "package_status": "unknown",
+        "open_gap_count": 0,
     }
+
+
+async def test_the_snapshot_records_the_package_state_the_human_saw(db, tenant_a):
+    """3B-2 §4.4: qui decideix veu si el paquet documental estava incomplet."""
+    from tests.test_tender_analysis_package import _gap, _global_run
+
+    user, company = tenant_a
+    tender, _rows, _run = await v3_case(db, company, analysed=False)
+    await _global_run(db, tender)
+    await _gap(db, tender, "DOC-04", ["sites"])
+    await _gap(db, tender, "DOC-05", ["award_criteria"], resolved=True)
+    await db.commit()
+    workspace = await open_workspace(db, company.id, tender, user.id)
+
+    decision = await go(db, workspace, user, reason="Ho decidim amb el paquet incomplet.")
+
+    snapshot = parse_snapshot(decision.analysis_snapshot_json)
+    assert (snapshot.package_status, snapshot.open_gap_count) == ("incomplete", 1)
 
 
 async def test_a_lot_workspace_uses_the_tender_run(db, tenant_a):

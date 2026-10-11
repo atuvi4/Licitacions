@@ -207,7 +207,9 @@ async def _assert_links_belong(
         # un manual arxivat ja no compta. Les opcions que ja hi apuntaven NO es
         # toquen ni s'esborren: nomes es diu, a la lectura, que el vincle ha
         # deixat de ser vigent. Veure `effective_requirement_ids`.
-        effective = await effective_requirements(session, workspace.tender_id)
+        effective = await effective_requirements(
+            session, workspace.tender_id, workspace.company_id
+        )
         if requirement_id not in {item.id for item in effective.all}:
             raise OptionLinkMismatchError(
                 "Aquest requisit ja no forma part del conjunt vigent.",
@@ -218,7 +220,7 @@ async def _assert_links_belong(
 async def effective_requirement_ids(
     session: AsyncSession, workspace: BidWorkspace
 ) -> set[uuid.UUID]:
-    effective = await effective_requirements(session, workspace.tender_id)
+    effective = await effective_requirements(session, workspace.tender_id, workspace.company_id)
     return {item.id for item in effective.all}
 
 

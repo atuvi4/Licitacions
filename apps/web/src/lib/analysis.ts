@@ -317,8 +317,10 @@ const Q = (seccio: string, label: string): ResolveDestination => ({
   href: `/empresa/coneixement?tab=qualificacio&seccio=${seccio}`,
   label: `Coneixement › Qualificació › ${label}`,
 });
+// Una dada declarada sense verificar també es resol a l'ítem de «Coneixement actual»
+// («Afegeix evidència» / «Verifica»): la vista «Pendents de validar» ja no existeix
+// (addendum 3B-2, B5) i «declarat» no és cap tasca pendent (B2).
 const CURRENT: ResolveDestination = { href: "/empresa/coneixement?tab=actual", label: "Coneixement › Coneixement actual" };
-const PENDING: ResolveDestination = { href: "/empresa/coneixement?tab=pendents", label: "Coneixement › Pendents de validar" };
 const QUESTIONS: ResolveDestination = { href: "#preguntes", label: "Preguntes generades" };
 
 /** Només codis amb un destí inequívoc. La resta no té botó. */
@@ -343,9 +345,9 @@ export const RESOLVE: Record<string, ResolveDestination> = {
   NO_AVAILABLE_DELIVERY: CURRENT,
   TERRITORY_UNKNOWN: CURRENT,
   TERRITORY_UNMATCHED: CURRENT,
-  FACT_TRUE_DECLARED: PENDING,
-  CERT_CURRENT_DECLARED: PENDING,
-  DECLARED_NOT_VERIFIED: PENDING,
+  FACT_TRUE_DECLARED: CURRENT,
+  CERT_CURRENT_DECLARED: CURRENT,
+  DECLARED_NOT_VERIFIED: CURRENT,
   TURNOVER_UNKNOWN: Q("solvencia", "Solvència econòmica"),
   TURNOVER_BELOW: Q("solvencia", "Solvència econòmica"),
   EXECUTION_UNKNOWN: Q("experiencia", "Experiència"),

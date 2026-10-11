@@ -121,7 +121,10 @@ export function TechnicalSolutionSection({ workspace, registerLeaveGuard }: Prop
   const canEdit = canEditSolutions(membership.role);
   const base = `/companies/${companyId}/workspaces/${workspace.id}`;
 
-  const analysis = useResource<RequirementAnalysis>(`/tenders/${workspace.tender_id}/analysis/requirements`);
+  // La run que llegeix l'empresa de la candidatura (3B-2 §6.5), no la de l'empresa per defecte.
+  const analysis = useResource<RequirementAnalysis>(
+    `/tenders/${workspace.tender_id}/analysis/requirements?company_id=${workspace.company_id}`,
+  );
   const solutions = useResource<TechnicalSolution[]>(`${base}/technical-solutions`);
   // Cas C de l'abast: candidatura global sobre un plec amb lots. Els lots on
   // ens presentem els diu l'oferta, i només llavors es llegeix.

@@ -31,6 +31,7 @@ import {
   type AnalysisLimits,
   type AnalysisQuote,
   type JobRequest,
+  type QuoteAcceptance,
   confirmAnalysis,
   jobErrorMessage,
   previewAnalysis,
@@ -54,7 +55,20 @@ import {
   isTrustworthyAnalysis,
   jobErrorAction,
 } from "@/lib/labels";
-import type { AwardCriterion, Requirement, RequirementAnalysis, RequirementEvidence, ReviewStatus } from "@/lib/requirements";
+import {
+  COMPLETED_EMPTY_TEXT,
+  SIMULATION_NOT_CURRENT_TEXT,
+  canAdoptAnalysis,
+  requirementAnalysisState,
+  type AwardCriterion,
+  type ExtractionRun,
+  type Requirement,
+  type RequirementAnalysis,
+  type RequirementEvidence,
+  type RequirementRunAdoption,
+  type ReviewStatus,
+} from "@/lib/requirements";
+import type { TenderDocumentMeta, TenderPackage } from "@/lib/tenders";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
@@ -195,6 +209,8 @@ export function RequirementAnalysisSection({
   tenderId,
   companyId,
   analysis,
+  documents,
+  pkg,
   loading,
   error,
   onReload,
@@ -203,6 +219,10 @@ export function RequirementAnalysisSection({
   tenderId: string;
   companyId: string | null;
   analysis: RequirementAnalysis | null;
+  /** Els plecs vigents de la fitxa: l'estat buit diu si ja tenen text (A5). */
+  documents?: TenderDocumentMeta[];
+  /** El paquet de la fitxa: la quota diu què falta sota la casella d'acceptar-lo (M4). */
+  pkg?: TenderPackage | null;
   loading: boolean;
   error: string | null;
   onReload: () => Promise<void>;
@@ -241,6 +261,19 @@ export function RequirementAnalysisSection({
 
   const state = analysisState(analysis);
   const run = analysis?.run ?? null;
+  // L'última run d'aquests plecs, sigui o no la vigent: una simulació o una
+  // lectura acabada sense resultats mai són vigents i no arriben a `analysis.run`,
+  // però s'han d'explicar (3B-2 §6.3).
+  const latestRuns = useResource<ExtractionRun[]>(`/tenders/${tenderId}/analysis/runs?limit=1`);
+  const latest = Array.isArray(latestRuns.data) ? (latestRuns.data[0] ?? null) : null;
+  const latestNotCurrent = latest && latest.id !== run?.id ? latest : null;
+  const { reload: reloadLatest } = latestRuns;
+  const [acceptance, setAcceptance] = useState<QuoteAcceptance>({});
+  const [quoteForce, setQuoteForce] = useState(false);
+  const [accepting, setAccepting] = useState(false);
+  const [adopting, setAdopting] = useState(false);
+  const [adoptionNotice, setAdoptionNotice] = useState<string | null>(null);
+  const canAdopt = canAdoptAnalysis(membership?.role);
 
   // L'anàlisi s'executa en segon pla: aquí només es demana i se'n segueix
   // l'estat. Quan acaba, es recarrega el que se n'ha obtingut.
@@ -249,7 +282,7 @@ export function RequirementAnalysisSection({
       setJobFailure(done);
       setActionError(jobErrorMessage(done.error_code));
     }
-    await onReload();
+    await Promise.all([onReload(), reloadLatest()]);
   });
   const running = submitting || job.active;
 
@@ -258,16 +291,61 @@ export function RequirementAnalysisSection({
       setActionError("Cal una empresa activa per demanar l'anàlisi.");
       return;
     }
+    // En una licitació pública la selecció és la canònica del servidor: el tenant
+    // no força res (422 `public_tender_canonical_only`). Només en una de manual.
+    const effectiveForce = editable && force;
     setSubmitting(true);
     setActionError(null);
     setJobFailure(null);
     setQuoteNotice(null);
+    setAcceptance({});
+    setQuoteForce(effectiveForce);
     try {
-      setQuote(await previewAnalysis(companyId, tenderId, force));
+      setQuote(await previewAnalysis(companyId, tenderId, effectiveForce));
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : "No s'ha pogut calcular el volum.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  /** Una acceptació explícita canvia la quota: es torna a demanar el volum amb ella. */
+  async function accept(change: QuoteAcceptance) {
+    if (!companyId) return;
+    const next = { ...acceptance, ...change };
+    setAccepting(true);
+    setActionError(null);
+    try {
+      setQuote(await previewAnalysis(companyId, tenderId, quoteForce, next));
+      setAcceptance(next);
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "No s'ha pogut recalcular el volum.");
+    } finally {
+      setAccepting(false);
+    }
+  }
+
+  /** L'empresa adopta l'anàlisi canònica nova com la seva base (3B-2 §6.5). */
+  async function adopt() {
+    if (!companyId || !analysis?.canonical_run_id) return;
+    setAdopting(true);
+    setActionError(null);
+    setAdoptionNotice(null);
+    try {
+      const adopted = await api.post<RequirementRunAdoption>(`/tenders/${tenderId}/analysis/requirements/adopt`, {
+        run_id: analysis.canonical_run_id,
+        company_id: companyId,
+      });
+      setAdoptionNotice(
+        adopted.reconciliation_required
+          ? "Feta. La revisió de l'empresa parlava d'una altra anàlisi: cal reconciliar la revisió amb la nova."
+          : "Feta: aquesta és ara l'anàlisi de l'empresa.",
+      );
+      await onReload();
+    } catch (caught) {
+      setActionError(caught instanceof Error && caught.message ? caught.message : "No s'ha pogut adoptar l'anàlisi.");
+    } finally {
+      setAdopting(false);
     }
   }
 
@@ -322,7 +400,28 @@ export function RequirementAnalysisSection({
   const trustworthy = !run || isTrustworthyAnalysis(run.analysis_basis);
   const failure = jobFailure ?? (job.request?.status === "failed" ? job.request : null);
   const failureAction = failure ? jobErrorAction(failure.error_code) : null;
-  const mainButtonLabel = run ? "Torna a analitzar" : "Analitza requisits";
+  const mainButtonLabel = run ? "Torna a analitzar" : "Analitza el plec";
+  // Sense run però amb `analysis_state=current` (N3): la licitació té requisits
+  // escrits a mà i no hi ha cap anàlisi automàtica. No és cap buit: el cos mostra
+  // els requisits, i l'anàlisi automàtica queda com a acció secundària.
+  const manualOnly = run === null && requirementAnalysisState(analysis) === "current";
+  // Una sola CTA «Analitza» (A8): sense anàlisi la porta l'estat buit; la
+  // capçalera només té botó quan hi ha una anàlisi (tornar-hi), feina en curs o
+  // requisits manuals sense run.
+  const headerButton = run !== null || job.active || quote !== null || manualOnly;
+  // L'estat del plec segueix els documents (A5): sense text no hi ha res a llegir;
+  // amb text, els requisits encara no s'han analitzat.
+  const textExtracted = documents?.some((document) => document.analyzable && document.latest_file?.analysis_status === "extracted");
+  const emptyTitle =
+    documents === undefined
+      ? "Requisits encara no analitzats"
+      : textExtracted
+        ? "Text extret · requisits encara no analitzats"
+        : "Sense text extret";
+  const emptyDescription =
+    documents !== undefined && !textExtracted
+      ? "Processa els plecs a la pestanya Plecs per extreure'n el text: fins llavors no hi ha res a analitzar. «0 bloquejos» aquí no vol dir que no n'hi hagi: vol dir que ningú ho ha mirat."
+      : "«0 bloquejos» aquí no vol dir que no n'hi hagi: vol dir que ningú ho ha mirat. Els comptadors es queden a zero fins que hi hagi una anàlisi.";
 
   const FILTERS: Array<{ key: Filter; label: string; level: "blocking" | "attention" | "neutral" }> = [
     { key: "all", label: "Tots", level: "neutral" },
@@ -374,14 +473,16 @@ export function RequirementAnalysisSection({
                   {ANALYSIS_STATUS_TEXT(analysis, job.request)}
                 </StatusPill>
               )}
-              <Button
-                variant={run ? "secondary" : "primary"}
-                onClick={() => void analyse(state === "stale")}
-                disabled={running || loading || quote !== null}
-                loading={submitting}
-              >
-                {mainButtonLabel}
-              </Button>
+              {headerButton && (
+                <Button
+                  variant={run || manualOnly ? "secondary" : "primary"}
+                  onClick={() => void analyse(state === "stale")}
+                  disabled={running || loading || quote !== null}
+                  loading={submitting}
+                >
+                  {mainButtonLabel}
+                </Button>
+              )}
             </div>
           }
         />
@@ -443,6 +544,8 @@ export function RequirementAnalysisSection({
         {quote && (
           <AnalysisQuotePanel
             quote={quote}
+            pkg={pkg ?? null}
+            documents={documents}
             notice={quoteNotice}
             canConfirm={canConfirm}
             rerun={run !== null}
@@ -451,9 +554,55 @@ export function RequirementAnalysisSection({
             onCancel={() => {
               setQuote(null);
               setQuoteNotice(null);
+              setAcceptance({});
             }}
+            onAccept={(change) => void accept(change)}
+            accepting={accepting}
           />
         )}
+
+        {analysis?.adoption_available && (
+          // 3B-2 §6.5: una anàlisi canònica nova no substitueix la que l'empresa té
+          // acceptada; l'empresa l'adopta, i només qui decideix la licitació.
+          <div className="m-4 flex flex-col gap-2 border border-border-strong bg-subtle px-3.5 py-2.5 sm:flex-row sm:items-center sm:gap-3.5">
+            <div className="min-w-0 flex-1">
+              <p className="font-heading text-[14px] font-semibold text-ink">Hi ha una anàlisi nova del plec</p>
+              <p className="text-body text-muted">
+                {canAdopt
+                  ? "L'empresa continua llegint l'anterior fins que l'adopteu. Adoptar-la no esborra la revisió feta."
+                  : "L'empresa continua llegint l'anterior. Només qui decideix la licitació la pot adoptar."}
+              </p>
+            </div>
+            {canAdopt && (
+              <Button variant="primary" size="sm" onClick={() => void adopt()} loading={adopting} disabled={adopting}>
+                Adopta-la
+              </Button>
+            )}
+          </div>
+        )}
+        {adoptionNotice && <p className="mx-4 mb-2 text-[13px] text-ink">{adoptionNotice}</p>}
+
+        {latestNotCurrent && latestNotCurrent.status === "completed_empty" && (
+          <div className="m-4 border border-warning bg-warning-soft px-3.5 py-2.5">
+            <p className="font-heading text-[14px] font-semibold text-warning">{COMPLETED_EMPTY_TEXT}</p>
+            <p className="mt-0.5 text-body text-ink">
+              L&apos;última lectura dels plecs ha acabat sense cap requisit ni criteri. O el plec no en diu res, o
+              l&apos;extracció ha fallat sense dir-ho: ho ha de mirar una persona. No és la vigent.
+            </p>
+          </div>
+        )}
+        {latestNotCurrent &&
+          latestNotCurrent.status !== "completed_empty" &&
+          latestNotCurrent.run_basis !== "real" &&
+          latestNotCurrent.run_basis !== "gold" && (
+            <div className="m-4 border border-warning bg-warning-soft px-3.5 py-2.5">
+              <p className="font-heading text-[14px] font-semibold text-warning">{SIMULATION_NOT_CURRENT_TEXT}</p>
+              <p className="mt-0.5 text-body text-ink">
+                La darrera anàlisi d&apos;aquests plecs és una simulació: no ha llegit el plec i mai no compta com a
+                vigent. Els requisits d&apos;aquí només surten d&apos;una lectura real.
+              </p>
+            </div>
+          )}
 
         {run && !trustworthy && (
           <div className="m-4 flex flex-col gap-1 border border-warning bg-warning-soft px-3.5 py-2.5 sm:flex-row sm:items-center sm:gap-3.5">
@@ -479,16 +628,23 @@ export function RequirementAnalysisSection({
           </Banner>
         )}
 
-        {!run && !job.active && !quote && (
+        {!run && !job.active && !quote && !manualOnly && (
           <EmptyState
-            title="Aquest plec encara no s'ha llegit"
-            description="«0 bloquejos» aquí no vol dir que no n'hi hagi: vol dir que ningú ho ha mirat. Els comptadors es queden a zero fins que hi hagi una anàlisi."
+            title={emptyTitle}
+            description={emptyDescription}
             action={
               <Button variant="primary" onClick={() => void analyse(false)} disabled={running || loading}>
-                Analitza els plecs
+                Analitza el plec
               </Button>
             }
           />
+        )}
+
+        {manualOnly && !job.active && !quote && (
+          <p className="px-5 py-4 text-[13px] text-muted">
+            Els requisits d&apos;aquesta licitació són escrits a mà. No s&apos;ha fet cap anàlisi automàtica del plec:
+            és opcional i es pot demanar des de la capçalera d&apos;aquesta targeta.
+          </p>
         )}
 
         {run && (
@@ -577,8 +733,13 @@ export function RequirementAnalysisSection({
       {requirements.length > 0 && (
         <Card>
           <CardHeader
-            title={`Requisits extrets (${requirements.length})`}
-            description="Proposats per l'anàlisi automàtica amb cita i pàgina. Extret no vol dir acreditat: el compliment es compara a sota."
+            // Sense run, tots són escrits a mà (N3): la targeta no pot dir «extrets» ni «proposats per l'anàlisi».
+            title={manualOnly ? `Requisits escrits a mà (${requirements.length})` : `Requisits extrets (${requirements.length})`}
+            description={
+              manualOnly
+                ? "Escrits per l'empresa; cap no ve de l'anàlisi automàtica. Escrit no vol dir acreditat: el compliment es compara a sota."
+                : "Proposats per l'anàlisi automàtica amb cita i pàgina. Extret no vol dir acreditat: el compliment es compara a sota."
+            }
           />
           {/* La crida principal a la revisió és al Resum: aquí, només text i un enllaç discret. */}
           <p className="border-b border-border px-4 py-2 text-caption text-muted sm:px-5">

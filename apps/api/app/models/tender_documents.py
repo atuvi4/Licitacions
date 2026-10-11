@@ -264,6 +264,15 @@ class TenderDocumentFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             postgresql_where=sa.text(_IN_FLIGHT),
             sqlite_where=sa.text(_IN_FLIGHT),
         ),
+        # Un sol fitxer vigent per document (3B-2 §2.4, 0058). Qui en fa vigent un
+        # de nou ha de destronar l'anterior ABANS (l'index no es diferible).
+        sa.Index(
+            "uq_tender_document_files_current",
+            "tender_document_id",
+            unique=True,
+            postgresql_where=sa.text("is_current"),
+            sqlite_where=sa.text("is_current = 1"),
+        ),
     )
 
     tender_document_id: Mapped[uuid.UUID] = mapped_column(

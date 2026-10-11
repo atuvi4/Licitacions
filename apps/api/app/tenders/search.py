@@ -117,6 +117,25 @@ def build_search_text(
     return text or None
 
 
+#: Comencament i camp obligat de la plantilla del `summary` del feed agregat, ja
+#: normalitzats (`normalize_search_text`): «Id licitación: …; Órgano de
+#: Contratación: …; Importe: …; Estado: …».
+_TEMPLATE_HEAD = "id licitacion "
+_TEMPLATE_FIELD = " organo de contratacion "
+
+
+def is_feed_summary_template(text: str | None) -> bool:
+    """Cert si `text` es la plantilla fixa del `summary` del feed agregat (1044).
+
+    L'UNICA deteccio de la plantilla (3B-2 §7.1.2): la fan servir la normalitzacio
+    de la ingesta (`description=None`, text cru a `source_metadata.feed_summary`) i
+    el backfill dels existents. No es una descripcio de l'objecte: son metadades
+    de la font (expedient, organ, import, estat) que la fitxa ja ensenya.
+    """
+    folded = normalize_search_text(text)
+    return folded.startswith(_TEMPLATE_HEAD) and _TEMPLATE_FIELD in f"{folded} "
+
+
 async def refresh_search_text(session: AsyncSession, tender: Tender) -> str | None:
     """Recalcula `tender.search_text` llegint l'organisme i els lots vigents de la BD.
 

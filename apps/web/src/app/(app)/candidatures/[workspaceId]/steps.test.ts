@@ -33,15 +33,23 @@ describe("resolveStep", () => {
 
 describe("stepperItems", () => {
   it("sense decisió: Decidir en curs, Preparar s'obre amb GO, Tancar amb el que falta", () => {
-    const items = stepperItems(workspaceFixture());
+    const items = stepperItems(workspaceFixture(), 2);
     expect(items.map((i) => [i.key, i.state])).toEqual([
       ["decidir", "on"],
       ["preparar", "todo"],
       ["tancar", "todo"],
     ]);
     expect(items[1].note).toBe("s'obre amb GO");
-    expect(items[2].note).toBe("2 coses per resoldre");
+    expect(items[2].note).toBe("2 pendents de preparació (totes les àrees)");
     expect(items[0].pill).toBeNull();
+  });
+
+  it("el recompte de Tancar és el de la preparació final (A15): un sol comptador, mateixa font que la llista", () => {
+    // `readiness_blockers` del workspace no hi compta: només el que diu la preparació final.
+    const ws = workspaceFixture({ readiness_blockers: ["a", "b", "c"] });
+    expect(stepperItems(ws, 1)[2].note).toBe("1 pendent de preparació (totes les àrees)");
+    expect(stepperItems(ws, 0)[2].note).toBe("a punt per tancar");
+    expect(stepperItems(ws, null)[2].note).toBe("comprovant la preparació");
   });
 
   it("amb GO: Decidir fet amb la decisió i la data, Preparar en curs", () => {
@@ -55,12 +63,39 @@ describe("stepperItems", () => {
         readiness: "ready_for_final_review",
         readiness_blockers: [],
       }),
+      0,
     );
     expect(items.map((i) => i.state)).toEqual(["done", "on", "todo"]);
     expect(items[0].note).toContain("GO");
     expect(items[0].note).toContain("2026");
     expect(items[1].note).toBeNull();
-    expect(items[2].note).toBe("dossier complet");
+    expect(items[2].note).toBe("a punt per tancar");
+  });
+
+  it("sense cap anàlisi del plec, Tancar no diu mai «dossier complet»", () => {
+    const decision = decisionFixture();
+    const items = stepperItems(
+      workspaceFixture({
+        status: "preparing_bid",
+        human_decision: "go",
+        latest_decision: decision,
+        decisions: [decision],
+        readiness: "not_started",
+        readiness_blockers: ["analysis_missing"],
+        dossier_coverage: {
+          analysis_state: "absent",
+          mandatory_total: null,
+          covered: 0,
+          missing_document: 0,
+          needs_review: 0,
+          not_applicable: 0,
+          expired_documents: 0,
+          optional_total: 0,
+          optional_covered: 0,
+        },
+      }),
+    );
+    expect(items[2].note).toBe("encara no hi ha cap anàlisi del plec");
   });
 
   it("a Tancar: Preparar fet i Tancar en curs; presentada, tot fet", () => {

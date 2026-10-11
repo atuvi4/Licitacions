@@ -38,6 +38,9 @@ class EntityCounts(BaseModel):
     people: int
     qualifications: int
     cpv_preferences: int
+    #: 0 o 1: les preferencies de contracte desades (una fila per empresa). Amb CPV i
+    #: territoris, el que decideix si el pre-fit es pot calcular (3B-2 §7.1.4).
+    contract_preferences: int = 0
     projects: int
     documents: int
     document_links: int

@@ -113,6 +113,17 @@ class Settings(BaseSettings):
     DOCUMENT_LOW_TEXT_CHARS_PER_PAGE: int = 100
     # Un processat en curs mes antic que aixo es considera mort i es pot reclamar.
     DOCUMENT_PROCESSING_STALE_SECONDS: int = 300
+    # Hosts oficials d'on l'operador de plataforma pot incorporar documents
+    # publics per URL (3B-2 §2.2). Coincidencia per sufix de domini (el host
+    # mateix o qualsevol subdomini), a la URL i a cada salt de redireccio; a mes
+    # de la guarda SSRF, no en lloc seu. Com a variable d'entorn, en JSON.
+    DOCUMENT_OFFICIAL_HOSTS: list[str] = Field(
+        default_factory=lambda: [
+            "contractaciopublica.cat",
+            "contrataciondelestado.es",
+            "contrataciondelsectorpublico.gob.es",
+        ]
+    )
 
     # --- Ingesta de paquets ZIP (fase 1 del motor d'analisi) ---
     # Cada fitxer de dins te el limit de sempre (`DOCUMENT_MAX_SIZE_MB`). Aquests
@@ -140,8 +151,17 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     # El model NO es una decisio de domini: es configuracio.
     LLM_MODEL: str = "claude-sonnet-5"
-    LLM_TIMEOUT_SECONDS: float = 120.0
-    LLM_MAX_RETRIES: int = 2
+    # Models reals admesos (3B-2 §6.7): `LLM_MODEL` ha de ser IDENTIC a una entrada.
+    # Buida per defecte: cap model real no es pot fer servir fins que el propietari
+    # el pina a un ID exacte en autoritzar (porta unica: `model_not_pinned`).
+    LLM_ALLOWED_MODELS: list[str] = Field(default_factory=list)
+    # Una crida llarga (un chunk de 6 pagines amb 8000 tokens de sortida) pot passar
+    # dels 2 minuts; el reintent ja no es automatic (veure LLM_MAX_RETRIES).
+    LLM_TIMEOUT_SECONDS: float = 300.0
+    # Reintents automatics del SDK: 0 per defecte (3B-2 §6.6). Un chunk fallit es torna
+    # a enviar nomes via una represa, que es veu i es paga explicitament; un reintent
+    # automatic podria pagar dues vegades una crida que ja havia arribat.
+    LLM_MAX_RETRIES: int = 0
     LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS: int = 8000
     # Preu dels models, en dolars per milio de tokens, per poder posar un cost a
     # una execucio del benchmark. Buit per defecte: un preu al codi envelleix
@@ -149,9 +169,26 @@ class Settings(BaseSettings):
     # que no tenir-ne cap. Si el model no hi es, `estimated_cost` queda buit i
     # l'informe diu per que. Exemple:
     #   LLM_MODEL_PRICES={"<model>": {"input": <USD per 1M>, "output": <USD per 1M>}}
+    # Per a un proveidor REAL de producte el preu es obligatori i es busca pel model
+    # EXACTE (3B-2 §6.7): sense preu, la quota i el handler refusen (`price_unknown`).
     LLM_MODEL_PRICES: dict[str, dict[str, float]] = Field(default_factory=dict)
+    # Caps de despesa en dolars (3B-2 §6.7, decisio 5). Valen fins que l'operador
+    # registra una autoritzacio nova del mateix scope (`llm_budget_authorizations`).
+    #   canary: una prova de pocs chunks (`only_chunks`);
+    #   run: una analisi sencera;
+    #   pilot_total: tot el que s'ha gastat (`llm_spend_ledger`).
+    LLM_BUDGET_CANARY_USD: float = 1.0
+    LLM_BUDGET_RUN_USD: float = 3.0
+    LLM_BUDGET_PILOT_TOTAL_USD: float = 10.0
+    # Permet demanar una analisi SIMULADA (`fake`/`fixture`) fora de `ENVIRONMENT=test`.
+    # Fals per defecte i el pilot no la posa: sense ella, la quota d'una simulacio
+    # surt `provider_not_real` (3B-2 §6.1.1). Una simulacio mai es vigent (§6.3).
+    ALLOW_SIMULATED_ANALYSIS: bool = False
 
     # --- Analisi de requisits ---
+    # Perfil de producte (3B-2 §6.4, decisio 1): el de tota analisi d'un tender
+    # public, que cap empresa no tria. Ha de ser un perfil existent.
+    REQUIREMENTS_PRODUCT_PROFILE: str = "v1"
     # Chunking per pagines: mai es parteix una pagina entre chunks.
     REQUIREMENTS_CHUNK_PAGES: int = 6
     # Solapament perque un requisit que travessa un salt de pagina no es perdi.
@@ -260,6 +297,24 @@ class Settings(BaseSettings):
             )
         return self
 
+    @field_validator("REQUIREMENTS_PRODUCT_PROFILE")
+    @classmethod
+    def _product_profile_must_exist(cls, value: str) -> str:
+        """Un perfil de producte que no existeix faria fallar cada quota: millor no arrencar.
+
+        Import diferit: els perfils no depenen de la configuracio, pero aquest modul
+        es carrega abans que res.
+        """
+        from app.ai.profiles import PROFILES
+
+        chosen = value.strip().lower()
+        if chosen not in PROFILES:
+            raise ValueError(
+                f"REQUIREMENTS_PRODUCT_PROFILE={value!r} no es cap perfil "
+                f"({', '.join(sorted(PROFILES))})."
+            )
+        return chosen
+
     @field_validator("ANALYSIS_CONFIRM_ROLES", "DOCUMENT_PROCESS_ROLES")
     @classmethod
     def _roles_must_exist(cls, value: list[str]) -> list[str]:
@@ -271,6 +326,13 @@ class Settings(BaseSettings):
         if unknown:
             raise ValueError(f"Rols desconeguts: {', '.join(unknown)}.")
         return roles
+
+    @field_validator("DOCUMENT_OFFICIAL_HOSTS")
+    @classmethod
+    def _normalise_official_hosts(cls, value: list[str]) -> list[str]:
+        """Minuscules, sense punt final ni buits: la comparacio es per sufix exacte."""
+        hosts = [str(host).strip().lower().rstrip(".") for host in value]
+        return [host for host in hosts if host]
 
     @field_validator("COOKIE_SAMESITE")
     @classmethod

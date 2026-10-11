@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { CompletenessSection } from "@/lib/types";
 import type { WorkspaceSummary } from "@/lib/workspace";
 
-import { countPendingDecisions, openOpportunities, profileFooterLine } from "./counts";
+import { countPendingDecisions, openOpportunities } from "./counts";
 
 function workspace(overrides: Partial<WorkspaceSummary>): WorkspaceSummary {
   return {
@@ -29,10 +28,6 @@ function workspace(overrides: Partial<WorkspaceSummary>): WorkspaceSummary {
   };
 }
 
-function section(status: CompletenessSection["status"]): CompletenessSection {
-  return { key: status, label: status, weight: 1, ratio: 1, points: 1, status, detail: "", requires_evidence: false };
-}
-
 describe("countPendingDecisions", () => {
   it("compta les candidatures sense decisió o ajornades que encara estan obertes", () => {
     const rows = [
@@ -45,17 +40,6 @@ describe("countPendingDecisions", () => {
     ];
     expect(countPendingDecisions(rows)).toBe(2);
     expect(countPendingDecisions([])).toBe(0);
-  });
-});
-
-describe("profileFooterLine", () => {
-  it("no diu res quan tot és al dia i descriu el que falta quan no", () => {
-    expect(profileFooterLine([section("complete"), section("complete")])).toBeNull();
-    expect(profileFooterLine([section("complete"), section("partial")])).toBe("1 àrea del perfil és parcial");
-    expect(profileFooterLine([section("empty")])).toBe("1 àrea del perfil és buida");
-    expect(profileFooterLine([section("empty"), section("partial"), section("complete")])).toBe(
-      "2 àrees del perfil no estan al dia",
-    );
   });
 });
 

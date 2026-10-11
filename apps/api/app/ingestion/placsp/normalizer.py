@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from app.ingestion.placsp import codes
 from app.ingestion.placsp.parser import ParsedDocument, ParsedEntry, ParsedLot
 from app.models.enums import ContractType, ProcedureType, TenderDocumentType, TenderStatus
+from app.tenders.search import is_feed_summary_template
 
 # Els terminis de PLACSP venen com a data + hora local sense zona horaria.
 # Espanya peninsular; es documenta com a assumpcio coneguda.
@@ -201,7 +202,22 @@ SOURCE_METADATA_KEYS = (
     "procedure_code",
     "placsp_organ_id",
     "pscp_id_intern",
+    #: El `summary` cru del feed quan es la plantilla fixa (3B-2 §7.1.2): no es la
+    #: descripcio de l'objecte i no va a `description`, pero no es perd.
+    "feed_summary",
 )
+
+
+def _description(entry: ParsedEntry) -> str | None:
+    """El `summary` com a descripcio, nomes si no es la plantilla del feed agregat.
+
+    La plantilla («Id licitación…; Órgano de Contratación…») son metadades de la
+    font, no l'objecte del contracte: amb ella, `description` queda nul i la fitxa
+    diu «Objecte no publicat al feed» (mai el titol com a objecte inventat).
+    """
+    if is_feed_summary_template(entry.summary):
+        return None
+    return entry.summary
 
 
 def _source_metadata(entry: ParsedEntry) -> dict[str, str]:
@@ -211,6 +227,7 @@ def _source_metadata(entry: ParsedEntry) -> dict[str, str]:
         "contract_subtype_code": entry.contract_subtype_code,
         "contract_type_code": entry.contract_type_code,
         "procedure_code": entry.procedure_code,
+        "feed_summary": entry.summary if is_feed_summary_template(entry.summary) else None,
         "placsp_organ_id": entry.buyer.oc_plat_id,
         "pscp_id_intern": entry.pscp_id_intern,
     }
@@ -235,7 +252,7 @@ def normalize(entry: ParsedEntry) -> NormalizedTender:
         # font (n'hi ha de 1.999 caracters) i `tenders.title` es Text (0057).
         title=title,
         expediente_number=(entry.contract_folder_id or None),
-        description=entry.summary,
+        description=_description(entry),
         procedure_type=codes.map_procedure_type(entry.procedure_code),
         contract_type=codes.map_contract_type(entry.contract_type_code),
         status=codes.map_status(entry.status_code),

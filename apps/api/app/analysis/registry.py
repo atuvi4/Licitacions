@@ -28,7 +28,12 @@ RULES_VERSION_V2 = "phase3a-analysis-v2"
 #: v3: empremta numericament canonica i copy propi. Canviar-la fa caducar les runs v2,
 #: pero no en canvia el text: cada run es llegeix amb la taula de la seva versio.
 RULES_VERSION_V3 = "phase3a-analysis-v3"
-RULES_VERSION = RULES_VERSION_V3
+#: v4 (3B-2 §4.4 i §3.2): cada forat obert del paquet documental es una
+#: `missing_information` del plec, una seccio buida i `unknown` per un forat no dona
+#: cap avaluacio positiva, i la divergencia de rols de l'empresa es una troballa. El
+#: copy es el de la v3 (cap codi canvia de significat). Fa caducar les runs v3.
+RULES_VERSION_V4 = "phase3b-analysis-v4"
+RULES_VERSION = RULES_VERSION_V4
 
 #: Text neutre quan la versio (o el codi dins la seva taula) no te text. Mai el d'una
 #: altra versio.
@@ -183,6 +188,11 @@ class ExplanationCode:
     EQUIPMENT_CALIBRATION_EXPIRED = "EQUIPMENT_CALIBRATION_EXPIRED"
     FACT_NUMBER_MEETS = "FACT_NUMBER_MEETS"
     FACT_NUMBER_BELOW = "FACT_NUMBER_BELOW"
+    #: v4 (3B-2 §4.4): un forat obert del paquet documental (`missing_information`,
+    #: `missing_from=tender`). Nomes a la taula v4: la v3 queda congelada.
+    PACKAGE_GAP = "PACKAGE_GAP"
+    #: v4 (3B-2 §3.2): els rols de document de l'empresa difereixen dels globals.
+    ROLE_OVERRIDE_DIVERGES = "ROLE_OVERRIDE_DIVERGES"
 
 
 #: Copy v2 de les explicacions: COPIA LITERAL CONGELADA dels textos de 7513e3a.
@@ -708,16 +718,30 @@ RULE_CODES: frozenset[str] = _codes(RuleCode)
 EXPLANATION_CODES: frozenset[str] = _codes(ExplanationCode)
 QUESTION_CODES: frozenset[str] = _codes(QuestionCode)
 
+#: Codis nous de la v4 (3B-2): el copy v3 de la resta no canvia.
+_EXPLANATIONS_V4_NEW: dict[str, str] = {
+    ExplanationCode.PACKAGE_GAP: (
+        "Al paquet documental del plec li falta un document: el que hi diria no es pot avaluar."
+    ),
+    ExplanationCode.ROLE_OVERRIDE_DIVERGES: (
+        "Els tipus de document que ha fixat l'empresa difereixen dels de la plataforma: "
+        "aquesta anàlisi llegeix els de la plataforma."
+    ),
+}
+
 #: El copy es versiona per `rules_version` (spec 3.11): un run es renderitza sempre amb
 #: la taula de la seva versio. Un sol `ExplanationCode`/`QuestionCode`: la versio nomes
 #: tria la taula de text; un codi no canvia mai de significat entre versions.
 EXPLANATIONS_BY_VERSION: dict[str, Mapping[str, str]] = {
     RULES_VERSION_V2: MappingProxyType(_EXPLANATIONS_V2),
     RULES_VERSION_V3: MappingProxyType(_EXPLANATIONS_V3),
+    # Copia propia: la taula v3 queda congelada; la v4 hi afegeix els codis nous.
+    RULES_VERSION_V4: MappingProxyType({**_EXPLANATIONS_V3, **_EXPLANATIONS_V4_NEW}),
 }
 QUESTIONS_BY_VERSION: dict[str, Mapping[str, str]] = {
     RULES_VERSION_V2: MappingProxyType(_QUESTIONS_V2),
     RULES_VERSION_V3: MappingProxyType(_QUESTIONS_V3),
+    RULES_VERSION_V4: MappingProxyType(dict(_QUESTIONS_V3)),
 }
 
 assert set(EXPLANATIONS_BY_VERSION) == set(QUESTIONS_BY_VERSION), "cada versio te les dues taules"

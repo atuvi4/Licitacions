@@ -333,6 +333,131 @@ class FactView:
         }
 
 
+# --------------------------------------------------------------------------- #
+# Estat del paquet documental (3B-2 §4.4)                                         #
+# --------------------------------------------------------------------------- #
+
+#: `package_status`: `incomplete` si hi ha algun forat obert (els forats son fets, amb
+#: passada de classificacio global o sense); sense forats, `complete` amb passada vigent
+#: i `unknown` sense.
+PACKAGE_COMPLETE = "complete"
+PACKAGE_INCOMPLETE = "incomplete"
+PACKAGE_UNKNOWN = "unknown"
+
+#: `section_status` de cada seccio de l'estructura.
+SECTION_UNKNOWN = "unknown"
+SECTION_NONE_DECLARED = "none_declared"
+SECTION_PRESENT = "present"
+
+#: Les seccions amb estat propi, amb els noms que fa servir `would_provide`.
+PACKAGE_SECTIONS = (
+    "blocks",
+    "sites",
+    "scope_items",
+    "territories",
+    "award_criteria",
+    "contract_facts",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PackageGapView:
+    """Un forat OBERT del paquet (`tender_package_gaps` sense `resolved_at`).
+
+    La vista nomes porta forats oberts: un forat resolt no es carrega mai, i per aixo
+    no hi ha cap camp `resolved`. `would_provide` diu quines seccions (o
+    `requirements`) aportaria el document que falta; buit vol dir impacte desconegut.
+    """
+
+    code: str
+    detail: dict[str, Any] | None = None
+    would_provide: tuple[str, ...] = ()
+    producer: str | None = None
+
+    @property
+    def key(self) -> str | None:
+        value = (self.detail or {}).get("key")
+        return _norm(str(value)) if value is not None else None
+
+    def canonical(self) -> dict[str, Any]:
+        """Nomes el que diu que falta: el codi, la clau i que aportaria. El `detail`
+        sencer (cites, fragments) i el productor en queden fora: d'on surt la troballa
+        no canvia el que falta al plec."""
+        return {
+            "code": self.code,
+            "key": self.key,
+            "would_provide": sorted(set(self.would_provide)),
+        }
+
+
+def section_presence(view: TenderStructureView) -> dict[str, bool]:
+    """Si cada seccio te alguna fila. Els territoris son els dels requisits."""
+    return {
+        "blocks": bool(view.blocks),
+        "sites": bool(view.sites),
+        "scope_items": bool(view.scope_items),
+        "territories": any(r.territories for r in view.requirements),
+        "award_criteria": bool(view.criteria),
+        "contract_facts": bool(view.facts),
+    }
+
+
+#: Codis de forat que, amb impacte desconegut (`would_provide` buit), poden afectar
+#: QUALSEVOL seccio buida: falta un document del plec (citat, obligatori) o el seu
+#: text. Un format que no sabem llegir (`format_not_analyzable`) o un forat declarat
+#: per l'operador sense `would_provide` fan el paquet incomplet, pero no deixen cap
+#: seccio `unknown`: nomes en surt la troballa.
+IMPACT_UNKNOWN_BROADENS = frozenset(
+    {"referenced_document_missing", "required_role_missing", "no_text"}
+)
+
+
+def section_status_for(presence: dict[str, bool], gaps: Any, *, has_run: bool) -> dict[str, str]:
+    """L'estat de cada seccio.
+
+    * `present`: te files. Les files son fets citats: un forat que nomena la seccio no
+      les desfa (en surt igualment la troballa i el paquet es `incomplete`).
+    * `unknown`: buida i, o un forat obert la nomena a `would_provide`, o un forat
+      d'`IMPACT_UNKNOWN_BROADENS` te impacte desconegut, o no hi ha cap passada de
+      classificacio vigent. Mai `none_declared` en aquests casos.
+    * `none_declared`: buida, amb passada vigent i cap forat que la pugui afectar.
+    """
+    gaps = tuple(gaps)
+    named = {section for gap in gaps for section in gap.would_provide}
+    broadens = any(not gap.would_provide and gap.code in IMPACT_UNKNOWN_BROADENS for gap in gaps)
+    status: dict[str, str] = {}
+    for section in PACKAGE_SECTIONS:
+        if presence.get(section, False):
+            status[section] = SECTION_PRESENT
+        elif section in named or broadens or not has_run:
+            status[section] = SECTION_UNKNOWN
+        else:
+            status[section] = SECTION_NONE_DECLARED
+    return status
+
+
+def package_status_for(gaps: Any, *, has_run: bool) -> str:
+    """Els forats oberts son fets (tambe en una licitacio manual, que no te mai passada
+    global): amb algun, `incomplete`. `unknown` nomes sense passada i sense forats."""
+    if tuple(gaps):
+        return PACKAGE_INCOMPLETE
+    return PACKAGE_COMPLETE if has_run else PACKAGE_UNKNOWN
+
+
+def gap_section_status(view: TenderStructureView) -> dict[str, str]:
+    """L'estat de les seccions que es deriva NOMES dels forats i de les files: el que
+    entra a l'empremta i el que el motor llegeix. La manca d'una passada de
+    classificacio no hi compta (no es una propietat del plec)."""
+    return section_status_for(section_presence(view), view.gaps, has_run=True)
+
+
+def gap_unknown_sections(view: TenderStructureView) -> frozenset[str]:
+    """Les seccions `unknown` per culpa d'un forat obert. Buit si no n'hi ha cap."""
+    if not view.gaps:
+        return frozenset()
+    return frozenset(s for s, st in gap_section_status(view).items() if st == SECTION_UNKNOWN)
+
+
 @dataclass(frozen=True, slots=True)
 class TenderStructureView:
     tender_id: str
@@ -351,8 +476,27 @@ class TenderStructureView:
     facts: tuple[FactView, ...] = ()
     #: Nomes per a la relectura: no entra al fingerprint.
     source: dict[str, Any] = field(default_factory=dict)
+    #: Estat del paquet documental (3B-2 §4.4). Vegeu `package_status_for`.
+    package_status: str = PACKAGE_UNKNOWN
+    #: Els forats OBERTS del paquet (mai els resolts).
+    gaps: tuple[PackageGapView, ...] = ()
+    #: Seccio -> `unknown` | `none_declared` | `present`. Vegeu `section_status_for`.
+    section_status: dict[str, str] = field(default_factory=dict)
 
     def canonical(self) -> dict[str, Any]:
+        """La forma canonica de l'estructura.
+
+        L'estat del paquet hi entra NOMES si hi ha algun forat obert (precedent de
+        `submission_deadline`): un plec sense forats conserva exactament l'empremta
+        d'abans. I aleshores hi entra el que es deriva dels forats i de les files
+        (`package_status = incomplete`, els forats en forma canonica i
+        `gap_section_status`), mai la presencia o absencia d'una passada de
+        classificacio global: l'empremta descriu que exigeix el plec i que hi falta,
+        i que encara no s'hagi classificat no es cap propietat del plec. Per aixo
+        `package_status = unknown` per si sol (sense passada, sense forats) no canvia
+        res.
+        """
+
         def as_set(items: Any) -> list[dict[str, Any]]:
             unique = {canonical_json(item.canonical()): item.canonical() for item in items}
             return [unique[k] for k in sorted(unique)]
@@ -372,6 +516,11 @@ class TenderStructureView:
         # Nomes quan hi es: un plec sense termini conserva l'empremta d'abans.
         if self.submission_deadline is not None:
             canonical["submission_deadline"] = self.submission_deadline
+        # Nomes amb forats oberts: vegeu el docstring.
+        if self.gaps:
+            canonical["package_status"] = PACKAGE_INCOMPLETE
+            canonical["gaps"] = as_set(self.gaps)
+            canonical["section_status"] = gap_section_status(self)
         return canonical
 
 
@@ -384,10 +533,14 @@ def structure_fingerprint(view: TenderStructureView) -> str:
 # inputs_hash                                                                   #
 # --------------------------------------------------------------------------- #
 
+#: 3B-2 §3.2: la classificacio que llegeix l'analisi ja no es la passada de
+#: l'empresa sino la GLOBAL (`global_classification_run_id`) mes els overrides de
+#: rol de l'empresa ancorats a la versio del fitxer (`role_overrides_hash`).
 INPUT_FIELDS = (
     "tender_revision_id",
     "extraction_run_id",
-    "classification_run_id",
+    "global_classification_run_id",
+    "role_overrides_hash",
     "review_revision_hash",
     "tender_structure_fingerprint",
     "knowledge_fingerprint",
@@ -399,18 +552,20 @@ def inputs_hash(
     *,
     tender_revision_id: str | None,
     extraction_run_id: str | None,
-    classification_run_id: str | None,
+    global_classification_run_id: str | None,
+    role_overrides_hash: str | None,
     review_revision_hash: str | None,
     tender_structure_fingerprint: str,
     knowledge_fingerprint: str,
     rules_version: str,
 ) -> str:
-    """EXACTAMENT aquests set inputs, en forma canonica. Un `None` es un `None`."""
+    """EXACTAMENT aquests vuit inputs, en forma canonica. Un `None` es un `None`."""
     return sha256_of(
         {
             "tender_revision_id": tender_revision_id,
             "extraction_run_id": extraction_run_id,
-            "classification_run_id": classification_run_id,
+            "global_classification_run_id": global_classification_run_id,
+            "role_overrides_hash": role_overrides_hash,
             "review_revision_hash": review_revision_hash,
             "tender_structure_fingerprint": tender_structure_fingerprint,
             "knowledge_fingerprint": knowledge_fingerprint,

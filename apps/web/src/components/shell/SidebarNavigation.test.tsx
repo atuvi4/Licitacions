@@ -9,24 +9,26 @@ describe("SidebarNavigation", () => {
       <SidebarNavigation
         pathname="/licitacions"
         onNavigate={() => undefined}
-        counts={{ oportunitats: 148, candidatures: 3, perfil: "96 %" }}
+        counts={{ oportunitats: 148, candidatures: 3 }}
       />,
     );
     expect(screen.getByRole("link", { name: /Avui/ }).textContent).toBe("Avui");
     expect(screen.getByRole("link", { name: /Oportunitats/ }).textContent).toContain("148");
     expect(screen.getByRole("link", { name: /Candidatures/ }).textContent).toContain("3");
-    expect(screen.getByRole("link", { name: /El nostre perfil/ }).textContent).toContain("96 %");
+    // Cap percentatge de completitud al costat del perfil (B1).
+    expect(screen.getByRole("link", { name: /El nostre perfil/ }).textContent).toBe("El nostre perfil");
     expect(screen.getByRole("link", { name: /Oportunitats/ }).getAttribute("aria-current")).toBe("page");
     expect(screen.queryByRole("link", { name: "Biblioteca de documents" })).toBeNull();
   });
 
-  it("dins d'Empresa despleguen els quatre subdestins", () => {
+  it("dins d'Empresa despleguen els cinc subdestins, amb les preferències del Radar", () => {
     render(<SidebarNavigation pathname="/experiencia" onNavigate={() => undefined} counts={{}} />);
     expect(screen.getByRole("link", { name: /El nostre perfil/ }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("link", { name: "Experiència" }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("link", { name: "Biblioteca de documents" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Totes les àrees" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Coneixement" }).getAttribute("href")).toBe("/empresa/coneixement");
+    expect(screen.getByRole("link", { name: "Preferències del Radar" }).getAttribute("href")).toBe("/empresa/radar");
   });
 
   it("l'app d'empresa diu «Administració de l'empresa» i no porta res de l'Administració Tuvi", () => {

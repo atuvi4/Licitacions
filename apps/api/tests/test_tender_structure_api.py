@@ -136,6 +136,7 @@ async def _run(db, tender_id: str) -> RequirementExtractionRun:
         schema_version="v",
         provider="fake",
         model="fake",
+        run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
         is_current=True,
     )
     db.add(run)

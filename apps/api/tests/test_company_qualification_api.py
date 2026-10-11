@@ -49,6 +49,7 @@ from app.services import tender_analysis as analysis
 from app.services import tender_scope as scope
 from tests import test_tender_scope_models as m
 from tests.fixtures.company_twin import build_company_twin
+from tests.structure_support import PROV
 from tests.test_company_knowledge_permissions_api import _role
 from tests.test_company_knowledge_records_api import _link_evidence
 
@@ -404,6 +405,7 @@ async def _qualification_tender(db):
     c3.timing = RequirementTiming.AT_SUBMISSION
     c3.tranches = [{"min": 15, "points": 1}, {"min": 20, "points": 2}]
     run = await db.get(RequirementExtractionRun, c3.run_id)
+    run.run_basis = "real"  # sintetica vigent: a PG nomes real/gold (0061)
     run.is_current = True
     sub, form = RequirementTiming.AT_SUBMISSION, RequirementTiming.BEFORE_FORMALIZATION
     reqs = {
@@ -452,8 +454,8 @@ async def _qualification_tender(db):
             "value_json": {"operating_fact": "ipv4_assignable_count", "count": count},
             "value_schema": "v1", "need_type": need_type, "points": points,
             "award_criterion_id": criterion,
-        })  # fmt: skip
-    await scope.set_award_links(db, tender, reqs["ipv4"], [c3.id])
+        }, provenance=PROV)  # fmt: skip
+    await scope.set_award_links(db, tender, reqs["ipv4"], [c3.id], provenance=PROV)
     await db.flush()
     return tender, {k: r.id for k, r in reqs.items()}, c3.id
 

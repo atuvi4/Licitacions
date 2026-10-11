@@ -41,6 +41,7 @@ from app.models.tender_scope import (
     TenderScopeItemSourceRefLink,
 )
 from app.models.tender_structure import TenderBlock
+from tests.structure_support import PROV
 from tests.test_tender_structure_api import (
     ANALYSIS,
     DETAIL,
@@ -762,7 +763,9 @@ async def test_a_public_tender_is_readable_but_only_the_internal_service_writes_
     db.add(tender)
     await db.commit()
     # Via interna (fixture/extraccio): persisteix.
-    await scope.create_scope_item(db, tender, {"service_line_code": "access_ftth", "quantity": 15})
+    await scope.create_scope_item(
+        db, tender, {"service_line_code": "access_ftth", "quantity": 15}, provenance=PROV
+    )
     await scope.create_fact(
         db,
         tender,
@@ -770,6 +773,7 @@ async def test_a_public_tender_is_readable_but_only_the_internal_service_writes_
         value_json={"count": 3},
         value_schema="v1",
         block_ids=[],
+        provenance=PROV,
     )
     await db.commit()
     # Tenant: llegeix, pero no escriu.

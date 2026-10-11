@@ -135,10 +135,11 @@ export const RESULT_LABELS: Record<AssessmentResult, string> = {
   not_applicable: "No aplica",
 };
 
+// A14: cap veredicte automàtic es diu «GO» ni «NO-GO»: això només ho diu una persona.
 export const ELIGIBILITY_LABELS: Record<EligibilityResult, string> = {
   eligible: "Elegible",
   review_required: "Cal revisió",
-  no_go: "NO-GO",
+  no_go: "No elegible",
   undetermined: "Sense determinar",
 };
 
@@ -152,12 +153,13 @@ export const ELIGIBILITY_HINTS: Record<EligibilityResult, string> = {
   undetermined: "Encara no s'ha avaluat cap requisit del plec.",
 };
 
+/** El resultat de l'anàlisi del motor (A14): mai una «recomanació» ni un GO/NO-GO. */
 export const RECOMMENDATION_LABELS: Record<RecommendationResult, string> = {
   go_candidate: "Candidata",
   eligible_low_fit: "Elegible però poc encaix",
   review: "Revisió",
-  no_go: "NO-GO",
-  undetermined: "Sense recomanació",
+  no_go: "Bloqueig confirmat",
+  undetermined: "Sense resultat",
 };
 
 /** Que hi ha darrere d'una analisi, dit sense embuts. La diferencia entre

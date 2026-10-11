@@ -217,9 +217,18 @@ async def test_a_document_of_another_tender_is_not_reachable(client_a, tender_do
 
 
 async def test_reextract_without_content_is_reported_per_document(
-    client_a, tender_document, tenant_a, session_factory
+    client_a, tender_document, tenant_a, session, session_factory
 ):
-    """Ja no es un 422 de la peticio: la feina ho escriu a la fila del document."""
+    """Ja no es un 422 de la peticio: la feina ho escriu a la fila del document.
+
+    Forcar el processat en una licitacio PUBLICA es de l'operador (3B-2 §2.4,
+    `public_tender_canonical_only`): aqui la licitacio es de l'empresa.
+    """
+    from app.models.tenders import Tender
+
+    tender = await session.get(Tender, tender_document.tender_id)
+    tender.owner_company_id = tenant_a[1].id
+    await session.commit()
     final = await _process(
         client_a, tenant_a, tender_document, session_factory, force_reextract=True
     )

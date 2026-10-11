@@ -35,6 +35,7 @@ from app.services import bid_workspace as workspace_service
 from app.services import submission_package as service
 from app.services import workspace_dossier as dossier_service
 from app.services.tender_lifecycle import ChangeLog, load_change_log, revision_of
+from app.services.workspace_gate import assert_workspace_go
 from app.workspace.dossier import document_validity
 from app.workspace.transitions import is_submitted
 
@@ -206,6 +207,7 @@ async def list_packages(workspace_id: uuid.UUID, session: SessionDep, ctx: Compa
 async def freeze(workspace_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
     """Recalcula la readiness i congela el que hi ha ara. No s'edita despres."""
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     outcome = await service.freeze_package(
         session, workspace, user=ctx.user, role=ctx.membership.role
     )
@@ -286,6 +288,7 @@ async def approve(
     **no presenta res**: `submitted` es una altra iteracio.
     """
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     package = await service.get_package(session, ctx.company_id, package_id)
     approval = await service.approve_package(
         session,

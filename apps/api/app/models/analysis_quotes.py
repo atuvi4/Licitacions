@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 import sqlalchemy as sa
@@ -58,6 +59,9 @@ class AnalysisQuote(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     document_ids: Mapped[list[str]] = mapped_column(sa.JSON, nullable=False, default=list)
 
     input_fingerprint: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    #: Identitat de l'analisi que s'ha ensenyat (0061, 3B-2 §6.2): la mateixa que
+    #: es desa al run. NUL als previews anteriors i als que no tenen res analitzable.
+    analysis_identity: Mapped[str | None] = mapped_column(sa.String(64))
     #: El fingerprint no inclou el chunking: sense aixo, un canvi de mida de
     #: chunk passaria desapercebut entre el preview i la confirmacio.
     pages_per_chunk: Mapped[int] = mapped_column(sa.Integer, nullable=False)
@@ -85,10 +89,24 @@ class AnalysisQuote(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: En que es basa l'estimacio (runs i peticions). NULL si no n'hi ha.
     estimate_basis: Mapped[dict[str, Any] | None] = mapped_column(sa.JSON)
 
+    #: Cost estimat en dolars (0061, 3B-2 §6.7): tokens estimats x `LLM_MODEL_PRICES`.
+    #: NUL si no hi ha preu (una simulacio, o un model sense preu: `price_unknown`).
+    estimated_cost_usd: Mapped[Decimal | None] = mapped_column(sa.Numeric(12, 6))
+
     #: El limit vigent quan es va ensenyar, i si l'analisi hi cabia.
     max_chunks: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     allowed: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    #: L'unic motiu prioritzat (vegeu `analysis_planning.BLOCKING_PRIORITY`).
     blocking_reason: Mapped[str | None] = mapped_column(sa.String(50))
+    #: Prerequisits de §6.1 tal com es van ensenyar (0061): base del proveidor, paquet,
+    #: qualitat, elegibilitat canonica, pressupost, `failed[]` i avisos. Formen part
+    #: de la identitat del preview. NUL als previews anteriors a 3B-2.
+    prerequisites: Mapped[dict[str, Any] | None] = mapped_column(sa.JSON)
+    #: Qui confirma accepta analitzar un paquet incomplet (§6.1.3). Es desa aqui (i a
+    #: la peticio, via `analysis_quote_id`), mai al run global: no es un input del run.
+    accept_incomplete_package: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
 
     status: Mapped[AnalysisQuoteStatus] = mapped_column(
         enum_column(AnalysisQuoteStatus, "analysis_quote_status"),

@@ -2110,8 +2110,10 @@ def test_0056_es_reversible_i_mai_esborra_l_extensio():
     assert "pg_trgm" not in sql
 
 
-def test_0057_es_l_unic_cap_i_penja_de_0056():
-    """0056 penjava de 0055; el hotfix 0057 (titols a Text) es el nou cap unic."""
+def test_0061_es_l_unic_cap_i_penja_de_0060():
+    """0060 penjava de 0059; 0061 (base del run de requisits) es el nou cap unic."""
+    from app.db.revision import SCHEMA_REVISION
+
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
         capture_output=True,
@@ -2121,12 +2123,26 @@ def test_0057_es_l_unic_cap_i_penja_de_0056():
     )
     assert result.returncode == 0, result.stderr[-1000:]
     assert [line.split()[0] for line in result.stdout.splitlines() if line.strip()] == [
-        "0057_lot_title_text"
+        "0061_requirement_run_basis"
     ]
+    assert SCHEMA_REVISION == "0061_requirement_run_basis"
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(API_ROOT / "alembic.ini")))
+    assert (
+        script.get_revision("0061_requirement_run_basis").down_revision
+        == "0060_structure_provenance"
+    )
+    assert (
+        script.get_revision("0060_structure_provenance").down_revision
+        == "0059_global_classification"
+    )
+    assert (
+        script.get_revision("0059_global_classification").down_revision
+        == "0058_public_documents"
+    )
+    assert script.get_revision("0058_public_documents").down_revision == "0057_lot_title_text"
     assert script.get_revision("0057_lot_title_text").down_revision == "0056_radar_search"
     assert script.get_revision("0056_radar_search").down_revision == "0055_radar_ingestion"
 
@@ -2450,3 +2466,1227 @@ async def test_0057_round_trip_real_a_postgres(engine):
             await conn.execute(sa.text("SELECT title FROM tender_lots WHERE external_lot_id = '1'"))
         ).scalar_one()
     assert stored == long_title
+
+
+# --------------------------------------------------------------------------- #
+# 0058: documents publics (origen, source ownership, verificacio, alies, gaps) #
+# --------------------------------------------------------------------------- #
+
+_PUBDOC_UP = "0057_lot_title_text:0058_public_documents"
+_PUBDOC_DOWN = "0058_public_documents:0057_lot_title_text"
+
+_PUBDOC_COLUMNS = (
+    "origin",
+    "governing_source_id",
+    "contribution_status",
+    "contributed_by",
+    "contributed_at",
+    "contribution_source_url",
+    "verified_by",
+    "verified_at",
+    "verification_note",
+    "duplicate_of_document_id",
+    "retired_by",
+    "retired_reason",
+)
+
+
+def test_0058_afegeix_les_dotze_columnes_a_tender_documents_i_la_taula_de_gaps():
+    sql = _offline_sql("upgrade", _PUBDOC_UP)
+    added = re.findall(r"ALTER TABLE tender_documents ADD COLUMN (\w+)", sql)
+    assert tuple(added) == _PUBDOC_COLUMNS
+    assert "CREATE TABLE tender_package_gaps" in sql
+    assert "tender_document_proposals" not in sql
+    # origin neix `feed` i la contribucio `not_applicable`: additiva, sense apagar res
+    assert "origin VARCHAR(15) DEFAULT 'feed' NOT NULL" in sql
+    assert "contribution_status VARCHAR(20) DEFAULT 'not_applicable' NOT NULL" in sql
+
+
+def test_0058_fa_el_backfill_abans_dels_check():
+    sql = _offline_sql("upgrade", _PUBDOC_UP)
+    upload = sql.index("SET origin = 'owner_upload'")
+    governing = sql.index("SET governing_source_id")
+    first_check = sql.index("ck_tender_documents_")
+    assert "url LIKE 'upload://%'" in sql
+    assert "FROM tenders" in sql[governing:first_check]
+    assert upload < first_check and governing < first_check
+    # el backfill del governing nomes toca els `feed`
+    assert "origin = 'feed'" in sql[governing:first_check]
+
+
+def test_0058_crea_els_check_de_coherencia():
+    sql = _offline_sql("upgrade", _PUBDOC_UP)
+    for name in (
+        "ck_tender_documents_origin_valid",
+        "ck_tender_documents_contribution_status_valid",
+        "ck_tender_documents_contribution_matches_origin",
+        "ck_tender_documents_verified_at_matches_status",
+        "ck_tender_documents_feed_has_governing_source",
+    ):
+        assert name in sql, name
+    assert "governing_source_id IS NOT NULL" in sql
+    assert "REFERENCES sources (id) ON DELETE RESTRICT" in sql
+    assert "ON DELETE SET NULL" in sql  # usuaris i alies continuen sent SET NULL
+
+
+def test_0058_downgrade_refusa_abans_de_cap_drop():
+    sql = _offline_sql("downgrade", _PUBDOC_DOWN)
+    guard = sql.index("RAISE EXCEPTION")
+    assert "contribution_status = 'verified'" in sql
+    assert "duplicate_of_document_id IS NOT NULL" in sql
+    assert "0058" in sql[guard : guard + 400]
+    assert guard < sql.index("DROP TABLE tender_package_gaps")
+    assert guard < sql.index("DROP COLUMN origin")
+    for column in _PUBDOC_COLUMNS:
+        assert f"DROP COLUMN {column}" in sql, column
+
+
+def test_0058_a_sqlite_nomes_afegeix_i_treu_columnes_sense_check_ni_raise():
+    up = _offline_sql_sqlite("upgrade", _PUBDOC_UP).replace("alembic_version", "")
+    down = _offline_sql_sqlite("downgrade", _PUBDOC_DOWN).replace("alembic_version", "")
+    assert "RAISE" not in up and "RAISE" not in down
+    assert "ADD CONSTRAINT" not in up
+    added = re.findall(r"ALTER TABLE tender_documents ADD COLUMN (\w+)", up)
+    assert tuple(added) == _PUBDOC_COLUMNS
+    assert "CREATE TABLE tender_package_gaps" in up
+    assert "DROP TABLE tender_package_gaps" in down
+
+
+def test_els_gaps_i_els_documents_nous_al_model():
+    from app.models.package import TenderPackageGap
+    from app.models.tenders import TenderDocument
+
+    table = TenderDocument.__table__
+    for column in _PUBDOC_COLUMNS:
+        assert column in table.c, column
+    assert table.c.origin.nullable is False and table.c.contribution_status.nullable is False
+    assert table.c.governing_source_id.nullable is True
+    gaps = TenderPackageGap.__table__
+    assert {c.name for c in gaps.c} >= {
+        "tender_id",
+        "code",
+        "detail",
+        "referenced_from_source_ref_id",
+        "would_provide",
+        "producer",
+        "producer_run_id",
+        "resolved_by_document_id",
+        "resolved_at",
+        "created_at",
+    }
+
+
+@pytest.mark.postgres
+async def test_0058_round_trip_real_a_postgres(engine):
+    """0057 -> 0058 -> 0057 -> 0058 amb les funcions reals, backfill i refusos.
+
+    El harness crea l'schema amb `create_all` (estat del cap = 0058). El primer
+    `downgrade()` el porta a 0057; els documents s'hi insereixen amb SQL cru (sense
+    les columnes noves) i el segon `upgrade()` les ha de reomplir.
+    """
+    import importlib.util
+    import uuid as uuid_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.models.sources import Source
+    from app.models.tenders import Tender
+
+    path = API_ROOT / "alembic" / "versions" / "0058_public_documents.py"
+    spec = importlib.util.spec_from_file_location("mig_0058_public_documents", path)
+    m58 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m58)
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def columns(conn) -> set[str]:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'tender_documents'"
+            )
+        )
+        return {row[0] for row in rows}
+
+    async def gaps_table(conn) -> bool:
+        return bool(
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = current_schema() "
+                        "AND table_name = 'tender_package_gaps'"
+                    )
+                )
+            ).scalar_one()
+        )
+
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        source = Source(code=f"t58-{uuid_module.uuid4().hex[:6]}", name="Font 0058")
+        session.add(source)
+        await session.flush()
+        tender = Tender(source_id=source.id, external_id="t58", title="Expedient 0058")
+        session.add(tender)
+        await session.commit()
+        source_id, tender_id = source.id, tender.id
+
+    async with engine.begin() as conn:
+        assert set(_PUBDOC_COLUMNS) <= await columns(conn) and await gaps_table(conn)
+        await conn.run_sync(run, m58.downgrade)  # -> 0057
+        assert not set(_PUBDOC_COLUMNS) & await columns(conn)
+        assert not await gaps_table(conn)
+        await conn.run_sync(run, m58.upgrade)  # -> 0058 (buit)
+        await conn.run_sync(run, m58.downgrade)  # -> 0057
+
+    feed_id, owner_id = uuid_module.uuid4(), uuid_module.uuid4()
+    async with engine.begin() as conn:
+        for doc_id, name, url in (
+            (feed_id, "pcap.pdf", "https://example.com/pcap.pdf"),
+            (owner_id, "pujat.pdf", f"upload://{uuid_module.uuid4()}"),
+        ):
+            await conn.execute(
+                sa.text(
+                    "INSERT INTO tender_documents (id, tender_id, name, document_type, url) "
+                    "VALUES (:id, :tender, :name, 'other', :url)"
+                ),
+                {"id": doc_id, "tender": tender_id, "name": name, "url": url},
+            )
+        await conn.run_sync(run, m58.upgrade)  # -> 0058 amb dades
+
+    async with engine.begin() as conn:
+        rows = {
+            row[0]: tuple(row[1:])
+            for row in await conn.execute(
+                sa.text(
+                    "SELECT id, origin, governing_source_id, contribution_status, verified_at "
+                    "FROM tender_documents"
+                )
+            )
+        }
+    assert rows[feed_id] == ("feed", source_id, "not_applicable", None)
+    assert rows[owner_id] == ("owner_upload", None, "not_applicable", None)
+
+    # Els CHECK els imposa la base: un feed sense font governant no entra.
+    with pytest.raises(DBAPIError):
+        async with engine.begin() as conn:
+            await conn.execute(
+                sa.text("UPDATE tender_documents SET governing_source_id = NULL WHERE id = :id"),
+                {"id": feed_id},
+            )
+
+    # Amb un document verificat el downgrade refusa i no toca res.
+    async with engine.begin() as conn:
+        await conn.execute(
+            sa.text(
+                "UPDATE tender_documents SET origin = 'operator_url', governing_source_id = NULL, "
+                "contribution_status = 'verified', verified_at = now() WHERE id = :id"
+            ),
+            {"id": owner_id},
+        )
+    with pytest.raises(DBAPIError) as caught:
+        async with engine.begin() as conn:
+            await conn.run_sync(run, m58.downgrade)
+    assert "0058" in str(caught.value)
+    async with engine.begin() as conn:
+        assert set(_PUBDOC_COLUMNS) <= await columns(conn) and await gaps_table(conn)
+        # Sense verificats pero amb un alies, tambe refusa.
+        await conn.execute(
+            sa.text(
+                "UPDATE tender_documents SET origin = 'owner_upload', "
+                "contribution_status = 'not_applicable', verified_at = NULL WHERE id = :id"
+            ),
+            {"id": owner_id},
+        )
+        await conn.execute(
+            sa.text("UPDATE tender_documents SET duplicate_of_document_id = :a WHERE id = :b"),
+            {"a": feed_id, "b": owner_id},
+        )
+    with pytest.raises(DBAPIError) as caught:
+        async with engine.begin() as conn:
+            await conn.run_sync(run, m58.downgrade)
+    assert "0058" in str(caught.value)
+
+    # Sense verificats ni alies, el downgrade es neta.
+    async with engine.begin() as conn:
+        await conn.execute(sa.text("UPDATE tender_documents SET duplicate_of_document_id = NULL"))
+        await conn.run_sync(run, m58.downgrade)
+        assert not set(_PUBDOC_COLUMNS) & await columns(conn)
+        await conn.run_sync(run, m58.upgrade)
+        assert set(_PUBDOC_COLUMNS) <= await columns(conn) and await gaps_table(conn)
+
+
+@pytest.mark.postgres
+async def test_0058_no_deixa_esborrar_una_font_amb_documents_governats(engine):
+    import uuid as uuid_module
+
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.models.sources import Source
+    from app.models.tenders import Tender, TenderDocument
+
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        source = Source(code=f"r58-{uuid_module.uuid4().hex[:6]}", name="Font RESTRICT")
+        session.add(source)
+        await session.flush()
+        tender = Tender(source_id=source.id, external_id="r58", title="T")
+        session.add(tender)
+        await session.flush()
+        session.add(
+            TenderDocument(
+                tender_id=tender.id, name="a.pdf", url="https://example.com/a.pdf",
+                governing_source_id=source.id,
+            )
+        )
+        await session.commit()
+        source_id = source.id
+    with pytest.raises(IntegrityError):
+        async with factory() as session:
+            await session.execute(sa.text("DELETE FROM sources WHERE id = :i"), {"i": source_id})
+            await session.commit()
+
+
+# 0058: un sol fitxer vigent per document (3B-2 §2.4).
+
+_CURRENT_FILE_INDEX = (
+    "CREATE UNIQUE INDEX uq_tender_document_files_current "
+    "ON tender_document_files (tender_document_id) WHERE is_current"
+)
+
+
+def test_0058_deixa_un_sol_vigent_abans_de_crear_l_index_parcial():
+    sql = _offline_sql("upgrade", _PUBDOC_UP)
+    dedup = sql.index("UPDATE tender_document_files SET is_current = false")
+    index = sql.index(_CURRENT_FILE_INDEX)
+    assert dedup < index
+    # Es queda la versio mes alta de les vigents (la que ja llegeix `current_file_for`).
+    assert "newer.version_number > tender_document_files.version_number" in sql[dedup:index]
+
+
+def test_0058_downgrade_treu_l_index_de_fitxer_vigent_despres_del_refus():
+    sql = _offline_sql("downgrade", _PUBDOC_DOWN)
+    drop = sql.index("DROP INDEX uq_tender_document_files_current")
+    assert sql.index("RAISE EXCEPTION") < drop
+
+
+def test_0058_a_sqlite_tambe_crea_l_index_de_fitxer_vigent():
+    up = _offline_sql_sqlite("upgrade", _PUBDOC_UP)
+    down = _offline_sql_sqlite("downgrade", _PUBDOC_DOWN)
+    assert (
+        "CREATE UNIQUE INDEX uq_tender_document_files_current "
+        "ON tender_document_files (tender_document_id) WHERE is_current = 1"
+    ) in up
+    assert "DROP INDEX uq_tender_document_files_current" in down
+
+
+def test_l_index_de_fitxer_vigent_es_al_model():
+    from app.models.tender_documents import TenderDocumentFile
+
+    indexes = {i.name: i for i in TenderDocumentFile.__table__.indexes}
+    index = indexes["uq_tender_document_files_current"]
+    assert index.unique is True
+    assert [c.name for c in index.columns] == ["tender_document_id"]
+    assert str(index.dialect_options["postgresql"]["where"]) == "is_current"
+    assert str(index.dialect_options["sqlite"]["where"]) == "is_current = 1"
+
+
+@pytest.mark.postgres
+async def test_0058_index_de_fitxer_vigent_round_trip_real_a_postgres(engine):
+    """Dades d'abans amb dos vigents (fallada + bona): l'upgrade en deixa un i crea l'index."""
+    import importlib.util
+    import uuid as uuid_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.models.sources import Source
+    from app.models.tenders import Tender
+
+    path = API_ROOT / "alembic" / "versions" / "0058_public_documents.py"
+    spec = importlib.util.spec_from_file_location("mig_0058_current_file", path)
+    m58 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m58)
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def has_index(conn) -> bool:
+        return bool(
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() "
+                        "AND indexname = 'uq_tender_document_files_current'"
+                    )
+                )
+            ).scalar_one()
+        )
+
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        source = Source(code=f"c58-{uuid_module.uuid4().hex[:6]}", name="Font 0058 vigent")
+        session.add(source)
+        await session.flush()
+        tender = Tender(source_id=source.id, external_id="c58", title="Expedient vigent")
+        session.add(tender)
+        await session.commit()
+        tender_id = tender.id
+
+    doc_id = uuid_module.uuid4()
+    file_ids = {version: uuid_module.uuid4() for version in (1, 2, 3)}
+    async with engine.begin() as conn:
+        assert await has_index(conn)
+        await conn.run_sync(run, m58.downgrade)  # -> 0057, sense l'index
+        assert not await has_index(conn)
+        await conn.execute(
+            sa.text(
+                "INSERT INTO tender_documents (id, tender_id, name, document_type, url) "
+                "VALUES (:id, :tender, 'pcap.pdf', 'other', 'https://example.com/pcap.pdf')"
+            ),
+            {"id": doc_id, "tender": tender_id},
+        )
+        # v1 fallada i vigent (no n'hi havia cap de bona), v2 bona i vigent, v3 antiga.
+        for version, current, status in (
+            (1, True, "failed"),
+            (2, True, "downloaded"),
+            (3, False, "failed"),
+        ):
+            await conn.execute(
+                sa.text(
+                    "INSERT INTO tender_document_files (id, tender_document_id, version_number, "
+                    "is_current, download_status, origin, redirect_count) "
+                    "VALUES (:id, :doc, :v, :c, :s, 'fetched', 0)"
+                ),
+                {"id": file_ids[version], "doc": doc_id, "v": version, "c": current, "s": status},
+            )
+        await conn.run_sync(run, m58.upgrade)  # -> 0058
+        assert await has_index(conn)
+        rows = dict(
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT version_number, is_current FROM tender_document_files "
+                        "WHERE tender_document_id = :doc"
+                    ),
+                    {"doc": doc_id},
+                )
+            ).all()
+        )
+    assert rows == {1: False, 2: True, 3: False}
+
+    with pytest.raises(IntegrityError):
+        async with engine.begin() as conn:
+            await conn.execute(
+                sa.text("UPDATE tender_document_files SET is_current = true WHERE id = :id"),
+                {"id": file_ids[3]},
+            )
+
+
+# --------------------------------------------------------------------------- #
+# 0059: classificacio global, revisions de rol i override ancorat a la versio  #
+# --------------------------------------------------------------------------- #
+
+_GLOBAL_UP = "0058_public_documents:0059_global_classification"
+_GLOBAL_DOWN = "0059_global_classification:0058_public_documents"
+_GLOBAL_TABLES = (
+    "global_document_classification_runs",
+    "global_document_role_suggestions",
+    "global_document_classification_findings",
+    "document_role_reviews",
+)
+
+
+def _create_body(sql: str, table: str) -> str:
+    return re.search(rf"CREATE TABLE {table} \((.*?)\n\);", sql, re.S).group(1)
+
+
+def test_0059_crea_les_quatre_taules_globals_sense_company_id():
+    sql = _offline_sql("upgrade", _GLOBAL_UP)
+    for table in _GLOBAL_TABLES:
+        assert f"CREATE TABLE {table}" in sql, table
+        assert "company_id" not in _create_body(sql, table), table
+    # Una sola vigent per tender i unica per empremta.
+    assert (
+        "CREATE UNIQUE INDEX uq_global_document_classification_runs_current "
+        "ON global_document_classification_runs (tender_id) WHERE is_current"
+    ) in sql
+    assert "uq_global_document_classification_runs_fingerprint" in sql
+    assert "UNIQUE (tender_id, input_fingerprint)" in sql
+
+
+def test_0059_tots_els_enums_porten_check():
+    sql = _offline_sql("upgrade", _GLOBAL_UP)
+    for name in (
+        "ck_global_document_classification_runs_trigger_valid",
+        "ck_global_document_role_suggestions_role_valid",
+        "ck_global_document_role_suggestions_confidence_valid",
+        "ck_global_document_role_suggestions_document_type_valid",
+        "ck_global_document_classification_findings_code_valid",
+        "ck_global_document_classification_findings_severity_valid",
+        "ck_document_role_reviews_role_valid",
+        "ck_document_role_reviews_authority_valid",
+        "ck_document_role_reviews_reason_not_empty",
+    ):
+        assert name in sql, name
+    assert "'document_processing', 'document_intake', 'operator_request'" in sql
+    assert "'platform_operator', 'promoted_from_company'" in sql
+
+
+def test_0059_la_revisio_de_rol_es_nomes_d_afegir_i_l_actor_restringeix():
+    sql = _offline_sql("upgrade", _GLOBAL_UP)
+    assert "CREATE TRIGGER document_role_reviews_append_only" in sql
+    assert "BEFORE UPDATE OR DELETE ON document_role_reviews" in sql
+    body = _create_body(sql, "document_role_reviews")
+    assert "actor_id UUID NOT NULL" in body
+    assert "reason VARCHAR(500) NOT NULL" in body
+    assert "REFERENCES users (id) ON DELETE RESTRICT" in body
+    # Cap SET NULL: el trigger prohibeix qualsevol UPDATE, tambe el d'una FK.
+    assert "SET NULL" not in body
+
+
+def test_0059_backfill_del_sha_abans_del_not_null_i_esborra_les_decisions_sense_fitxer():
+    sql = _offline_sql("upgrade", _GLOBAL_UP)
+    add = sql.index("ALTER TABLE tender_document_role_decisions ADD COLUMN content_sha256")
+    backfill = sql.index("UPDATE tender_document_role_decisions SET content_sha256")
+    delete = sql.index("DELETE FROM tender_document_role_decisions WHERE content_sha256 IS NULL")
+    not_null = sql.index(
+        "ALTER TABLE tender_document_role_decisions ALTER COLUMN content_sha256 SET NOT NULL"
+    )
+    assert add < backfill < delete < not_null
+    assert "tender_document_files.is_current" in sql[backfill:delete]
+    assert "RAISE NOTICE" in sql[delete:not_null]
+
+
+def test_0059_downgrade_refusa_i_treu_el_trigger_abans_de_la_taula():
+    sql = _offline_sql("downgrade", _GLOBAL_DOWN)
+    guard = sql.index("RAISE EXCEPTION")
+    assert "0059" in sql[guard : guard + 300]
+    trigger = sql.index("DROP TRIGGER IF EXISTS document_role_reviews_append_only")
+    function = sql.index("DROP FUNCTION IF EXISTS document_role_reviews_append_only()")
+    table = sql.index("DROP TABLE document_role_reviews")
+    assert guard < trigger < function < table
+    assert "DROP COLUMN content_sha256" in sql
+    for table_name in _GLOBAL_TABLES:
+        assert f"DROP TABLE {table_name}" in sql, table_name
+
+
+def test_0059_a_sqlite_crea_les_taules_sense_trigger_ni_raise():
+    up = _offline_sql_sqlite("upgrade", _GLOBAL_UP).replace("alembic_version", "")
+    down = _offline_sql_sqlite("downgrade", _GLOBAL_DOWN).replace("alembic_version", "")
+    assert "RAISE" not in up and "RAISE" not in down
+    assert "TRIGGER" not in up and "TRIGGER" not in down
+    for table in _GLOBAL_TABLES:
+        assert f"CREATE TABLE {table}" in up, table
+        assert f"DROP TABLE {table}" in down, table
+    assert "ALTER TABLE tender_document_role_decisions ADD COLUMN content_sha256" in up
+
+
+def test_0059_afegeix_l_acceptacio_del_paquet_incomplet_a_les_runs_d_analisi():
+    """3B-2 §4.4: boolea nullable, sense valor per defecte (les runs existents queden
+    a nul), i el downgrade el treu. A PostgreSQL i a SQLite."""
+    for compile_sql in (_offline_sql, _offline_sql_sqlite):
+        up = compile_sql("upgrade", _GLOBAL_UP)
+        down = compile_sql("downgrade", _GLOBAL_DOWN)
+        assert (
+            "ALTER TABLE tender_analysis_runs ADD COLUMN accepted_incomplete_package BOOLEAN"
+        ) in up
+        added = next(line for line in up.splitlines() if "accepted_incomplete_package" in line)
+        assert "NOT NULL" not in added and "DEFAULT" not in added
+        assert "ALTER TABLE tender_analysis_runs DROP COLUMN accepted_incomplete_package" in down
+    from app.models.tender_analysis import TenderAnalysisRun
+
+    column = TenderAnalysisRun.__table__.c.accepted_incomplete_package
+    assert column.nullable is True and column.server_default is None
+
+
+def test_0059_al_model():
+    from app.models.classification import TenderDocumentRoleDecision
+    from app.models.global_classification import DocumentRoleReview
+    from app.tenant_ops import PUBLIC_TABLES
+
+    assert set(_GLOBAL_TABLES) <= PUBLIC_TABLES
+    assert TenderDocumentRoleDecision.__table__.c.content_sha256.nullable is False
+    reviews = DocumentRoleReview.__table__
+    assert reviews.c.actor_id.nullable is False and reviews.c.reason.nullable is False
+    assert "company_id" not in reviews.c
+
+
+@pytest.mark.postgres
+async def test_0059_round_trip_real_a_postgres_amb_trigger(engine):
+    """0058 -> 0059 -> 0058 -> 0059 amb backfill, trigger nomes d'afegir i refus.
+
+    El harness crea l'schema amb `create_all` (cap = 0059). Les dades d'abans
+    (una decisio amb fitxer vigent i una sense) s'insereixen a 0058 amb SQL cru.
+    """
+    import importlib.util
+    import uuid as uuid_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.models.identity import Company, User
+    from app.models.sources import Source
+    from app.models.tenders import Tender
+
+    path = API_ROOT / "alembic" / "versions" / "0059_global_classification.py"
+    spec = importlib.util.spec_from_file_location("mig_0059_global_classification", path)
+    m59 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m59)
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def tables(conn) -> set[str]:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = current_schema()"
+            )
+        )
+        return {row[0] for row in rows} & set(_GLOBAL_TABLES)
+
+    async def has_column(conn, table: str, column: str) -> bool:
+        return bool(
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT count(*) FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() "
+                        "AND table_name = :table AND column_name = :column"
+                    ),
+                    {"table": table, "column": column},
+                )
+            ).scalar_one()
+        )
+
+    async def has_sha_column(conn) -> bool:
+        # Les dues columnes de 0059 van juntes: el sha de l'override i l'acceptacio
+        # del paquet incomplet a les runs d'analisi.
+        sha = await has_column(conn, "tender_document_role_decisions", "content_sha256")
+        accepted = await has_column(conn, "tender_analysis_runs", "accepted_incomplete_package")
+        assert sha == accepted
+        return sha
+
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        source = Source(code=f"t59-{uuid_module.uuid4().hex[:6]}", name="Font 0059")
+        company = Company(legal_name="Empresa 0059")
+        operator = User(
+            email=f"op59-{uuid_module.uuid4().hex[:6]}@tuvi-qa.com",
+            hashed_password="x",
+            full_name="Operador",
+            is_active=True,
+        )
+        session.add_all([source, company, operator])
+        await session.flush()
+        tender = Tender(source_id=source.id, external_id="t59", title="Expedient 0059")
+        session.add(tender)
+        await session.commit()
+        source_id, company_id, tender_id = source.id, company.id, tender.id
+        operator_id = operator.id
+
+    async with engine.begin() as conn:
+        assert await tables(conn) == set(_GLOBAL_TABLES) and await has_sha_column(conn)
+        await conn.run_sync(run, m59.downgrade)  # -> 0058
+        assert not await tables(conn) and not await has_sha_column(conn)
+
+    with_file, without_file = uuid_module.uuid4(), uuid_module.uuid4()
+    content_id = uuid_module.uuid4()
+    async with engine.begin() as conn:
+        for doc_id, url in ((with_file, "https://e.cat/a.pdf"), (without_file, "https://e.cat/b")):
+            await conn.execute(
+                sa.text(
+                    "INSERT INTO tender_documents (id, tender_id, name, document_type, url, "
+                    "origin, governing_source_id) "
+                    "VALUES (:id, :tender, 'doc.pdf', 'other', :url, 'feed', :source)"
+                ),
+                {"id": doc_id, "tender": tender_id, "url": url, "source": source_id},
+            )
+        await conn.execute(
+            sa.text(
+                "INSERT INTO tender_document_contents (id, sha256, storage_key, file_size, "
+                "mime_type, is_text_extractable) "
+                "VALUES (:id, :sha, 'k/a.pdf', 10, 'application/pdf', true)"
+            ),
+            {"id": content_id, "sha": "c" * 64},
+        )
+        await conn.execute(
+            sa.text(
+                "INSERT INTO tender_document_files (id, tender_document_id, content_id, "
+                "version_number, is_current, download_status, origin, redirect_count) "
+                "VALUES (:id, :doc, :content, 1, true, 'downloaded', 'fetched', 0)"
+            ),
+            {"id": uuid_module.uuid4(), "doc": with_file, "content": content_id},
+        )
+        for doc_id in (with_file, without_file):
+            await conn.execute(
+                sa.text(
+                    "INSERT INTO tender_document_role_decisions "
+                    "(id, company_id, tender_document_id, role, decided_at) "
+                    "VALUES (:id, :company, :doc, 'pcap', now())"
+                ),
+                {"id": uuid_module.uuid4(), "company": company_id, "doc": doc_id},
+            )
+        await conn.run_sync(run, m59.upgrade)  # -> 0059 amb dades
+        rows = dict(
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT tender_document_id, content_sha256 "
+                        "FROM tender_document_role_decisions"
+                    )
+                )
+            ).all()
+        )
+    # La decisio amb fitxer queda ancorada al sha vigent; la de sense fitxer, fora.
+    assert rows == {with_file: "c" * 64}
+
+    review_id = uuid_module.uuid4()
+    async with engine.begin() as conn:
+        await conn.execute(
+            sa.text(
+                "INSERT INTO document_role_reviews (id, tender_document_id, content_sha256, "
+                "role, authority, actor_id, reason) VALUES (:id, :doc, :sha, "
+                "'characteristics_table', 'platform_operator', :actor, 'Es el quadre')"
+            ),
+            {"id": review_id, "doc": with_file, "sha": "c" * 64, "actor": operator_id},
+        )
+    # Nomes d'afegir: ni UPDATE ni DELETE directe.
+    for statement in (
+        "UPDATE document_role_reviews SET role = 'pcap' WHERE id = :id",
+        "DELETE FROM document_role_reviews WHERE id = :id",
+    ):
+        with pytest.raises(DBAPIError) as caught:
+            async with engine.begin() as conn:
+                await conn.execute(sa.text(statement), {"id": review_id})
+        assert "nomes d'afegir" in str(caught.value)
+    # L'actor no es pot esborrar mentre hi hagi revisions seves.
+    with pytest.raises(DBAPIError):
+        async with engine.begin() as conn:
+            await conn.execute(sa.text("DELETE FROM users WHERE id = :id"), {"id": operator_id})
+
+    # Amb una revisio, el downgrade refusa i no toca res.
+    with pytest.raises(DBAPIError) as caught:
+        async with engine.begin() as conn:
+            await conn.run_sync(run, m59.downgrade)
+    assert "0059" in str(caught.value)
+    async with engine.begin() as conn:
+        assert await tables(conn) == set(_GLOBAL_TABLES)
+
+    # Una cascada (desapareix la licitacio) si que s'emporta la revisio.
+    async with engine.begin() as conn:
+        await conn.execute(sa.text("DELETE FROM tenders WHERE id = :id"), {"id": tender_id})
+        remaining = (
+            await conn.execute(sa.text("SELECT count(*) FROM document_role_reviews"))
+        ).scalar_one()
+    assert remaining == 0
+
+    # Sense revisions, el downgrade es net (trigger inclos) i l'upgrade el refa.
+    async with engine.begin() as conn:
+        await conn.run_sync(run, m59.downgrade)
+        assert not await tables(conn) and not await has_sha_column(conn)
+        functions = (
+            await conn.execute(
+                sa.text(
+                    "SELECT count(*) FROM pg_proc "
+                    "WHERE proname = 'document_role_reviews_append_only'"
+                )
+            )
+        ).scalar_one()
+        assert functions == 0
+        await conn.run_sync(run, m59.upgrade)
+        assert await tables(conn) == set(_GLOBAL_TABLES) and await has_sha_column(conn)
+
+
+# --------------------------------------------------------------------------- #
+# 0061: base del run de requisits, identitat d'analisi i punter per empresa    #
+# --------------------------------------------------------------------------- #
+
+_BASIS_UP = "0060_structure_provenance:0061_requirement_run_basis"
+_BASIS_DOWN = "0061_requirement_run_basis:0060_structure_provenance"
+_POINTER = "company_tender_requirement_runs"
+
+
+def test_0061_afegeix_la_base_el_backfill_per_proveidor_i_la_degradacio_abans_del_not_null():
+    sql = _offline_sql("upgrade", _BASIS_UP)
+    add = sql.index("ALTER TABLE requirement_extraction_runs ADD COLUMN run_basis VARCHAR(12)")
+    backfill = sql.index("UPDATE requirement_extraction_runs SET run_basis = CASE")
+    # M3: es degrada tot vigent que no sigui un COMPLETED real/gold (fake/fixture,
+    # `unconfigured`, PARTIAL llegats), abans del NOT NULL i de cap CHECK.
+    demote = sql.index(
+        "UPDATE requirement_extraction_runs SET is_current = false WHERE is_current "
+        "AND (status <> 'completed' OR run_basis NOT IN ('real', 'gold'))"
+    )
+    not_null = sql.index(
+        "ALTER TABLE requirement_extraction_runs ALTER COLUMN run_basis SET NOT NULL"
+    )
+    check = sql.index("ck_requirement_extraction_runs_run_basis_valid")
+    current_check = sql.index("ck_requirement_extraction_runs_current_is_real_or_gold")
+    status_check = sql.index("ck_requirement_extraction_runs_status_valid")
+    assert add < backfill < demote < not_null < check
+    assert demote < current_check and demote < status_check
+    # I4: nomes un run real o gold pot ser vigent; M6: estats tancats.
+    assert "is_current = false OR run_basis IN ('real', 'gold')" in sql
+    assert (
+        "status IN ('pending', 'running', 'completed', 'partial', 'failed', "
+        "'completed_empty')"
+    ) in sql
+    case = sql[backfill:demote]
+    for fragment in (
+        "IN ('fake', 'fixture') THEN 'simulation'",
+        "THEN 'unconfigured'",
+        "substr(lower(trim(provider)), 1, 5) = 'gold:' THEN 'gold'",
+        "ELSE 'real'",
+    ):
+        assert fragment in case, fragment
+    assert "'real', 'simulation', 'unconfigured', 'gold'" in sql
+
+
+def test_0061_amplia_l_estat_i_afegeix_revisio_i_identitat():
+    sql = _offline_sql("upgrade", _BASIS_UP)
+    assert (
+        "ALTER TABLE requirement_extraction_runs ALTER COLUMN status TYPE VARCHAR(15)"
+    ) in sql
+    assert (
+        "ALTER TABLE requirement_extraction_runs ADD COLUMN needs_review BOOLEAN "
+        "DEFAULT false NOT NULL"
+    ) in sql
+    assert "ALTER TABLE requirement_extraction_runs ADD COLUMN analysis_identity VARCHAR(64)" in sql
+    assert "ALTER TABLE analysis_quotes ADD COLUMN analysis_identity VARCHAR(64)" in sql
+    # Un `completed_empty` sempre demana revisio.
+    assert "ck_requirement_extraction_runs_completed_empty_needs_review" in sql
+
+
+def test_0061_crea_el_punter_per_empresa_amb_pk_composta():
+    sql = _offline_sql("upgrade", _BASIS_UP)
+    body = _create_body(sql, _POINTER)
+    for column in (
+        "company_id UUID NOT NULL",
+        "tender_id UUID NOT NULL",
+        "run_id UUID NOT NULL",
+        "accepted_by UUID",
+        "accepted_at TIMESTAMP WITH TIME ZONE",
+    ):
+        assert column in body, column
+    assert "PRIMARY KEY (company_id, tender_id)" in body
+    assert "REFERENCES companies (id) ON DELETE CASCADE" in body
+    assert "REFERENCES requirement_extraction_runs (id) ON DELETE CASCADE" in body
+    assert "REFERENCES users (id) ON DELETE SET NULL" in body
+
+
+def test_0061_downgrade_refusa_si_hi_ha_completed_empty_abans_de_cap_drop():
+    sql = _offline_sql("downgrade", _BASIS_DOWN)
+    guard = sql.index("RAISE EXCEPTION")
+    assert "completed_empty" in sql[sql.rindex("DO $$", 0, guard) : guard]
+    assert "0061" in sql[guard : guard + 300]
+    for drop in (
+        f"DROP TABLE {_POINTER}",
+        "ALTER TABLE requirement_extraction_runs DROP COLUMN run_basis",
+        "ALTER TABLE requirement_extraction_runs DROP COLUMN needs_review",
+        "ALTER TABLE requirement_extraction_runs DROP COLUMN analysis_identity",
+        "ALTER TABLE analysis_quotes DROP COLUMN analysis_identity",
+        "ALTER TABLE requirement_extraction_runs ALTER COLUMN status TYPE VARCHAR(9)",
+        "DROP CONSTRAINT ck_requirement_extraction_runs_current_is_real_or_gold",
+        "DROP CONSTRAINT ck_requirement_extraction_runs_status_valid",
+    ):
+        assert guard < sql.index(drop), drop
+
+
+def test_0061_a_sqlite_sense_raise_ni_alter_type():
+    up = _offline_sql_sqlite("upgrade", _BASIS_UP).replace("alembic_version", "")
+    down = _offline_sql_sqlite("downgrade", _BASIS_DOWN).replace("alembic_version", "")
+    assert "RAISE" not in up and "RAISE" not in down
+    assert "TYPE VARCHAR" not in up and "TYPE VARCHAR" not in down
+    assert "current_is_real_or_gold" not in up and "status_valid" not in up
+    assert f"CREATE TABLE {_POINTER}" in up and f"DROP TABLE {_POINTER}" in down
+    assert "ADD COLUMN run_basis" in up
+
+
+def test_0061_al_model():
+    from app.models.analysis_quotes import AnalysisQuote
+    from app.models.company_runs import CompanyTenderRequirementRun
+    from app.models.enums import AnalysisRunStatus
+    from app.models.requirements import RequirementExtractionRun
+    from app.tenant_ops import PUBLIC_TABLES
+
+    runs = RequirementExtractionRun.__table__
+    assert runs.c.run_basis.nullable is False
+    assert runs.c.needs_review.nullable is False
+    assert runs.c.analysis_identity.nullable is True
+    assert AnalysisQuote.__table__.c.analysis_identity.nullable is True
+    assert AnalysisRunStatus.COMPLETED_EMPTY.value == "completed_empty"
+    pointer = CompanyTenderRequirementRun.__table__
+    assert [c.name for c in pointer.primary_key.columns] == ["company_id", "tender_id"]
+    assert pointer.c.company_id.nullable is False
+    assert _POINTER not in PUBLIC_TABLES
+
+    # I4 + M6: els dos CHECK nomes es creen a PostgreSQL; SQLite no canvia.
+    from sqlalchemy.dialects import postgresql, sqlite
+    from sqlalchemy.schema import CreateTable
+
+    pg = str(CreateTable(runs).compile(dialect=postgresql.dialect()))
+    lite = str(CreateTable(runs).compile(dialect=sqlite.dialect()))
+    for name in ("current_is_real_or_gold", "status_valid"):
+        assert f"ck_requirement_extraction_runs_{name}" in pg, name
+        assert f"ck_requirement_extraction_runs_{name}" not in lite, name
+
+
+@pytest.mark.postgres
+async def test_0061_round_trip_real_a_postgres(engine):
+    """0061 -> 0060 -> 0061 amb backfill i degradacio dels fake vigents, i refus del
+    downgrade amb un `completed_empty`. L'esquema el crea el harness (cap = 0061)."""
+    import importlib.util
+    import uuid as uuid_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.models.sources import Source
+    from app.models.tenders import Tender
+
+    path = API_ROOT / "alembic" / "versions" / "0061_requirement_run_basis.py"
+    spec = importlib.util.spec_from_file_location("mig_0061_requirement_run_basis", path)
+    m61 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m61)
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def has_column(conn, table: str, column: str) -> bool:
+        return bool(
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT count(*) FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() "
+                        "AND table_name = :table AND column_name = :column"
+                    ),
+                    {"table": table, "column": column},
+                )
+            ).scalar_one()
+        )
+
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        source = Source(code=f"t61-{uuid_module.uuid4().hex[:6]}", name="Font 0061")
+        session.add(source)
+        await session.flush()
+        tenders = [
+            Tender(source_id=source.id, external_id=f"t61-{n}", title=f"Expedient 0061 {n}")
+            for n in range(5)
+        ]
+        session.add_all(tenders)
+        await session.commit()
+        tender_ids = [t.id for t in tenders]
+
+    async with engine.begin() as conn:
+        assert await has_column(conn, "requirement_extraction_runs", "run_basis")
+        await conn.run_sync(run, m61.downgrade)  # -> 0060
+        assert not await has_column(conn, "requirement_extraction_runs", "run_basis")
+        assert not await has_column(conn, "analysis_quotes", "analysis_identity")
+        assert not await has_column(conn, _POINTER, "run_id")
+
+    # A 0060, tots vigents (un per tender): fake, real, gold, sense proveidor i un
+    # PARTIAL real llegat (M3: nomes un COMPLETED real/gold continua vigent).
+    rows = {
+        "fake": (tender_ids[0], "fake", True, "completed"),
+        "anthropic": (tender_ids[1], "anthropic", True, "completed"),
+        "gold": (tender_ids[2], "gold", True, "completed"),
+        "": (tender_ids[3], "", True, "completed"),
+        "partial": (tender_ids[4], "anthropic", True, "partial"),
+    }
+    run_ids = {}
+    async with engine.begin() as conn:
+        for key, (tender_id, provider, current, status) in rows.items():
+            run_ids[key] = uuid_module.uuid4()
+            await conn.execute(
+                sa.text(
+                    "INSERT INTO requirement_extraction_runs (id, tender_id, status, "
+                    "input_fingerprint, extractor_version, prompt_version, schema_version, "
+                    "provider, model, started_at, documents_analyzed, pages_analyzed, "
+                    "chunks_total, chunks_completed, chunks_failed, requirements_extracted, "
+                    "requirements_rejected, award_criteria_extracted, validation_errors, "
+                    "evidence_rejected, source_quality_status, is_current) VALUES (:id, "
+                    ":tender, :status, :fp, 'v', 'v', 'v', :provider, 'm', now(), "
+                    "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'unknown', :current)"
+                ),
+                {
+                    "id": run_ids[key],
+                    "tender": tender_id,
+                    "status": status,
+                    "fp": "f" * 64,
+                    "provider": provider,
+                    "current": current,
+                },
+            )
+        await conn.run_sync(run, m61.upgrade)  # -> 0061 amb dades
+        result = {
+            row.id: (row.run_basis, row.is_current, row.needs_review)
+            for row in await conn.execute(
+                sa.text(
+                    "SELECT id, run_basis, is_current, needs_review "
+                    "FROM requirement_extraction_runs WHERE id = ANY(:ids)"
+                ),
+                {"ids": list(run_ids.values())},
+            )
+        }
+    assert result == {
+        run_ids["fake"]: ("simulation", False, False),
+        run_ids["anthropic"]: ("real", True, False),
+        run_ids["gold"]: ("gold", True, False),
+        run_ids[""]: ("unconfigured", False, False),
+        run_ids["partial"]: ("real", False, False),
+    }
+
+    # I4: cap run vigent que no sigui real o gold, ni amb SQL cru; M6: estats tancats.
+    for statement in (
+        "UPDATE requirement_extraction_runs SET is_current = true WHERE id = :id",
+        "UPDATE requirement_extraction_runs SET status = 'bogus' WHERE id = :id",
+    ):
+        with pytest.raises(DBAPIError):
+            async with engine.begin() as conn:
+                await conn.execute(sa.text(statement), {"id": run_ids["fake"]})
+
+    # Una base fora de la llista no entra; un `completed_empty` sense revisio tampoc.
+    with pytest.raises(DBAPIError):
+        async with engine.begin() as conn:
+            await conn.execute(
+                sa.text("UPDATE requirement_extraction_runs SET run_basis = 'x' WHERE id = :id"),
+                {"id": run_ids["anthropic"]},
+            )
+    with pytest.raises(DBAPIError):
+        async with engine.begin() as conn:
+            await conn.execute(
+                sa.text(
+                    "UPDATE requirement_extraction_runs SET status = 'completed_empty', "
+                    "is_current = false WHERE id = :id"
+                ),
+                {"id": run_ids["anthropic"]},
+            )
+
+    # Amb un `completed_empty`, el downgrade refusa i no toca res.
+    async with engine.begin() as conn:
+        await conn.execute(
+            sa.text(
+                "UPDATE requirement_extraction_runs SET status = 'completed_empty', "
+                "needs_review = true, is_current = false WHERE id = :id"
+            ),
+            {"id": run_ids["anthropic"]},
+        )
+    with pytest.raises(DBAPIError) as caught:
+        async with engine.begin() as conn:
+            await conn.run_sync(run, m61.downgrade)
+    assert "0061" in str(caught.value)
+    async with engine.begin() as conn:
+        assert await has_column(conn, "requirement_extraction_runs", "run_basis")
+
+    # Sense cap `completed_empty`, el downgrade es net i l'upgrade el refa.
+    async with engine.begin() as conn:
+        await conn.execute(
+            sa.text("DELETE FROM requirement_extraction_runs WHERE id = ANY(:ids)"),
+            {"ids": list(run_ids.values())},
+        )
+        await conn.run_sync(run, m61.downgrade)
+        assert not await has_column(conn, "requirement_extraction_runs", "needs_review")
+        await conn.run_sync(run, m61.upgrade)
+        assert await has_column(conn, _POINTER, "accepted_at")
+        assert await has_column(conn, "requirement_extraction_runs", "analysis_identity")
+
+
+# --------------------------------------------------------------------------- #
+# 0061 (Task 8): prerequisits de quota, llibre de despesa i autoritzacions      #
+# --------------------------------------------------------------------------- #
+
+_LEDGER = "llm_spend_ledger"
+_AUTHORIZATIONS = "llm_budget_authorizations"
+
+
+def test_0061_afegeix_els_prerequisits_i_el_cost_estimat_a_la_quota():
+    sql = _offline_sql("upgrade", _BASIS_UP)
+    assert "ALTER TABLE analysis_quotes ADD COLUMN prerequisites JSON" in sql
+    assert (
+        "ALTER TABLE analysis_quotes ADD COLUMN accept_incomplete_package BOOLEAN "
+        "DEFAULT false NOT NULL"
+    ) in sql
+    assert "ALTER TABLE analysis_quotes ADD COLUMN estimated_cost_usd NUMERIC(12, 6)" in sql
+
+
+def test_0061_crea_el_llibre_de_despesa_global_que_sobreviu_al_run():
+    sql = _offline_sql("upgrade", _BASIS_UP)
+    body = _create_body(sql, _LEDGER)
+    for column in (
+        "run_id UUID,",
+        "chunk_index INTEGER NOT NULL",
+        "provider VARCHAR(50) NOT NULL",
+        "model VARCHAR(120) NOT NULL",
+        "input_tokens INTEGER NOT NULL",
+        "output_tokens INTEGER NOT NULL",
+        # Un run real sempre te preu (porta unica, fix round 1 I2): mai NUL.
+        "cost_usd NUMERIC(12, 6) NOT NULL",
+        # L'scope del run que l'ha pagat (fix round 1 M3): canari o analisi.
+        "budget_scope VARCHAR(20) NOT NULL",
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL",
+    ):
+        assert column in body, column
+    assert "company_id" not in body
+    # La despesa no s'esborra amb el run: el run passa a NUL.
+    assert "REFERENCES requirement_extraction_runs (id) ON DELETE SET NULL" in body
+    assert "CHECK (cost_usd >= 0)" in body
+    assert "CHECK (budget_scope IN ('canary', 'run'))" in body
+    assert "CHECK (input_tokens >= 0 AND output_tokens >= 0)" in body
+    assert "UNIQUE (run_id, chunk_index)" in body
+
+
+def test_0061_crea_les_autoritzacions_amb_scope_tancat():
+    sql = _offline_sql("upgrade", _BASIS_UP)
+    body = _create_body(sql, _AUTHORIZATIONS)
+    for column in (
+        "scope VARCHAR(20) NOT NULL",
+        "cap_usd NUMERIC(12, 6) NOT NULL",
+        "authorized_by UUID",
+        "note VARCHAR(500) NOT NULL",
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL",
+    ):
+        assert column in body, column
+    assert "company_id" not in body
+    assert "CHECK (scope IN ('canary', 'run', 'pilot_total'))" in body
+    assert "CHECK (cap_usd > 0)" in body
+    assert "REFERENCES users (id) ON DELETE SET NULL" in body
+
+
+def test_0061_downgrade_refusa_amb_despesa_al_llibre_abans_de_cap_drop():
+    sql = _offline_sql("downgrade", _BASIS_DOWN)
+    guard = sql.index(f"SELECT 1 FROM {_LEDGER}")
+    raise_ = sql.index("RAISE EXCEPTION", guard)
+    for drop in (
+        f"DROP TABLE {_AUTHORIZATIONS}",
+        f"DROP TABLE {_LEDGER}",
+        "ALTER TABLE analysis_quotes DROP COLUMN prerequisites",
+        "ALTER TABLE analysis_quotes DROP COLUMN accept_incomplete_package",
+        "ALTER TABLE analysis_quotes DROP COLUMN estimated_cost_usd",
+        f"DROP TABLE {_POINTER}",
+    ):
+        assert raise_ < sql.index(drop), drop
+    # En ordre invers: primer el que 0061 crea l'ultim.
+    assert sql.index(f"DROP TABLE {_AUTHORIZATIONS}") < sql.index(f"DROP TABLE {_LEDGER}")
+    assert sql.index(f"DROP TABLE {_LEDGER}") < sql.index(f"DROP TABLE {_POINTER}")
+
+
+def test_0061_a_sqlite_tambe_crea_el_llibre_i_les_autoritzacions():
+    up = _offline_sql_sqlite("upgrade", _BASIS_UP).replace("alembic_version", "")
+    down = _offline_sql_sqlite("downgrade", _BASIS_DOWN).replace("alembic_version", "")
+    assert "RAISE" not in up and "RAISE" not in down
+    for table in (_LEDGER, _AUTHORIZATIONS):
+        assert f"CREATE TABLE {table}" in up and f"DROP TABLE {table}" in down
+
+
+def test_0061_llibre_i_autoritzacions_al_model():
+    from app.models.analysis_quotes import AnalysisQuote
+    from app.models.llm_budget import LlmBudgetAuthorization, LlmSpendLedger
+    from app.tenant_ops import PUBLIC_TABLES
+
+    quotes = AnalysisQuote.__table__
+    assert quotes.c.prerequisites.nullable is True
+    assert quotes.c.accept_incomplete_package.nullable is False
+    assert quotes.c.estimated_cost_usd.nullable is True
+    ledger = LlmSpendLedger.__table__
+    assert ledger.c.run_id.nullable is True
+    assert ledger.c.cost_usd.nullable is False
+    assert ledger.c.budget_scope.nullable is False
+    assert "company_id" not in ledger.c and "company_id" not in LlmBudgetAuthorization.__table__.c
+    assert {_LEDGER, _AUTHORIZATIONS} <= PUBLIC_TABLES
+
+
+@pytest.mark.postgres
+async def test_0061_round_trip_real_a_postgres_amb_el_llibre(engine):
+    """0061 -> 0060 -> 0061: el downgrade refusa amb despesa al llibre i no toca res;
+    sense despesa, desfa llibre, autoritzacions i columnes de la quota."""
+    import importlib.util
+    import uuid as uuid_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import DBAPIError
+
+    path = API_ROOT / "alembic" / "versions" / "0061_requirement_run_basis.py"
+    spec = importlib.util.spec_from_file_location("mig_0061_ledger", path)
+    m61 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m61)
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def tables(conn) -> set[str]:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = current_schema() AND table_name = ANY(:names)"
+            ),
+            {"names": [_LEDGER, _AUTHORIZATIONS]},
+        )
+        return {row[0] for row in rows}
+
+    async def quote_columns(conn) -> set[str]:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'analysis_quotes' "
+                "AND column_name = ANY(:names)"
+            ),
+            {"names": ["prerequisites", "accept_incomplete_package", "estimated_cost_usd"]},
+        )
+        return {row[0] for row in rows}
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            sa.text(
+                "INSERT INTO llm_spend_ledger (id, chunk_index, provider, model, input_tokens, "
+                "output_tokens, cost_usd, budget_scope) "
+                "VALUES (:id, 0, 'anthropic', 'm', 10, 5, 0.000105, 'run')"
+            ),
+            {"id": uuid_module.uuid4()},
+        )
+        await conn.execute(
+            sa.text(
+                "INSERT INTO llm_budget_authorizations (id, scope, cap_usd, note) "
+                "VALUES (:id, 'pilot_total', 12.5, 'ampliacio')"
+            ),
+            {"id": uuid_module.uuid4()},
+        )
+
+    with pytest.raises(DBAPIError) as caught:
+        async with engine.begin() as conn:
+            await conn.run_sync(run, m61.downgrade)
+    assert "0061" in str(caught.value)
+    async with engine.begin() as conn:
+        assert await tables(conn) == {_LEDGER, _AUTHORIZATIONS}
+        cost = await conn.scalar(sa.text("SELECT cost_usd FROM llm_spend_ledger"))
+        assert str(cost) == "0.000105"
+
+    async with engine.begin() as conn:
+        await conn.execute(sa.text("DELETE FROM llm_spend_ledger"))
+        await conn.run_sync(run, m61.downgrade)
+        assert await tables(conn) == set()
+        assert await quote_columns(conn) == set()
+        await conn.run_sync(run, m61.upgrade)
+        assert await tables(conn) == {_LEDGER, _AUTHORIZATIONS}
+        assert await quote_columns(conn) == {
+            "prerequisites", "accept_incomplete_package", "estimated_cost_usd"
+        }

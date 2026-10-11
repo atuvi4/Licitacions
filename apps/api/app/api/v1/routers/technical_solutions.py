@@ -30,6 +30,7 @@ from app.schemas.workspace import (
 from app.services import audit
 from app.services import bid_workspace as workspace_service
 from app.services import technical_solution as service
+from app.services.workspace_gate import assert_workspace_go
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/technical-solutions", tags=["technical-solutions"]
@@ -75,6 +76,7 @@ async def create_solution(
 ):
     """Manual i prou: aquest cami no pot lligar la fila a cap requisit."""
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     solution = await service.create_manual(
         session,
@@ -118,6 +120,7 @@ async def create_from_requirement(
     havia (`created=False`), com fa `create_workspace`.
     """
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     service.assert_can_edit(ctx.membership.role)
     solution, created = await service.create_from_requirement(
         session, workspace, requirement_id=payload.requirement_id, user=ctx.user
@@ -152,6 +155,7 @@ async def update_solution(
 ):
     """Nomes camps de treball. `validated` no s'hi pot escriure mai."""
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     solution = await service.get_solution(session, workspace, solution_id)
     service.assert_can_edit(ctx.membership.role)
     fields = payload.model_dump(exclude_unset=True)
@@ -201,6 +205,7 @@ async def validate_solution(
     queda a l'auditoria.
     """
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     solution = await service.get_solution(session, workspace, solution_id)
     service.assert_can_validate(ctx.membership.role)
     solution = await service.validate_solution(

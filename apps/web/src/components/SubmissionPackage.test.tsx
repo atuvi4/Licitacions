@@ -363,6 +363,29 @@ describe("Tancar · la porta d'S6", () => {
     expect((screen.getByRole("button", { name: "Congela la proposta" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("sense anàlisi del plec el resum no diu «0 de 0»: diu que no n'hi ha i on fer-la", async () => {
+    mockLoad([], {});
+    const { container } = renderSection({
+      dossier_coverage: {
+        analysis_state: "absent",
+        mandatory_total: null,
+        covered: 0,
+        missing_document: 0,
+        needs_review: 0,
+        not_applicable: 0,
+        expired_documents: 0,
+        optional_total: 0,
+        optional_covered: 0,
+      },
+    });
+    await flush();
+    expect(screen.getByText("Encara no hi ha cap anàlisi del plec")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Analitza el plec/ }).getAttribute("href")).toBe("/licitacions/t1?tab=requisits");
+    expect(container.textContent).not.toMatch(/\b0 de 0\b|de null/);
+    // A6: al lloc de la fracció, el comptador diu que els requisits no s'han analitzat.
+    expect(screen.getByText("Requisits encara no analitzats")).toBeTruthy();
+  });
+
   it("congelar crida l'endpoint real una sola vegada, encara que es premi dues", async () => {
     mockLoad([], {});
     let resolve: ((value: unknown) => void) | null = null;
@@ -418,6 +441,34 @@ describe("Tancar · manifest v2", () => {
     expect(dialog.textContent).toContain("Commutadors d'accés 48p");
     expect(dialog.textContent!.replace(/\u00a0/g, " ")).toContain("127.240,00");
     expect(dialog.textContent).toContain("Base d'aprovació");
+  });
+
+  it("una revisió congelada sense cap anàlisi del plec no diu «0 de 0», ni a la capçalera ni al manifest", async () => {
+    const detail = packageDetailFixture({
+      requirement_run_id: null,
+      coverage: { mandatory_total: 0, mandatory_covered: 0, document_count: 1 },
+    });
+    mockLoad([packageSummaryFixture()], { p1: detail });
+    const manifest = manifestV2();
+    const loader = get.getMockImplementation()!;
+    get.mockImplementation(async (path: string) =>
+      path.endsWith("/manifest")
+        ? {
+            ...manifest,
+            approval_basis: { ...manifest.approval_basis, analysis: { requirement_run_id: null, compliance_run_id: null, prefit_score: null } },
+            content: { ...manifest.content, coverage: { mandatory_total: 0, mandatory_covered: 0, document_count: 1 } },
+          }
+        : loader(path),
+    );
+    const { container } = renderSection();
+    await flush();
+    expect(container.textContent).toContain("Encara no hi ha cap anàlisi del plec");
+    expect(container.textContent).not.toMatch(/\b0 de 0\b/);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Veure el manifest" })); });
+    await flush();
+    const dialog = screen.getAllByRole("dialog").at(-1)!;
+    expect(dialog.textContent).toContain("Encara no hi ha cap anàlisi del plec");
+    expect(dialog.textContent).not.toMatch(/\b0 de 0\b/);
   });
 
   it("no ensenya mai cap xifra interna", async () => {
@@ -814,6 +865,7 @@ describe("Tancar · la cobertura del dossier diu el que compta", () => {
     // els opcionals van a `optional_covered` i no han d'entrar a la xifra.
     const { container } = renderSection({
       dossier_coverage: {
+        analysis_state: "current",
         mandatory_total: 24,
         covered: 20,
         missing_document: 3,
@@ -837,5 +889,30 @@ describe("Tancar · la cobertura del dossier diu el que compta", () => {
     await flush();
     expect(screen.getByText("Preparació completa")).toBeTruthy();
     expect(container.textContent).not.toContain("requisits obligatoris coberts");
+  });
+});
+
+describe("SubmissionPackageSection: l'estat del peu surt de workspaceStatusLabel (A13)", () => {
+  const coverage = (analysis_state: "absent" | "stale" | "current") => ({
+    analysis_state,
+    mandatory_total: analysis_state === "absent" ? null : 4,
+    covered: 0,
+    missing_document: 0,
+    needs_review: 0,
+    not_applicable: 0,
+    expired_documents: 0,
+    optional_total: 0,
+    optional_covered: 0,
+  });
+
+  it.each([
+    ["absent", "Estat: Pendent d'anàlisi"],
+    ["stale", "Estat: Anàlisi obsoleta"],
+    ["current", "Estat: En anàlisi"],
+  ] as const)("estat analysis amb anàlisi %s", async (state, expected) => {
+    mockLoad([], {});
+    const { container } = renderSection({ status: "analysis", dossier_coverage: coverage(state) });
+    await flush();
+    expect(container.textContent).toContain(expected);
   });
 });

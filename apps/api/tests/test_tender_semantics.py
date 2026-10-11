@@ -31,6 +31,7 @@ from app.services import tender_scope as scope
 from app.services import tender_structure as structure
 from tests import test_tender_scope_models as m
 from tests import test_tender_structure_api as api
+from tests.structure_support import PROV
 from tests.test_tender_structure_api import _code, _count
 
 pytestmark = pytest.mark.asyncio
@@ -59,18 +60,25 @@ def _sql_id(db, value: uuid.UUID) -> tuple[str, str]:
 async def test_a_site_needs_a_code_or_a_name_and_critical_is_never_coerced(db):
     tender = await m._public_tender(db)
     remote = TenderSiteRole.REMOTE
-    code_only = await structure.create_site(db, tender, {"code": "D02", "role": remote})
-    name_only = await structure.create_site(db, tender, {"name": "Can Maset", "role": remote})
+    code_only = await structure.create_site(
+        db, tender, {"code": "D02", "role": remote}, provenance=PROV
+    )
+    name_only = await structure.create_site(
+        db, tender, {"name": "Can Maset", "role": remote}, provenance=PROV
+    )
     assert (code_only.code, code_only.name, code_only.is_critical) == ("D02", None, None)
     assert (name_only.code, name_only.name, name_only.is_critical) == (None, "Can Maset", None)
     with pytest.raises(structure.SiteIdentityError):
-        await structure.create_site(db, tender, {"role": remote})
+        await structure.create_site(db, tender, {"role": remote}, provenance=PROV)
     # Dues seus sense codi no col·lisionen: el NULL no es cap codi.
     critical = await structure.create_site(
-        db, tender, {"name": "Policia Local", "role": remote, "is_critical": True}
+        db, tender, {"name": "Policia Local", "role": remote, "is_critical": True}, provenance=PROV
     )
     not_critical = await structure.create_site(
-        db, tender, {"name": "Piscina Municipal", "role": remote, "is_critical": False}
+        db,
+        tender,
+        {"name": "Piscina Municipal", "role": remote, "is_critical": False},
+        provenance=PROV,
     )
     assert (critical.is_critical, not_critical.is_critical) == (True, False)
     await db.flush()
@@ -83,14 +91,17 @@ async def test_a_site_needs_a_code_or_a_name_and_critical_is_never_coerced(db):
         False,
     ]
     # `None` es un valor que s'aplica («ja no ho sabem»), no una omissio.
-    assert await structure.update_site(db, tender, critical, {"is_critical": None}) is True
+    assert (
+        await structure.update_site(db, tender, critical, {"is_critical": None}, provenance=PROV)
+        is True
+    )
     await db.refresh(critical)
     assert critical.is_critical is None
     # Treure l'unica identitat que te es refusa; canviar-la per l'altra, no.
     with pytest.raises(structure.SiteIdentityError):
-        await structure.update_site(db, tender, code_only, {"code": None})
+        await structure.update_site(db, tender, code_only, {"code": None}, provenance=PROV)
     assert await structure.update_site(
-        db, tender, code_only, {"name": "Seu del ramal", "code": None}
+        db, tender, code_only, {"name": "Seu del ramal", "code": None}, provenance=PROV
     )
     await db.refresh(code_only)
     assert (code_only.code, code_only.name) == (None, "Seu del ramal")
@@ -98,7 +109,7 @@ async def test_a_site_needs_a_code_or_a_name_and_critical_is_never_coerced(db):
     await m._rejected_by_db(
         db,
         sa.insert(TenderSite).values(
-            id=uuid.uuid4(), tender_id=tender.id, role=TenderSiteRole.REMOTE.value
+            id=uuid.uuid4(), tender_id=tender.id, role=TenderSiteRole.REMOTE.value, origin="gold"
         ),
     )
     assert await _count(db, TenderSite) == 4
@@ -221,7 +232,7 @@ async def test_territory_completeness_rules_at_the_service(db):
     assert requirement.territory_completeness == TerritoryCompleteness.UNKNOWN, "per defecte"
     escala = {"kind": AreaKind.MUNICIPALITY, "label": "L'Escala", "qualifier": "trama urbana"}
     # unknown: 0..N.
-    assert await scope.set_territories(db, tender, requirement, [escala]) is True
+    assert await scope.set_territories(db, tender, requirement, [escala], provenance=PROV) is True
     # not_applicable amb files: no, en cap ordre.
     with pytest.raises(scope.TerritoryCompletenessConflictError):
         await scope.set_territory_completeness(
@@ -230,23 +241,33 @@ async def test_territory_completeness_rules_at_the_service(db):
     # complete i partial: almenys una.
     assert await scope.set_territory_completeness(db, requirement, TerritoryCompleteness.COMPLETE)
     with pytest.raises(scope.TerritoryCompletenessConflictError):
-        await scope.set_territories(db, tender, requirement, [])
+        await scope.set_territories(db, tender, requirement, [], provenance=PROV)
     assert await scope.set_territory_completeness(db, requirement, TerritoryCompleteness.PARTIAL)
     with pytest.raises(scope.TerritoryCompletenessConflictError):
-        await scope.set_territories(db, tender, requirement, [])
+        await scope.set_territories(db, tender, requirement, [], provenance=PROV)
     # L'estat final es el que compta: buidar i declarar «no aplica» alhora es valid.
     touched = await scope.set_territory_semantics(
-        db, tender, requirement, completeness=TerritoryCompleteness.NOT_APPLICABLE, territories=[]
+        db,
+        tender,
+        requirement,
+        completeness=TerritoryCompleteness.NOT_APPLICABLE,
+        territories=[],
+        provenance=PROV,
     )
     assert touched == ["completesa=not_applicable", "territoris=0"]
     await db.refresh(requirement, attribute_names=["territories"])
     assert requirement.territories == []
     with pytest.raises(scope.TerritoryCompletenessConflictError):
-        await scope.set_territories(db, tender, requirement, [escala])
+        await scope.set_territories(db, tender, requirement, [escala], provenance=PROV)
     # Un conflicte no deixa res a mitges.
     with pytest.raises(scope.TerritoryCompletenessConflictError):
         await scope.set_territory_semantics(
-            db, tender, requirement, completeness=TerritoryCompleteness.COMPLETE, territories=[]
+            db,
+            tender,
+            requirement,
+            completeness=TerritoryCompleteness.COMPLETE,
+            territories=[],
+            provenance=PROV,
         )
     await db.refresh(requirement)
     assert requirement.territory_completeness == TerritoryCompleteness.NOT_APPLICABLE
@@ -258,10 +279,16 @@ async def test_territory_completeness_rules_at_the_service(db):
         other,
         completeness=TerritoryCompleteness.COMPLETE,
         territories=[escala, {**escala, "label": "  L'Escala "}],
+        provenance=PROV,
     )
     assert touched == ["completesa=complete", "territoris=1"]
-    assert await scope.set_territories(db, tender, other, [escala]) is False
-    assert await scope.set_territory_semantics(db, tender, other, territories=[escala]) == []
+    assert await scope.set_territories(db, tender, other, [escala], provenance=PROV) is False
+    assert (
+        await scope.set_territory_semantics(
+            db, tender, other, territories=[escala], provenance=PROV
+        )
+        == []
+    )
     # Tornar a «no se sap» sempre es pot, amb o sense files.
     assert await scope.set_territory_completeness(db, other, TerritoryCompleteness.UNKNOWN)
     assert await scope.set_territory_completeness(db, requirement, TerritoryCompleteness.UNKNOWN)
@@ -388,6 +415,7 @@ async def test_the_downgrade_to_0049_passes_only_when_every_row_fits_there(db):
         db,
         tender,
         {"code": "S1", "name": "Seu", "role": TenderSiteRole.REMOTE, "is_critical": False},
+        provenance=PROV,
     )
     await db.flush()
     # Tot representable a 0049: cap fila incompatible, cap error.
@@ -421,16 +449,19 @@ async def test_the_downgrade_to_0049_passes_only_when_every_row_fits_there(db):
     await db.flush()
     assert await _guard(db, migration) is None
 
-    await structure.update_site(db, tender, site, {"is_critical": None})
+    await structure.update_site(db, tender, site, {"is_critical": None}, provenance=PROV)
     with pytest.raises(migration.DowngradeBlockedError, match="seus sense saber"):
         await _guard(db, migration)
     await db.refresh(site)
     assert site.is_critical is None, "la guarda no coacciona res"
-    await structure.update_site(db, tender, site, {"is_critical": False})
+    await structure.update_site(db, tender, site, {"is_critical": False}, provenance=PROV)
     assert await _guard(db, migration) is None
 
     code_only = await structure.create_site(
-        db, tender, {"code": "D02", "role": TenderSiteRole.REMOTE, "is_critical": False}
+        db,
+        tender,
+        {"code": "D02", "role": TenderSiteRole.REMOTE, "is_critical": False},
+        provenance=PROV,
     )
     await db.flush()
     with pytest.raises(migration.DowngradeBlockedError, match="seus sense codi o sense nom"):
@@ -441,7 +472,10 @@ async def test_the_downgrade_to_0049_passes_only_when_every_row_fits_there(db):
     assert await _guard(db, migration) is None
 
     name_only = await structure.create_site(
-        db, tender, {"name": "Can Maset", "role": TenderSiteRole.REMOTE, "is_critical": False}
+        db,
+        tender,
+        {"name": "Can Maset", "role": TenderSiteRole.REMOTE, "is_critical": False},
+        provenance=PROV,
     )
     await db.flush()
     with pytest.raises(migration.DowngradeBlockedError, match="1 seus sense codi o sense nom"):

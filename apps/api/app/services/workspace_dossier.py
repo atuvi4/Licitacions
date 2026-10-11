@@ -43,7 +43,7 @@ from app.models.enums import (
     WorkspaceTaskStatus,
 )
 from app.models.identity import User
-from app.models.requirements import Requirement
+from app.models.requirements import Requirement, RequirementExtractionRun
 from app.models.submission import SubmissionPackage
 from app.models.workspace import (
     BidWorkspace,
@@ -54,6 +54,9 @@ from app.models.workspace import (
 from app.services import bid_workspace as workspace_service
 from app.workspace.checklist import checklist_title
 from app.workspace.dossier import (
+    ANALYSIS_ABSENT,
+    ANALYSIS_CURRENT,
+    ANALYSIS_STALE,
     COVERING_STATUSES,
     DOSSIER_GROUPS,
     GROUP_ORDER,
@@ -384,6 +387,9 @@ class Dossier:
     #: ni per a la readiness, i no s'amaguen: son la feina que es va fer quan el
     #: plec deia una altra cosa.
     superseded: list[DossierRow] = field(default_factory=list)
+    #: `absent` / `current` / `stale`: si hi ha analisi del plec darrere dels
+    #: comptadors (3B-2 §7.1.3). Amb `absent`, `mandatory_total = 0` no vol dir res.
+    analysis_state: str = ANALYSIS_ABSENT
 
     def grouped(self) -> list[tuple[str, list[DossierRow]]]:
         buckets: dict[str, list[DossierRow]] = {group: [] for group in GROUP_ORDER}
@@ -443,7 +449,7 @@ async def load_dossier(
     # Un item es actiu si el seu requisit es del run vigent. No es guarda en cap
     # columna: es deriva, i per tant no pot dir mai una cosa diferent de la que
     # diuen les dades. Sense run vigent no hi ha res de superat.
-    live = await live_requirement_ids(session, workspace.tender_id)
+    live = await live_requirement_ids(session, workspace.tender_id, workspace.company_id)
 
     for item in items:
         requirement = requirements.get(item.requirement_id) if item.requirement_id else None
@@ -513,12 +519,16 @@ async def load_dossier(
     counters = summarise_coverage(
         coverage, mandatory=mandatory_requirements, expired_documents=expired_mandatory
     )
+    analysis_state = await requirement_analysis_state(
+        session, workspace.tender_id, state.requirement_run
+    )
 
     readiness = await _readiness(
         session,
         workspace,
         state=state,
         counters=counters,
+        analysis_state=analysis_state,
         # "Ha comencat" vol dir que hi ha feina de dossier, encara que el plec
         # hagi canviat i tota hagi passat a historia. Que despres no pugui estar
         # a punt ho diu `analysis_outdated`, que es una altra cosa.
@@ -545,7 +555,27 @@ async def load_dossier(
         readiness=readiness,
         deadline=state.deadline_at,
         superseded=superseded,
+        analysis_state=analysis_state,
     )
+
+
+async def requirement_analysis_state(
+    session: AsyncSession, tender_id: uuid.UUID, run: RequirementExtractionRun | None
+) -> str:
+    """`absent` / `current` / `stale` de l'analisi del plec que llegeix l'empresa.
+
+    `run` es la run EFECTIVA de l'empresa (`WorkspaceState.requirement_run`: el seu
+    punter o la canonica). Sense run, els requisits escrits a ma (licitacio manual)
+    tambe son una analisi: `current`. Sense res, `absent`. Amb run, `stale` si ja no
+    parla dels plecs d'ara (`run_is_outdated`, la mateixa regla que el 409).
+    """
+    from app.services.manual_requirement import manual_filter
+    from app.services.requirement_analysis import run_is_outdated
+
+    if run is None:
+        manual = await session.scalar(sa.select(sa.exists().where(manual_filter(tender_id))))
+        return ANALYSIS_CURRENT if manual else ANALYSIS_ABSENT
+    return ANALYSIS_STALE if await run_is_outdated(session, run) else ANALYSIS_CURRENT
 
 
 # --------------------------------------------------------------------------- #
@@ -604,8 +634,9 @@ async def _readiness(
     started: bool,
     needs_review_items: int,
     unproven_mandatory: int = 0,
+    analysis_state: str = ANALYSIS_CURRENT,
 ) -> ReadinessResult:
-    live = await live_requirement_ids(session, workspace.tender_id)
+    live = await live_requirement_ids(session, workspace.tender_id, workspace.company_id)
     blocked_conditions = [
         WorkspaceChecklistItem.workspace_id == workspace.id,
         WorkspaceChecklistItem.mandatory.is_(True),
@@ -649,7 +680,10 @@ async def _readiness(
             decision_is_go=bool(
                 decision and decision.decision == WorkspaceDecisionType.GO
             ),
-            analysis_outdated=state.analysis_outdated,
+            # Sense analisi del plec no hi ha dossier complet (3B-2 §7.1.3); amb una
+            # analisi que ja no parla dels plecs d'ara, el dossier tampoc no ho es.
+            analysis_missing=analysis_state == ANALYSIS_ABSENT,
+            analysis_outdated=state.analysis_outdated or analysis_state == ANALYSIS_STALE,
             mandatory_unresolved=state.counters.mandatory_unresolved,
             blocked_checklist_items=blocked,
             missing_mandatory_evidence=counters.missing_document,
@@ -1191,15 +1225,16 @@ async def create_task_for_gap(
 
 
 async def live_requirement_ids(
-    session: AsyncSession, tender_id: uuid.UUID
+    session: AsyncSession, tender_id: uuid.UUID, company_id: uuid.UUID | None = None
 ) -> set[uuid.UUID] | None:
     """Els requisits de l'extraccio vigent. `None` quan no n'hi ha cap.
 
     `None` i conjunt buit volen dir coses diferents: sense analisi vigent no hi
     ha res de superat —no hi ha contra que comparar—, mentre que una analisi
     vigent sense cap requisit si que deixa tot el que hi havia com a historia.
+    Amb `company_id`, la que llegeix l'empresa (el seu punter, 3B-2 §6.5).
     """
-    run = await workspace_service.current_requirement_run(session, tender_id)
+    run = await workspace_service.current_requirement_run(session, tender_id, company_id)
     if run is None:
         return None
     return {
@@ -1217,7 +1252,7 @@ async def active_checklist_items(
 ) -> list[WorkspaceChecklistItem]:
     """La checklist que l'usuari ha de fer, sense el que ja es historia."""
     items = await workspace_service.checklist_items(session, workspace.id)
-    live = await live_requirement_ids(session, workspace.tender_id)
+    live = await live_requirement_ids(session, workspace.tender_id, workspace.company_id)
     if live is None:
         return items
     return [i for i in items if i.requirement_id is None or i.requirement_id in live]
@@ -1227,7 +1262,9 @@ async def _current_requirements(
     session: AsyncSession, workspace: BidWorkspace
 ) -> tuple[uuid.UUID | None, list[Requirement]]:
     """Els requisits del run vigent que afecten aquest workspace."""
-    run = await workspace_service.current_requirement_run(session, workspace.tender_id)
+    run = await workspace_service.current_requirement_run(
+        session, workspace.tender_id, workspace.company_id
+    )
     if run is None:
         return None, []
     return run.id, await workspace_service.relevant_requirements(session, workspace)
@@ -1384,7 +1421,9 @@ async def reconcile_with_current_analysis(
     )
     sync = await sync_dossier(session, workspace, user_id=user_id)
 
-    run = await workspace_service.current_requirement_run(session, workspace.tender_id)
+    run = await workspace_service.current_requirement_run(
+        session, workspace.tender_id, workspace.company_id
+    )
     if run is not None:
         workspace.current_requirement_run_id = run.id
     compliance = await workspace_service.current_compliance_run(

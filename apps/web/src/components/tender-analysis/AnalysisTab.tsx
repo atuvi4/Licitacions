@@ -17,7 +17,7 @@ import {
 import { formatDateTime } from "@/lib/labels";
 import { useResource } from "@/lib/hooks";
 import type { KnowledgeRecords, Vocabulary } from "@/lib/knowledge";
-import type { AwardCriterion, Requirement, RequirementAnalysis } from "@/lib/requirements";
+import { requirementAnalysisState, type AwardCriterion, type Requirement, type RequirementAnalysis } from "@/lib/requirements";
 import { canReview, whoCanReview } from "@/lib/review";
 import type { Service } from "@/lib/types";
 
@@ -178,8 +178,20 @@ export function AnalysisTab({
       {children}
     </PermissionNote>
   );
+  // A7: sense anàlisi del plec vigent (absent o obsoleta) no hi ha cap botó
+  // «Analitza»/«Recalcula»: el servidor respondria 409 `analysis_prerequisites_missing`
+  // o treballaria sobre requisits caducats. Es diu què cal primer.
+  const analysisCurrent = requirementAnalysisState(requirements) === "current";
+  const analysisGate = (
+    <p className="text-[13px] text-muted">
+      Cal una anàlisi del plec vigent per analitzar la licitació: primer{" "}
+      {requirementAnalysisState(requirements) === "stale" ? "torna a analitzar" : "analitza"} el plec a «Requisits extrets».
+    </p>
+  );
   const action = (text: string) =>
-    !mayRecalculate
+    !analysisCurrent
+      ? analysisGate
+      : !mayRecalculate
       ? permission(
           <Button variant={shown ? "secondary" : "primary"} disabled>
             {text}

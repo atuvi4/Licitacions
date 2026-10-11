@@ -9,8 +9,9 @@ import {
 import { AVAILABILITY_LABELS, TEMPORAL_STATUS_LABELS, VERIFICATION_STATUS_LABELS } from "@/lib/format";
 import type { JobRequest } from "@/lib/jobs";
 import { MATCH_STATUS_LABELS } from "@/lib/matching";
-import { ANALYSIS_STATE_LABELS, type ExtractionRun, type RequirementAnalysis } from "@/lib/requirements";
+import { ANALYSIS_STATE_LABELS, analysisState, type ExtractionRun, type RequirementAnalysis } from "@/lib/requirements";
 import { DOCUMENT_STATE_LABELS, TENDER_STATUS_LABELS } from "@/lib/tenders";
+import { tenderStatusView } from "@/lib/labels";
 import {
   CHECKLIST_STATUS_LABELS,
   COVERAGE_LABELS,
@@ -134,7 +135,8 @@ describe("els cinc invariants de la secció 0.4", () => {
 describe("deadlineLevel", () => {
   it.each([
     [null, "neutral"],
-    [-3, "blocking"],
+    // Un termini passat no és cap urgència (retoc del concern 7): neutre.
+    [-3, "neutral"],
     [0, "blocking"],
     [7, "blocking"],
     [8, "attention"],
@@ -258,6 +260,8 @@ describe("ANALYSIS_STATUS_TEXT", () => {
     skipped_documents: null,
     error_code: null,
     error_message: null,
+    run_basis: "real",
+    needs_review: false,
   };
   const analysis = (overrides: Partial<ExtractionRun>, is_stale = false): RequirementAnalysis => ({
     run: { ...run, ...overrides },
@@ -311,8 +315,14 @@ describe("ANALYSIS_STATUS_TEXT", () => {
     expect(ANALYSIS_STATUS_TEXT(analysis({}, true), null)).toMatch(/^Anàlisi del .*2026 · el plec ha canviat$/);
   });
   it("sense anàlisi i fallida", () => {
-    expect(ANALYSIS_STATUS_TEXT(null, null)).toBe("Plec sense analitzar");
+    expect(ANALYSIS_STATUS_TEXT(null, null)).toBe("Encara no hi ha cap anàlisi del plec");
     expect(ANALYSIS_STATUS_TEXT(analysis({ status: "failed" }), null)).toBe("L'anàlisi ha fallat");
+  });
+  it("acabada sense resultats: mai «completa», cal revisar (3B-2 §6.3)", () => {
+    const empty = analysis({ status: "completed_empty", needs_review: true, requirements_extracted: 0 });
+    expect(ANALYSIS_STATUS_TEXT(empty, null)).toBe("Anàlisi acabada sense resultats: cal revisar");
+    expect(analysisState(empty)).toBe("completed_empty");
+    expect(ANALYSIS_STATE_LEVEL.completed_empty).not.toBe("ready");
   });
 });
 
@@ -349,6 +359,35 @@ describe("changeLevel (L9)", () => {
   it("un canvi material demana atenció; un d'informatiu és neutre", () => {
     expect(changeLevel({ is_material: true })).toBe("attention");
     expect(changeLevel({ is_material: false })).toBe("neutral");
+  });
+});
+
+describe("ANALYSIS_STATUS_TEXT amb requisits escrits a mà (M1)", () => {
+  it("sense run i amb `analysis_state` current, la frase diu els manuals; absent diu que no hi ha anàlisi", () => {
+    const manual = { id: "m", origin: "manual", archived_at: null } as unknown as RequirementAnalysis["requirements"][number];
+    const current: RequirementAnalysis = { run: null, requirements: [manual], award_criteria: [], is_stale: false, analysis_state: "current" };
+    expect(ANALYSIS_STATUS_TEXT(current, null)).toBe("Requisits escrits a mà · 1");
+    const absent: RequirementAnalysis = { run: null, requirements: [], award_criteria: [], is_stale: false, analysis_state: "absent" };
+    expect(ANALYSIS_STATUS_TEXT(absent, null)).toBe("Encara no hi ha cap anàlisi del plec");
+  });
+});
+
+describe("tenderStatusView (A12)", () => {
+  const now = new Date("2026-10-09T16:00:00Z");
+  it("termini passat amb estat obert o desconegut → «Fora de termini», amb l'estat cru a part", () => {
+    expect(tenderStatusView({ status: "open", deadline_at: "2026-10-09T15:00:00Z" }, now)).toEqual({ label: "Fora de termini", level: "neutral", sourceStatus: "En termini" });
+    expect(tenderStatusView({ status: "unknown", deadline_at: "2026-09-01T15:00:00Z" }, now)).toEqual({ label: "Fora de termini", level: "neutral", sourceStatus: "Sense determinar" });
+    expect(tenderStatusView({ status: "estat_nou", deadline_at: "2026-09-01T15:00:00Z" }, now)).toEqual({ label: "Fora de termini", level: "neutral", sourceStatus: "Estat desconegut" });
+  });
+  it("una anul·lació o una adjudicació de la font tenen precedència sobre el termini passat", () => {
+    expect(tenderStatusView({ status: "cancelled", deadline_at: "2026-09-01T15:00:00Z" }, now)).toEqual({ label: "Anul·lada", level: "blocking", sourceStatus: null });
+    expect(tenderStatusView({ status: "awarded", deadline_at: "2026-09-01T15:00:00Z" }, now)).toEqual({ label: "Adjudicada", level: "neutral", sourceStatus: null });
+    expect(tenderStatusView({ status: "pending_award", deadline_at: "2026-09-01T15:00:00Z" }, now)).toEqual({ label: "Pendent d'adjudicació", level: "neutral", sourceStatus: null });
+  });
+  it("termini obert o desconegut → l'estat de la font amb el seu nivell, sense «Estat a la font»", () => {
+    expect(tenderStatusView({ status: "open", deadline_at: "2026-10-21T10:00:00Z" }, now)).toEqual({ label: "En termini", level: "ready", sourceStatus: null });
+    expect(tenderStatusView({ status: "cancelled", deadline_at: null }, now)).toEqual({ label: "Anul·lada", level: "blocking", sourceStatus: null });
+    expect(tenderStatusView({ status: "estat_nou", deadline_at: null }, now)).toEqual({ label: "Estat desconegut", level: "neutral", sourceStatus: null });
   });
 });
 

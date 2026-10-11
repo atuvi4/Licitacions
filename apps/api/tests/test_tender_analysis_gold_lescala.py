@@ -469,7 +469,8 @@ async def test_the_lescala_v3_copy_shows_no_codes_and_keeps_coded_params(db, ten
     run = (await analysis.analyze_tender(db, company_id=company.id, tender_id=tender_id)).run
     await db.commit()
     await db.refresh(run)
-    assert run.rules_version == "phase3a-analysis-v3"
+    # 3B-2 puja les regles a la v4 (forats del paquet, divergencia de rols); copy de la v3.
+    assert run.rules_version == "phase3b-analysis-v4"
 
     base = f"/api/v1/companies/{company.id}/tenders/{tender_id}/analysis"
     response = await client_a.get(f"{base}/runs/{run.id}")

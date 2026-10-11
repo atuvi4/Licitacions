@@ -353,7 +353,7 @@ async def test_the_effective_set_is_the_current_run_plus_live_manuals(
     extracted = await _extracted_requirement(db, run, tender_id)
     manual = await _ok(client_a, company, tender_id)
 
-    effective = await manual_requirement.effective_requirements(db, uuid.UUID(tender_id))
+    effective = await manual_requirement.effective_requirements(db, uuid.UUID(tender_id), None)
 
     assert [r.id for r in effective.extracted] == [extracted.id]
     assert [str(r.id) for r in effective.manual] == [manual["id"]]
@@ -369,7 +369,7 @@ async def test_an_old_run_does_not_contribute(client_a, db, tenant_a):
     new_run = await _extracted_run(db, tender_id)
     new = await _extracted_requirement(db, new_run, tender_id, title="D'ara")
 
-    effective = await manual_requirement.effective_requirements(db, uuid.UUID(tender_id))
+    effective = await manual_requirement.effective_requirements(db, uuid.UUID(tender_id), None)
 
     assert [r.id for r in effective.extracted] == [new.id]
     assert old.id not in {r.id for r in effective.all}
@@ -386,7 +386,7 @@ async def test_a_re_extraction_does_not_take_the_manuals_away(client_a, db, tena
     second_run = await _extracted_run(db, tender_id)
     await _extracted_requirement(db, second_run, tender_id, title="Segona passada")
 
-    effective = await manual_requirement.effective_requirements(db, uuid.UUID(tender_id))
+    effective = await manual_requirement.effective_requirements(db, uuid.UUID(tender_id), None)
     assert manual["id"] in {str(r.id) for r in effective.manual}
     assert len(effective.extracted) == 1
 
@@ -400,7 +400,7 @@ async def test_an_archived_manual_leaves_the_effective_set(client_a, db, tenant_
     )
 
     db.expire_all()
-    effective = await manual_requirement.effective_requirements(db, uuid.UUID(tender_id))
+    effective = await manual_requirement.effective_requirements(db, uuid.UUID(tender_id), None)
     assert effective.manual == ()
 
 
@@ -410,7 +410,7 @@ async def test_without_any_run_the_manuals_are_the_whole_set(client_a, db, tenan
     tender_id = await _tender(client_a, company)
     created = await _ok(client_a, company, tender_id)
 
-    effective = await manual_requirement.effective_requirements(db, uuid.UUID(tender_id))
+    effective = await manual_requirement.effective_requirements(db, uuid.UUID(tender_id), None)
     assert effective.run is None
     assert [str(r.id) for r in effective.all] == [created["id"]]
 
@@ -1255,3 +1255,56 @@ async def test_citing_has_no_side_effects(client_a, db, tenant_a):
     assert (
         await document_review.fingerprint_of(db, uuid.UUID(tender_id))
     ).fingerprint == documents_before.fingerprint
+
+
+async def test_the_manual_key_recipe_does_not_change(monkeypatch):
+    """La recepta de `manual_dedup_key`, reescrita aquí: si algú la toca, falla.
+
+    El títol hi entra per `title_keys.normalized_title`, la mateixa funció que
+    l'extractor, i la clau no canvia per als casos existents (títol amb espais o
+    majúscules, categoria com a enum, sense títol).
+    """
+    import hashlib
+
+    from app.models.enums import RequirementCategory
+    from app.services import title_keys
+
+    def digest(parts):
+        return hashlib.sha256("␟".join(parts).encode("utf-8")).hexdigest()[:64]
+
+    tender_id = uuid.UUID("00000000-0000-4000-8000-000000000011")
+    fields = {
+        "category": "economic_solvency",
+        "operator": None,
+        "scope": "tender",
+        "title": "  Solvencia  ECONOMICA ",
+        "value_json": {"min": 1},
+    }
+    expected = digest(
+        [str(tender_id), "economic_solvency", "", "tender", "solvencia economica", "{'min': 1}"]
+    )
+
+    assert manual_requirement.manual_dedup_key(tender_id, fields) == expected
+    assert (
+        manual_requirement.manual_dedup_key(tender_id, {**fields, "title": "Solvencia economica"})
+        == expected
+    )
+    assert (
+        manual_requirement.manual_dedup_key(
+            tender_id, {**fields, "category": RequirementCategory.ECONOMIC_SOLVENCY}
+        )
+        == expected
+    )
+    assert (
+        manual_requirement.manual_dedup_key(tender_id, {**fields, "title": "Solvencia tecnica"})
+        != expected
+    )
+    assert manual_requirement.manual_dedup_key(tender_id, {**fields, "title": None}) == digest(
+        [str(tender_id), "economic_solvency", "", "tender", "", "{'min': 1}"]
+    )
+    # El títol hi entra per la funció compartida, no per cap còpia inline.
+    assert manual_requirement.normalized_title is title_keys.normalized_title
+    monkeypatch.setattr(manual_requirement, "normalized_title", lambda _text: "stub")
+    assert manual_requirement.manual_dedup_key(tender_id, fields) == digest(
+        [str(tender_id), "economic_solvency", "", "tender", "stub", "{'min': 1}"]
+    )

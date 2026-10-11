@@ -62,6 +62,22 @@ describe("Pestanya Anàlisi: vies d'execució i abast (T9)", () => {
 });
 
 describe("Pestanya Anàlisi: estats", () => {
+  it("sense anàlisi del plec vigent (A7) no hi ha cap botó «Analitza»: es diu què cal primer", async () => {
+    respond(new ApiError(404, "not_found", "Cap analisi vigent."));
+    render(
+      <AnalysisTab
+        companyId="c1"
+        tenderId="t1"
+        requirements={{ ...requirementsFixture, analysis_state: "absent" } as typeof requirementsFixture}
+        workspaceId={null}
+        candidatureChecked
+      />,
+    );
+    await flush();
+    expect(screen.queryByRole("button", { name: /Analitza|Recalcula/ })).toBeNull();
+    expect(screen.getByText(/Cal una anàlisi del plec vigent/)).toBeTruthy();
+  });
+
   it("sense anàlisi (404) és l'estat normal, amb què és i què no és, i el botó Analitza", async () => {
     respond(new ApiError(404, "not_found", "Cap analisi vigent."));
     await renderTab();

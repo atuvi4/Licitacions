@@ -6,6 +6,7 @@ import {
   ELIGIBILITY_LABELS,
   ELIGIBILITY_LEVEL,
   STEP_LABELS,
+  isDeadlinePassed,
   stepOf,
   type Level,
   type WorkspaceStep,
@@ -53,13 +54,18 @@ export function decisionPill(workspace: WorkspaceSummary): Pill {
     return { level: DECISION_LEVEL[workspace.human_decision], label: DECISION_LABELS[workspace.human_decision] };
   }
   if (stepOf(workspace.status) === "tancada") return { level: "neutral", label: "Sense decisió" };
-  return { level: DECISION_PENDING_LEVEL, label: "Pendent" };
+  // A14: l'estat de la decisió és «Pendent de decidir / GO / NO-GO».
+  return { level: DECISION_PENDING_LEVEL, label: "Pendent de decidir" };
 }
 
 /** Què demana atenció, només a partir de camps reals. `undetermined` no hi entra. */
 export function attentionPills(workspace: WorkspaceSummary): Pill[] {
   const pills: Pill[] = [];
-  if (workspace.deadline_passed) pills.push({ level: "blocking", label: "Termini tancat" });
+  // «Fora de termini» (A12): el servidor ho diu, i si el termini ha passat des de
+  // l'última lectura, la data també.
+  if (workspace.deadline_passed || isDeadlinePassed(workspace.deadline_at)) {
+    pills.push({ level: "blocking", label: "Fora de termini" });
+  }
   if (workspace.eligibility === "no_go") {
     pills.push({ level: ELIGIBILITY_LEVEL.no_go, label: `Elegibilitat: ${ELIGIBILITY_LABELS.no_go}` });
   }

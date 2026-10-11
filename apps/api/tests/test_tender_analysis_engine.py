@@ -49,6 +49,7 @@ from app.services import tender_scope as scope
 from app.services import tender_structure
 from tests import test_tender_scope_models as m
 from tests.fixtures.company_twin import build_company_twin
+from tests.structure_support import PROV
 from tests.test_company_knowledge_records_api import _link_evidence
 
 pytestmark = pytest.mark.asyncio
@@ -116,6 +117,7 @@ async def _synthetic_tender(db):
     from app.models.requirements import RequirementExtractionRun
 
     run = await db.get(RequirementExtractionRun, run_criterion.run_id)
+    run.run_basis = "real"  # sintetica vigent: a PG nomes real/gold (0061)
     run.is_current = True
     await db.flush()
 
@@ -169,8 +171,9 @@ async def _synthetic_tender(db):
         territories=[
             {"kind": AreaKind.MUNICIPALITY, "label": "L'Escala", "qualifier": "trama urbana"}
         ],
+        provenance=PROV,
     )  # fmt: skip
-    await scope.set_award_links(db, tender, reqs["c1"], [run_criterion.id])
+    await scope.set_award_links(db, tender, reqs["c1"], [run_criterion.id], provenance=PROV)
     reqs["pbx"] = await _requirement(
         db, tender, "Centraleta", RequirementCategory.TECHNICAL_REQUIREMENT,
         timing=RequirementTiming.AT_EXECUTION,
@@ -178,7 +181,7 @@ async def _synthetic_tender(db):
     scope.set_proof(reqs["pbx"], [])
     await tender_structure.set_requirement_blocks(db, tender, reqs["pbx"], [b3.id])
     await scope.set_territory_completeness(db, reqs["pbx"], TerritoryCompleteness.NOT_APPLICABLE)
-    await scope.set_award_links(db, tender, reqs["pbx"], [t1.id, j6.id])
+    await scope.set_award_links(db, tender, reqs["pbx"], [t1.id, j6.id], provenance=PROV)
 
     def need(**f):
         return {
@@ -203,8 +206,11 @@ async def _synthetic_tender(db):
             value_json={"channels": 20},
             value_schema="v1",
         ),
+        provenance=PROV,
     )
-    await scope.create_need(db, tender, reqs["pbx"], need(capability_code="pbx.queues"))
+    await scope.create_need(
+        db, tender, reqs["pbx"], need(capability_code="pbx.queues"), provenance=PROV
+    )
     for threshold, points in ((30, 0.67), (40, 1.33), (50, 2.0)):
         await scope.create_need(
             db,
@@ -219,6 +225,7 @@ async def _synthetic_tender(db):
                 points=points,
                 award_criterion_id=t1.id,
             ),
+            provenance=PROV,
         )
     await scope.create_need(
         db,
@@ -230,6 +237,7 @@ async def _synthetic_tender(db):
             points=1,
             award_criterion_id=j6.id,
         ),
+        provenance=PROV,
     )
     await scope.create_need(
         db,
@@ -241,6 +249,7 @@ async def _synthetic_tender(db):
             points=1,
             award_criterion_id=j6.id,
         ),
+        provenance=PROV,
     )
     # Cap dimensio territorial als requisits que no en tenen: si no, `unknown` per defecte
     # (el que te tot plec antic) genera, amb rao, una pregunta per la llista de territoris.
@@ -253,6 +262,7 @@ async def _synthetic_tender(db):
         value_json={"A": "x"},
         value_schema="v1",
         block_ids=[],
+        provenance=PROV,
     )
 
     items = {
@@ -265,17 +275,22 @@ async def _synthetic_tender(db):
                 "quantity": Decimal("15"),
                 "unit": "acces",
             },
+            provenance=PROV,
         ),
         "pbx": await scope.create_scope_item(
             db,
             tender,
             {"service_line_code": "voice_pbx", "block_id": b3.id, "quantity": Decimal("123")},
+            provenance=PROV,
         ),
         "civil": await scope.create_scope_item(
-            db, tender, {"service_line_code": "civil_works", "block_id": b1.id}
+            db, tender, {"service_line_code": "civil_works", "block_id": b1.id}, provenance=PROV
         ),
         "mobile": await scope.create_scope_item(
-            db, tender, {"service_line_code": "mobile_telephony", "block_id": b3.id}
+            db,
+            tender,
+            {"service_line_code": "mobile_telephony", "block_id": b3.id},
+            provenance=PROV,
         ),
     }
     await db.flush()
@@ -590,7 +605,9 @@ async def test_runs_are_immutable_idempotent_and_go_stale_only_on_material_chang
     ref = await source_refs.create_document_file_ref(
         db, tender_id=tender.id, file_id=file.id, location_label="cl. 1"
     )
-    await tender_structure.link_source_ref(db, entity=blocks["b1"], source_ref_id=ref.id)
+    await tender_structure.link_source_ref(
+        db, entity=blocks["b1"], source_ref_id=ref.id, provenance=PROV
+    )
     await db.commit()
     assert await _count(db, TenderSourceRef) == 1
     assert await analysis.is_stale(db, a) is False
@@ -622,7 +639,9 @@ async def test_runs_are_immutable_idempotent_and_go_stale_only_on_material_chang
         "la run antiga no es muta"
     )
     # Canvi material de l'estructura: stale una altra vegada.
-    await tender_structure.create_site(db, tender, {"name": "Can Maset", "role": "remote"})
+    await tender_structure.create_site(
+        db, tender, {"name": "Can Maset", "role": "remote"}, provenance=PROV
+    )
     await db.commit()
     assert await analysis.is_stale(db, b) is True
     c = (await analysis.analyze_tender(db, company_id=company.id, tender_id=tender.id)).run
@@ -808,6 +827,7 @@ async def _scored_boolean_criterion(db, tender, reqs, crits, name="T2 hot deskin
             "comparator": NeedComparator.PRESENT, "value_json": None, "value_schema": None,
             "need_type": NeedType.SCORED_IMPROVEMENT, "points": 2, "award_criterion_id": t2.id,
         },
+        provenance=PROV,
     )  # fmt: skip
     await db.flush()
     return t2
@@ -1357,9 +1377,15 @@ async def test_the_audit_table_matches_the_engine_and_covers_every_producer():
     assert pure.DATA_MISSING_FROM_COMPANY == frozenset(
         x for _, x, where in DATA_MISSING_FROM if where == COMPANY
     )
-    # DATA_MISSING, TENDER_REFERENCE_DATE_MISSING, TERRITORY_LIST_UNAVAILABLE (requisit) i
-    # CRITERION_NEEDS_UNKNOWN (criteri).
-    assert inspect.getsource(pure).count("FindingType.MISSING_INFORMATION") == 4
+    # DATA_MISSING, TENDER_REFERENCE_DATE_MISSING, TERRITORY_LIST_UNAVAILABLE (requisit),
+    # CRITERION_NEEDS_UNKNOWN (criteri) i PACKAGE_GAP (forat del paquet, 3B-2 §4.4).
+    assert inspect.getsource(pure).count("FindingType.MISSING_INFORMATION") == 5
+    from app.analysis.fingerprint import PackageGapView, TenderStructureView
+
+    gapped = TenderStructureView(
+        tender_id="t", gaps=(PackageGapView(code="no_text", detail={"key": "d"}),)
+    )
+    assert _missing(pure.package_findings(gapped)) == [(X.PACKAGE_GAP, TENDER)]
     # El codi sense atribucio es nomes de la v3: la taula v2 no el te.
     assert X.DATA_MISSING_UNATTRIBUTED not in registry.EXPLANATIONS_BY_VERSION[RULES_VERSION_V2]
     findings, questions = _pure_requirement_findings(
@@ -1566,7 +1592,12 @@ async def test_a_block_territory_does_not_contaminate_other_scope_items(db, tena
     scope.set_proof(ftth_req, [])
     await tender_structure.set_requirement_blocks(db, tender, ftth_req, [b1.id])
     await scope.set_territory_semantics(
-        db, tender, ftth_req, completeness=TerritoryCompleteness.UNKNOWN, territories=[]
+        db,
+        tender,
+        ftth_req,
+        completeness=TerritoryCompleteness.UNKNOWN,
+        territories=[],
+        provenance=PROV,
     )
     sla_req = await _requirement(
         db, tender, "SLA a Can Maset", RequirementCategory.TECHNICAL_REQUIREMENT,
@@ -1577,22 +1608,27 @@ async def test_a_block_territory_does_not_contaminate_other_scope_items(db, tena
     await scope.set_territory_semantics(
         db, tender, sla_req, completeness=TerritoryCompleteness.COMPLETE,
         territories=[{"kind": AreaKind.CUSTOM, "label": "Can Maset"}],
+        provenance=PROV,
     )  # fmt: skip
     await scope.create_need(db, tender, sla_req, {
         "capability_code": "ops.sla_response_minutes", "unmapped_capability": None,
         "comparator": NeedComparator.LTE, "value_json": {"minutes": 120}, "value_schema": "v1",
         "need_type": NeedType.MINIMUM, "points": None, "award_criterion_id": None,
-    })  # fmt: skip
+    }, provenance=PROV)  # fmt: skip
     ftth = await scope.create_scope_item(
         db,
         tender,
         {"service_line_code": "access_ftth", "block_id": b1.id, "quantity": Decimal("15")},
+        provenance=PROV,
     )
     radio = await scope.create_scope_item(
-        db, tender, {"service_line_code": "radio_link", "block_id": b1.id, "quantity": Decimal("2")}
+        db,
+        tender,
+        {"service_line_code": "radio_link", "block_id": b1.id, "quantity": Decimal("2")},
+        provenance=PROV,
     )
     support = await scope.create_scope_item(
-        db, tender, {"service_line_code": "support_ops", "block_id": b1.id}
+        db, tender, {"service_line_code": "support_ops", "block_id": b1.id}, provenance=PROV
     )
     await db.flush()
     await _twin(db, company, client_a)

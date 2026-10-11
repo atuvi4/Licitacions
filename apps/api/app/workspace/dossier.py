@@ -160,6 +160,15 @@ def coverage_for_requirement(pieces: list[EvidenceView]) -> DossierCoverage:
     return DossierCoverage.COVERED
 
 
+#: Estat de l'analisi del plec que hi ha darrere dels comptadors (3B-2 §7.1.3).
+#: `absent`: cap run efectiva ni requisits manuals (els zeros no volen dir res);
+#: `current`: la run efectiva parla dels plecs d'ara; `stale`: n'ha quedat enrere
+#: (`run_is_outdated`).
+ANALYSIS_ABSENT = "absent"
+ANALYSIS_CURRENT = "current"
+ANALYSIS_STALE = "stale"
+
+
 @dataclass(frozen=True, slots=True)
 class DossierCoverageCounters:
     """Cobertura documental dels requisits OBLIGATORIS. No es el compliment."""
@@ -219,6 +228,10 @@ def summarise_coverage(
 #: Motius que impedeixen arribar a la revisio final. La interficie en deriva el
 #: text; el servidor nomes envia codis, com a la resta del sistema.
 BLOCKER_DECISION_NOT_GO = "decision_not_go"
+#: No hi ha cap analisi del plec (`analysis_state = absent`, 3B-2 §7.1.3): zero
+#: requisits obligatoris no vol dir que el plec no en tingui, vol dir que ningu no
+#: l'ha llegit. Sense aquest blocador, un dossier sense res deia «complet».
+BLOCKER_ANALYSIS_MISSING = "analysis_missing"
 BLOCKER_MANDATORY_UNRESOLVED = "mandatory_unresolved"
 #: Una analisi de requisits o un calcul de compliment nous: el dossier ja no
 #: descriu el que el sistema sap ara, i no es pot seguir presentant com a llest.
@@ -244,6 +257,8 @@ class ReadinessInput:
 
     dossier_started: bool = False
     decision_is_go: bool = False
+    #: Cap analisi del plec (ni run efectiva ni requisits manuals).
+    analysis_missing: bool = False
     analysis_outdated: bool = False
     mandatory_unresolved: int = 0
     blocked_checklist_items: int = 0
@@ -284,6 +299,8 @@ def evaluate_readiness(data: ReadinessInput) -> ReadinessResult:
 
     if not data.decision_is_go:
         blockers.append(BLOCKER_DECISION_NOT_GO)
+    if data.analysis_missing:
+        blockers.append(BLOCKER_ANALYSIS_MISSING)
     if data.analysis_outdated:
         blockers.append(BLOCKER_ANALYSIS_OUTDATED)
     if data.mandatory_unresolved:

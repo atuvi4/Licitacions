@@ -242,3 +242,19 @@ export function lotSummary(match: TenderMatch): string | null {
   );
   return parts.join(" · ");
 }
+
+/** El que el perfil ha de tenir perquè el pre-fit es pugui calcular (3B-2 §7.1.4). */
+export interface PrefitProfileCounts {
+  cpv_preferences: number;
+  territories: number;
+  contract_preferences: number;
+}
+
+/**
+ * Si el perfil té CPV, territoris o preferències de contracte: sense cap d'aquests,
+ * el pre-fit no es calcula (ni a la ingesta ni a demanda). `null` = encara no se sap.
+ */
+export function prefitProfileReady(counts: PrefitProfileCounts | null | undefined): boolean | null {
+  if (!counts) return null;
+  return counts.cpv_preferences + counts.territories + (counts.contract_preferences ?? 0) > 0;
+}

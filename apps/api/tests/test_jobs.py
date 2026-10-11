@@ -58,6 +58,7 @@ from app.models.tenders import Tender
 from app.models.workspace import WorkspaceDecision
 from app.services.requirement_analysis import analysis_input, analyze_tender_requirements
 from tests.jobs_support import confirm_new_quote, confirm_quote, create_quote, run_worker
+from tests.real_provider import RealNamedFake
 
 QUOTE = "El volumen anual de negocios del licitador debera ser al menos de 450.000 euros"
 
@@ -382,21 +383,33 @@ async def test_cancelling_detaches_the_request_and_only_cancels_unneeded_queued_
     assert job.status == WorkJobStatus.CANCELLED
 
 
-async def test_a_normal_request_joins_an_active_force_execution(tenant_a, tenant_b, plec, session):
+async def _own(session, tender_id, company) -> None:
+    """La licitacio passa a ser manual de `company`: nomes alla un tenant pot fer
+    `force` (en una publica, 422 `public_tender_canonical_only`, 3B-2 §6.4)."""
+    tender = await session.get(Tender, tender_id)
+    tender.owner_company_id = company.id
+    await session.commit()
+
+
+async def test_a_normal_request_joins_an_active_force_execution(tenant_a, plec, session):
     tender_id = plec["document"].tender_id
+    await _own(session, tender_id, tenant_a[1])
     forced = await _submit(session, tenant_a[1], tenant_a[0], tender_id, force=True)
-    normal = await _submit(session, tenant_b[1], tenant_b[0], tender_id)
+    normal = await _submit(session, tenant_a[1], tenant_a[0], tender_id)
 
     assert normal.request.work_job_id == forced.request.work_job_id
+    # La mateixa empresa: la peticio pendent sobre aquella feina ja es la seva.
+    assert normal.already_requested is True
     assert await _count(session, WorkJob) == 1
 
 
 async def test_a_force_request_never_joins_a_normal_execution(
-    tenant_a, tenant_b, plec, session, session_factory
+    tenant_a, plec, session, session_factory
 ):
     tender_id = plec["document"].tender_id
+    await _own(session, tender_id, tenant_a[1])
     normal = await _submit(session, tenant_a[1], tenant_a[0], tender_id)
-    forced = await _submit(session, tenant_b[1], tenant_b[0], tender_id, force=True)
+    forced = await _submit(session, tenant_a[1], tenant_a[0], tender_id, force=True)
 
     assert forced.request.work_job_id != normal.request.work_job_id
     assert await _count(session, WorkJob) == 2
@@ -819,8 +832,9 @@ async def test_an_orphan_without_run_is_reused_or_failed_after_the_grace(
     _, lost, _ = await _reconciled(session, session_factory, lost, grace=0)
     assert lost.error_code == "worker_lost_before_start"
 
-    reusable = _run(tender_id, status=AnalysisRunStatus.COMPLETED, fingerprint="2" * 64,
-                    is_current=True)
+    # Una simulacio no es mai vigent (3B-2 §6.3): es reaprofita per ser la darrera
+    # simulacio acabada (`latest_simulation_run`), no per `is_current`.
+    reusable = _run(tender_id, status=AnalysisRunStatus.COMPLETED, fingerprint="2" * 64)
     session.add(reusable)
     await session.commit()
     found = await _orphan(session, tender_id, fingerprint="2" * 64)
@@ -834,7 +848,8 @@ async def test_a_zombie_cannot_finalise_a_run_declared_lost(
 ):
     tender_id = plec["document"].tender_id
     tender = await session.get(Tender, tender_id)
-    previous = await analyze_tender_requirements(session, tender, provider=fake.FakeProvider())
+    # La vigent ha de ser real: una simulacio mai no ho es (3B-2 §6.3).
+    previous = await analyze_tender_requirements(session, tender, provider=RealNamedFake())
     plec["content"].sha256 = "c" * 64
     await session.commit()
 
@@ -1246,4 +1261,10 @@ async def test_processing_skips_documents_removed_from_the_source(
         provider_factory=fake.FakeProvider,
     )
     await handlers.process_tender_documents(ctx)
-    assert processed == [current.id]
+    assert removed.id not in processed
+    if explicit:
+        assert processed == [current.id]
+    else:
+        # 3B-2 (fix round 1, M2): per defecte es processen TOTS els tipus (no
+        # alies), tambe el PCAP `other` de la fixture; el retirat, mai.
+        assert processed == [tender_document.id, current.id]

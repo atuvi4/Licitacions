@@ -41,7 +41,7 @@ from app.models.tender_documents import (
     TenderDocumentPage,
 )
 from app.models.tenders import Tender, TenderDocument
-from app.tenders.documents import is_active_document
+from app.tenders.documents import is_active_document, is_analyzable_document
 
 
 class SourceRefChainError(ValidationError):
@@ -66,15 +66,39 @@ class SourceRefDocumentRemovedError(ValidationError):
     code = "source_ref_document_removed"
 
 
+class SourceRefDocumentNotAnalyzableError(ValidationError):
+    """El document es vigent pero no analitzable (3B-2 §2.3): no admet cites noves.
+
+    Un alies (mateixos bytes que un altre document: es cita el canonic) o una
+    aportacio de l'operador encara no verificada (o rebutjada). Citar-lo faria
+    entrar a l'estructura un document que l'analisi no llegeix.
+    """
+
+    code = "source_ref_document_not_analyzable"
+
+
 def _assert_active(document: TenderDocument) -> None:
     if not is_active_document(document):
         raise SourceRefDocumentRemovedError(
             "Aquest document ja no es vigent a la font: no s'hi poden afegir cites noves."
         )
+    if not is_analyzable_document(document):
+        raise SourceRefDocumentNotAnalyzableError(
+            "Aquest document no es analitzable (alies o pendent de verificar): "
+            "no s'hi poden afegir cites noves.",
+            details={
+                "contribution_status": str(document.contribution_status),
+                "duplicate_of_document_id": (
+                    str(document.duplicate_of_document_id)
+                    if document.duplicate_of_document_id
+                    else None
+                ),
+            },
+        )
 
 
 async def assert_ref_citable(session: AsyncSession, ref: TenderSourceRef) -> None:
-    """Refusa enllacar a una entitat nova una cita d'un document retirat."""
+    """Refusa enllacar a una entitat nova una cita d'un document no analitzable."""
     if ref.tender_document_id is None:
         return
     document = await session.get(TenderDocument, ref.tender_document_id)

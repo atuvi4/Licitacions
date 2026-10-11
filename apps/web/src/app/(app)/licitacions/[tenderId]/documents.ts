@@ -1,7 +1,13 @@
 import { formatDate } from "@/lib/format";
 import type { JobRequest } from "@/lib/jobs";
-import { jobLevel, type Level } from "@/lib/labels";
-import type { TenderDocumentFileSummary } from "@/lib/tenders";
+import { DOCUMENT_STATE_LEVEL, jobLevel, type Level } from "@/lib/labels";
+import { requirementAnalysisState, type RequirementAnalysis } from "@/lib/requirements";
+import {
+  DOCUMENT_STATE_LABELS,
+  documentState,
+  type TenderDocumentFileSummary,
+  type TenderDocumentMeta,
+} from "@/lib/tenders";
 
 /**
  * Pestanya Plecs (handoff L10): què és cada document, si s'ha llegit i amb
@@ -40,6 +46,29 @@ export function extractedText(file: TenderDocumentFileSummary | null): string {
   const pages = `${file.page_count} pàg.`;
   if (file.text_char_count === null) return pages;
   return `${pages} · ${NUMBER.format(file.text_char_count)} caràcters`;
+}
+
+/**
+ * L'estat d'un document a la pestanya Plecs (A5): «Sense text extret» → «Text
+ * extret · requisits encara no analitzats» → «Analitzat». Un document llegit no
+ * és un document analitzat: fins que una anàlisi vigent l'hagi llegit, es diu
+ * que els requisits encara no s'han analitzat. Un format que no sabem llegir o
+ * un error es diuen tal com són.
+ */
+export function readingLabel(
+  document: Pick<TenderDocumentMeta, "id" | "latest_file">,
+  analysis: RequirementAnalysis | null,
+): { label: string; level: Level } {
+  const state = documentState(document.latest_file);
+  if (state === "error") return { label: DOCUMENT_STATE_LABELS.error, level: DOCUMENT_STATE_LEVEL.error };
+  if (state === "unsupported") return { label: DOCUMENT_STATE_LABELS.unsupported, level: DOCUMENT_STATE_LEVEL.unsupported };
+  if (state === "not_downloaded" || state === "downloaded") return { label: "Sense text extret", level: "neutral" };
+  const analysisState = requirementAnalysisState(analysis);
+  const run = analysis?.run ?? null;
+  const skipped = run?.skipped_documents?.some((item) => item.tender_document_id === document.id) ?? false;
+  if (run && !skipped && analysisState === "current") return { label: "Analitzat", level: "ready" };
+  if (run && !skipped && analysisState === "stale") return { label: "Analitzat · anàlisi obsoleta", level: "attention" };
+  return { label: "Text extret · requisits encara no analitzats", level: "attention" };
 }
 
 /** Sota la pastilla de lectura: només quan el text extret no és de fiar. */

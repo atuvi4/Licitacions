@@ -96,7 +96,20 @@ export interface CompanyOnboarded {
 }
 
 export const PLATFORM_HOME = "/plataforma/empreses";
+/** Licitacions públiques: l'entrada cap als documents públics oficials de cadascuna (3B-2 §7.1.5). */
+export const PLATFORM_TENDERS = "/plataforma/licitacions";
 export const DEFAULT_PILOT_DAYS = 60;
+
+export function platformTenderDocumentsPath(tenderId: string): string {
+  return `${PLATFORM_TENDERS}/${tenderId}/documents`;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Un identificador enganxat a la cerca porta directament a la licitació. */
+export function looksLikeUuid(value: string): boolean {
+  return UUID_PATTERN.test(value.trim());
+}
 
 /** Nom a mostrar: el comercial si n'hi ha, si no el legal. */
 export function displayName(company: { legal_name: string; trade_name: string | null }): string {

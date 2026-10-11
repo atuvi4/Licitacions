@@ -37,6 +37,7 @@ from app.schemas.workspace import (
 from app.services import audit
 from app.services import bid_workspace as workspace_service
 from app.services import workspace_dossier as service
+from app.services.workspace_gate import assert_workspace_go
 from app.workspace.decision import nothing_to_do_reason
 from app.workspace.transitions import is_submitted
 
@@ -176,16 +177,7 @@ async def _dossier_read(
         workspace_id=workspace.id,
         workspace_status=plan.status,
         deadline_at=dossier.deadline,
-        coverage=DossierCoverageRead(
-            mandatory_total=dossier.counters.mandatory_total,
-            covered=dossier.counters.covered,
-            missing_document=dossier.counters.missing_document,
-            needs_review=dossier.counters.needs_review,
-            not_applicable=dossier.counters.not_applicable,
-            expired_documents=dossier.counters.expired_documents,
-            optional_total=dossier.counters.optional_total,
-            optional_covered=dossier.counters.optional_covered,
-        ),
+        coverage=DossierCoverageRead.of(dossier.counters, dossier.analysis_state),
         readiness=_readiness_read(dossier.readiness, plan.status),
         groups=groups,
         superseded_count=len(dossier.superseded),
@@ -216,6 +208,7 @@ async def get_dossier(workspace_id: uuid.UUID, session: SessionDep, ctx: Company
 async def sync_dossier(workspace_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx):
     """Proposa; no tria. Idempotent i sense tocar res del que ja s'hagi decidit."""
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     outcome = await service.sync_dossier(session, workspace, user_id=ctx.user.id)
     await service.start_bid_preparation(session, workspace)
     await session.commit()
@@ -223,7 +216,9 @@ async def sync_dossier(workspace_id: uuid.UUID, session: SessionDep, ctx: Compan
     # Mutacio explicita: aqui si que es desa l'estat reconciliat. Abans ho feia,
     # de retruc, la lectura del dossier que es retorna a sota.
     await service.reconcile_readiness(session, workspace)
-    run = await workspace_service.current_requirement_run(session, workspace.tender_id)
+    run = await workspace_service.current_requirement_run(
+        session, workspace.tender_id, workspace.company_id
+    )
     return DossierSyncResult(
         suggested=outcome.suggested,
         gaps=outcome.gaps,
@@ -256,6 +251,7 @@ async def confirm_relevance(
     respon una persona queda amb el seu nom, la seva data i el seu motiu.
     """
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     item = await service.get_item(session, workspace, item_id)
     await service.confirm_relevance(
         session, workspace, item, note=payload.note, user=ctx.user
@@ -280,6 +276,7 @@ async def add_item(
     ctx: CompanyCtx,
 ):
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     await service.add_item(
         session,
         workspace,
@@ -303,6 +300,7 @@ async def update_item(
 ):
     """Retorna el dossier sencer: canviar una peca canvia cobertura i readiness."""
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     item = await service.get_item(session, workspace, item_id)
     await service.update_item(
         session,
@@ -325,6 +323,7 @@ async def create_task(
 ):
     """Del forat a la feina: titol deterministic, sense IA, sense duplicats."""
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     item = await service.get_item(session, workspace, item_id)
     task = await service.create_task_for_gap(session, workspace, item, user=ctx.user)
     return TaskRead.model_validate(task)
@@ -350,6 +349,7 @@ async def advance(workspace_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx)
     humana que encara no existeix.
     """
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     readiness = await service.advance_to_final_review(
         session, workspace, user=ctx.user, role=ctx.membership.role
     )

@@ -122,6 +122,13 @@ export const FINDING_COPY: Record<string, FindingCopy> = {
     action: "Ves a Decidir",
     destination: DECIDE,
   },
+  // 3B-2 §7.1.3: sense anàlisi, zero requisits no vol dir que el plec no en tingui.
+  analysis_missing: {
+    label: "Encara no hi ha cap anàlisi del plec",
+    hint: "Sense anàlisi no se sap quins requisits obligatoris té el plec.",
+    action: "Analitza el plec",
+    destination: ANALISI,
+  },
   analysis_outdated: {
     label: "El compliment anterior ha quedat endarrerit",
     hint: "El plec o el compliment anterior han canviat des de l'última execució del motor anterior.",
@@ -322,6 +329,29 @@ export interface FindingGroup {
 /** Només els bloquejos compten al capçal: un avís no impedeix res. */
 export function blockerCount(findings: ReadinessFinding[]): number {
   return findings.filter((finding) => finding.severity === "blocker").length;
+}
+
+/** Etiqueta del comptador únic de pendents: compta les quatre àrees de Preparar (B6). */
+export const BLOCKER_COUNT_SCOPE = "(totes les àrees)";
+
+/** «N pendents de preparació (totes les àrees)»: el mateix text al capçal i a Tancar. */
+export function blockerCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "pendent" : "pendents"} de preparació ${BLOCKER_COUNT_SCOPE}`;
+}
+
+/**
+ * Bloquejos per àrea de Preparar: els que es resolen en aquella àrea. Un bloqueig que
+ * es resol fora de Preparar (Decidir, la fitxa de la licitació) o amb un codi que no
+ * coneixem compta al total però a cap àrea.
+ */
+export function blockersByArea(findings: ReadinessFinding[]): Record<PrepareArea, number> {
+  const counts: Record<PrepareArea, number> = { solucio: 0, oferta: 0, dossier: 0, pla: 0 };
+  for (const finding of findings) {
+    if (finding.severity !== "blocker") continue;
+    const destination = findingCopy(finding.code)?.destination;
+    if (destination?.kind === "area") counts[destination.area] += 1;
+  }
+  return counts;
 }
 
 /**

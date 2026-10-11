@@ -12,6 +12,7 @@ import uuid
 from fastapi import APIRouter, Response, status
 from sqlalchemy.exc import IntegrityError
 
+from app.analysis.fingerprint import PACKAGE_INCOMPLETE
 from app.analysis.registry import question_text
 from app.api.deps import CompanyCtx, SessionDep
 from app.api.v1.routers.tender_structure import _visible_tender
@@ -21,7 +22,12 @@ from app.core.errors import (
     NotFoundError,
 )
 from app.models.tender_analysis import TenderAnalysisRun
-from app.schemas.tender_analysis import AnalysisRunRead, AnalysisRunWriteRead, QuestionRead
+from app.schemas.tender_analysis import (
+    AnalysisRunRead,
+    AnalysisRunRequest,
+    AnalysisRunWriteRead,
+    QuestionRead,
+)
 from app.services import manual_requirement, review_actions, tender_analysis
 
 router = APIRouter(
@@ -77,11 +83,20 @@ async def read_analysis_run(
     return await run_read(session, run)
 
 
-async def _analyze_and_commit(session, company_id: uuid.UUID, tender_id: uuid.UUID):
+async def _analyze_and_commit(
+    session,
+    company_id: uuid.UUID,
+    tender_id: uuid.UUID,
+    *,
+    accept_incomplete_package: bool = False,
+):
     """Una execucio del motor i el commit. Es una funcio a part per poder-la provar
     en una cursa."""
     outcome = await tender_analysis.analyze_tender(
-        session, company_id=company_id, tender_id=tender_id
+        session,
+        company_id=company_id,
+        tender_id=tender_id,
+        accept_incomplete_package=accept_incomplete_package,
     )
     await session.commit()
     return outcome
@@ -113,27 +128,44 @@ def _is_run_race(exc: IntegrityError) -> bool:
     summary="Analitza (o reutilitza) i deixa vigent",
 )
 async def run_analysis(
-    tender_id: uuid.UUID, response: Response, session: SessionDep, ctx: CompanyCtx
+    tender_id: uuid.UUID,
+    response: Response,
+    session: SessionDep,
+    ctx: CompanyCtx,
+    payload: AnalysisRunRequest | None = None,
 ):
     """Analitza el plec per a l'empresa i deixa l'analisi vigent.
 
     `reused` vol dir que no s'ha escrit cap analisi nova: ja n'hi havia una amb les
     mateixes entrades (pot ser diferent de la que el client tenia en pantalla).
+
+    Prerequisit (3B-2 §4.4): hi ha requisits efectius, o el paquet documental consta
+    com a incomplet i qui ho demana ho accepta explicitament
+    (`accept_incomplete_package=true`, que queda registrat a la run). Acceptar no
+    serveix de res si el paquet no consta com a incomplet (`complete` o `unknown`).
+    Si la resposta es una run reutilitzada (`reused`), `accepted_incomplete_package`
+    es el valor amb que es va crear, no el d'aquesta peticio.
     """
     # El mateix permis que revisar els requisits del plec: cap llista nova.
     review_actions.assert_can_review(ctx.membership.role)
     # Abans de cap rollback: despres, `ctx.company` queda caducat i no es pot rellegir.
     company_id = ctx.company_id
+    accept = bool(payload and payload.accept_incomplete_package)
     await _visible_tender(session, company_id, tender_id)
-    effective = await manual_requirement.effective_requirements(session, tender_id)
+    effective = await manual_requirement.effective_requirements(session, tender_id, company_id)
     if not list(effective.all):
-        # El motor no refusa mai: sense requisits faria una analisi buida i enganyosa.
-        raise AnalysisPrerequisitesMissingError(
-            "No hi ha requisits per analitzar.",
-            details={"missing": [MISSING_REQUIREMENTS]},
-        )
+        package = await tender_analysis.package_state(session, tender_id)
+        if not (accept and package.status == PACKAGE_INCOMPLETE):
+            # El motor no refusa mai: sense requisits faria una analisi buida i
+            # enganyosa, llevat que l'objectiu sigui veure que falta al paquet.
+            raise AnalysisPrerequisitesMissingError(
+                "No hi ha requisits per analitzar.",
+                details={"missing": [MISSING_REQUIREMENTS], "package_status": package.status},
+            )
     try:
-        outcome = await _analyze_and_commit(session, company_id, tender_id)
+        outcome = await _analyze_and_commit(
+            session, company_id, tender_id, accept_incomplete_package=accept
+        )
     except IntegrityError as exc:
         if not _is_run_race(exc):
             raise  # un altre error d'integritat no s'emmascara
@@ -141,7 +173,9 @@ async def run_analysis(
         # sol reintent: el motor la trobara per `inputs_hash` i la reutilitzara.
         await session.rollback()
         try:
-            outcome = await _analyze_and_commit(session, company_id, tender_id)
+            outcome = await _analyze_and_commit(
+                session, company_id, tender_id, accept_incomplete_package=accept
+            )
         except IntegrityError as again:
             await session.rollback()
             if not _is_run_race(again):

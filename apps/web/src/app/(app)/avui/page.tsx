@@ -12,17 +12,25 @@ import { useResource } from "@/lib/hooks";
 import {
   ELIGIBILITY_LABELS,
   RECOMMENDATION_LABELS,
-  daysUntilDeadline,
-  deadlineLabel,
-  deadlineLevel,
+  deadlineCountdownView,
   shortSummary,
 } from "@/lib/labels";
-import type { TenderMatchListItem } from "@/lib/matching";
+import type { MatchSummary, TenderMatchListItem } from "@/lib/matching";
 import { buildQuery, type Page } from "@/lib/tenders";
 import type { DashboardSummary } from "@/lib/types";
 import type { WorkspaceSummary } from "@/lib/workspace";
 
-import { blockerReasons, emptyKind, openBlockers, pendingDecisions, todayLine } from "./queue";
+import {
+  RADAR_NOTE,
+  blockerReasons,
+  candidatesCause,
+  candidatesEmptyLine,
+  candidatesLine,
+  openBlockers,
+  pendingDecisions,
+  todayLine,
+  type CandidatesCause,
+} from "./queue";
 
 /**
  * Avui: la cua de treball (handoff L5, mockup 02). Tres blocs composts al
@@ -35,9 +43,10 @@ import { blockerReasons, emptyKind, openBlockers, pendingDecisions, todayLine } 
 const FRESH_LIMIT = 5;
 const ACTION_CLASS = "min-h-12 w-full sm:min-h-0 sm:w-auto";
 
-function DeadlinePill({ days }: { days: number | null }) {
-  if (days === null) return <StatusPill level="neutral">Sense termini</StatusPill>;
-  return <StatusPill level={deadlineLevel(days)}>{deadlineLabel(days)}</StatusPill>;
+/** El comptador de `lib/deadline` (A11), a partir de la data: el mateix que a la fitxa. */
+function DeadlinePill({ deadline }: { deadline: string | null }) {
+  const countdown = deadlineCountdownView(deadline);
+  return <StatusPill level={countdown.level}>{countdown.text}</StatusPill>;
 }
 
 function Row({ children }: { children: ReactNode }) {
@@ -92,6 +101,33 @@ function CountPill({ count }: { count: number }) {
   );
 }
 
+/**
+ * El bloc del Radar sense cap candidata oberta (A17): el 0 es diu sobre el
+ * total de licitacions i amb la causa, i la sortida és on es resol.
+ */
+function RadarEmpty({ radar, cause }: { radar: MatchSummary | null; cause: CandidatesCause | null }) {
+  if (radar && radar.candidates > 0) {
+    return <Nothing>Cap candidata amb termini obert · {candidatesLine(radar.candidates, radar.total_tenders)}.</Nothing>;
+  }
+  return (
+    <div className="px-3.5 py-4 text-[13px] text-muted">
+      <p>{radar ? candidatesEmptyLine(radar.total_tenders, cause) : "Cap candidata"}.</p>
+      <p className="mt-1">
+        Són {RADAR_NOTE}.{" "}
+        {cause === "profile" ? (
+          <Link href="/empresa/radar" className="text-brand-strong hover:text-accent-800">
+            Defineix les preferències del Radar →
+          </Link>
+        ) : (
+          <Link href="/licitacions" className="text-brand-strong hover:text-accent-800">
+            Mira totes les licitacions →
+          </Link>
+        )}
+      </p>
+    </div>
+  );
+}
+
 export default function AvuiPage() {
   const { companyId } = useSession();
   const base = `/companies/${companyId}`;
@@ -100,20 +136,26 @@ export default function AvuiPage() {
     `${base}/matches?${buildQuery({ match_status: "candidate", sort: "deadline", only_open: true, limit: FRESH_LIMIT })}`,
   );
   const profile = useResource<DashboardSummary>(`${base}/summary`);
+  // El resum del Radar: candidates prioritzades i el total de licitacions
+  // visibles (el mateix univers que «Totes» d'Oportunitats), A17.
+  const radar = useResource<MatchSummary>(`${base}/matches/summary`);
 
   const reloadAll = useCallback(() => {
     void workspaces.reload();
     void fresh.reload();
     void profile.reload();
-  }, [workspaces, fresh, profile]);
+    void radar.reload();
+  }, [workspaces, fresh, profile, radar]);
 
   const decisions = workspaces.data ? pendingDecisions(workspaces.data) : null;
   const blockers = workspaces.data ? openBlockers(workspaces.data) : null;
   const freshTotal = fresh.data ? fresh.data.total : undefined;
+  const cause = candidatesCause(profile.data?.counts);
   const subtitle = todayLine(new Date(), {
     decisions: decisions?.length,
     warnings: blockers?.length,
-    fresh: freshTotal,
+    candidates: radar.data?.candidates,
+    totalTenders: radar.data?.total_tenders,
   });
 
   // Primera càrrega: l'esquelet amb el títol i la data reals, cap recompte.
@@ -138,23 +180,24 @@ export default function AvuiPage() {
     );
   }
 
-  // Buit total: cap candidatura i cap candidata. Amb sortida sempre.
+  // Buit total: cap candidatura i cap candidata. Amb sortida sempre, i el 0
+  // explicat: candidates prioritzades pel Radar sobre el total de licitacions,
+  // amb la causa (A17). Cap mesurador de completitud ni «Completa el perfil»
+  // (B1): la sortida són les Preferències del Radar.
   if (workspaces.data && workspaces.data.length === 0 && fresh.data && fresh.data.total === 0) {
-    const kind = emptyKind(fresh.data.total, profile.data?.counts.cpv_preferences);
-    const openTenders = profile.data ? null : null;
-    void openTenders;
+    const zero = radar.data ? candidatesEmptyLine(radar.data.total_tenders, cause) : "0 candidates";
     return (
       <>
         <PageHeader title="Avui" description={subtitle} />
         <Card>
-          {kind === "profile" ? (
+          {cause === "profile" ? (
             <EmptyState
               icon={<Search aria-hidden strokeWidth={1.5} />}
               title="Encara no sabem què busqueu"
-              description="L'encaix es calcula amb els codis CPV, els territoris i la franja d'import del perfil. Sense això no podem ordenar les licitacions obertes: només llistar-les."
+              description={`${zero}. Són ${RADAR_NOTE}: el Radar prioritza amb els codis CPV, els territoris i la franja d'import del perfil, i sense això només pot llistar les licitacions.`}
               action={
-                <LinkButton href="/empresa" variant="primary" size="md">
-                  Completa el perfil · 3 passos
+                <LinkButton href="/empresa/radar" variant="primary" size="md">
+                  Defineix les preferències del Radar
                 </LinkButton>
               }
               secondary={
@@ -167,10 +210,15 @@ export default function AvuiPage() {
             <EmptyState
               icon={<Search aria-hidden strokeWidth={1.5} />}
               title="Encara no hi ha res a la cua"
-              description="Una candidatura es crea des d'una oportunitat, quan decidiu que val la pena mirar-la de prop. Ara mateix cap oportunitat oberta encaixa amb el perfil."
+              description={`${zero}. Són ${RADAR_NOTE}: ara mateix cap licitació oberta encaixa amb el perfil. Una candidatura es crea des d'una oportunitat, quan decidiu que val la pena mirar-la de prop.`}
               action={
                 <LinkButton href="/licitacions" variant="primary" size="md">
                   Mira les oportunitats
+                </LinkButton>
+              }
+              secondary={
+                <LinkButton href="/empresa/radar" variant="secondary" size="md">
+                  Preferències del Radar
                 </LinkButton>
               }
             />
@@ -205,7 +253,7 @@ export default function AvuiPage() {
                   {[workspace.buyer_name, workspace.expediente_number].filter(Boolean).join(" · ")}
                   {workspace.recommendation && (
                     <>
-                      {" · "}Recomanació automàtica: {RECOMMENDATION_LABELS[workspace.recommendation]}
+                      {" · "}Resultat de l&apos;anàlisi: {RECOMMENDATION_LABELS[workspace.recommendation]}
                     </>
                   )}
                   {workspace.eligibility && (
@@ -221,7 +269,7 @@ export default function AvuiPage() {
                   </StatusPill>
                 )}
               </div>
-              <DeadlinePill days={workspace.days_remaining} />
+              <DeadlinePill deadline={workspace.deadline_at} />
               <LinkButton
                 href={`/candidatures/${workspace.id}?pas=decidir`}
                 variant={index === 0 ? "primary" : "secondary"}
@@ -278,20 +326,27 @@ export default function AvuiPage() {
 
       <Card>
         <CardHeader
-          title="Noves per revisar"
-          description="Candidates obertes, ordenades per termini"
-          action={freshTotal !== undefined ? <CountPill count={freshTotal} /> : undefined}
+          title="Candidates del Radar"
+          description={`Candidates ${RADAR_NOTE.replace(/^candidates /, "")} · obertes, ordenades per termini`}
+          action={
+            radar.data ? (
+              <StatusPill level="neutral" className="tabular-nums">
+                {candidatesLine(radar.data.candidates, radar.data.total_tenders)}
+              </StatusPill>
+            ) : freshTotal !== undefined ? (
+              <CountPill count={freshTotal} />
+            ) : undefined
+          }
         />
         {fresh.error ? (
           <BlockError what="les oportunitats" onRetry={() => void fresh.reload()} />
         ) : !fresh.data ? (
           <GhostRows />
         ) : fresh.data.items.length === 0 ? (
-          <Nothing>Cap oportunitat candidata oberta.</Nothing>
+          <RadarEmpty radar={radar.data} cause={cause} />
         ) : (
           <>
             {fresh.data.items.map(({ tender, match }, index) => {
-              const days = daysUntilDeadline(tender.deadline_at);
               return (
                 <Row key={tender.id}>
                   <span className="grid h-8 min-w-11 shrink-0 place-items-center self-start px-1.5 sm:self-center">
@@ -303,7 +358,7 @@ export default function AvuiPage() {
                       {[tender.buyer?.name, match ? shortSummary(match) : "Encaix sense calcular"].filter(Boolean).join(" · ")}
                     </p>
                   </div>
-                  <DeadlinePill days={days} />
+                  <DeadlinePill deadline={tender.deadline_at} />
                   <LinkButton
                     href={`/licitacions/${tender.id}`}
                     variant={index === 0 ? "primary" : "secondary"}

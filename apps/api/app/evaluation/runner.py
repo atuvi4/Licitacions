@@ -26,6 +26,7 @@ from sqlalchemy.orm import selectinload
 from app.ai.contract_v3 import counts_as_award_criterion
 from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
 from app.ai.provider import ProviderError, StructuredLLMProvider, get_provider
+from app.core.errors import AnalysisNotAllowedError
 
 # `resolve_tender` viu a `corpus.py`, compartit amb la pagina de revisio: el
 # gold s'ha de verificar contra EXACTAMENT el document que s'analitzara.
@@ -243,6 +244,11 @@ async def run_case(
         )
     except ProviderError as exc:
         outcome.skipped_reason = f"provider_error:{exc.code}"
+        return outcome
+    except AnalysisNotAllowedError as exc:
+        # La porta unica de l'analisi (3B-2 §6.7): model no pinat, sense preu o
+        # pressupost esgotat. No s'ha cridat el proveidor ni reservat cap run.
+        outcome.skipped_reason = f"not_allowed:{exc.code}"
         return outcome
     except Exception as exc:  # noqa: BLE001 - un cas no pot tombar el benchmark
         outcome.skipped_reason = f"error:{type(exc).__name__}"

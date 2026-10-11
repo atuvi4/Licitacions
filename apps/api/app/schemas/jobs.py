@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -58,12 +58,25 @@ class JobSubmissionRead(JobRequestRead):
 
 
 class AnalysisQuoteIn(BaseModel):
+    """Opcions d'una quota.
+
+    En una licitacio PUBLICA, `force`, `document_ids` i `profile` responen 422
+    `public_tender_canonical_only` (3B-2 §6.4): la seleccio i el perfil son els
+    canonics del servidor. En una MANUAL propia, com sempre.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     force: bool = False
     document_ids: list[uuid.UUID] = Field(default_factory=list)
+    #: Perfil d'extraccio (nomes licitacions manuals). Buit = el de producte.
+    profile: str | None = Field(default=None, max_length=20)
     #: Represa d'un run parcial: nomes s'enviaran els chunks que hi van fallar.
     resume_from_run_id: uuid.UUID | None = None
+    #: Qui confirma accepta un paquet incomplet (§6.1.3). No entra al run.
+    accept_incomplete_package: bool = False
+    #: Qui confirma accepta un text amb avisos de qualitat (§6.1.4). No entra al run.
+    acknowledge_quality: bool = False
 
 
 class QuoteDocumentRead(BaseModel):
@@ -109,7 +122,14 @@ class AnalysisQuoteRead(BaseModel):
     estimate_basis: dict | None = None
     max_chunks: int
     allowed: bool
+    #: L'unic motiu prioritzat pel qual no es pot confirmar (3B-2 §6.1).
     blocking_reason: str | None = None
+    #: Prerequisits de §6.1 tal com es van calcular (`failed`, `advisory`, `warnings`,
+    #: paquet, qualitat, pressupost). NUL als previews anteriors a 3B-2.
+    prerequisites: dict[str, Any] | None = None
+    #: Cost estimat en dolars (§6.7). NUL sense preu del model.
+    estimated_cost_usd: float | None = None
+    accept_incomplete_package: bool = False
     expires_at: datetime
     confirmed_at: datetime | None = None
     superseded_by_id: uuid.UUID | None = None
@@ -118,6 +138,18 @@ class AnalysisQuoteRead(BaseModel):
     @property
     def pages_truncated(self) -> bool:
         return self.pages_in_plan < self.pages_total
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def provider_basis(self) -> str | None:
+        """`real` o `simulation` (o `unconfigured`): sobre que es faria l'analisi."""
+        return (self.prerequisites or {}).get("provider_basis")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def warnings(self) -> list[str]:
+        """Avisos que no bloquegen (p. ex. `previous_run_completed_empty`)."""
+        return list((self.prerequisites or {}).get("warnings") or [])
 
     @computed_field  # type: ignore[prop-decorator]
     @property

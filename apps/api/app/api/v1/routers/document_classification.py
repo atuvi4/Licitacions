@@ -36,6 +36,13 @@ router = APIRouter(
 )
 
 
+def _role_source(item: service.ClassifiedDocument) -> RoleSource | None:
+    """Qui diu el rol vigent. Una decisio d'una versio anterior es diu, pero no mana."""
+    if item.decision is not None:
+        return RoleSource.STALE_OVERRIDE if item.decision_is_stale else RoleSource.PERSON
+    return RoleSource.CLASSIFIER if item.suggestion else None
+
+
 def build_read(view: service.ClassificationView) -> ClassificationRead:
     documents = []
     for item in view.documents:
@@ -49,9 +56,7 @@ def build_read(view: service.ClassificationView) -> ClassificationRead:
                 sha256=item.sha256,
                 document_type=item.document.document_type,
                 role=item.role,
-                role_source=(
-                    RoleSource.PERSON if decision else RoleSource.CLASSIFIER if suggestion else None
-                ),
+                role_source=_role_source(item),
                 suggested_role=suggestion.role if suggestion else None,
                 suggested_confidence=suggestion.confidence if suggestion else None,
                 decided_at=decision.decided_at if decision else None,

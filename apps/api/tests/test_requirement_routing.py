@@ -32,6 +32,7 @@ from app.workspace.requirement_routing import (
     WORK_PLAN,
     route_requirement,
 )
+from tests.conftest import grant_go
 from tests.test_technical_solutions_api import (
     _requirement,
     _tender,
@@ -55,6 +56,7 @@ async def workspace(db, tenant_a):
     outcome = await workspace_service.create_workspace(
         db, company_id=company.id, tender=tender, user_id=user.id
     )
+    await grant_go(db, outcome.workspace, user)
     return outcome.workspace
 
 
@@ -297,7 +299,9 @@ async def test_cap_requisit_no_desapareix_del_conjunt_efectiu(db, workspace):
 
     made = await _set(db, workspace)
 
-    effective = await manual_requirement.effective_requirements(db, workspace.tender_id)
+    effective = await manual_requirement.effective_requirements(
+        db, workspace.tender_id, workspace.company_id
+    )
 
     assert {r.id for r in made.values()} <= {r.id for r in effective.all}
     assert (

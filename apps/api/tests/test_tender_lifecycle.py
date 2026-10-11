@@ -59,8 +59,11 @@ from app.services.tender_document_processing import process_tender_document
 from app.services.tender_lifecycle import build_snapshot
 from app.tenders.changes import (
     COMPARED_FIELDS,
+    DOCUMENT_CONTRIBUTION_FIELDS,
     DOCUMENT_FIELDS,
+    DOCUMENT_INTERNAL_FIELDS,
     DOCUMENT_PRESENCE_FIELDS,
+    DOCUMENT_REVIEW_FIELDS,
     IMPACT_MATRIX,
     LOT_FIELDS,
     MANUAL_ONLY_FIELDS,
@@ -132,6 +135,7 @@ async def extraction_run(db, tender) -> RequirementExtractionRun:
         schema_version="requirements-schema-v1",
         provider="fake",
         model="fake-model-v1",
+        run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
         is_current=True,
     )
     db.add(run)
@@ -328,14 +332,60 @@ class TestDeteccioPura:
             )
         )
         await db.commit()
+        pcap = await db.scalar(
+            sa.select(TenderDocument).where(TenderDocument.url == "https://x/pcap.pdf")
+        )
+        # Alies (3B-2): mateixos bytes que el PCAP. Tambe aporta un camp al hash.
+        db.add(
+            TenderDocument(
+                tender_id=tender.id,
+                url="https://x/annex.pdf",
+                name="PCAP (copia)",
+                document_type=TenderDocumentType.ADDITIONAL,
+                duplicate_of_document_id=pcap.id,
+            )
+        )
+        # Aportacio de l'operador pendent de verificar (3B-2 §2.2): marca `contribution`.
+        from app.models.enums import DocumentContributionStatus, TenderDocumentOrigin
+
+        db.add(
+            TenderDocument(
+                tender_id=tender.id,
+                url="https://x/zz-pendent.pdf",
+                name="Annex aportat",
+                document_type=TenderDocumentType.ADDITIONAL,
+                origin=TenderDocumentOrigin.OPERATOR_URL,
+                contribution_status=DocumentContributionStatus.PENDING_VERIFICATION,
+            )
+        )
+        await db.commit()
 
         snapshot = await build_snapshot(db, tender)
 
         assert set(snapshot["lots"][0]) == LOT_FIELDS
-        present, removed = snapshot["documents"]
-        assert set(present) == DOCUMENT_FIELDS - DOCUMENT_PRESENCE_FIELDS
-        assert set(removed) == DOCUMENT_FIELDS
+        alias, present, removed, pending = snapshot["documents"]
+        # `reviewed_role` (0059) nomes hi es amb una revisio de l'operador per a la
+        # versio vigent: cap d'aquests documents en te (vegeu
+        # `test_el_rol_revisat_entra_a_la_fotografia_nomes_si_n_hi_ha`).
+        outside = DOCUMENT_INTERNAL_FIELDS | DOCUMENT_CONTRIBUTION_FIELDS | DOCUMENT_REVIEW_FIELDS
+        shown = DOCUMENT_FIELDS - DOCUMENT_PRESENCE_FIELDS
+        assert set(present) == shown - outside
+        assert set(removed) == DOCUMENT_FIELDS - outside
+        assert set(alias) == shown - DOCUMENT_CONTRIBUTION_FIELDS - DOCUMENT_REVIEW_FIELDS
+        assert set(pending) == shown - DOCUMENT_INTERNAL_FIELDS - DOCUMENT_REVIEW_FIELDS
         assert removed["removed"] is True
+        assert alias["duplicate_of"] == "https://x/pcap.pdf"
+        assert pending["contribution"] == "pending_verification"
+
+        # I cada camp que hi entra, si canvia, s'explica amb algun canvi.
+        base = {"documents": [alias]}
+        for name in sorted(DOCUMENT_FIELDS - {"url"}):
+            other = dict(alias)
+            if name == "removed":
+                other[name] = True
+            else:
+                other[name] = None if alias.get(name) is not None else "valor-nou"
+            assert diff_snapshots(base, {"documents": [other]}), name
 
     def test_dos_camps_amb_el_mateix_codi_es_distingeixen_pel_subjecte(self):
         """Un pressupost amb IVA i un sense son el mateix fet, camps diferents."""
@@ -356,6 +406,164 @@ class TestDeteccioPura:
     def test_tot_codi_te_un_impacte_escrit(self):
         """La matriu es explicita: cap codi pot quedar sense classificar."""
         assert {code for code in ChangeCode} == set(IMPACT_MATRIX)
+
+    def test_passar_a_alies_o_deixar_de_ser_ho_es_informatiu(self):
+        """Mateix contingut, un altre document el representa: res a reobrir."""
+        doc = {"url": "https://x/copia.pdf", "name": "C", "sha256": "s"}
+        alias = {**doc, "duplicate_of": "https://x/pcap.pdf"}
+
+        for before, after, old, new in (
+            (doc, alias, None, "https://x/pcap.pdf"),
+            (alias, doc, "https://x/pcap.pdf", None),
+        ):
+            changes = diff_snapshots({"documents": [before]}, {"documents": [after]})
+            assert [c.code for c in changes] == [ChangeCode.DOCUMENT_ALIAS_CHANGED]
+            assert (changes[0].old_value, changes[0].new_value) == (old, new)
+            assert changes[0].subject == "https://x/copia.pdf"
+            assert changes[0].impacts == frozenset({ChangeImpact.INFORMATIONAL})
+            assert changes[0].is_material is False
+
+    def test_una_aportacio_pendent_nomes_es_material_quan_es_verifica(self):
+        """3B-2 §2.2: arribar pendent es informatiu; verificar dona `DOCUMENT_ADDED`."""
+        url = "https://contractaciopublica.cat/annex.pdf"
+        verified = {"url": url, "name": "Annex", "sha256": "s"}
+        pending = {**verified, "contribution": "pending_verification"}
+        rejected = {**verified, "contribution": "rejected"}
+
+        def codes(before, after):
+            return sorted(
+                c.code.value
+                for c in diff_snapshots({"documents": before}, {"documents": after})
+            )
+
+        arrival = diff_snapshots({"documents": []}, {"documents": [pending]})
+        assert [c.code for c in arrival] == [ChangeCode.DOCUMENT_CONTRIBUTION_CHANGED]
+        assert (arrival[0].old_value, arrival[0].new_value) == (None, "pending_verification")
+        assert not any(c.is_material for c in arrival)
+
+        assert codes([pending], [verified]) == [
+            "DOCUMENT_ADDED",
+            "DOCUMENT_CONTRIBUTION_CHANGED",
+        ]
+        assert codes([pending], [rejected]) == ["DOCUMENT_CONTRIBUTION_CHANGED"]
+        assert codes([pending], [{**pending, "removed": True}]) == [
+            "DOCUMENT_CONTRIBUTION_CHANGED"
+        ]
+        # Rebutjar-ne un de verificat el treu del material: es una retirada.
+        assert codes([verified], [rejected]) == [
+            "DOCUMENT_CONTRIBUTION_CHANGED",
+            "DOCUMENT_REMOVED",
+        ]
+        assert codes([pending], [pending]) == []
+
+    def test_el_feed_que_canvia_el_tipus_d_un_document_revisat_ho_diu(self):
+        """3B-2 §3.2: el feed mai sobreescriu en silenci un rol revisat (informatiu)."""
+        url = "https://x/ppt.pdf"
+        reviewed = {
+            "url": url,
+            "name": "PPT",
+            "sha256": "s",
+            "document_type": "technical_terms",
+            "reviewed_role": "characteristics_table",
+        }
+        retyped = {**reviewed, "document_type": "additional"}
+
+        changes = diff_snapshots({"documents": [reviewed]}, {"documents": [retyped]})
+        by_code = {c.code: c for c in changes}
+        assert set(by_code) == {
+            ChangeCode.DOCUMENT_METADATA_CHANGED,
+            ChangeCode.SOURCE_TYPE_CHANGED_AFTER_REVIEW,
+        }
+        event = by_code[ChangeCode.SOURCE_TYPE_CHANGED_AFTER_REVIEW]
+        assert (event.old_value, event.new_value, event.subject) == (
+            "technical_terms",
+            "additional",
+            url,
+        )
+        assert event.impacts == frozenset({ChangeImpact.INFORMATIONAL})
+        assert not any(c.is_material for c in changes)
+
+        # Sense revisio, el mateix canvi es nomes metadada.
+        plain = {k: v for k, v in reviewed.items() if k != "reviewed_role"}
+        changes = diff_snapshots(
+            {"documents": [plain]}, {"documents": [{**plain, "document_type": "additional"}]}
+        )
+        assert [c.code for c in changes] == [ChangeCode.DOCUMENT_METADATA_CHANGED]
+
+    def test_revisar_el_rol_es_informatiu(self):
+        doc = {"url": "https://x/pcap.pdf", "name": "PCAP", "sha256": "s"}
+        reviewed = {**doc, "reviewed_role": "pcap"}
+        for before, after, old, new in (
+            (doc, reviewed, None, "pcap"),
+            (reviewed, {**doc, "reviewed_role": "notice"}, "pcap", "notice"),
+            (reviewed, doc, "pcap", None),
+        ):
+            changes = diff_snapshots({"documents": [before]}, {"documents": [after]})
+            assert [c.code for c in changes] == [ChangeCode.DOCUMENT_ROLE_REVIEWED]
+            assert (changes[0].old_value, changes[0].new_value) == (old, new)
+            assert changes[0].is_material is False
+
+    async def test_el_rol_revisat_entra_a_la_fotografia_nomes_si_n_hi_ha(self, db, tender):
+        """Nomes amb una revisio per a la versio VIGENT: les fotografies d'abans no canvien."""
+        from app.models.global_classification import DocumentRoleReview
+        from app.models.tender_documents import TenderDocumentContent, TenderDocumentFile
+        from tests.test_platform_onboarding import create_operator
+
+        operator = await create_operator(db)
+        document = TenderDocument(
+            tender_id=tender.id,
+            url="https://x/quadre.pdf",
+            name="Quadre",
+            document_type=TenderDocumentType.ADDITIONAL,
+        )
+        content = TenderDocumentContent(
+            sha256="e" * 64,
+            storage_key="tests/quadre.pdf",
+            file_size=10,
+            mime_type="application/pdf",
+            is_text_extractable=True,
+        )
+        db.add_all([document, content])
+        await db.flush()
+        db.add(
+            TenderDocumentFile(
+                tender_document_id=document.id,
+                content_id=content.id,
+                is_current=True,
+                download_status=DownloadStatus.DOWNLOADED,
+            )
+        )
+        await db.commit()
+        before = await build_snapshot(db, tender)
+        assert "reviewed_role" not in before["documents"][0]
+
+        # Una revisio d'una altra versio no hi entra.
+        db.add(
+            DocumentRoleReview(
+                tender_document_id=document.id,
+                content_sha256="f" * 64,
+                role="pcap",
+                authority="platform_operator",
+                actor_id=operator.id,
+                reason="Versio antiga",
+            )
+        )
+        await db.commit()
+        assert (await build_snapshot(db, tender)) == before
+
+        db.add(
+            DocumentRoleReview(
+                tender_document_id=document.id,
+                content_sha256="e" * 64,
+                role="characteristics_table",
+                authority="platform_operator",
+                actor_id=operator.id,
+                reason="Es el quadre",
+            )
+        )
+        await db.commit()
+        entry = (await build_snapshot(db, tender))["documents"][0]
+        assert entry["reviewed_role"] == "characteristics_table"
 
     def test_dos_estats_iguals_no_donen_cap_canvi(self):
         snapshot = {"title": "X", "documents": [], "cpvs": [], "lots": []}

@@ -22,11 +22,11 @@ import {
   DECISION_PENDING_LEVEL,
   whoCanDecide,
 } from "@/lib/labels";
+import { deadlineCountdownView } from "@/lib/deadline";
 import { formatDateTime } from "@/lib/tenders";
 import {
   DECISION_LABELS,
   analysisWarningLabel,
-  deadlineLabel,
   warningLabel,
   type AnalysisDecisionSnapshotV1,
   type WorkspaceDecisionEntry,
@@ -309,11 +309,11 @@ export function DecisionPanel({
             <div>
               <dt className="text-muted">Termini</dt>
               <dd className="mt-0.5 text-ink">
-                {workspace.deadline_passed
-                  ? "Ja ha passat"
-                  : workspace.deadline_at
-                    ? `${deadlineLabel(workspace.days_remaining) ?? ""} · ${formatDateTime(workspace.deadline_at)}`
-                    : "No consta"}
+                {/* El mateix comptador que a totes les pantalles (A11/A12, N2): «Fora de
+                    termini» quan ha passat, mai una segona frase per al mateix fet. */}
+                {workspace.deadline_at
+                  ? `${deadlineCountdownView(workspace.deadline_at).text} · ${formatDateTime(workspace.deadline_at)}`
+                  : "No consta"}
               </dd>
             </div>
             <div>

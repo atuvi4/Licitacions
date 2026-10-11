@@ -1,5 +1,6 @@
 "use client";
 
+import { Lock } from "lucide-react";
 import { useCallback, useState } from "react";
 
 import { CitationPicker } from "@/components/CitationPicker";
@@ -31,7 +32,7 @@ import {
 } from "@/lib/issues";
 import type { SourceRefCitation } from "@/lib/requirements";
 import { formatDateTime } from "@/lib/tenders";
-import type { WorkspaceDetail } from "@/lib/workspace";
+import { PREPARE_READ_ONLY_TEXT, type WorkspaceDetail } from "@/lib/workspace";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
@@ -64,12 +65,19 @@ export function IssuesDrawer({
   open,
   onClose,
   context,
+  readOnly = false,
 }: {
   workspace: WorkspaceDetail;
   open: boolean;
   onClose: () => void;
   /** Quan s'obre des d'una entitat, el formulari ja ve preomplert amb ella. */
   context?: IssueContext | null;
+  /**
+   * Sense GO vigent (3B-2 §7.1.6): els dubtes es consulten però no s'hi
+   * escriu. Tot el cos del calaix queda dins d'un `fieldset` desactivat; el
+   * botó de tancar és del `Drawer` i continua funcionant.
+   */
+  readOnly?: boolean;
 }) {
   const { companyId, membership } = useSession();
   const invalidateReadiness = useInvalidateReadiness();
@@ -94,6 +102,13 @@ export function IssuesDrawer({
 
   return (
     <Drawer open={open} onClose={onClose} title="Dubtes i discrepàncies">
+      {readOnly && (
+        <p role="note" className="mb-3 flex items-center gap-2 text-[13px] text-muted">
+          <Lock size={14} strokeWidth={1.5} aria-hidden />
+          {PREPARE_READ_ONLY_TEXT}
+        </p>
+      )}
+      <fieldset disabled={readOnly} className="m-0 min-w-0 border-0 p-0">
       <div className="grid gap-3">
         {canEdit && !creating && (
           <div className="flex flex-wrap items-center gap-2">
@@ -161,6 +176,7 @@ export function IssuesDrawer({
           ))}
         </ul>
       </div>
+      </fieldset>
     </Drawer>
   );
 }

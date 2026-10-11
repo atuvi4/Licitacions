@@ -41,6 +41,11 @@ function document(overrides: Partial<TenderDocumentMeta> = {}): TenderDocumentMe
     url: "upload://x",
     mime_type: "application/pdf",
     published_at: null,
+    removed_at: null,
+    origin: "owner_upload",
+    contribution_status: "not_applicable",
+    duplicate_of_document_id: null,
+    analyzable: true,
     latest_file: {
       file_id: "f-pdf",
       version_number: 1,

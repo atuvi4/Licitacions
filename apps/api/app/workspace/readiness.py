@@ -189,9 +189,9 @@ ECONOMIC_VAT_MISSING = "economic_vat_missing"
 ECONOMIC_UNIT_LIMIT_UNKNOWN = "economic_unit_limit_unknown"
 ECONOMIC_LOT_BUDGET_UNKNOWN = "economic_lot_budget_unknown"
 
-#: Els dos blocadors del dossier que en realitat parlen de la candidatura
+#: Els blocadors del dossier que en realitat parlen de la candidatura
 #: sencera. Es reclassifiquen, no es tornen a calcular.
-_WORKSPACE_CODES = frozenset({"decision_not_go", "analysis_outdated"})
+_WORKSPACE_CODES = frozenset({"decision_not_go", "analysis_missing", "analysis_outdated"})
 
 
 @dataclass(frozen=True, slots=True)

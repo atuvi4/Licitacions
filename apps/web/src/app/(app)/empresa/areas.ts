@@ -7,7 +7,9 @@ import type { CompletenessSection, ExpiryAlert } from "@/lib/types";
  * El hub del perfil (handoff L8) llegeix `completeness.sections[]` tal com
  * l'envia l'API i només hi afegeix text fix per clau: on es va a omplir cada
  * àrea, un subtítol i «què en depèn» en genèric. Cap xifra de licitacions
- * (C-5): el backend no la dona i no s'inventa.
+ * (C-5): el backend no la dona i no s'inventa. El `score` que també envia
+ * l'API no es mostra enlloc (addendum 3B-2, B1): el perfil no és un
+ * formulari que es completa, és el que l'empresa declara.
  */
 
 /** Ruta on s'edita cada àrea (les claus reals de `services/completeness.py`). */
@@ -132,10 +134,32 @@ export function areaLink(key: string): string {
   return SECTION_LINKS[key] ?? "/empresa";
 }
 
+/** Cap verb de «completar» (B1): afegir-hi dades o revisar-les, sense cap percentatge al darrere. */
 export function areaActionLabel(section: Pick<CompletenessSection, "key" | "status">): string {
   if (section.status === "empty") return areaMeta(section.key).add;
-  if (section.status === "partial") return "Completa-ho";
+  if (section.status === "partial") return "Afegeix-hi dades";
   return "Revisa";
+}
+
+/**
+ * Les preferències del Radar (B4): el que el Radar fa servir per prioritzar
+ * (CPV i territoris; la franja d'import viu dins de «solvency», que no es pot
+ * partir). No són coneixement corporatiu i es mostren a part, a `/empresa/radar`.
+ */
+export const RADAR_SECTION_KEYS = ["territories", "cpv"] as const;
+
+export function isRadarSection(key: string): boolean {
+  return (RADAR_SECTION_KEYS as readonly string[]).includes(key);
+}
+
+export function splitRadarSections(sections: CompletenessSection[]): {
+  radar: CompletenessSection[];
+  knowledge: CompletenessSection[];
+} {
+  return {
+    radar: sections.filter((section) => isRadarSection(section.key)),
+    knowledge: sections.filter((section) => !isRadarSection(section.key)),
+  };
 }
 
 export interface AreaGroup {
@@ -174,17 +198,12 @@ export function profileContext(companyName: string, areaCount: number, updatedAt
   return updatedAt ? `${base} · última modificació ${formatDate(updatedAt)}` : base;
 }
 
-/** Peu de la taula: l'únic lloc de la pantalla, amb el recompte lateral, on surt el percentatge. */
-export function footerLine(sections: CompletenessSection[], score: number): string {
+/** Peu de la taula: compta àrees, mai un percentatge de completitud (B1). */
+export function footerLine(sections: CompletenessSection[]): string {
   const attention = sections.filter((section) => section.status !== "complete").length;
   const upToDate = sections.length - attention;
-  const completeness = `${score} % de completitud`;
-  if (attention === 0) return `Les ${sections.length} àrees estan al dia · ${completeness}`;
-  return `${attention} ${attention === 1 ? "àrea demana" : "àrees demanen"} atenció · ${upToDate} al dia · ${completeness}`;
-}
-
-export function isNewProfile(completeness: { score: number; sections?: CompletenessSection[] }): boolean {
-  return completeness.score === 0;
+  if (attention === 0) return `Les ${sections.length} àrees estan al dia`;
+  return `${attention} ${attention === 1 ? "àrea demana" : "àrees demanen"} atenció · ${upToDate} al dia`;
 }
 
 function days(n: number): string {

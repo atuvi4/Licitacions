@@ -31,6 +31,7 @@ from app.core.errors import (
     AnalysisInProgressError,
     AnalysisInputChangedError,
     AnalysisInterruptedError,
+    AnalysisNotAllowedError,
     AnalysisRunReclaimedError,
     AnalysisTooLargeError,
     NoContentToExtractError,
@@ -40,10 +41,16 @@ from app.core.errors import (
 )
 from app.jobs.params import AnalyzeParams, ProcessParams
 from app.jobs.queue import JobCompletion
-from app.models.enums import AnalysisRunStatus, DownloadStatus, JobOutcome, WorkJobType
+from app.models.enums import (
+    AnalysisRunStatus,
+    DownloadStatus,
+    GlobalClassificationTrigger,
+    JobOutcome,
+    WorkJobType,
+)
 from app.models.tenders import Tender, TenderDocument
+from app.services.global_document_classification import classify_safely
 from app.services.requirement_analysis import analyze_tender_requirements
-from app.services.requirement_chunking import DEFAULT_DOCUMENT_TYPES
 from app.services.tender_document_processing import process_tender_document
 from app.services.url_guard import Resolver
 from app.tenders.documents import active_documents
@@ -88,9 +95,14 @@ async def process_tender_documents(ctx: JobContext) -> JobCompletion | None:
         if params.document_ids:
             query = query.where(TenderDocument.id.in_(params.document_ids))
         else:
-            query = query.where(
-                TenderDocument.document_type.in_([t.value for t in DEFAULT_DOCUMENT_TYPES])
-            )
+            # Per defecte: vigents i no alies (un alies te els mateixos bytes que
+            # el seu canonic), de TOTS els tipus (3B-2 §3.2): un plec que el feed
+            # publica mal tipat s'ha de baixar i llegir perque la classificacio
+            # global el pugui reconeixer; el que llegeix l'extraccio ja ho decideix
+            # el resolutor. Un document de l'operador pendent de verificar SI que
+            # es processa: s'ha de poder llegir abans de verificar-lo. El que
+            # alimenta classificacio, analisi i cites es `ANALYZABLE_DOCUMENT`.
+            query = query.where(TenderDocument.duplicate_of_document_id.is_(None))
         # Nomes els ids: un rollback del servei (document ja en curs) expira els
         # objectes de la sessio, i cada document es torna a carregar quan toca.
         document_ids = list(
@@ -149,6 +161,13 @@ async def process_tender_documents(ctx: JobContext) -> JobCompletion | None:
                 all_reused = all_reused and outcome.reused
             await ctx.report_progress(position + 1, len(document_ids))
 
+    # Classificacio global (3B-2 §3.2): determinista i sense cost, en una sessio
+    # neta. Idempotent per empremta; una fallada no tomba el processat ja desat.
+    async with ctx.session_factory() as session:
+        await classify_safely(
+            session, ctx.job.tender_id, GlobalClassificationTrigger.DOCUMENT_PROCESSING
+        )
+
     if any_failed:
         outcome_code = JobOutcome.PARTIAL
     elif all_reused:
@@ -173,7 +192,6 @@ async def analyze_requirements(ctx: JobContext) -> JobCompletion | None:
         return JobCompletion.failed(
             "provider_changed", "El worker no te configurat el proveidor i model demanats."
         )
-
     async with ctx.session_factory() as session:
         tender = await session.get(Tender, ctx.job.tender_id)
         if tender is None:
@@ -193,6 +211,11 @@ async def analyze_requirements(ctx: JobContext) -> JobCompletion | None:
                 chunk_limit=settings.ANALYSIS_MAX_CHUNKS_PER_RUN,
                 resume_from_run_id=params.resume_from_run_id,
             )
+        except AnalysisNotAllowedError as exc:
+            # 3B-2 §6.3 capa 1 i §6.7: la porta unica de l'analisi
+            # (`llm_budget.provider_gate`) ha refusat ABANS de cap crida (simulacio
+            # fora de test, model no pinat, sense preu, pressupost esgotat o massa car).
+            return JobCompletion.failed(exc.code, exc.message)
         except ResumeNotAllowedError:
             # Entre la confirmacio i l'execucio el run ha deixat de ser
             # reprenible. No s'ha enviat res.
@@ -217,7 +240,9 @@ async def analyze_requirements(ctx: JobContext) -> JobCompletion | None:
     run = outcome.run
     if outcome.reused:
         return JobCompletion.succeeded(JobOutcome.REUSED, result_run_id=run.id)
-    if run.status == AnalysisRunStatus.COMPLETED:
+    if run.status in (AnalysisRunStatus.COMPLETED, AnalysisRunStatus.COMPLETED_EMPTY):
+        # `completed_empty` (3B-2 §6.3): la feina s'ha fet i s'ha pagat; el run porta
+        # `needs_review` i no es vigent, pero no es una fallada del job.
         return JobCompletion.succeeded(JobOutcome.EXECUTED, result_run_id=run.id)
     if run.status == AnalysisRunStatus.PARTIAL:
         return JobCompletion.succeeded(JobOutcome.PARTIAL, result_run_id=run.id)

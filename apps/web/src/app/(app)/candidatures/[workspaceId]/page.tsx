@@ -1,6 +1,6 @@
 "use client";
 
-import { Check } from "lucide-react";
+import { Check, Lock } from "lucide-react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
@@ -28,24 +28,69 @@ import {
   cn,
 } from "@/components/ui";
 import { ReadinessControl } from "@/components/ReadinessControl";
-import { ReadinessProvider, useInvalidateReadiness } from "@/components/ReadinessProvider";
+import { ReadinessProvider, useInvalidateReadiness, useReadiness } from "@/components/ReadinessProvider";
 import { decisionAnalysisState, analysisPath, type AnalysisRun } from "@/lib/analysis";
 import { useResource } from "@/lib/hooks";
 import { IssuesDrawer } from "@/components/IssuesDrawer";
-import { PREPARE_AREAS, PREPARE_AREA_LABELS, isPrepareArea, type PrepareArea } from "@/lib/readiness";
+import { PREPARE_AREAS, PREPARE_AREA_LABELS, blockerCount, blockersByArea, isPrepareArea, type PrepareArea } from "@/lib/readiness";
 import {
   WORKSPACE_STATUS_LEVEL,
-  deadlineLevel,
+  deadlineCountdownView,
 } from "@/lib/labels";
 import { formatDateTime } from "@/lib/tenders";
 import {
-  WORKSPACE_STATUS_LABELS,
-  deadlineLabel,
+  workspaceStatusLabel,
   type WorkspaceDecisionType,
   type WorkspaceDetail,
 } from "@/lib/workspace";
 
-import { STEPS, defaultStep, primaryBanner, stepperItems, type CandidatureStep, type StepItem } from "./steps";
+import {
+  PREPARE_READ_ONLY_TEXT,
+  STEPS,
+  defaultStep,
+  prepareMode,
+  primaryBanner,
+  stepperItems,
+  type CandidatureStep,
+  type StepItem,
+} from "./steps";
+
+/**
+ * Preparar i Tancar sense GO (3B-2 §7.1.6, decisió 4): es llegeixen, no
+ * s'editen. Una nota i no un bàner: la pàgina només en té un (handoff §2.4).
+ */
+function ReadOnlyNote({ decideHref }: { decideHref: string }) {
+  return (
+    <p role="note" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-muted">
+      <Lock size={14} strokeWidth={1.5} aria-hidden />
+      <span>{PREPARE_READ_ONLY_TEXT}</span>
+      <span aria-hidden>·</span>
+      <Link href={decideHref} className="font-medium text-brand hover:underline">
+        Ves a Decidir
+      </Link>
+    </p>
+  );
+}
+
+/**
+ * Sense GO, l'àrea es renderitza igual però dins d'un `fieldset` desactivat: el
+ * navegador desactiva tots els controls de dins (botons, camps, selectors) i
+ * cap crida mutadora pot sortir de la interfície. Els enllaços continuen
+ * funcionant: es pot consultar. El backend ho imposa igual (403
+ * `decision_required`), aquí només s'evita oferir el que no es pot fer.
+ */
+function PrepareArea({ editable, children }: { editable: boolean; children: ReactNode }) {
+  return (
+    <fieldset
+      disabled={!editable}
+      data-prepare-mode={editable ? "edit" : "read-only"}
+      aria-label="Preparació de la candidatura"
+      className="m-0 min-w-0 space-y-5 border-0 p-0"
+    >
+      {children}
+    </fieldset>
+  );
+}
 
 /**
  * Decidir → Preparar → Tancar. El progrés surt de l'estat real; el pas que
@@ -260,6 +305,7 @@ function WorkspaceView() {
     companyId ? `/companies/${companyId}/workspaces/${params.workspaceId}` : null,
   );
   const invalidateReadiness = useInvalidateReadiness();
+  const readiness = useReadiness();
   // Una àrea amb feina sense desar pot aturar el canvi de pestanya. La secció
   // registra la pregunta; les pestanyes la fan abans de navegar.
   const leaveGuard = useRef<(() => Promise<boolean>) | null>(null);
@@ -344,8 +390,17 @@ function WorkspaceView() {
   }
 
   const step = paramStep ?? pinned ?? defaultStep(data.status);
-  const items = stepperItems(data);
+  // Un sol comptador de pendents (A15): el de la preparació final, el mateix que
+  // el distintiu del capçal i que Tancar; `null` mentre no se sap.
+  const readinessBlockers =
+    readiness.data && Array.isArray(readiness.data.findings) ? blockerCount(readiness.data.findings) : null;
+  // Recompte per àrea (B6): el comptador del capçal és de les quatre àrees; cada pestanya diu el seu.
+  const areaBlockers =
+    readiness.data && Array.isArray(readiness.data.findings) ? blockersByArea(readiness.data.findings) : null;
+  const items = stepperItems(data, readinessBlockers);
   const banner = primaryBanner(data);
+  // La porta d'edició de Preparar i Tancar: només un GO vigent (3B-2 §7.1.6).
+  const editable = prepareMode(data) === "edit";
   const signerName = user?.full_name || user?.email || "tu";
   // Qualsevol desat d'una secció ja passava per aquí; ara també torna a
   // preguntar la preparació final, perquè el capçal no quedi dient el que era
@@ -382,7 +437,8 @@ function WorkspaceView() {
     setPinned("tancar");
     router.replace(hrefFor("tancar"), { scroll: false });
   };
-  const days = deadlineLabel(data.days_remaining);
+  // El comptador de `lib/deadline` sobre `deadline_at` (A11): el mateix nombre que a la fitxa.
+  const countdown = deadlineCountdownView(data.deadline_at);
 
   return (
     <>
@@ -403,24 +459,30 @@ function WorkspaceView() {
         }
         actions={
           <>
-            <StatusPill level={WORKSPACE_STATUS_LEVEL[data.status]}>{WORKSPACE_STATUS_LABELS[data.status]}</StatusPill>
+            {/* L'estat `analysis` s'etiqueta segons l'anàlisi real del plec (A13). */}
+            <StatusPill level={WORKSPACE_STATUS_LEVEL[data.status]}>{workspaceStatusLabel(data)}</StatusPill>
             <ReadinessControl />
-            <LinkButton href={`/licitacions/${data.tender_id}`} variant="secondary" size="sm">
-              Obre la fitxa de la licitació →
-            </LinkButton>
           </>
         }
       />
 
       <div className="space-y-5">
+        {/* Sempre a la capçalera, fora dels badges, a Decidir, Preparar i Tancar (A16). */}
+        <p className="-mt-2 text-[13.5px]">
+          <Link href={`/licitacions/${data.tender_id}`} className="font-medium text-brand hover:underline">
+            Veure la licitació
+          </Link>
+          <span className="text-muted"> · la fitxa, els plecs i l&apos;anàlisi del plec</span>
+        </p>
+
         <PhaseStepper items={items} current={step} hrefFor={hrefFor} beforeNavigate={() => leaveGuard.current?.() ?? true} />
 
         <p className="flex flex-wrap items-center gap-2 text-[13.5px] text-ink">
           <span className="text-muted">Termini:</span>
           {data.deadline_at ? (
             <>
-              <StatusPill level={deadlineLevel(data.days_remaining)} size="sm">
-                {days ?? formatDateTime(data.deadline_at)}
+              <StatusPill level={countdown.level} size="sm">
+                {countdown.text}
               </StatusPill>
               <span>{formatDateTime(data.deadline_at)}</span>
             </>
@@ -474,7 +536,11 @@ function WorkspaceView() {
                 licitació, no una segona navegació principal. */}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Tabs
-                items={PREPARE_AREAS.map((key) => ({ key, label: PREPARE_AREA_LABELS[key] }))}
+                items={PREPARE_AREAS.map((key) => ({
+                  key,
+                  label: PREPARE_AREA_LABELS[key],
+                  ...(areaBlockers && areaBlockers[key] > 0 ? { count: areaBlockers[key], countLevel: "blocking" as const } : {}),
+                }))}
                 value={area}
                 param="area"
                 history="push"
@@ -490,27 +556,40 @@ function WorkspaceView() {
               </Button>
             </div>
 
+            {!editable && <ReadOnlyNote decideHref={hrefFor("decidir")} />}
+
             <IssuesDrawer
               workspace={data}
               open={issuesOpen}
               onClose={() => setIssuesOpen(false)}
+              readOnly={!editable}
             />
 
-            {area === "solucio" && <TechnicalSolutionSection workspace={data} registerLeaveGuard={registerLeaveGuard} />}
-            {area === "oferta" && <EconomicOfferSection workspace={data} registerLeaveGuard={registerLeaveGuard} />}
-            {area === "dossier" && <DossierSection workspace={data} onChange={refresh} onAdvanced={onAdvanced} />}
-            {area === "pla" && (
-              <>
-                <WorkPlanDeadlines workspace={data} />
-                <ChecklistSection workspace={data} onChange={refresh} />
-                <TasksSection workspace={data} onChange={refresh} />
-                <NotesSection workspace={data} onChange={refresh} />
-              </>
-            )}
+            <PrepareArea editable={editable}>
+              {area === "solucio" && <TechnicalSolutionSection workspace={data} registerLeaveGuard={registerLeaveGuard} />}
+              {area === "oferta" && <EconomicOfferSection workspace={data} registerLeaveGuard={registerLeaveGuard} />}
+              {area === "dossier" && <DossierSection workspace={data} onChange={refresh} onAdvanced={onAdvanced} />}
+              {area === "pla" && (
+                <>
+                  <WorkPlanDeadlines workspace={data} />
+                  <ChecklistSection workspace={data} onChange={refresh} />
+                  <TasksSection workspace={data} onChange={refresh} />
+                  <NotesSection workspace={data} onChange={refresh} />
+                </>
+              )}
+            </PrepareArea>
           </>
         )}
 
-        {step === "tancar" && <SubmissionPackageSection workspace={data} onChange={refresh} signerName={signerName} />}
+        {step === "tancar" && (
+          <>
+            {/* El paquet de presentació també és una generació del pas Preparar (§7.1.6). */}
+            {!editable && <ReadOnlyNote decideHref={hrefFor("decidir")} />}
+            <PrepareArea editable={editable}>
+              <SubmissionPackageSection workspace={data} onChange={refresh} signerName={signerName} />
+            </PrepareArea>
+          </>
+        )}
 
         <Card>
           <CardHeader title="Enllaços" />

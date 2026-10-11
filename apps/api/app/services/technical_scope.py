@@ -164,7 +164,7 @@ async def _requirements(
     que es exactament el que ha de passar.
     """
     effective = await manual_requirement.effective_requirements(
-        session, workspace.tender_id
+        session, workspace.tender_id, workspace.company_id
     )
     return tuple(
         requirement

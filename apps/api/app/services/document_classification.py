@@ -59,8 +59,9 @@ from app.models.tender_documents import (
     TenderDocumentPage,
 )
 from app.models.tenders import Tender, TenderDocument
+from app.services.document_roles import DocumentNotProcessedError, current_shas
 from app.services.storage import get_storage
-from app.tenders.documents import ACTIVE_DOCUMENT, removed_document_ids
+from app.tenders.documents import ANALYZABLE_DOCUMENT, removed_document_ids
 
 
 @dataclass(slots=True)
@@ -75,10 +76,11 @@ class _Input:
 async def _inputs(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> list[_Input]:
-    """Els documents VIGENTS amb contingut desat, en l'ordre en que van arribar.
+    """Els documents ANALITZABLES amb contingut desat, en l'ordre en que van arribar.
 
     Un plec retirat de la font no es classifica ni apareix entre els rols
-    vigents; les runs de classificacio anteriors el conserven tal com era.
+    vigents; les runs de classificacio anteriors el conserven tal com era. Un
+    alies o una aportacio sense verificar tampoc (3B-2 §2.3).
     """
     rows = (
         await session.execute(
@@ -91,7 +93,7 @@ async def _inputs(
                 ),
             )
             .join(TenderDocumentContent, TenderDocumentContent.id == TenderDocumentFile.content_id)
-            .where(TenderDocument.tender_id == tender_id, ACTIVE_DOCUMENT)
+            .where(TenderDocument.tender_id == tender_id, ANALYZABLE_DOCUMENT)
         )
     ).all()
     if not rows:
@@ -333,11 +335,15 @@ async def classify_tender(
         for item in inputs:
             document = item.document
             decided = decisions.get(document.id)
-            if decided is not None:
+            if decided is not None and decided.content_sha256 == item.content.sha256:
                 document.document_type = ROLE_TO_DOCUMENT_TYPE[decided.role]
                 continue
-            managed = document.document_type == TenderDocumentType.OTHER or (
-                document.document_type == previous_types.get(document.id)
+            # Una decisio d'una versio anterior del fitxer (0059) ja no mana: el
+            # document torna a ser gestionat per la classificacio.
+            managed = (
+                decided is not None
+                or document.document_type == TenderDocumentType.OTHER
+                or document.document_type == previous_types.get(document.id)
             )
             if managed:
                 document.document_type = result.decisions[str(document.id)].document_type
@@ -364,8 +370,13 @@ class ClassifiedDocument:
     needs_review: bool
 
     @property
+    def decision_is_stale(self) -> bool:
+        """La decisio es d'una versio anterior del fitxer: ja no mana (0059)."""
+        return self.decision is not None and self.decision.content_sha256 != self.sha256
+
+    @property
     def role(self) -> DocumentRole | None:
-        if self.decision is not None:
+        if self.decision is not None and not self.decision_is_stale:
             return self.decision.role
         return self.suggestion.role if self.suggestion else None
 
@@ -402,6 +413,7 @@ async def load_view(
     for item in inputs:
         suggestion = suggestions.get(item.document.id)
         decision = decisions.get(item.document.id)
+        stale = decision is not None and decision.content_sha256 != item.content.sha256
         documents.append(
             ClassifiedDocument(
                 document=item.document,
@@ -410,9 +422,11 @@ async def load_view(
                 sha256=item.content.sha256,
                 suggestion=suggestion,
                 decision=decision,
-                needs_review=decision is None
+                # Una decisio d'una versio anterior no tanca la revisio: cal tornar-hi.
+                needs_review=(decision is None or stale)
                 and (
-                    suggestion is None
+                    stale
+                    or suggestion is None
                     or suggestion.confidence != "high"
                     or item.document.id in flagged
                 ),
@@ -434,7 +448,12 @@ async def decide_role(
 
     Fixar-lo el fa definitiu per a l'analisi: el document passa al tipus del rol,
     encara que el classificador l'hagues deixat fora (per exemple, perque semblava
-    una copia). Qui ho fixa en respon. La decisio sobreviu a les reclassificacions.
+    una copia). Qui ho fixa en respon. La decisio sobreviu a les reclassificacions,
+    pero no a un fitxer nou: s'ancora a la versio vigent (`content_sha256`, 0059).
+
+    **Mai** escriu `document_type` en una licitacio que no es de l'empresa
+    (`_owns`): alla el tipus es del feed, i la decisio es nomes l'override de
+    l'empresa que llegeix el resolutor (`app/services/document_roles.py`).
     """
     document = await session.scalar(
         sa.select(TenderDocument).where(
@@ -443,6 +462,9 @@ async def decide_role(
     )
     if document is None:
         raise NotFoundError("Document no trobat.")
+    sha = (await current_shas(session, [document_id])).get(document_id)
+    if sha is None:
+        raise DocumentNotProcessedError("El document encara no te cap fitxer: no es pot decidir.")
     decision = await session.scalar(
         sa.select(TenderDocumentRoleDecision).where(
             TenderDocumentRoleDecision.company_id == company_id,
@@ -453,6 +475,7 @@ async def decide_role(
         decision = TenderDocumentRoleDecision(company_id=company_id, tender_document_id=document_id)
         session.add(decision)
     decision.role = role
+    decision.content_sha256 = sha
     decision.decided_by = user.id
     decision.decided_at = datetime.now(UTC)
     if _owns(tender, company_id):

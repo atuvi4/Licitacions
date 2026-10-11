@@ -9,9 +9,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_serializer, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
-from app.services.tender_analysis import AnalysisStatus, summary_of
+from app.services.tender_analysis import AnalysisStatus, PackageState, summary_of
 from app.workspace.decision import AnalysisDecisionWarnings
 
 WarningCode = Literal["analysis_missing", "analysis_stale", "blocker_potential", "deadline_passed"]
@@ -49,6 +56,10 @@ class AnalysisDecisionSnapshotV1(BaseModel):
     blocker_potential_count: int | None = None
     findings_count: int | None = None
     warnings: list[WarningCode]
+    #: 3B-2 §4.4: l'estat del paquet documental que veia qui decidia i els forats
+    #: oberts. Opcionals: les fotografies anteriors no en tenen.
+    package_status: Literal["complete", "incomplete", "unknown"] | None = None
+    open_gap_count: int | None = Field(default=None, ge=0)
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -97,15 +108,24 @@ class AnalysisDecisionSnapshotV1(BaseModel):
 
 
 def build_snapshot(
-    status: AnalysisStatus, warnings: AnalysisDecisionWarnings
+    status: AnalysisStatus,
+    warnings: AnalysisDecisionWarnings,
+    package: PackageState | None = None,
 ) -> AnalysisDecisionSnapshotV1:
+    # 3B-2 §4.4: l'estat del paquet es del plec; hi es amb run o sense.
+    package_fields: dict[str, Any] = (
+        {"package_status": package.status, "open_gap_count": len(package.gaps)}
+        if package is not None
+        else {}
+    )
     run = status.run
     if run is None:
         return AnalysisDecisionSnapshotV1(
-            schema_version=1, state="absent", warnings=warnings.codes()
+            schema_version=1, state="absent", warnings=warnings.codes(), **package_fields
         )
     summary = summary_of(run)
     return AnalysisDecisionSnapshotV1(
+        **package_fields,
         schema_version=1,
         state="stale" if status.stale else "current",
         rules_version=run.rules_version,

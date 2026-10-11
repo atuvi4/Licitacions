@@ -8,10 +8,11 @@ Flux:
    * rol dins `ANALYSIS_CONFIRM_ROLES` (configuracio), si no 403;
    * el quote ha d'estar obert i sense caducar;
    * es **torna a calcular** el preview i es compara amb el desat (versio del
-     calcul, fingerprint, chunking, pagines, chunks, perfil, proveidor, model).
-     Si res ha canviat no es crea res: es desa un preview nou i l'usuari l'ha de
-     tornar a confirmar;
-   * limit de chunks i limit d'analisis pendents de l'empresa;
+     calcul, fingerprint, chunking, pagines, chunks, perfil, proveidor, model,
+     identitat d'analisi i prerequisits). Si alguna cosa ha canviat no es crea res:
+     es desa un preview nou i l'usuari l'ha de tornar a confirmar;
+   * prerequisits de 3B-2 §6.1 (`blocking_reason`, 422 amb aquest codi), limit de
+     chunks i limit d'analisis pendents de l'empresa;
    * es crea la `JobRequest` de 7A amb l'empremta confirmada, i el quote queda
      `confirmed` a la mateixa transaccio.
 
@@ -34,11 +35,13 @@ from app.ai.provider import StructuredLLMProvider, get_provider
 from app.core.config import settings
 from app.core.errors import (
     AnalysisInputChangedError,
+    AnalysisNotAllowedError,
     AnalysisTooLargeError,
     CompanyActiveLimitError,
     NotFoundError,
     NothingAnalyzableError,
     PermissionDeniedError,
+    PublicTenderCanonicalOnlyError,
     QuoteNotOpenError,
     ResumeNotAllowedError,
     ValidationError,
@@ -50,7 +53,13 @@ from app.models.enums import AnalysisQuoteStatus, JobRequestStatus, WorkJobType
 from app.models.identity import Company
 from app.models.jobs import JobRequest
 from app.models.tenders import Tender
-from app.services.analysis_planning import AnalysisPreview, build_preview, resume_identity
+from app.services.analysis_planning import (
+    ANALYSIS_TOO_LARGE,
+    AnalysisPreview,
+    build_preview,
+    prerequisites_identity,
+    resume_identity,
+)
 from app.tenders.visibility import visible_to_company
 
 
@@ -109,6 +118,7 @@ def _quote_from_preview(
         force=preview.force,
         document_ids=preview.document_ids,
         input_fingerprint=preview.input_fingerprint,
+        analysis_identity=preview.analysis_identity,
         pages_per_chunk=preview.pages_per_chunk,
         overlap_pages=preview.overlap_pages,
         documents=preview.documents,
@@ -125,6 +135,9 @@ def _quote_from_preview(
         max_chunks=preview.max_chunks,
         allowed=preview.allowed,
         blocking_reason=preview.blocking_reason,
+        prerequisites=preview.prerequisites or None,
+        estimated_cost_usd=preview.estimated_cost_usd,
+        accept_incomplete_package=preview.accept_incomplete_package,
         status=AnalysisQuoteStatus.OPEN,
         expires_at=now + timedelta(seconds=settings.ANALYSIS_QUOTE_TTL_SECONDS),
     )
@@ -156,7 +169,37 @@ def _quote_identity(quote: AnalysisQuote) -> tuple:
         quote.provider,
         quote.model,
         resume_identity(resume_run_of(quote), quote.chunks_to_send),
+        quote.analysis_identity,
+        prerequisites_identity(quote.prerequisites),
     )
+
+
+def acknowledged_quality(quote: AnalysisQuote) -> bool:
+    """L'acceptacio de qualitat es desa dins dels prerequisits de la quota."""
+    return bool((quote.prerequisites or {}).get("acknowledge_quality"))
+
+
+async def _visible_owner(
+    session: AsyncSession, *, company_id: uuid.UUID, tender_id: uuid.UUID
+) -> uuid.UUID | None:
+    """El propietari de la licitacio (NUL si es publica), nomes si l'empresa la veu.
+
+    La visibilitat es comprova PRIMER, i per la regla unica de
+    `app/tenders/visibility.py`. `nothing_analyzable`, el recompte de documents,
+    les pagines, els tokens i el cost son respostes sobre una licitacio: donar-ne
+    cap sobre la d'una altra empresa ja en confirma l'existencia i l'estat. Tambe
+    el 422 `public_tender_canonical_only`: diria que la licitacio es publica.
+    """
+    row = (
+        await session.execute(
+            sa.select(Tender.owner_company_id).where(
+                Tender.id == tender_id, visible_to_company(company_id)
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        raise NotFoundError("Licitacio no trobada.")
+    return row.owner_company_id
 
 
 async def _preview(
@@ -169,19 +212,11 @@ async def _preview(
     profile: ExtractorProfile,
     provider_factory: Callable[[], StructuredLLMProvider],
     resume_from_run_id: uuid.UUID | None = None,
+    accept_incomplete_package: bool = False,
+    acknowledge_quality: bool = False,
 ) -> AnalysisPreview:
-    """El volum de l'analisi, i abans de res de qui es la licitacio.
-
-    La visibilitat es comprova PRIMER, i per la regla unica de
-    `app/tenders/visibility.py`. `nothing_analyzable`, el recompte de documents,
-    les pagines, els tokens i el cost son respostes sobre una licitacio: donar-ne
-    cap sobre la d'una altra empresa ja en confirma l'existencia i l'estat.
-    """
-    visible = await session.scalar(
-        sa.select(Tender.id).where(Tender.id == tender_id, visible_to_company(company_id))
-    )
-    if visible is None:
-        raise NotFoundError("Licitacio no trobada.")
+    """El volum de l'analisi, i abans de res de qui es la licitacio (`_visible_owner`)."""
+    await _visible_owner(session, company_id=company_id, tender_id=tender_id)
     return await build_preview(
         session,
         tender_id,
@@ -190,7 +225,14 @@ async def _preview(
         force=force,
         document_ids=[uuid.UUID(str(item)) for item in document_ids],
         resume_from_run_id=resume_from_run_id,
+        accept_incomplete_package=accept_incomplete_package,
+        acknowledge_quality=acknowledge_quality,
     )
+
+
+def product_profile() -> ExtractorProfile:
+    """El perfil de producte (`REQUIREMENTS_PRODUCT_PROFILE`, validat en arrencar)."""
+    return PROFILES[settings.REQUIREMENTS_PRODUCT_PROFILE]
 
 
 async def create_quote(
@@ -201,26 +243,54 @@ async def create_quote(
     tender_id: uuid.UUID,
     force: bool = False,
     document_ids: list[uuid.UUID] | None = None,
-    profile: ExtractorProfile = DEFAULT_PROFILE,
+    profile: str | None = None,
     provider_factory: Callable[[], StructuredLLMProvider] = get_provider,
     resume_from_run_id: uuid.UUID | None = None,
+    accept_incomplete_package: bool = False,
+    acknowledge_quality: bool = False,
 ) -> AnalysisQuote:
     """Calcula i desa el preview. Nomes lectures del plec; cap proveidor.
 
     `resume_from_run_id`: represa d'un run parcial; el quote compta nomes els
     chunks fallits. Una represa no es `force`.
+
+    Frontera (3B-2 §6.4): en una licitacio PUBLICA el tenant no tria res del que
+    entra al run global. `force`, `document_ids` o qualsevol `profile` (fins i tot
+    el de producte) responen 422 `public_tender_canonical_only`; la seleccio es la
+    canonica del servidor i el perfil el de producte. En una licitacio MANUAL
+    propia, com abans: el propietari tria documents, `force` i perfil (`profile`,
+    per defecte el de producte).
+
+    `accept_incomplete_package` i `acknowledge_quality` (§6.1.3-4) no son inputs del
+    run: es permeten en totes dues i queden desats a la quota.
     """
     if resume_from_run_id is not None and force:
         raise ValidationError("Una represa no pot ser `force`: nomes envia els chunks fallits.")
+    owner = await _visible_owner(session, company_id=company_id, tender_id=tender_id)
+    if owner is None and (force or document_ids or profile is not None):
+        raise PublicTenderCanonicalOnlyError(
+            "En una licitacio publica l'analisi es la canonica: cap empresa no en tria "
+            "els documents, el perfil ni la pot forcar."
+        )
+    chosen = product_profile()
+    if profile is not None:
+        chosen = PROFILES.get(profile.strip().lower())
+        if chosen is None:
+            raise ValidationError(
+                f"Perfil d'extraccio desconegut: {profile!r}.",
+                details={"profiles": sorted(PROFILES)},
+            )
     preview = await _preview(
         session,
         company_id=company_id,
         tender_id=tender_id,
         force=force,
         document_ids=document_ids or [],
-        profile=profile,
+        profile=chosen,
         provider_factory=provider_factory,
         resume_from_run_id=resume_from_run_id,
+        accept_incomplete_package=accept_incomplete_package,
+        acknowledge_quality=acknowledge_quality,
     )
     if preview.is_empty:
         raise NothingAnalyzableError(
@@ -306,6 +376,10 @@ async def confirm_quote(
 
     profile = PROFILES.get(quote.profile, DEFAULT_PROFILE)
     resume_from = resume_run_of(quote)
+    acceptances = {
+        "accept_incomplete_package": bool(quote.accept_incomplete_package),
+        "acknowledge_quality": acknowledged_quality(quote),
+    }
     try:
         preview = await _preview(
             session,
@@ -316,6 +390,7 @@ async def confirm_quote(
             profile=profile,
             provider_factory=provider_factory,
             resume_from_run_id=resume_from,
+            **acceptances,
         )
     except ResumeNotAllowedError:
         # El run ja no es pot reprendre (n'hi ha un de mes nou, han canviat els
@@ -344,8 +419,16 @@ async def confirm_quote(
             )
         )
     if not preview.allowed:
-        raise AnalysisTooLargeError(
-            f"L'analisi te {preview.chunks_to_send} chunks i el maxim es {preview.max_chunks}."
+        if preview.blocking_reason == ANALYSIS_TOO_LARGE:
+            raise AnalysisTooLargeError(
+                f"L'analisi te {preview.chunks_to_send} chunks i el maxim es {preview.max_chunks}."
+            )
+        # Un prerequisit de §6.1 no es compleix (i ja ho deia el preview, perque la
+        # identitat inclou els incompliments): no es crea res.
+        raise AnalysisNotAllowedError(
+            "Aquesta analisi no es pot demanar ara mateix.",
+            blocking_reason=preview.blocking_reason or "analysis_not_allowed",
+            details={"failed": list((preview.prerequisites or {}).get("failed") or [])},
         )
 
     confirmed_quote_id = quote.id
@@ -402,6 +485,7 @@ async def confirm_quote(
             profile=profile,
             provider_factory=provider_factory,
             resume_from_run_id=resume_from,
+            **acceptances,
         )
         raise PreviewChangedError(
             await _replace(

@@ -39,6 +39,7 @@ from app.models.tenders import Tender, TenderLot
 from app.models.workspace import WorkspaceTechnicalSolution
 from app.services import bid_workspace as workspace_service
 from app.workspace.checklist import checklist_title
+from tests.conftest import grant_go
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                      #
@@ -86,6 +87,7 @@ async def _requirement(
         schema_version="requirements-schema-v1",
         provider="fake",
         model="fake",
+        run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
         is_current=True,
     )
     db.add(run)
@@ -118,6 +120,7 @@ async def workspace(db, tenant_a):
     outcome = await workspace_service.create_workspace(
         db, company_id=company.id, tender=tender, user_id=user.id
     )
+    await grant_go(db, outcome.workspace, user)
     return outcome.workspace
 
 
@@ -429,6 +432,7 @@ async def test_un_requisit_d_un_altre_lot_es_rebutjat(client_a, db, tenant_a):
             db, company_id=company.id, tender=tender, user_id=user.id, tender_lot_id=lots[0].id
         )
     ).workspace
+    await grant_go(db, nostre, user)
     alie = await _requirement(db, tender, title="Requisit del lot 2")
     await db.execute(
         sa.update(Requirement)
@@ -454,6 +458,7 @@ async def test_un_requisit_general_val_per_a_un_workspace_de_lot(client_a, db, t
             db, company_id=company.id, tender=tender, user_id=user.id, tender_lot_id=lot.id
         )
     ).workspace
+    await grant_go(db, nostre, user)
     general = await _requirement(db, tender, title="Requisit general")
 
     response = await create_from_requirement(client_a, nostre, general.id)
@@ -635,6 +640,7 @@ async def test_el_patch_no_toca_un_altre_workspace(client_a, db, tenant_a, works
             db, company_id=company.id, tender=other_tender, user_id=user.id
         )
     ).workspace
+    await grant_go(db, other, user)
     solution = await a_solution(client_a, other)
 
     aliena = await client_a.patch(url(workspace, solution["id"]), json={"title": "Canviat"})
@@ -917,6 +923,7 @@ async def test_una_solucio_d_una_altra_empresa_no_es_llegible(
             db, company_id=other_company.id, tender=other_tender, user_id=other_user.id
         )
     ).workspace
+    await grant_go(db, other_workspace, other_user)
     await a_solution(client_b, other_workspace)
 
     response = await client_a.get(url(other_workspace))
@@ -934,6 +941,7 @@ async def test_una_solucio_d_una_altra_empresa_no_es_modificable(
             db, company_id=other_company.id, tender=other_tender, user_id=other_user.id
         )
     ).workspace
+    await grant_go(db, other_workspace, other_user)
     solution = await a_solution(client_b, other_workspace)
 
     response = await client_a.patch(
@@ -955,6 +963,7 @@ async def test_un_id_alie_no_diu_si_existeix(client_a, client_b, db, tenant_b, w
             db, company_id=other_company.id, tender=other_tender, user_id=other_user.id
         )
     ).workspace
+    await grant_go(db, other_workspace, other_user)
     solution = await a_solution(client_b, other_workspace)
 
     alie = await client_a.patch(url(workspace, solution["id"]), json={"title": "Canviat"})
@@ -1017,6 +1026,7 @@ async def test_el_llistat_nomes_porta_les_d_aquesta_candidatura(
             db, company_id=company.id, tender=other_tender, user_id=user.id
         )
     ).workspace
+    await grant_go(db, other, user)
     await a_solution(client_a, workspace, title="D'aquesta")
     await a_solution(client_a, other, title="De l'altra")
 

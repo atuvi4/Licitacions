@@ -580,13 +580,6 @@ export const FLAG_LABELS: Record<KnowledgeFlag, string> = {
   scope_unknown: "Abast desconegut",
 };
 
-/** Què vol dir cada pendent, en una frase, per a la vista «Pendents de validar». */
-export const FLAG_EXPLANATIONS: Record<KnowledgeFlag, string> = {
-  evidence_missing: "Encara no hi ha cap document que ho acrediti.",
-  to_verify: "Ja té evidència enllaçada: falta que algú la doni per bona.",
-  scope_unknown: "No se sap quines línies de servei cobreix. El text de l'abast no es fa servir per deduir-ho.",
-};
-
 export interface SnapshotIndex {
   claims: Map<string, KnowledgeClaim>;
   pending: Map<string, PendingItem[]>;
@@ -656,80 +649,6 @@ export function entryState(entry: KnowledgeEntry | undefined): EffectiveState {
 
 export function findEntry(snapshot: KnowledgeSnapshot | null, section: SnapshotSection, key: string): KnowledgeEntry | undefined {
   return snapshot?.[section]?.find((entry) => entry.key === key);
-}
-
-/* ----- Pendents de validar -------------------------------------------------- */
-
-/** Els papers d'un partner i els productes d'una solució no tenen pantalla pròpia: no es llisten sols. */
-const NESTED_SUBJECTS = new Set(["partner_role", "solution_product"]);
-/** La fotografia anomena «execution_reference» el que l'API de verificacio anomena «project». */
-const SNAPSHOT_SUBJECT_KINDS: Record<string, RecordKind> = { execution_reference: "project" };
-
-export interface PendingGroup {
-  id: string;
-  subject: RecordKind;
-  key: string;
-  recordId: string;
-  kinds: PendingKind[];
-}
-
-/** Un bloc per dada: «ENS: falta evidència i abast desconegut», no dues files. */
-export function groupPendingRecords(snapshot: KnowledgeSnapshot | null): PendingGroup[] {
-  const groups = new Map<string, PendingGroup>();
-  for (const item of snapshot?.pending_validation ?? []) {
-    if (item.kind === "historic_candidate" || !item.record_id || NESTED_SUBJECTS.has(item.subject)) continue;
-    const subject = (SNAPSHOT_SUBJECT_KINDS[item.subject] ?? item.subject) as RecordKind;
-    const id = `${subject}:${item.record_id}`;
-    const group = groups.get(id) ?? { id, subject, key: item.key, recordId: item.record_id, kinds: [] };
-    group.kinds.push(item.kind);
-    groups.set(id, group);
-  }
-  return [...groups.values()];
-}
-
-export function pendingCandidates(snapshot: KnowledgeSnapshot | null): PendingItem[] {
-  return (snapshot?.pending_validation ?? []).filter((item) => item.kind === "historic_candidate");
-}
-
-export interface KnowledgeSummary {
-  verified: number;
-  declared: number;
-  pending: number;
-  historic: number;
-  unknown: number;
-}
-
-/**
- * El resum de dalt. «Desconegut» només compta el que té una llista tancada
- * (normes, fets operatius i línies de servei): del que és obert (solucions,
- * productes, partners) no es pot dir què falta.
- */
-export function summarize(snapshot: KnowledgeSnapshot | null, vocabulary: Vocabulary | null): KnowledgeSummary {
-  const summary: KnowledgeSummary = { verified: 0, declared: 0, pending: 0, historic: 0, unknown: 0 };
-  if (!snapshot) return summary;
-  // Una dada compta una vegada: una persona amb tres perfils surt a tres entrades.
-  const counted = new Set<string>();
-  for (const section of SECTIONS) {
-    for (const entry of snapshot[section] ?? []) {
-      for (const claim of entry.claims) {
-        if (counted.has(claim.record_id)) continue;
-        counted.add(claim.record_id);
-        if (claim.source === "current_verified") summary.verified += 1;
-        else summary.declared += 1;
-      }
-    }
-  }
-  summary.pending = groupPendingRecords(snapshot).length;
-  summary.historic = pendingCandidates(snapshot).length;
-  const closed: Array<[SnapshotSection, string[]]> = [
-    ["certifications", vocabulary?.standards.map((item) => item.code) ?? []],
-    ["facts", [...FACT_KEYS]],
-    ["services", vocabulary?.service_lines.map((item) => item.code) ?? []],
-  ];
-  for (const [section, keys] of closed) {
-    summary.unknown += keys.filter((key) => !findEntry(snapshot, section, key)).length;
-  }
-  return summary;
 }
 
 /* ----- Candidats de l'històric ---------------------------------------------- */

@@ -41,6 +41,7 @@ import {
   STRENGTH_LEVEL,
 } from "@/lib/labels";
 import type { Assessment, AssessmentResult, Compliance } from "@/lib/compliance";
+import type { RequirementAnalysisState } from "@/lib/requirements";
 
 const EVIDENCE_DICTIONARIES = { types: INSURANCE_TYPE_LABELS as Record<string, string>, kinds: INSURANCE_LIMIT_KIND_LABELS };
 
@@ -172,9 +173,10 @@ function AssessmentRow({
             </ul>
           )}
           {assessment.evidence.length === 0 && result === "unknown" && (
+            // Cap verb d'onboarding (addendum 3B-2, B1): la dada que falta es declara al coneixement.
             <p className="mt-1 text-caption">
-              <Link href="/empresa" className={LINK}>
-                Completa el perfil →
+              <Link href="/empresa/coneixement" className={LINK}>
+                Afegeix la dada al perfil →
               </Link>
             </p>
           )}
@@ -301,6 +303,7 @@ export function ComplianceSection({
   loading,
   error,
   prefitScore,
+  analysisState,
   onReload,
 }: {
   tenderId: string;
@@ -309,6 +312,12 @@ export function ComplianceSection({
   loading: boolean;
   error: string | null;
   prefitScore: number | null;
+  /**
+   * Si hi ha anàlisi del plec vigent (A7). Sense (`absent`) o obsoleta (`stale`)
+   * no s'ofereix calcular ni recalcular el compliment: el servidor ho refusaria
+   * (422 `no_requirements_to_assess`) o compararia contra uns requisits caducats.
+   */
+  analysisState: RequirementAnalysisState;
   onReload: () => Promise<void>;
 }) {
   const [running, setRunning] = useState(false);
@@ -365,6 +374,11 @@ export function ComplianceSection({
   })).filter((group) => group.items.length > 0);
   const hasAttention = groups.some((group) => !group.collapsible);
   const analyseLabel = run ? "Recalcula" : "Analitza compliment";
+  const analysisCurrent = analysisState === "current";
+  const analysisGate =
+    analysisState === "stale"
+      ? "Cal una anàlisi del plec vigent per recalcular el compliment: l'anàlisi actual és obsoleta. Torna a analitzar el plec a l'apartat de dalt."
+      : "Cal una anàlisi del plec vigent per calcular el compliment: primer analitza el plec a l'apartat de dalt.";
 
   const counters = run
     ? [
@@ -385,11 +399,15 @@ export function ComplianceSection({
           title="Compliment de l'empresa"
           description="Compara els requisits del plec amb el que pot acreditar l'empresa. Comparació determinista amb el perfil."
           action={
-            <Button variant={run ? "secondary" : "primary"} onClick={() => void analyse(Boolean(run))} disabled={running || loading} loading={running}>
-              {analyseLabel}
-            </Button>
+            analysisCurrent ? (
+              <Button variant={run ? "secondary" : "primary"} onClick={() => void analyse(Boolean(run))} disabled={running || loading} loading={running}>
+                {analyseLabel}
+              </Button>
+            ) : undefined
           }
         />
+
+        {!analysisCurrent && <p className="border-b border-border px-5 py-3 text-[13px] text-muted">{analysisGate}</p>}
 
         {(error || actionError) && !failedReview && <ErrorNotice message={actionError ?? error ?? ""} />}
 
@@ -399,9 +417,11 @@ export function ComplianceSection({
             kicker="Sense avaluar"
             className="m-4"
             action={
-              <Button size="sm" variant="primary" onClick={() => void analyse(Boolean(run))} disabled={running || loading}>
-                {analyseLabel}
-              </Button>
+              analysisCurrent ? (
+                <Button size="sm" variant="primary" onClick={() => void analyse(Boolean(run))} disabled={running || loading}>
+                  {analyseLabel}
+                </Button>
+              ) : undefined
             }
           >
             Encara no es pot dir si l&apos;empresa compleix: no s&apos;ha avaluat cap requisit del plec. Els comptadors
@@ -415,9 +435,11 @@ export function ComplianceSection({
             kicker="Obsolet"
             className="m-4"
             action={
-              <Button size="sm" variant="secondary" onClick={() => void analyse(true)} disabled={running || loading}>
-                Recalcula ara
-              </Button>
+              analysisCurrent ? (
+                <Button size="sm" variant="secondary" onClick={() => void analyse(true)} disabled={running || loading}>
+                  Recalcula ara
+                </Button>
+              ) : undefined
             }
           >
             El perfil de l&apos;empresa o els requisits han canviat des d&apos;aquest càlcul.
@@ -443,7 +465,8 @@ export function ComplianceSection({
                 <p className="mt-1 text-caption text-muted">Encaix de metadades; no és una probabilitat de guanyar.</p>
               </div>
               <div>
-                <p className={KICKER}>Recomanació automàtica</p>
+                {/* A14: el motor dona un resultat, no una recomanació; GO/NO-GO només ho diu una persona. */}
+                <p className={KICKER}>Resultat de l&apos;anàlisi</p>
                 <p className="mt-1 text-[14px] font-medium text-ink">{RECOMMENDATION_LABELS[run.recommendation]}</p>
                 <p className="mt-1 text-caption text-muted">La presentació la decideix una persona a la candidatura.</p>
               </div>
@@ -468,11 +491,17 @@ export function ComplianceSection({
         {!run && !loading && (
           <EmptyState
             title="Encara no s'ha comparat el plec amb el perfil"
-            description="Sense aquesta comparació no hi ha cap veredicte: ni bloquejos ni acreditacions. Es calcula a partir dels requisits extrets i de les dades del perfil."
+            description={
+              analysisCurrent
+                ? "Sense aquesta comparació no hi ha cap veredicte: ni bloquejos ni acreditacions. Es calcula a partir dels requisits extrets i de les dades del perfil."
+                : "Sense aquesta comparació no hi ha cap veredicte: ni bloquejos ni acreditacions. Es calcula a partir dels requisits del plec, i encara no n'hi ha cap d'analitzat."
+            }
             action={
-              <Button variant="primary" onClick={() => void analyse(false)} disabled={running || loading}>
-                Analitza compliment
-              </Button>
+              analysisCurrent ? (
+                <Button variant="primary" onClick={() => void analyse(false)} disabled={running || loading}>
+                  Analitza compliment
+                </Button>
+              ) : undefined
             }
           />
         )}
@@ -532,9 +561,11 @@ export function ComplianceSection({
             title="Cap requisit avaluat"
             description="El càlcul ha acabat sense cap requisit per comparar. Si el plec en té, cal analitzar-lo primer."
             action={
-              <Button variant="secondary" onClick={() => void analyse(true)} disabled={running || loading}>
-                Recalcula
-              </Button>
+              analysisCurrent ? (
+                <Button variant="secondary" onClick={() => void analyse(true)} disabled={running || loading}>
+                  Recalcula
+                </Button>
+              ) : undefined
             }
           />
         </Card>

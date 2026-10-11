@@ -49,9 +49,9 @@ def fake_run():
         )
     ]
     findings = [
-        SimpleNamespace(finding_type="blocker_potential"),
-        SimpleNamespace(finding_type="review_required"),
-        SimpleNamespace(finding_type="blocker_potential"),
+        SimpleNamespace(finding_type="blocker_potential", explanation_code="FACT_CONTRADICTS"),
+        SimpleNamespace(finding_type="review_required", explanation_code="FACT_TRUE_DECLARED"),
+        SimpleNamespace(finding_type="blocker_potential", explanation_code="FACT_CONTRADICTS"),
     ]
     return SimpleNamespace(
         fit_assessments=fits,
@@ -135,6 +135,34 @@ def test_snapshot_absent():
     assert dumped["state"] == "absent"
     assert dumped["warnings"] == ["analysis_missing"]
     assert parse_snapshot(json.loads(json.dumps(dumped))).to_json_dict() == dumped
+
+
+@pytest.mark.parametrize("with_run", [False, True])
+def test_snapshot_carries_the_package_state(with_run):
+    """3B-2 §4.4: l'estat del paquet i el nombre de forats oberts, amb o sense run.
+    Una fotografia antiga (sense aquestes claus) continua sent valida."""
+    from app.analysis.fingerprint import PackageGapView
+    from app.services.tender_analysis import PackageState
+
+    gaps = (PackageGapView(code="referenced_document_missing", detail={"key": "DOC-04"}),)
+    package = PackageState(status="incomplete", gaps=gaps, has_run=True)
+    if with_run:
+        status = AnalysisStatus(run=fake_run(), stale=False)
+        w = W(blocker_potential=True)
+    else:
+        status = AnalysisStatus(run=None, stale=False)
+        w = W(analysis_missing=True)
+    dumped = build_snapshot(status, w, package).to_json_dict()
+    assert (dumped["package_status"], dumped["open_gap_count"]) == ("incomplete", 1)
+    assert set(dumped) == (RUN_KEYS if with_run else ABSENT_KEYS) | {
+        "package_status",
+        "open_gap_count",
+    }
+    assert parse_snapshot(json.loads(json.dumps(dumped))).to_json_dict() == dumped
+    with pytest.raises(ValidationError):
+        parse_snapshot({**dumped, "package_status": "partial"})
+    with pytest.raises(ValidationError):
+        parse_snapshot({**dumped, "open_gap_count": -1})
 
 
 @pytest.mark.parametrize("key", ["score", "recommendation", "go", "blocker_confirmed", "foo"])

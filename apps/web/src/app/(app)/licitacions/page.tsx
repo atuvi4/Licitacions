@@ -7,7 +7,10 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { CatalogueTabs } from "@/components/catalogue/CatalogueTabs";
 import { CatalogueView } from "@/components/catalogue/CatalogueView";
-import { DeadlineCell } from "@/components/catalogue/CatalogueRow";
+import { CpvMatchLine, DeadlineCell, TenderStatusPills } from "@/components/catalogue/CatalogueRow";
+import { cpvMatch } from "@/components/catalogue/cpvMatch";
+import { FilterChips, feedFilterChips } from "@/components/catalogue/FilterChips";
+import { PreFitUncalculatedNotice } from "@/components/catalogue/PreFitSummary";
 import { TendersHeader } from "@/components/catalogue/TendersHeader";
 import { PreFitDisclaimer, ScoreValue } from "@/components/PreFit";
 import { useSession } from "@/components/SessionProvider";
@@ -29,7 +32,6 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { api } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
-import { TENDER_STATUS_LEVEL } from "@/lib/labels";
 import {
   MATCH_STATUS_HELP,
   MATCH_STATUS_LABELS,
@@ -73,7 +75,8 @@ const COLUMN_HEADERS = ["Encaix", "Licitació", "Termini", "Import", "Estat"];
 const INGEST_COMMAND = "python -m app.ingestion.sync --source placsp_agregadas --max-pages 2";
 
 function FitCell({ match }: { match: TenderMatchListItem["match"] }) {
-  if (!match) return <span className="text-caption text-faint">Sense calcular</span>;
+  // Sense càlcul la fila no diu res (A9): l'avís és un de sol, a la capçalera de la llista.
+  if (!match) return null;
   return (
     <div className="flex flex-col items-start gap-1">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -169,6 +172,14 @@ function ReviewFeed() {
     setOffset(0);
   }
 
+  /** Treu només aquell filtre (C5), del formulari i de la consulta. */
+  function removeFilter(key: string) {
+    const empty = EMPTY_FILTERS[key as keyof Filters];
+    setFilters((current) => ({ ...current, [key]: empty }));
+    setApplied((current) => ({ ...current, [key]: empty }));
+    setOffset(0);
+  }
+
   function selectMode(value: string) {
     setMode(value);
     setOffset(0);
@@ -220,6 +231,11 @@ function ReviewFeed() {
             {labelOf(CONTRACT_TYPE_LABELS, tender.contract_type, "Tipus desconegut")}
             {tender.lot_count > 0 && ` · ${tender.lot_count} ${tender.lot_count === 1 ? "lot" : "lots"}`}
           </p>
+          {/* Amb filtre de CPV, per quin CPV hi entra la fila (C4). */}
+          {(() => {
+            const matched = cpvMatch(tender.cpvs, applied.cpv);
+            return matched ? <CpvMatchLine match={matched} /> : null;
+          })()}
         </div>
       ),
     },
@@ -241,12 +257,7 @@ function ReviewFeed() {
       width: "14%",
       cell: ({ tender }) => (
         <div className="flex flex-col items-start gap-1">
-          <StatusPill
-            level={Object.hasOwn(TENDER_STATUS_LEVEL, tender.status) ? TENDER_STATUS_LEVEL[tender.status] : "neutral"}
-            size="sm"
-          >
-            {labelOf(TENDER_STATUS_LABELS, tender.status, "Estat desconegut")}
-          </StatusPill>
+          <TenderStatusPills tender={tender} />
           {tender.is_modified && tender.source_publication_count > 1 && (
             <StatusPill level="attention" size="sm">
               Publicada {tender.source_publication_count} cops
@@ -262,7 +273,7 @@ function ReviewFeed() {
       return (
         <EmptyState
           title="Encara no s'ha llegit cap licitació"
-          description="En aquest entorn encara no s'ha ingerit la font pública. Quan hi hagi licitacions, apareixeran aquí amb el pre-fit calculat."
+          description="En aquest entorn encara no s'ha ingerit la font pública. Quan hi hagi licitacions, apareixeran aquí; el pre-fit només s'hi calcula si el perfil té CPV, territoris o preferències de contracte."
           action={
             <Button variant="primary" onClick={() => { void facets.reload(); void list.reload(); }}>
               Torna-ho a provar
@@ -303,8 +314,8 @@ function ReviewFeed() {
             title="Encara no sabem què busqueu"
             description={`L'encaix es calcula amb els codis CPV, els territoris i la franja d'import del perfil. Sense això no podem ordenar les ${openCount ? `${openCount} ` : ""}licitacions obertes: només llistar-les.`}
             action={
-              <LinkButton href="/empresa" variant="primary" size="md">
-                Completa el perfil · 3 passos
+              <LinkButton href="/empresa/radar" variant="primary" size="md">
+                Defineix les preferències del Radar
               </LinkButton>
             }
             secondary={
@@ -420,7 +431,7 @@ function ReviewFeed() {
       <p className="mb-4 text-caption text-muted">
         {active.status
           ? MATCH_STATUS_HELP[active.status]
-          : "Totes les licitacions ingerides, amb el pre-fit al costat. El pre-fit no n'amaga cap."}
+          : "Totes les licitacions ingerides. El pre-fit hi surt al costat quan s'ha calculat amb el perfil (CPV, territoris o preferències de contracte); no n'amaga cap."}
       </p>
 
       <details
@@ -556,6 +567,8 @@ function ReviewFeed() {
         </form>
       </details>
 
+      <FilterChips chips={feedFilterChips(applied, facets.data)} onRemove={removeFilter} className="mb-4" />
+
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-subtle px-3.5 py-2">
           <p className="text-[13px] text-muted" aria-live="polite">
@@ -601,6 +614,8 @@ function ReviewFeed() {
         ) : items.length === 0 ? (
           renderEmpty()
         ) : (
+          <>
+          <PreFitUncalculatedNotice count={items.filter(({ match }) => !match).length} />
           <DataTable<TenderMatchListItem>
             columns={columns}
             rows={items}
@@ -633,6 +648,7 @@ function ReviewFeed() {
               </>
             }
           />
+          </>
         )}
       </Card>
 

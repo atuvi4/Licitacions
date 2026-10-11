@@ -41,7 +41,7 @@ from app.models.review import ReviewItem, ReviewItemRelation, ReviewItemRevision
 from app.services import review_actions, review_awards, review_relations, review_view
 from tests import test_requirement_analysis as base
 from tests.conftest import TEST_PASSWORD, login
-from tests.test_requirement_analysis_v3 import _requirement, _run_v3
+from tests.test_requirement_analysis_v3 import _requirement, _run_v3_real
 
 analyzable = base.analyzable
 _clean_provider = base._clean_provider
@@ -100,7 +100,7 @@ def _basis(role: str, name: str) -> dict:
 async def awards(session, analyzable):
     """SINTETIC: una run v3 vigent amb un requisit i els 23 criteris de Palamos."""
     x = analyzable["extraction"]
-    run = await _run_v3(session, analyzable,
+    run = await _run_v3_real(session, analyzable,
                         {"requirements": [_requirement(x.id)], "award_candidates": []})
     page = analyzable["pages"][0]
     criteria = {}

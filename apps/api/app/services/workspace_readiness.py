@@ -20,7 +20,7 @@ from app.core.errors import NotFoundError
 from app.models.enums import PricingBasis, TechnicalSolutionSource, TechnicalSolutionStatus
 from app.models.workspace import BidWorkspace
 from app.services import dimensions as dimension_service
-from app.services import document_review, requirement_analysis
+from app.services import document_review, manual_requirement, requirement_analysis
 from app.services import economic_offer as offer_service
 from app.services import issues as issue_service
 from app.services import offer_line_option_sync as sync_service
@@ -515,7 +515,9 @@ async def _analysis_predates_documents(
     l'analisi vigent no queda desfasada perque hagi arribat un document del qual
     no sabem llegir el text.
     """
-    run = await requirement_analysis.current_run_for(session, workspace.tender_id)
+    run = await manual_requirement.effective_run(
+        session, workspace.tender_id, workspace.company_id
+    )
     if run is None:
         return False
     current = await requirement_analysis.analysis_input(session, workspace.tender_id)

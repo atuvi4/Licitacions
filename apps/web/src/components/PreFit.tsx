@@ -11,7 +11,7 @@
  * d'aquí l'anomena així.
  */
 
-import { Card, StatusPill, cn } from "@/components/ui";
+import { Button, Card, EmptyState, LinkButton, StatusPill, cn } from "@/components/ui";
 import { MATCH_STATUS_LEVEL } from "@/lib/labels";
 import {
   DIMENSION_LABELS,
@@ -133,6 +133,56 @@ function FactorRow({ factor }: { factor: MatchFactor }) {
   );
 }
 
+/**
+ * Una licitació sense pre-fit (3B-2 §7.1.4). No es calcula per a totes: només per
+ * a les empreses amb CPV, territoris o preferències de contracte al perfil. Sense
+ * perfil es diu això; amb perfil, es pot calcular per a aquesta sola licitació.
+ * `profileReady = null`: encara no se sap el perfil, i no s'afirma res.
+ */
+export function PreFitMissing({
+  profileReady,
+  calculating,
+  error,
+  onCalculate,
+}: {
+  profileReady: boolean | null;
+  calculating: boolean;
+  error: string | null;
+  onCalculate: () => void;
+}) {
+  if (profileReady === false) {
+    return (
+      <Card>
+        <EmptyState
+          title="Sense pre-fit per a aquesta licitació"
+          description="El pre-fit només es calcula quan el perfil té CPV, territoris o preferències de contracte"
+          action={
+            <LinkButton href="/empresa/radar" variant="primary" size="md">
+              Preferències del Radar
+            </LinkButton>
+          }
+        />
+      </Card>
+    );
+  }
+  return (
+    <Card>
+      <EmptyState
+        title="Encara no s'ha calculat"
+        description="El pre-fit d'aquesta licitació encara no s'ha calculat amb el vostre perfil."
+        action={
+          profileReady ? (
+            <Button variant="primary" onClick={onCalculate} loading={calculating} disabled={calculating}>
+              Calcula&apos;l ara
+            </Button>
+          ) : undefined
+        }
+      />
+      {error && <p className="px-5 pb-4 text-center text-caption text-danger">{error}</p>}
+    </Card>
+  );
+}
+
 /** Desglossament complet per a la fitxa d'una licitació. */
 export function PreFitPanel({ match }: { match: TenderMatch | null }) {
   if (!match) {
@@ -141,7 +191,7 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
         <div className="px-5 py-6 text-center">
           <p className="text-[13px] text-muted">Aquesta licitació encara no té pre-fit calculat.</p>
           <p className="mt-1 text-caption text-faint">
-            Es calcula per a totes les licitacions ingerides; recalcula&apos;l des del feed.
+            Només es calcula amb un perfil que tingui CPV, territoris o preferències de contracte.
           </p>
         </div>
       </Card>

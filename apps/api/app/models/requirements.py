@@ -39,6 +39,7 @@ from app.models.enums import (
     RequirementObligation,
     RequirementOperator,
     RequirementOrigin,
+    RequirementRunBasis,
     RequirementScope,
     RequirementTiming,
     ReviewStatus,
@@ -46,6 +47,11 @@ from app.models.enums import (
     TerritoryMatchMode,
 )
 from app.models.review import in_values
+
+
+def _basis_from_provider(context) -> str:
+    """Valor per defecte de `run_basis`: la regla de `RequirementRunBasis.for_provider`."""
+    return RequirementRunBasis.for_provider(context.get_current_parameters().get("provider")).value
 
 
 def _timing_column() -> Mapped[RequirementTiming]:
@@ -113,6 +119,22 @@ class RequirementExtractionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "prompt_version",
             "schema_version",
         ),
+        # 0061: la base es tancada, i un run buit sospitos sempre demana revisio.
+        sa.CheckConstraint(in_values("run_basis", RequirementRunBasis), name="run_basis_valid"),
+        sa.CheckConstraint(
+            "status <> 'completed_empty' OR needs_review",
+            name="completed_empty_needs_review",
+        ),
+        # 0061, nomes a PostgreSQL (3B-2 §6.3, capa de dades): cap run vigent que no
+        # sigui real o gold, ni amb SQL cru; i estats tancats. SQLite (tests) no canvia:
+        # moltes fixtures hi creen runs vigents directament.
+        sa.CheckConstraint(
+            "is_current = false OR run_basis IN ('real', 'gold')",
+            name="current_is_real_or_gold",
+        ).ddl_if(dialect="postgresql"),
+        sa.CheckConstraint(in_values("status", AnalysisRunStatus), name="status_valid").ddl_if(
+            dialect="postgresql"
+        ),
     )
 
     tender_id: Mapped[uuid.UUID] = mapped_column(
@@ -144,6 +166,21 @@ class RequirementExtractionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     schema_version: Mapped[str] = mapped_column(sa.String(50), nullable=False)
     provider: Mapped[str] = mapped_column(sa.String(50), nullable=False)
     model: Mapped[str] = mapped_column(sa.String(120), nullable=False)
+    #: Sobre que s'ha construit (0061, 3B-2 §6.3): es deriva del proveidor si no
+    #: es diu. Nomes un run `real` pot ser `is_current`.
+    run_basis: Mapped[RequirementRunBasis] = mapped_column(
+        enum_column(RequirementRunBasis, "requirement_run_basis"),
+        nullable=False,
+        default=_basis_from_provider,
+    )
+    #: Cal que una persona el miri abans de fer-lo servir (`completed_empty`).
+    needs_review: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
+    #: sha256 del JSON canonic de la identitat de l'analisi (3B-2 §6.2): documents
+    #: amb el tipus efectiu i les pagines del pla, chunking, versions, proveidor i
+    #: model. NUL als runs anteriors a 0061.
+    analysis_identity: Mapped[str | None] = mapped_column(sa.String(64))
 
     started_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False

@@ -344,7 +344,7 @@ function DocumentText() {
                 </StatusPill>
               </Fact>
               <Fact label="Versió">
-                v{current.version_number} de {files.data.length}
+                Versió {current.version_number} de {files.data.length}
               </Fact>
               <Fact label="Mida">{formatBytes(current.content?.file_size ?? null)}</Fact>
               <Fact label="Pàgines">{total || "—"}</Fact>
@@ -378,7 +378,7 @@ function DocumentText() {
               {files.data.map((file) => (
                 <li key={file.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-[13px]">
                   <span>
-                    <span className="font-medium text-ink">v{file.version_number}</span>
+                    <span className="font-medium text-ink">Versió {file.version_number}</span>
                     {file.downloaded_at && <span className="text-muted"> · {formatDateTime(file.downloaded_at)}</span>}
                     {file.is_current && <span className="text-muted"> · vigent</span>}
                     {file.extraction && <span className="text-muted"> · revisió {file.extraction.revision_number}</span>}

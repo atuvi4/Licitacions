@@ -61,6 +61,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.revision import SCHEMA_REVISION
 from app.ingestion.errors import (
+    INTEGRITY_CONSTRAINT,
     PARSE_VALIDATION,
     TRANSIENT_CLASSES,
     SafeError,
@@ -75,7 +76,12 @@ from app.ingestion.placsp.client import FeedFetchError, PlacspClient
 from app.ingestion.placsp.normalizer import NormalizedTender, normalize
 from app.ingestion.sources import SOURCES
 from app.models.cpv import CPVCode
-from app.models.enums import IngestionStatus, ProcessingStatus
+from app.models.enums import (
+    DocumentContributionStatus,
+    IngestionStatus,
+    ProcessingStatus,
+    TenderDocumentOrigin,
+)
 from app.models.sources import IngestionRun, Source, SourceRecord
 from app.models.tenders import (
     Buyer,
@@ -85,9 +91,13 @@ from app.models.tenders import (
     TenderLot,
     TenderLotCPV,
 )
+from app.services.document_alias import (
+    assign_duplicate_alias,
+    promote_alias_if_canonical_retired,
+)
 from app.services.files import compute_sha256
 from app.services.storage import StorageService, get_storage
-from app.services.tender_lifecycle import record_revision
+from app.services.tender_lifecycle import DOCUMENT_INTAKE_TRIGGER, record_revision
 from app.tenders.search import (
     build_search_text,
     ordered_lot_titles,
@@ -122,6 +132,12 @@ _CLASS_IN_LINE = re.compile(
     r"^(?:pagina \d+: )?(?:https?://\S+: )?([A-Za-z_][\w.]*(?:Error|Exception))(?=:|$)"
 )
 _PAGE_PREFIX = re.compile(r"^pagina \d+")
+
+#: Linia segura (gramatica de `app.ingestion.errors`) d'una URL del feed que xoca
+#: amb un document que aquesta font no governa: no es una fallada de l'entrada.
+_NOT_GOVERNED = SafeError(
+    INTEGRITY_CONSTRAINT, "DocumentNotGoverned", target="uq_tender_documents_tender_url"
+)
 _REASONS = {
     "FeedFetchError": "feed no disponible",
     "ParseError": "contingut no valid",
@@ -318,6 +334,14 @@ class ApplyOutcome:
     restored: bool = False
     #: En crear-la s'hi ha aplicat una lapida que havia arribat abans.
     tombstone_adopted: bool = False
+
+
+@dataclass(slots=True)
+class DocumentSync:
+    """Documents governats per la font que aquest sync ha retirat o restaurat."""
+
+    removed: list[TenderDocument] = field(default_factory=list)
+    restored: list[TenderDocument] = field(default_factory=list)
 
 
 def raw_storage_key(record_id: uuid.UUID, moment: datetime | None = None) -> str:
@@ -1302,7 +1326,7 @@ class PlacspIngestionService:
 
         await self._sync_cpvs(tender, data)
         await self._sync_lots(tender, data, now)
-        await self._sync_documents(tender, data, record, now)
+        documents = await self._sync_documents(tender, data, source, record, now)
         # Cerca normalitzada (spec 3B-1 §7.2): l'organisme d'aquesta entrada i
         # els lots que publica (els absents queden retirats i ja no compten), en
         # l'ordre determinista que fa servir tambe el backfill.
@@ -1322,6 +1346,17 @@ class PlacspIngestionService:
         # passava el feed. Un avis que salta sempre no informa de res.
         if not outcome.unchanged:
             tender.last_changed_at = now
+
+        # Dedup logic (3B-2 §2.1) despres de la revisio de la font, i amb una de
+        # propia (`document_intake`): un canonic retirat pel feed cedeix el lloc al
+        # seu alies, i un document que torna recupera el seu. Res d'aixo ho ha
+        # publicat la font; si no hi havia alies, la revisio no canvia (no crea res).
+        if documents.removed or documents.restored:
+            for document in documents.removed:
+                await promote_alias_if_canonical_retired(self.session, document, record=False)
+            for document in documents.restored:
+                await assign_duplicate_alias(self.session, tender.id, document)
+            await record_revision(self.session, tender, trigger=DOCUMENT_INTAKE_TRIGGER)
         return ApplyOutcome(
             tender=tender,
             created=created,
@@ -1473,8 +1508,27 @@ class PlacspIngestionService:
             )
 
     async def _sync_documents(
-        self, tender: Tender, data: NormalizedTender, record: SourceRecord, now: datetime
-    ) -> None:
+        self,
+        tender: Tender,
+        data: NormalizedTender,
+        source: Source,
+        record: SourceRecord,
+        now: datetime,
+    ) -> DocumentSync:
+        """Sincronitza NOMES els documents que governa aquesta font (3B-2 §2.1).
+
+        **Source ownership**: un document es d'aquesta font si `origin = feed` i
+        `governing_source_id = source.id`. Els altres (d'operador, pujades
+        propies o d'una altra font) son invisibles per al sync: ni es retiren, ni
+        es restauren, ni se'n sobreescriu el nom o el tipus.
+
+        Si una URL del feed xoca amb un document no governat (UNIQUE
+        `(tender_id, url)`), el feed NO se l'apropia: el document es queda com
+        esta (qui el governa en continua sent l'unic responsable) i es deixa una
+        linia d'avis segura. Adoptar-lo en silenci canviaria l'origen d'una
+        aportacio verificada sense cap decisio humana; crear-ne un altre no es
+        pot (mateixa URL).
+        """
         existing = {
             document.url: document
             for document in (
@@ -1483,20 +1537,47 @@ class PlacspIngestionService:
                 )
             ).scalars()
         }
+        governed = {
+            url: document
+            for url, document in existing.items()
+            if document.origin == TenderDocumentOrigin.FEED
+            and document.governing_source_id == source.id
+        }
         wanted_urls = {info.url for info in data.documents}
+        outcome = DocumentSync()
 
-        # La publicacio completa porta la llista sencera de documents: el que no
-        # hi es s'ha retirat. Es MARCA, mai s'esborra: les versions baixades i el
-        # que s'hi ha analitzat es conserven.
-        for url, document in existing.items():
+        # La publicacio completa porta la llista sencera dels documents de la
+        # font: el que no hi es s'ha retirat. Es MARCA, mai s'esborra: les
+        # versions baixades i el que s'hi ha analitzat es conserven.
+        for url, document in governed.items():
             if url not in wanted_urls and document.removed_at is None:
                 document.removed_at = now
+                outcome.removed.append(document)
 
         for info in data.documents:
             document = existing.get(info.url)
             if document is None:
-                document = TenderDocument(tender_id=tender.id, url=info.url)
+                document = TenderDocument(
+                    tender_id=tender.id,
+                    url=info.url,
+                    origin=TenderDocumentOrigin.FEED,
+                    governing_source_id=source.id,
+                    contribution_status=DocumentContributionStatus.NOT_APPLICABLE,
+                )
                 self.session.add(document)
+            elif info.url not in governed:
+                logger.warning(
+                    "placsp.document.not_governed",
+                    extra={
+                        "tender_id": str(tender.id),
+                        "document_id": str(document.id),
+                        "origin": str(document.origin),
+                        "error": _NOT_GOVERNED.line(),
+                    },
+                )
+                continue
+            elif document.removed_at is not None:
+                outcome.restored.append(document)
             # Un document que torna deixa d'estar marcat: la font mana.
             document.removed_at = None
             document.name = info.name
@@ -1504,3 +1585,4 @@ class PlacspIngestionService:
             document.source_document_type_code = info.source_document_type_code
             document.published_at = info.published_at
             document.source_record_id = record.id
+        return outcome

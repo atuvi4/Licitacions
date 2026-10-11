@@ -145,18 +145,22 @@ def test_a_material_change_changes_the_hash():
     assert structure_fingerprint(replace(view, facts=())) != base
 
 
-def test_inputs_hash_depends_on_exactly_the_seven_inputs():
+def test_inputs_hash_depends_on_exactly_the_eight_inputs():
+    # 3B-2 §3.2: `classification_run_id` (passada de l'empresa) ha deixat de ser
+    # input; en el seu lloc, la passada global i el hash dels overrides de rol.
     base = dict(
-        tender_revision_id=None, extraction_run_id="e", classification_run_id=None,
-        review_revision_hash=None, tender_structure_fingerprint="s" * 64,
-        knowledge_fingerprint="k" * 64, rules_version=registry.RULES_VERSION,
+        tender_revision_id=None, extraction_run_id="e", global_classification_run_id=None,
+        role_overrides_hash=None, review_revision_hash=None,
+        tender_structure_fingerprint="s" * 64, knowledge_fingerprint="k" * 64,
+        rules_version=registry.RULES_VERSION,
     )  # fmt: skip
     digest = inputs_hash(**base)
     assert digest == inputs_hash(**base)
     for key, value in (
         ("tender_revision_id", "r"),
         ("extraction_run_id", None),
-        ("classification_run_id", "c"),
+        ("global_classification_run_id", "g"),
+        ("role_overrides_hash", "o" * 64),
         ("review_revision_hash", "x" * 64),
         ("tender_structure_fingerprint", "t" * 64),
         ("knowledge_fingerprint", "j" * 64),
@@ -263,7 +267,8 @@ def test_territory_aggregation_all_and_any():
 
 
 def test_the_registry_is_closed_and_nothing_is_orphan():
-    assert registry.RULES_VERSION == "phase3a-analysis-v3"
+    # 3B-2: v4 (forats del paquet i divergencia de rols); el copy es el de la v3.
+    assert registry.RULES_VERSION == "phase3b-analysis-v4"
     source = "\n".join(
         (API_ROOT / "app" / "analysis" / name).read_text(encoding="utf-8")
         for name in ("engine.py", "territory.py", "points.py")
@@ -305,11 +310,17 @@ def test_the_registry_is_closed_and_nothing_is_orphan():
 
 V2 = "phase3a-analysis-v2"
 V3 = "phase3a-analysis-v3"
+#: 3B-2 (forats del paquet i divergencia de rols): la versio vigent, amb el copy de la v3.
+V4 = "phase3b-analysis-v4"
 
 #: sha256 de les taules v2 (explicacions i plantilles de pregunta) tal com eren a
 #: 7513e3a (`EXPLANATIONS` i `QUESTIONS` del registre), serialitzades per `_copy_digest`.
 #: Fixat abans de cap canvi de text: si falla, algu ha tocat el copy congelat de la v2.
 V2_COPY_SHA256 = "613a3408fb6debf80ea67c8a4ddf0016dfd74a1f6cdc05f29c73c165e38b4592"
+#: El mateix per a la v3, que deixa de ser la vigent a 3B-2 (v4): les taules v3 tal com
+#: eren a 507ac57 (HEAD de la branca), serialitzades per `_copy_digest`. Si falla, algu ha
+#: tocat el copy congelat de la v3 (els codis nous van a la taula v4, no a la v3).
+V3_COPY_SHA256 = "a28f33261716b8fc31712955be73bada07e5e7edbeb9680ca9a62bba74406233"
 
 
 def _copy_digest(explanations, questions) -> str:
@@ -326,10 +337,27 @@ def test_the_v2_copy_is_frozen_exactly_as_it_was_at_7513e3a():
     )
 
 
+def test_the_v3_copy_is_frozen_exactly_as_it_was_at_507ac57():
+    assert (
+        _copy_digest(registry.EXPLANATIONS_BY_VERSION[V3], registry.QUESTIONS_BY_VERSION[V3])
+        == V3_COPY_SHA256
+    )
+
+
 def test_every_version_has_both_tables_and_the_current_one_covers_every_code():
-    assert registry.RULES_VERSION == V3
+    assert registry.RULES_VERSION == V4
     assert set(registry.EXPLANATIONS_BY_VERSION) == set(registry.QUESTIONS_BY_VERSION)
-    assert {V2, V3} <= set(registry.EXPLANATIONS_BY_VERSION)
+    assert {V2, V3, V4} <= set(registry.EXPLANATIONS_BY_VERSION)
+    # 3B-2: la v4 canvia regles (forats del paquet, divergencia de rols), no el copy dels
+    # codis que ja hi eren; nomes hi afegeix els dos codis nous (Task 9).
+    codes = registry.ExplanationCode
+    v4_only = {codes.PACKAGE_GAP, codes.ROLE_OVERRIDE_DIVERGES}
+    v4 = dict(registry.EXPLANATIONS_BY_VERSION[V4])
+    assert set(v4) - set(registry.EXPLANATIONS_BY_VERSION[V3]) == v4_only
+    assert {k: v for k, v in v4.items() if k not in v4_only} == dict(
+        registry.EXPLANATIONS_BY_VERSION[V3]
+    )
+    assert dict(registry.QUESTIONS_BY_VERSION[V4]) == dict(registry.QUESTIONS_BY_VERSION[V3])
     current = registry.RULES_VERSION
     assert set(registry.EXPLANATIONS_BY_VERSION[current]) == registry.EXPLANATION_CODES
     assert set(registry.QUESTIONS_BY_VERSION[current]) == registry.QUESTION_CODES

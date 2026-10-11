@@ -196,14 +196,69 @@ confirmacions simultànies no el poden superar.
 Tenant-safe: el preview no diu mai si una altra empresa està analitzant el mateix
 plec.
 
+## Licitacions públiques: run canònic, commit per chunk i pressupost (3B-2)
+
+Operació: `docs/ops/public-intake-runbook.md`. Aquí, el que canvia a la cua.
+
+**Dedupe canònic.** En una licitació pública (`owner_company_id` nul) la `dedupe_key`
+d'una anàlisi és `analyze:{tender}:canonical:{analysis_identity}`, sense cap paràmetre
+de tenant (`canonical_analysis_dedupe_key` a `app/jobs/params.py`). Dues empreses que
+demanen la mateixa anàlisi comparteixen una sola execució i un sol run; cada empresa
+conserva el seu punter (`company_tender_requirement_runs`). Una empresa no pot passar
+`document_ids`, `profile` ni `force` (422 `public_tender_canonical_only`). Prova:
+`tests/test_public_tender_canonical_quota.py`
+(`test_a_b_mateix_tender_public_una_sola_feina_canonica_sense_parametres_de_tenant`) i
+`tests/test_requirement_run_basis.py`.
+
+**`force` només de l'operador, mai canònic.** `POST /api/v1/platform/tenders/{id}/analysis/force`
+(`PlatformAdmin`, 202) encua una anàlisi forçada, opcionalment amb una selecció de
+documents i un perfil. El run es desa però **no passa mai a vigent**
+(`forced_not_canonical`) i passa per la mateixa porta de despesa. Prova:
+`test_l_operador_encua_un_run_forcat_que_mai_es_canonic` i
+`test_la_ruta_de_force_es_nomes_de_l_operador`.
+
+**Commit per chunk.** Cada chunk respost (també un de caigut que el proveïdor va
+arribar a respondre) es desa en un commit propi mentre el run és `running` i no vigent:
+requisits i evidències, `chunk_coverage` (els pendents com a `pending`), tokens, cost
+i, per a un run `real`, la línia del llibre `llm_spend_ledger`. Un worker que mor a mig
+run no perd la feina pagada. Prova: `tests/test_chunk_commits.py`.
+
+**Represa des de `worker_lost`.** `plan_resume` accepta un run `partial` i també un
+`failed` amb `error_code` `worker_lost` o `internal_error` que tingui algun chunk
+completat; envia només els chunks que falten, i només si és exactament la mateixa
+anàlisi (mateix fingerprint, perfil, proveïdor i model; si no, `ResumeNotAllowedError`
+amb el motiu). Un parcial ja no és mai vigent. Prova:
+`test_la_represa_des_de_worker_lost_envia_nomes_el_chunk_3` i
+`test_un_run_fallit_per_worker_lost_amb_chunks_completats_es_pot_reprendre`.
+
+**`budget_exceeded`.** Abans de cada chunk d'un run `real`, el gastat total ha de ser
+≤ `LLM_BUDGET_PILOT_TOTAL_USD` i el de la cadena de represa ≤ el cap de l'scope
+(`canary` per a `only_chunks` de com a molt 2 chunks, `run` per a la resta). Si se
+supera, no s'envia res més: el run es tanca `partial` (o `failed` si cap chunk s'havia
+completat) amb `error_code=budget_exceeded` i l'scope a
+`provider_metadata.budget_exceeded_scope`. Mentre no hi hagi una autorització
+posterior d'aquell scope o de `pilot_total`, tota quota que hagi de gastar queda
+`allowed=false` (`budget_exhausted`). Altres codis de la porta, abans de reservar el
+run: `provider_not_real`, `model_not_pinned`, `price_unknown`. Prova:
+`tests/test_llm_budget.py`.
+
+**Prerequisits de quota.** La quota d'una licitació pública calcula i desa a
+`analysis_quotes.prerequisites` (part de la identitat): proveïdor real, classificació
+global sense troballes HIGH obertes (o `accept_incomplete_package`), qualitat del text
+(`acknowledge_quality` si és `warning`) i selecció canònica. Prova:
+`tests/test_quote_prerequisites.py`.
+
 ## Límits coneguts
 
-* **Tokens d'un run perdut.** L'ús per chunk només es desa en tancar el run: si un
-  worker mor a mig fer, els tokens dels chunks ja cobrats no queden registrats.
+* **Tokens d'un run perdut (resolt a 3B-2).** Cada chunk respost es desa en un commit
+  propi, amb els seus tokens, el cost i la línia del llibre de despesa: un worker que
+  mor a mig fer no perd la feina pagada (vegeu «Commit per chunk»).
 * **Garanties de concurrència reals només a PostgreSQL.** SQLite (tests) no té
   `SKIP LOCKED`.
 * **Sense supervisor.** Cal mantenir el procés worker viu (i afegir-lo a
   `docker-compose`); la UI no avisa si no n'hi ha cap.
 * **Retenció.** `work_jobs` i `job_requests` creixen sense purga.
-* **Encara no hi ha** estimació prèvia, límits per tenant, ledger de tokens ni
-  confirmació explícita de despesa. La separació execució/petició ho deixa preparat.
+* **Despesa en diners.** Des de 3B-2 hi ha llibre de despesa global
+  (`llm_spend_ledger`) i caps per scope, però l'empresa no veu mai cap import global:
+  la quota només en rep booleans. Els preus no són al repositori (`LLM_MODEL_PRICES`
+  s'omple a la sessió).

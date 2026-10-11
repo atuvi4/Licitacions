@@ -26,6 +26,8 @@ ALLOWED_KEYS = {
     "procedure_code",
     "placsp_organ_id",
     "pscp_id_intern",
+    # 3B-2 §7.1.2: el `summary` cru quan es la plantilla del feed (no es descripcio).
+    "feed_summary",
 }
 
 

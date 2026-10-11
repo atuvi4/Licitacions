@@ -30,6 +30,7 @@ from app.services import bid_workspace as workspace_service
 from app.services import economic_offer as offer_service
 from app.services import technical_scope as scope_service
 from app.services import workspace_readiness as service
+from app.services.workspace_gate import assert_workspace_go
 from app.workspace.readiness import DOMAIN_ECONOMIC, DOMAIN_TECHNICAL
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["readiness"])
@@ -120,6 +121,7 @@ async def review_technical_scope(
     nou; si l'abast ha canviat, es una afirmacio nova i s'actualitza qui i quan.
     """
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     # Politica propia (`TECHNICAL_SCOPE_REVIEW_ROLES`), encara que avui tingui
     # els mateixos membres que l'edicio de solucions: son dues afirmacions
     # diferents i no han de quedar lligades per compartir una constant.
@@ -155,6 +157,8 @@ async def review_documents(workspace_id: uuid.UUID, session: SessionDep, ctx: Co
     Repetir-ho sobre el mateix conjunt es idempotent i no mou ni la data ni
     l'auditoria: la revisio vigent segueix sent la mateixa.
     """
+    # Sense guard de GO (3B-2, ruling C3): llegir els plecs es feina de Decidir,
+    # no del pas Preparar. L'abast tecnic (`technical-scope/review`) si que ho es.
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
     document_review.assert_can_review(ctx.membership.role)
     _state, changed = await document_review.mark_reviewed(session, workspace)

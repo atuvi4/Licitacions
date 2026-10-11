@@ -24,6 +24,9 @@ import type { DocumentReviewState, FinalReadiness } from "@/lib/readiness";
  * Marcar-los com a revisats no analitza res. Llegir els plecs i extreure'n els
  * requisits són dues accions diferents, i fondre-les voldria dir que dir «ja
  * me'ls he mirat» engegués una anàlisi —i una factura— que ningú no ha demanat.
+ *
+ * Llegir els plecs és feina de Decidir, no de Preparar (3B-2, ruling C3): el
+ * panell no sap res de la decisió GO ni en depèn.
  */
 export function DocumentReviewPanel({
   workspaceId,
@@ -84,7 +87,13 @@ export function DocumentReviewPanel({
 
   const canReview = canImportTender(membership?.role);
   const cta = canReview ? (
-    <Button variant="secondary" size="sm" loading={saving} onClick={() => void review()}>
+    <Button
+      variant="secondary"
+      size="sm"
+      loading={saving}
+      title="Deixa anotat que algú de l'empresa ha llegit els plecs. No analitza res: l'anàlisi de requisits és una altra acció."
+      onClick={() => void review()}
+    >
       Marca com revisats
     </Button>
   ) : null;
@@ -105,6 +114,10 @@ export function DocumentReviewPanel({
         <span className="inline-flex items-center gap-1.5">
           <CircleAlert size={14} strokeWidth={1.5} aria-hidden className="text-muted" />
           Documents pendents de revisió.
+        </span>
+        {/* Què vol dir el botó (addendum 3B-2, D6): una anotació humana, mai una anàlisi. */}
+        <span className="block text-caption text-muted">
+          «Marca com revisats» deixa anotat que algú de l&apos;empresa se&apos;ls ha llegit. No analitza res.
         </span>
         {error && <span className="block text-caption text-muted">{error}</span>}
       </Banner>

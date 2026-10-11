@@ -5,7 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { ComplianceSection } from "@/components/ComplianceSection";
-import { PreFitPanel, ScoreValue } from "@/components/PreFit";
+import { PreFitMissing, PreFitPanel, ScoreValue } from "@/components/PreFit";
 import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
 import { AnalysisTab } from "@/components/tender-analysis/AnalysisTab";
 import { ReviewSummaryCard } from "@/components/review/ReviewSummaryCard";
@@ -31,20 +31,19 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ApiError, api } from "@/lib/api";
 import type { Compliance } from "@/lib/compliance";
 import { formatDate, formatMoney } from "@/lib/format";
-import { useResource } from "@/lib/hooks";
+import { useMutation, useResource } from "@/lib/hooks";
 import { type AnalysisLimits, jobErrorMessage, requestProcessing, useJobRequest } from "@/lib/jobs";
-import { DOCUMENT_STATE_LEVEL, TENDER_STATUS_LEVEL, jobErrorAction, shortSummary } from "@/lib/labels";
-import type { TenderMatch } from "@/lib/matching";
-import type { RequirementAnalysis } from "@/lib/requirements";
+import { jobErrorAction, shortSummary, tenderStatusView } from "@/lib/labels";
+import { prefitProfileReady, type TenderMatch } from "@/lib/matching";
+import { requirementAnalysisState, type RequirementAnalysis } from "@/lib/requirements";
+import type { DashboardSummary } from "@/lib/types";
 import { publicationStatusLabel, type TenderHistoryRevision } from "@/lib/tender-changes";
 import {
   CONTRACT_TYPE_LABELS,
-  DOCUMENT_STATE_LABELS,
   PROCEDURE_TYPE_LABELS,
   TENDER_DOCUMENT_LABELS,
-  TENDER_STATUS_LABELS,
+  cpvDescription,
   labelOf,
-  documentState,
   formatBytes,
   formatDateTime,
   type TenderDetail,
@@ -55,7 +54,9 @@ import {
 import { DocumentReviewPanel, NewVersionButton } from "@/components/DocumentReviewPanel";
 import type { WorkspaceDetail } from "@/lib/workspace";
 
-import { extractedText, fileErrorText, isQueued, jobPill, readingSubtext, selectionLabel, versionText } from "./documents";
+import { extractedText, fileErrorText, isQueued, jobPill, readingLabel, readingSubtext, selectionLabel, versionText } from "./documents";
+import { topLevelDocuments } from "./package";
+import { DocumentBadges, PackageNotice, PlecsReadingLine, RemovedDocuments } from "./PlecsOverview";
 import {
   amountMeta,
   candidatureMeta,
@@ -142,8 +143,27 @@ function TenderDetail() {
   const match = useResource<TenderMatch>(
     companyId ? `/companies/${companyId}/matches/by-tender/${tenderId}` : null,
   );
+  // Només per saber si el perfil permet calcular el pre-fit (CPV, territoris o
+  // preferències de contracte): sense, no s'ofereix cap càlcul.
+  const profile = useResource<DashboardSummary>(companyId ? `/companies/${companyId}/summary` : null);
+  const { run: runPrefit, saving: prefitSaving, error: prefitError } = useMutation();
+  const { reload: reloadMatch } = match;
+  const calculatePrefit = useCallback(async () => {
+    if (!companyId) return;
+    // Només aquesta licitació: el recàlcul global és d'Oportunitats.
+    const done = await runPrefit(async () => {
+      await api.post(`/companies/${companyId}/matches/recalculate?tender_id=${tenderId}`, {});
+    });
+    if (done) await reloadMatch();
+  }, [companyId, runPrefit, reloadMatch, tenderId]);
 
-  const analysis = useResource<RequirementAnalysis>(`/tenders/${tenderId}/analysis/requirements`);
+  // La run de requisits que llegeix l'empresa activa (el seu punter o la canònica):
+  // amb més d'una empresa, el servidor no la pot endevinar.
+  const analysis = useResource<RequirementAnalysis>(
+    companyId
+      ? `/tenders/${tenderId}/analysis/requirements?company_id=${companyId}`
+      : `/tenders/${tenderId}/analysis/requirements`,
+  );
   const compliance = useResource<Compliance>(
     companyId ? `/companies/${companyId}/tenders/${tenderId}/compliance` : null,
   );
@@ -261,13 +281,18 @@ function TenderDetail() {
   }
 
   const deadline = deadlineMeta(data.deadline_at);
+  const statusView = tenderStatusView(data);
   const amount = amountMeta(data);
   const requirements = requirementsLine(analysis.data, compliance.data);
   const candidatureInfo = candidatureMeta(candidature.workspace);
   const cancelled = data.status === "cancelled";
   const mainCpvs = data.cpvs.filter((cpv) => cpv.is_main);
   const otherCpvs = data.cpvs.filter((cpv) => !cpv.is_main);
-  const items = tabItems({ documents: data.documents.length, analysis: analysis.data, compliance: compliance.data });
+  // Els àlies van plegats sota el canònic: no compten com a plecs.
+  const topLevelCount = topLevelDocuments(data.documents).length;
+  const items = tabItems({ documents: topLevelCount, analysis: analysis.data, compliance: compliance.data });
+  // «Hi ha anàlisi?» amb una sola font de veritat (M1): `analysis_state` del servidor.
+  const analysisState = requirementAnalysisState(analysis.data);
 
   const jobState = processJob.request;
   const jobStatus = jobPill(jobState);
@@ -316,6 +341,7 @@ function TenderDetail() {
                 {fileErrorText(file.error_code)}
               </p>
             )}
+            <DocumentBadges document={document} documents={data.documents} />
           </div>
         );
       },
@@ -360,7 +386,8 @@ function TenderDetail() {
       width: "16%",
       cell: (document) => {
         const file = document.latest_file;
-        const state = documentState(file);
+        // A5: «Sense text extret» → «Text extret · requisits encara no analitzats» → «Analitzat».
+        const reading = readingLabel(document, analysis.data);
         const subtext = readingSubtext(file);
         return (
           <div className="flex flex-col items-start gap-1">
@@ -375,8 +402,8 @@ function TenderDetail() {
                 </StatusPill>
               )
             ) : (
-              <StatusPill level={DOCUMENT_STATE_LEVEL[state]} size="sm">
-                {DOCUMENT_STATE_LABELS[state]}
+              <StatusPill level={reading.level} size="sm">
+                {reading.label}
               </StatusPill>
             )}
             {subtext && <span className="text-caption text-muted">{subtext}</span>}
@@ -454,9 +481,12 @@ function TenderDetail() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 lg:shrink-0">
-              <StatusPill level={Object.hasOwn(TENDER_STATUS_LEVEL, data.status) ? TENDER_STATUS_LEVEL[data.status] : "neutral"}>
-                {labelOf(TENDER_STATUS_LABELS, data.status, "Estat desconegut")}
-              </StatusPill>
+              {/* L'estat vigent (A12): «Fora de termini» si el termini ha passat,
+                  passi el que passi a la font; l'estat de la font es diu a part. */}
+              <StatusPill level={statusView.level}>{statusView.label}</StatusPill>
+              {statusView.sourceStatus && (
+                <span className="text-[13px] text-muted">Estat a la font: {statusView.sourceStatus}</span>
+              )}
               {data.source_publication_count > 1 && (
                 <StatusPill level="attention">Publicada {data.source_publication_count} cops</StatusPill>
               )}
@@ -494,6 +524,13 @@ function TenderDetail() {
             </Meta>
             <Meta label="Requisits">
               <span className="font-normal text-ink">{requirements.text}</span>
+              {!analysis.loading && !analysis.error && analysisState === "absent" && tab !== "requisits" && (
+                // Sense anàlisi (segons `analysis_state`, M1), el que toca és fer-la
+                // (3B-2 §7.1.3). A la pestanya Requisits la CTA ja hi és (A8).
+                <Link href={`/licitacions/${tenderId}?tab=requisits`} className={LINK}>
+                  Analitza el plec
+                </Link>
+              )}
               {requirements.detail && (
                 <span className={requirements.level === "blocking" ? "text-danger" : "font-normal text-muted"}>
                   · {requirements.detail}
@@ -548,17 +585,12 @@ function TenderDetail() {
             (match.data ? (
               <PreFitPanel match={match.data} />
             ) : (
-              <Card>
-                <EmptyState
-                  title="Aquesta licitació encara no té pre-fit calculat."
-                  description="Es calcula per a totes les licitacions ingerides; recalcula'l des d'Oportunitats i torna aquí."
-                  action={
-                    <LinkButton href="/licitacions" variant="primary" size="md">
-                      Recalcula el pre-fit a Oportunitats
-                    </LinkButton>
-                  }
-                />
-              </Card>
+              <PreFitMissing
+                profileReady={prefitProfileReady(profile.data?.counts)}
+                calculating={prefitSaving}
+                error={prefitError}
+                onCalculate={() => void calculatePrefit()}
+              />
             ))}
 
           <Card>
@@ -597,12 +629,17 @@ function TenderDetail() {
                 {[data.place_of_execution, data.nuts_code].filter(Boolean).join(" · ") || "—"}
               </Fact>
 
-              {data.description && (
-                <div className="sm:col-span-3">
-                  <p className="text-caption text-muted">Objecte</p>
+              {/* Sense descripció publicada es diu així: mai el títol com a objecte
+                  inventat, ni la plantilla de metadades del feed (3B-2 §7.1.2). */}
+              <div className="sm:col-span-3">
+                <p className="text-caption text-muted">Objecte</p>
+                {data.description ? (
                   <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-ink">{data.description}</p>
-                </div>
-              )}
+                ) : (
+                  // Una licitació oberta a mà no ve de cap feed (M5).
+                  <p className="mt-1 text-sm text-muted">{isManual ? "Sense descripció" : "Objecte no publicat al feed"}</p>
+                )}
+              </div>
 
               {data.source_url && (
                 <div className="sm:col-span-3">
@@ -659,20 +696,24 @@ function TenderDetail() {
                 <p className="text-[13px] text-muted">La font no publica cap CPV per a aquest expedient.</p>
               ) : (
                 <div className="flex flex-wrap gap-2">
-                  {[...mainCpvs, ...otherCpvs].map((cpv) => (
-                    <span
-                      key={cpv.cpv_code}
-                      className={
-                        cpv.is_main
-                          ? "inline-flex items-center gap-2 border border-brand bg-brand-soft px-3 py-1 text-[12px]"
-                          : "inline-flex items-center gap-2 border border-border-strong px-3 py-1 text-[12px]"
-                      }
-                    >
-                      <span className="font-mono font-medium">{cpv.cpv_code}</span>
-                      <span className="text-muted">{cpv.description}</span>
-                      {cpv.is_main && <span className={KICKER}>principal</span>}
-                    </span>
-                  ))}
+                  {[...mainCpvs, ...otherCpvs].map((cpv) => {
+                    // El nom oficial del catàleg, mai el codi repetit (D4).
+                    const description = cpvDescription(cpv);
+                    return (
+                      <span
+                        key={cpv.cpv_code}
+                        className={
+                          cpv.is_main
+                            ? "inline-flex items-center gap-2 border border-brand bg-brand-soft px-3 py-1 text-[12px]"
+                            : "inline-flex items-center gap-2 border border-border-strong px-3 py-1 text-[12px]"
+                        }
+                      >
+                        <span className="font-mono font-medium">{cpv.cpv_code}</span>
+                        {description && <span className="text-muted">{description}</span>}
+                        {cpv.is_main && <span className={KICKER}>principal</span>}
+                      </span>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -704,7 +745,7 @@ function TenderDetail() {
                     cell: (lot) => (
                       <div className="flex flex-wrap gap-1">
                         {lot.cpvs.slice(0, 4).map((cpv) => (
-                          <span key={cpv.cpv_code} title={cpv.description ?? undefined} className="bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-muted">
+                          <span key={cpv.cpv_code} title={cpvDescription(cpv) ?? undefined} className="bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-muted">
                             {cpv.cpv_code}
                           </span>
                         ))}
@@ -782,10 +823,15 @@ function TenderDetail() {
 
           <Card>
             <CardHeader
-              title={`Plecs (${data.documents.length})`}
+              title={`Plecs (${topLevelCount})`}
               description="Processa un plec per descarregar-ne l'original i extreure'n el text per pàgina. La selecció només governa el processament; no limita quins documents utilitza l'anàlisi de requisits."
               action={jobStatus ? <StatusPill level={jobStatus.level}>{jobStatus.label}</StatusPill> : undefined}
             />
+            {/* També amb 0 documents vigents (N4): «Cap document analitzable» i l'estat del paquet. */}
+            <div className="space-y-2 border-b border-border px-5 py-3">
+              <PlecsReadingLine documents={data.documents} />
+              <PackageNotice pkg={data.package ?? null} documents={data.documents} />
+            </div>
             {limits.data && !canProcess && (
               <div className="border-b border-border px-4 py-3">
                 <PermissionNote
@@ -824,7 +870,8 @@ function TenderDetail() {
               <div ref={documentsTable}>
                 <DataTable<TenderDocumentMeta>
                   columns={documentColumns}
-                  rows={data.documents}
+                  // Els àlies van plegats sota el seu canònic, no en una fila pròpia.
+                  rows={topLevelDocuments(data.documents)}
                   rowKey={(document) => document.id}
                   isSelected={(document) => selected.has(document.id)}
                   stackBelow="md"
@@ -846,6 +893,7 @@ function TenderDetail() {
                 />
               </div>
             )}
+            <RemovedDocuments documents={data.removed_documents ?? []} />
           </Card>
         </div>
       )}
@@ -864,6 +912,8 @@ function TenderDetail() {
             // aparèixer a totes les empreses.
             editable={isManual}
             analysis={analysis.data}
+            documents={data.documents}
+            pkg={data.package ?? null}
             loading={analysis.loading}
             error={analysis.error}
             // Una anàlisi nova deixa el compliment endarrerit: el seu avís s'ha de
@@ -877,6 +927,7 @@ function TenderDetail() {
             loading={compliance.loading}
             error={compliance.error}
             prefitScore={match.data?.score ?? null}
+            analysisState={analysisState}
             onReload={async () => {
               await compliance.reload();
             }}
@@ -901,6 +952,11 @@ function TenderDetail() {
         <div className="space-y-4">
           <TenderChangeHistory
             revisions={history.data}
+            // Vigents i retirats: un canvi d'un document retirat també es diu pel nom.
+            documents={[...data.documents, ...(data.removed_documents ?? [])].map((document) => ({
+              url: document.url,
+              name: document.name,
+            }))}
             loading={history.loading}
             error={history.error}
             onReload={history.reload}
@@ -958,7 +1014,12 @@ function TenderDetail() {
           </Card>
 
           {data.traceability && (
-            <Card>
+            // Traçabilitat tècnica (hashes, SourceRecord) plegada per defecte (addendum 3B-2, D5).
+            <details className="group">
+              <summary className="cursor-pointer list-none text-[13px] font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+                Detalls tècnics
+              </summary>
+            <Card className="mt-2">
               <CardHeader title="Traçabilitat" description="D'on surt aquesta dada. Zona tècnica." />
               <div className="grid gap-4 px-5 py-5 sm:grid-cols-2">
                 <Fact label="Font">
@@ -979,6 +1040,7 @@ function TenderDetail() {
                 </Fact>
               </div>
             </Card>
+            </details>
           )}
         </div>
       )}

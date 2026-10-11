@@ -174,8 +174,27 @@ EXPECTED_EXPLANATIONS_V3: dict[str, str] = {
 }
 
 
+#: Codis que nomes existeixen a la v4 (3B-2): la taula v3 queda congelada sense ells.
+V4_ONLY_EXPLANATIONS: dict[str, str] = {
+    X.PACKAGE_GAP: (
+        "Al paquet documental del plec li falta un document: el que hi diria no es pot avaluar."
+    ),
+    X.ROLE_OVERRIDE_DIVERGES: (
+        "Els tipus de document que ha fixat l'empresa difereixen dels de la plataforma: "
+        "aquesta anàlisi llegeix els de la plataforma."
+    ),
+}
+
+
 def test_the_oracle_covers_every_explanation_code():
-    assert set(EXPECTED_EXPLANATIONS_V3) == registry.EXPLANATION_CODES
+    assert set(EXPECTED_EXPLANATIONS_V3) == registry.EXPLANATION_CODES - set(V4_ONLY_EXPLANATIONS)
+
+
+@pytest.mark.parametrize("code", sorted(V4_ONLY_EXPLANATIONS))
+def test_the_v4_only_explanations_are_exact_human_catalan(code):
+    assert registry.explanation_text(code, registry.RULES_VERSION_V4) == V4_ONLY_EXPLANATIONS[code]
+    assert registry.explanation_text(code, V3) == registry.UNKNOWN_EXPLANATION_TEXT
+    assert offending(V4_ONLY_EXPLANATIONS[code]) == []
 
 
 @pytest.mark.parametrize("code", sorted(EXPECTED_EXPLANATIONS_V3))

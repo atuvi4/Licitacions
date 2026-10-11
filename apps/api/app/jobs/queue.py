@@ -463,7 +463,10 @@ async def _reconcile_one(
             .execution_options(populate_existing=True)
         )
 
-        if run is not None and run.status == AnalysisRunStatus.COMPLETED:
+        if run is not None and run.status in (
+            AnalysisRunStatus.COMPLETED,
+            AnalysisRunStatus.COMPLETED_EMPTY,
+        ):
             completion = JobCompletion.succeeded(JobOutcome.EXECUTED, result_run_id=run.id)
         elif run is not None and run.status == AnalysisRunStatus.PARTIAL:
             completion = JobCompletion.succeeded(JobOutcome.PARTIAL, result_run_id=run.id)

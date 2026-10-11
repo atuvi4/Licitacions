@@ -31,6 +31,7 @@ from app.models.tender_structure import (
     TenderSite,
 )
 from app.models.tenders import Tender
+from tests.structure_support import PROV
 
 pytestmark = pytest.mark.asyncio
 
@@ -116,27 +117,45 @@ async def test_block_code_is_unique_within_the_tender_and_money_is_decimal(db):
     other = await _tender(db)
     db.add(
         TenderBlock(
-            tender_id=tender.id, code="B1", name="Bloc 1", base_price_ex_vat=Decimal("1234.50")
+            tender_id=tender.id,
+            code="B1",
+            name="Bloc 1",
+            base_price_ex_vat=Decimal("1234.50"),
+            **PROV.create_kwargs(),
         )
     )
     # El mateix codi en un altre expedient es legitim.
-    db.add(TenderBlock(tender_id=other.id, code="B1", name="Un altre B1"))
+    db.add(TenderBlock(tender_id=other.id, code="B1", name="Un altre B1", **PROV.create_kwargs()))
     await db.commit()
     stored = await db.scalar(sa.select(TenderBlock).where(TenderBlock.tender_id == tender.id))
     assert stored.base_price_ex_vat == Decimal("1234.50")
     assert isinstance(stored.base_price_ex_vat, Decimal)
     # Tri-estat: no hi ha cap `False` per defecte.
     assert stored.separately_awardable is None
-    await _rejects(db, TenderBlock(tender_id=tender.id, code="B1", name="Repetit"))
+    await _rejects(
+        db, TenderBlock(tender_id=tender.id, code="B1", name="Repetit", **PROV.create_kwargs())
+    )
 
 
 async def test_block_money_and_points_cannot_be_negative(db):
     tender = await _tender(db)
     await db.commit()
     await _rejects(
-        db, TenderBlock(tender_id=tender.id, code="B1", name="x", base_price_ex_vat=Decimal("-1"))
+        db,
+        TenderBlock(
+            tender_id=tender.id,
+            code="B1",
+            name="x",
+            base_price_ex_vat=Decimal("-1"),
+            **PROV.create_kwargs(),
+        ),
     )
-    await _rejects(db, TenderBlock(tender_id=tender.id, code="B2", name="x", price_points=-0.5))
+    await _rejects(
+        db,
+        TenderBlock(
+            tender_id=tender.id, code="B2", name="x", price_points=-0.5, **PROV.create_kwargs()
+        ),
+    )
 
 
 async def test_site_role_and_critical_are_independent_and_location_is_optional(db):
@@ -147,9 +166,14 @@ async def test_site_role_and_critical_are_independent_and_location_is_optional(d
         name="Seu remota critica",
         role=TenderSiteRole.REMOTE,
         is_critical=True,
+        **PROV.create_kwargs(),
     )
     central = TenderSite(
-        tender_id=tender.id, code="S1", name="Seu central", role=TenderSiteRole.CENTRAL
+        tender_id=tender.id,
+        code="S1",
+        name="Seu central",
+        role=TenderSiteRole.CENTRAL,
+        **PROV.create_kwargs(),
     )
     db.add_all([central, critical_remote])
     await db.commit()
@@ -167,7 +191,14 @@ async def test_site_role_and_critical_are_independent_and_location_is_optional(d
         None,
     )
     await _rejects(
-        db, TenderSite(tender_id=tender.id, code="S1", name="Repetida", role=TenderSiteRole.REMOTE)
+        db,
+        TenderSite(
+            tender_id=tender.id,
+            code="S1",
+            name="Repetida",
+            role=TenderSiteRole.REMOTE,
+            **PROV.create_kwargs(),
+        ),
     )
     await _rejects(
         db,
@@ -177,6 +208,7 @@ async def test_site_role_and_critical_are_independent_and_location_is_optional(d
             name="x",
             role=TenderSiteRole.REMOTE,
             latitude=Decimal("91"),
+            **PROV.create_kwargs(),
         ),
     )
     await _rejects(
@@ -187,14 +219,21 @@ async def test_site_role_and_critical_are_independent_and_location_is_optional(d
             name="x",
             role=TenderSiteRole.REMOTE,
             longitude=Decimal("-181"),
+            **PROV.create_kwargs(),
         ),
     )
 
 
 async def test_deleting_the_tender_takes_blocks_sites_and_links_with_it(db):
     tender = await _tender(db)
-    block = TenderBlock(tender_id=tender.id, code="B1", name="Bloc")
-    site = TenderSite(tender_id=tender.id, code="S1", name="Seu", role=TenderSiteRole.CENTRAL)
+    block = TenderBlock(tender_id=tender.id, code="B1", name="Bloc", **PROV.create_kwargs())
+    site = TenderSite(
+        tender_id=tender.id,
+        code="S1",
+        name="Seu",
+        role=TenderSiteRole.CENTRAL,
+        **PROV.create_kwargs(),
+    )
     requirement = Requirement(
         tender_id=tender.id,
         origin=RequirementOrigin.MANUAL,
@@ -227,6 +266,7 @@ async def _run(db, tender: Tender) -> RequirementExtractionRun:
         schema_version="v",
         provider="fake",
         model="fake",
+        run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
         is_current=True,
     )
     db.add(run)
@@ -271,8 +311,8 @@ async def test_timing_defaults_to_unknown_and_only_accepts_the_enum(db):
 async def test_blocks_are_a_set_per_requirement_and_points_are_not_split(db):
     tender = await _tender(db)
     run = await _run(db, tender)
-    b1 = TenderBlock(tender_id=tender.id, code="B1", name="Bloc 1")
-    b2 = TenderBlock(tender_id=tender.id, code="B2", name="Bloc 2")
+    b1 = TenderBlock(tender_id=tender.id, code="B1", name="Bloc 1", **PROV.create_kwargs())
+    b2 = TenderBlock(tender_id=tender.id, code="B2", name="Bloc 2", **PROV.create_kwargs())
     requirement = Requirement(
         tender_id=tender.id,
         run_id=run.id,

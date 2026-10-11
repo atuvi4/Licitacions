@@ -33,8 +33,10 @@ Garanties, en l'ordre en que s'apliquen:
 5. **Dos modes explicits.** `--plan-only` no construeix cap proveidor i obre una
    transaccio READ ONLY. `--paid-run` refusa els proveidors simulats i no fa
    reintents. No hi ha cap mode per defecte.
-6. **v3 per la porta interna.** Es fa servir `profiles.V3` directament; no
-   s'afegeix a `PROFILES` i cap job no la pot demanar.
+6. **Perfil explicit.** `--profile v1|v2|v3`; per defecte, el de producte
+   (`REQUIREMENTS_PRODUCT_PROFILE`, 3B-2 §6.7). La v3 hi entra per la porta
+   interna (`INTERNAL_PROFILES`): no s'afegeix a `PROFILES` i cap job no la pot
+   demanar pel nom. El pla diu documents, pagines, chunks, omesos i QA.
 
 La sortida son codis i xifres: cap resposta del model, cap text del plec, cap
 credencial.
@@ -62,10 +64,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.ai import profiles
 from app.core.config import settings
 from app.models.enums import TenderDocumentType
+from app.models.tender_documents import TenderDocumentExtraction
 from app.models.tenders import Tender
 from app.services.analysis_planning import usage_history
+from app.services.extraction_qa import combine_status
 from app.services.requirement_analysis import analysis_input
-from app.services.requirement_chunking import Chunk, build_chunks
+from app.services.requirement_chunking import AnalyzableDocument, Chunk, build_chunks
 
 API_ROOT = Path(__file__).resolve().parents[1]
 PROBE_PREFIX = "licitacions_v3_probe_"
@@ -84,10 +88,31 @@ OUTCOME_DOCUMENT_TYPES = frozenset({TenderDocumentType.AWARD.value})
 EXIT_OK = 0
 EXIT_CONFIG = 2
 EXIT_UNSAFE_INPUT = 3
+#: La porta unica (proveidor, model pinat, preu, pressupost) ha refusat el run pagat.
+EXIT_NOT_ALLOWED = 4
 
 
 class ProbeError(RuntimeError):
     """Falta alguna cosa, o el que hi ha no es segur. Sempre abans de cap crida."""
+
+
+#: Perfils que la sonda pot executar: els de producte (`PROFILES`) i la v3 interna.
+PROFILE_CHOICES = ("v1", "v2", "v3")
+
+
+def resolve_profile(name: str | None) -> profiles.ExtractorProfile:
+    """El perfil demanat; sense nom, el de producte (`REQUIREMENTS_PRODUCT_PROFILE`).
+
+    La v3 continua fora de `PROFILES` (cap job no la pot demanar pel nom): aqui
+    entra per `INTERNAL_PROFILES`, la porta interna de la sonda.
+    """
+    chosen = (name or settings.REQUIREMENTS_PRODUCT_PROFILE).strip().lower()
+    profile = profiles.PROFILES.get(chosen) or profiles.INTERNAL_PROFILES.get(chosen)
+    if profile is None:
+        raise ProbeError(
+            f"Perfil desconegut: {chosen!r} (admesos: {', '.join(PROFILE_CHOICES)})."
+        )
+    return profile
 
 
 # --------------------------------------------------------------------------- #
@@ -394,18 +419,28 @@ async def preview_resume(
     provider_name: str,
     model: str,
     only_raw: str | None = None,
+    profile: profiles.ExtractorProfile,
 ) -> ResumePreview:
     """Que faria `--resume-from-run`, amb el MATEIX `plan_resume` de la canonada.
 
     Nomes llegeix. Totes les comprovacions de la represa (mateixa licitacio,
-    entrada, perfil, proveidor i model, pla de chunks; run parcial i vigent) son
-    les de `plan_resume`: aqui no n'hi ha cap de propia. Si refusa, s'atura.
+    entrada, perfil, proveidor i model, pla de chunks; run parcial, o fallit per
+    `worker_lost`/`internal_error`, i no superat per cap run mes nou) son les de
+    `plan_resume` i `run_is_superseded`: aqui no n'hi ha cap de propia. Un parcial
+    ja no es mai vigent (3B-2 §6.3). Si refusa, s'atura.
+
+    `profile` no te cap valor per defecte: un sol perfil, el que la CLI resol
+    (`resolve_profile`: `--profile` o el de producte).
     """
     from types import SimpleNamespace
 
     from app.core.errors import ResumeNotAllowedError
     from app.models.requirements import RequirementExtractionRun
-    from app.services.requirement_analysis import plan_resume, restrict_resume
+    from app.services.requirement_analysis import (
+        plan_resume,
+        restrict_resume,
+        run_is_superseded,
+    )
 
     current = await analysis_input(session, tender.id)
     chunks = build_chunks(current.documents)
@@ -417,7 +452,8 @@ async def preview_resume(
             fingerprint=current.fingerprint,
             chunks=chunks,
             provider=SimpleNamespace(name=provider_name, model=model),
-            profile=profiles.V3,
+            profile=profile,
+            superseded=source is not None and await run_is_superseded(session, source),
         )
     except ResumeNotAllowedError as exc:
         reason = (exc.details or {}).get("reason", "resume_refused")
@@ -497,6 +533,28 @@ class ProbePlan:
     history: Any = None
     provider_calls_made: int = 0
     token_estimate: dict[str, Any] = field(default_factory=dict)
+    #: Documents que NO entren al pla, i per que (`analysis_input().skipped`).
+    skipped: list[dict[str, Any]] = field(default_factory=list)
+    #: QA agregada de les extraccions llegides; `unknown` = ningu ho ha mirat, NO bona.
+    qa_status: str = "unknown"
+    #: Nom del document -> `qa_status` de la seva extraccio vigent (`None` = sense QA).
+    qa_by_document: dict[str, str | None] = field(default_factory=dict)
+
+
+async def _qa_by_document(
+    session: AsyncSession, documents: list[AnalyzableDocument]
+) -> dict[str, str | None]:
+    """El `qa_status` de l'extraccio vigent de cada plec del pla. Nomes llegeix."""
+    ids = [uuid.UUID(document.extraction_id) for document in documents]
+    statuses: dict[str, str | None] = {}
+    if ids:
+        rows = await session.execute(
+            sa.select(TenderDocumentExtraction.id, TenderDocumentExtraction.qa_status).where(
+                TenderDocumentExtraction.id.in_(ids)
+            )
+        )
+        statuses = {str(extraction_id): status for extraction_id, status in rows.all()}
+    return {document.document_name: statuses.get(document.extraction_id) for document in documents}
 
 
 async def build_probe_plan(
@@ -509,8 +567,13 @@ async def build_probe_plan(
     model: str,
     database: str = "",
     alembic_revision: str = "",
+    profile: profiles.ExtractorProfile,
 ) -> tuple[ProbePlan, list[Chunk]]:
-    """Que s'enviaria. Nomes llegeix: cap proveidor, cap run, cap escriptura."""
+    """Que s'enviaria. Nomes llegeix: cap proveidor, cap run, cap escriptura.
+
+    `profile` no te cap valor per defecte: un sol perfil, el que la CLI resol
+    (`resolve_profile`: `--profile` o el de producte).
+    """
     current = await analysis_input(session, tender.id)
     if not current.documents:
         raise ProbeError("La licitacio no te cap plec analitzable.")
@@ -527,7 +590,7 @@ async def build_probe_plan(
     selected = parse_chunk_selection(chunks_raw, chunks)
     by_index = {chunk.index: chunk for chunk in chunks}
     located = locate(chunks, locators)
-    profile = profiles.V3
+    qa_by_document = await _qa_by_document(session, current.documents)
 
     history = await usage_history(session, prompt_version=profile.prompt_version, model=model)
 
@@ -569,6 +632,9 @@ async def build_probe_plan(
         max_provider_calls=len(selected),
         token_estimate=estimate_tokens(history, len(selected), profile.prompt_version, model),
         history=history,
+        skipped=[{"name": s.document_name, "reason": s.reason} for s in current.skipped],
+        qa_status=combine_status(list(qa_by_document.values())).value,
+        qa_by_document=qa_by_document,
     )
     return plan, chunks
 
@@ -604,8 +670,8 @@ def _page_range(chunk: Chunk) -> str:
 
 def render_plan(plan: ProbePlan) -> str:
     lines = [
-        f"PLA v3 (no s'ha construit ni cridat cap proveidor) · base {plan.database!r} "
-        f"a {plan.alembic_revision}",
+        f"PLA {plan.profile} (no s'ha construit ni cridat cap proveidor) · base "
+        f"{plan.database!r} a {plan.alembic_revision}",
         f"Licitacio {plan.tender_id} · expedient {plan.expediente!r} · {plan.buyer!r}",
         f"  external_id: {plan.external_id}",
         f"Perfil {plan.profile}: {plan.extractor_version} / {plan.prompt_version} / "
@@ -613,9 +679,18 @@ def render_plan(plan: ProbePlan) -> str:
         f"Proveidor previst: {plan.provider} · model {plan.model} · limit de sortida "
         f"{plan.output_token_cap} tokens · temps maxim per crida {plan.timeout_seconds:g} s",
         f"Documents: {len(plan.documents)} · pagines: {plan.pages_total} · chunks: "
-        f"{plan.chunks_total}",
+        f"{plan.chunks_total} · omesos: {len(plan.skipped)}",
     ]
-    lines += [f"    {d['type']:<22} {d['pages']:>4} pag  {d['name']}" for d in plan.documents]
+    lines += [
+        f"    {d['type']:<22} {d['pages']:>4} pag  {d['name']}  "
+        f"(QA {plan.qa_by_document.get(d['name']) or 'unknown'})"
+        for d in plan.documents
+    ]
+    lines += [f"    omes: {s['name']} ({s['reason']})" for s in plan.skipped]
+    lines.append(
+        f"QA: {plan.qa_status} (agregat de les extraccions llegides; unknown = ningu ho ha "
+        "mirat, no vol dir bona)"
+    )
     if plan.located:
         lines.append("Pagines localitzades (chunks que les contenen):")
         lines += [f"    {label}: {indexes}" for label, indexes in plan.located.items()]
@@ -747,6 +822,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--locate", action="append", default=[],
                         help="ETIQUETA=tipus_document:pagina per trobar-ne el chunk (repetible)")
     parser.add_argument("--provider", default=None, help="proveidor (per defecte, ENV)")
+    parser.add_argument("--profile", choices=PROFILE_CHOICES, default=None,
+                        help="perfil d'extraccio (per defecte, REQUIREMENTS_PRODUCT_PROFILE; "
+                        "la v3 es la interna de la sonda)")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--plan-only", action="store_true",
                       help="nomes el pla: cap proveidor, cap crida, cap escriptura")
@@ -823,6 +901,7 @@ async def _run_with_session(
         if args.plan_only and session.bind.dialect.name == "postgresql":
             await session.execute(sa.text("SET TRANSACTION READ ONLY"))
         try:
+            profile = resolve_profile(getattr(args, "profile", None))
             revision = await check_database(session, url)
             tender = await resolve_single_tender(
                 session, expediente=args.expediente, tender_id=args.tender_id,
@@ -831,13 +910,14 @@ async def _run_with_session(
             plan, _ = await build_probe_plan(
                 session, tender, chunks_raw=args.chunks, locators=locators,
                 provider_name=provider_name, model=model,
-                database=url.database, alembic_revision=revision,
+                database=url.database, alembic_revision=revision, profile=profile,
             )
             resume = None
             if args.resume_from_run is not None:
                 resume = await preview_resume(
                     session, tender, args.resume_from_run,
                     provider_name=provider_name, model=model, only_raw=args.resume_chunks,
+                    profile=profile,
                 )
                 plan.selected_chunks = resume.send
                 plan.selected = [c for c in plan.selected if c.index in set(resume.send)]
@@ -858,25 +938,35 @@ async def _run_with_session(
             print("\nNO s'ha construit ni cridat cap proveidor i no s'ha escrit res.")
             return EXIT_OK
 
+        from app.core.errors import AnalysisNotAllowedError
         from app.services.requirement_analysis import analyze_tender_requirements
 
-        if resume is not None:
-            # La represa de la canonada, sense cap mecanisme propi: torna a fer
-            # `plan_resume` i les seves comprovacions abans de cap crida.
-            outcome = await analyze_tender_requirements(
-                session, tender, provider=provider, profile=profiles.V3,
-                resume_from_run_id=args.resume_from_run,
-                # Represa selectiva: la canonada torna a aplicar `restrict_resume`.
-                only_chunks=(
-                    frozenset(resume.send) if args.resume_chunks is not None else None
-                ),
-            )
-        else:
-            selected = frozenset(plan.selected_chunks)
-            outcome = await analyze_tender_requirements(
-                session, tender, provider=provider, profile=profiles.V3, force=True,
-                only_chunks=None if len(selected) == plan.chunks_total else selected,
-            )
+        # La canonada aplica la porta unica (3B-2 §6.7, `llm_budget.provider_gate`)
+        # abans de reservar el run i de cap crida: model pinat, preu, pressupost no
+        # esgotat i estimacio dins del cap (`canary` amb --chunks de com a molt 2).
+        try:
+            if resume is not None:
+                # La represa de la canonada, sense cap mecanisme propi: torna a fer
+                # `plan_resume` i les seves comprovacions abans de cap crida.
+                outcome = await analyze_tender_requirements(
+                    session, tender, provider=provider, profile=profile,
+                    resume_from_run_id=args.resume_from_run,
+                    # Represa selectiva: la canonada torna a aplicar `restrict_resume`.
+                    only_chunks=(
+                        frozenset(resume.send) if args.resume_chunks is not None else None
+                    ),
+                )
+            else:
+                selected = frozenset(plan.selected_chunks)
+                outcome = await analyze_tender_requirements(
+                    session, tender, provider=provider, profile=profile, force=True,
+                    only_chunks=None if len(selected) == plan.chunks_total else selected,
+                )
+        except AnalysisNotAllowedError as exc:
+            await session.rollback()
+            print(f"No es pot executar: {exc.code} - {exc.message}")
+            print("NO s'ha cridat cap proveidor i no s'ha reservat cap run.")
+            return EXIT_NOT_ALLOWED
         result = outcome.run
         rows = chunk_report(result)
         summary = {

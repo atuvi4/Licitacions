@@ -1,38 +1,60 @@
 import Link from "next/link";
 
+import { cpvMatch, cpvMatchText, type CpvMatch } from "@/components/catalogue/cpvMatch";
 import { PreFitSummary } from "@/components/catalogue/PreFitSummary";
 import { LinkButton, StatusPill } from "@/components/ui";
 import { formatDate, formatMoney } from "@/lib/format";
-import { TENDER_STATUS_LEVEL, deadlineLevel } from "@/lib/labels";
+import { deadlineCountdownView, tenderStatusView } from "@/lib/labels";
 import type { TenderMatch } from "@/lib/matching";
 import {
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
-  TENDER_STATUS_LABELS,
-  daysUntilDeadline,
+  cpvDescription,
   labelOf,
   sourceLabel,
   type SourceFacet,
   type TenderListItem,
 } from "@/lib/tenders";
 
+/** Quin CPV de la fila ha fet coincidir el filtre (C4), quan n'hi ha un d'aplicat. */
+export function CpvMatchLine({ match }: { match: CpvMatch }) {
+  return (
+    <p data-cpv-match={match.kind} className={`mt-0.5 text-caption ${match.kind === "main" ? "text-success" : "text-brand-strong"}`}>
+      {cpvMatchText(match)}
+    </p>
+  );
+}
+
+/** El comptador de dies de `lib/deadline` (A11): el mateix que a la fitxa i al workspace. */
 export function DeadlineCell({ value }: { value: string | null }) {
-  const days = daysUntilDeadline(value);
-  if (!value || days === null) {
+  const countdown = deadlineCountdownView(value);
+  if (!value || countdown.days === null) {
     return (
       <StatusPill level="neutral" size="sm">
         Sense termini
       </StatusPill>
     );
   }
-  const text = days < 0 ? "Tancat" : days === 0 ? "Avui" : `${days} ${days === 1 ? "dia" : "dies"}`;
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-      <StatusPill level={deadlineLevel(days)} size="sm">
-        {text}
+      <StatusPill level={countdown.level} size="sm">
+        {countdown.text}
       </StatusPill>
       <span className="text-caption whitespace-nowrap text-muted tabular-nums">{formatDate(value)}</span>
     </div>
+  );
+}
+
+/** L'estat vigent (A12) i, si el termini mana, l'estat de la font a part. */
+export function TenderStatusPills({ tender }: { tender: { status: string; deadline_at: string | null } }) {
+  const view = tenderStatusView(tender);
+  return (
+    <>
+      <StatusPill level={view.level} size="sm">
+        {view.label}
+      </StatusPill>
+      {view.sourceStatus && <span className="text-caption text-muted">Estat a la font: {view.sourceStatus}</span>}
+    </>
   );
 }
 
@@ -57,12 +79,17 @@ export function CatalogueRow({
   tender,
   match,
   sources,
+  cpvFilter,
 }: {
   tender: TenderListItem;
   match: TenderMatch | null;
   sources?: SourceFacet[];
+  /** El filtre de CPV aplicat, si n'hi ha: la fila diu per quin CPV hi entra (C4). */
+  cpvFilter?: string | null;
 }) {
   const mainCpv = tender.cpvs.find((cpv) => cpv.is_main) ?? tender.cpvs[0] ?? null;
+  const mainDescription = mainCpv ? cpvDescription(mainCpv) : null;
+  const matched = cpvMatch(tender.cpvs, cpvFilter);
   const source = sourceLabel(tender.source_code, sources);
   const amount = tender.estimated_value ?? tender.base_budget_without_tax ?? tender.base_budget;
   const detail = `/licitacions/${tender.id}`;
@@ -101,19 +128,18 @@ export function CatalogueRow({
             {mainCpv ? (
               <span className="break-words">
                 <span className="tabular-nums">{mainCpv.cpv_code}</span>
-                {mainCpv.description && <span className="text-muted"> · {mainCpv.description}</span>}
+                {mainDescription && <span className="text-muted"> · {mainDescription}</span>}
               </span>
             ) : (
               <span className="text-muted">Sense CPV</span>
             )}
+            {matched && <CpvMatchLine match={matched} />}
           </Fact>
           <Fact label="Font">{source ?? <span className="text-muted">Sense font</span>}</Fact>
         </dl>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <StatusPill level={Object.hasOwn(TENDER_STATUS_LEVEL, tender.status) ? TENDER_STATUS_LEVEL[tender.status] : "neutral"} size="sm">
-            {labelOf(TENDER_STATUS_LABELS, tender.status, "Estat desconegut")}
-          </StatusPill>
+          <TenderStatusPills tender={tender} />
           {tender.source_removed_at && (
             <StatusPill level="neutral" size="sm">
               Ja no disponible a la font
@@ -132,11 +158,9 @@ export function CatalogueRow({
           <PreFitSummary match={match} />
         </div>
         <div className="flex flex-wrap gap-2">
-          <LinkButton href={detail} variant="secondary" size="sm" className="min-h-11 md:min-h-0">
-            Veure
-          </LinkButton>
-          <LinkButton href={`${detail}?tab=analisi`} variant="primary" size="sm" className="min-h-11 md:min-h-0">
-            Analitzar
+          {/* Una sola acció (addendum 3B-2, D3): «Analitzar» prometia una anàlisi que la targeta no fa. */}
+          <LinkButton href={detail} variant="primary" size="sm" className="min-h-11 md:min-h-0">
+            Obre la fitxa
           </LinkButton>
         </div>
       </div>

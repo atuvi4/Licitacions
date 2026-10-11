@@ -24,7 +24,7 @@ export function SidebarNavigation({ pathname, onNavigate, counts = {} }: Sidebar
           <ul className="space-y-0.5">
             {group.items.map((item) => {
               const active = isNavigationActive(pathname, item.href);
-              const count = counts[item.countKey];
+              const count = item.countKey ? counts[item.countKey] : undefined;
               const showCount = count !== undefined && count !== 0;
               const Icon = item.icon;
               return (

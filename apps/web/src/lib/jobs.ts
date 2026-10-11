@@ -50,11 +50,19 @@ const JOB_ERROR_MESSAGES: Record<string, string> = {
   permission_denied: "El teu rol no pot llançar anàlisis.",
   no_documents: "No hi ha cap document per processar.",
   internal_error: "Error intern en executar la feina.",
+  public_tender_canonical_only:
+    "En una licitació pública l'anàlisi és la canònica: no es poden triar documents, perfil ni forçar-la.",
+  forced_not_canonical: "Anàlisi forçada per l'operador: no és mai la vigent.",
+  requirement_run_superseded: "Hi ha una anàlisi més nova del plec: revisa-la abans de continuar.",
+  requirements_outdated: "Els plecs han canviat des d'aquesta anàlisi: cal una anàlisi nova.",
 };
 
 export function jobErrorMessage(code: string | null): string {
   if (!code) return "La feina no s'ha pogut completar.";
-  return JOB_ERROR_MESSAGES[code] ?? `La feina no s'ha pogut completar (${code}).`;
+  if (Object.hasOwn(JOB_ERROR_MESSAGES, code)) return JOB_ERROR_MESSAGES[code];
+  // Confirmar una quota bloquejada respon 422 amb el codi del motiu (3B-2 §6.1).
+  if (Object.hasOwn(BLOCKING_REASON_TEXT, code)) return BLOCKING_REASON_TEXT[code];
+  return `La feina no s'ha pogut completar (${code}).`;
 }
 
 export interface AnalysisQuote {
@@ -90,8 +98,125 @@ export interface AnalysisQuote {
   estimated_output_tokens: number | null;
   max_chunks: number;
   allowed: boolean;
-  blocking_reason: string | null;
+  /** L'únic motiu prioritzat pel qual no es pot iniciar (3B-2 §6.1). */
+  blocking_reason: BlockingReason | null;
+  /** Prerequisits tal com es van calcular. `null` als previews anteriors a 3B-2. */
+  prerequisites: QuotePrerequisites | null;
+  /** Sobre què es faria l'anàlisi: lectura real, simulació o sense motor. */
+  provider_basis: ProviderBasis | null;
+  /** Avisos que no bloquegen (p. ex. `previous_run_completed_empty`). */
+  warnings: string[];
+  /** Cost estimat en dòlars (sostre). `null` sense preu del model. */
+  estimated_cost_usd: number | null;
+  accept_incomplete_package: boolean;
   expires_at: string;
+}
+
+/** `real` · `simulation` · `unconfigured`: sobre què es faria (i si pot ser mai vigent). */
+export type ProviderBasis = "real" | "simulation" | "unconfigured" | "gold";
+
+/** Codis de `blocking_reason` (`BLOCKING_PRIORITY` del servidor) i `nothing_analyzable`. */
+export type BlockingReason =
+  | "provider_not_real"
+  | "model_not_pinned"
+  | "price_unknown"
+  | "budget_exhausted"
+  | "budget_exceeded"
+  | "package_incomplete"
+  | "quality_unknown"
+  | "quality_warning"
+  | "selection_not_canonical"
+  | "analysis_too_large"
+  | "nothing_analyzable";
+
+export type QualityStatus = "good" | "warning" | "poor" | "unknown";
+
+/** Un motiu concret de paquet incomplet (`prerequisites.package.issues`). */
+export interface QuotePackageIssue {
+  code: string;
+  tender_document_id?: string | null;
+  tender_document_ids?: string[];
+  reason?: string;
+  finding_id?: string;
+  gap_code?: string;
+  gap_id?: string;
+}
+
+/**
+ * Prerequisits de la quota (3B-2 §6.1), tal com els desa el servidor. Cap import
+ * global del pressupost: només l'estimació pròpia i booleans.
+ */
+export interface QuotePrerequisites {
+  version: string;
+  provider_basis: ProviderBasis;
+  simulation_allowed?: boolean;
+  /** Cert si la quota faria despesa real: llavors paquet, qualitat i pressupost bloquegen. */
+  enforced?: boolean;
+  public_tender?: boolean;
+  canonical?: boolean;
+  accept_incomplete_package?: boolean;
+  acknowledge_quality?: boolean;
+  model_pinned?: boolean;
+  price_known?: boolean;
+  package?: { status: "complete" | "incomplete" | "unknown"; issues: QuotePackageIssue[]; accepted: boolean };
+  quality?: { status: QualityStatus; documents: { tender_document_id: string; qa_status: string }[]; acknowledged: boolean };
+  budget?: {
+    estimated_cost_usd: number | null;
+    estimated_input_tokens?: number | null;
+    estimated_output_tokens?: number | null;
+    basis?: string;
+    within_run_cap?: boolean;
+    within_total_cap?: boolean;
+    tripped?: boolean;
+  };
+  /** Els que bloquegen, per prioritat (el primer és `blocking_reason`). */
+  failed: string[];
+  /** Els que no bloquegen perquè la quota no faria despesa real. */
+  advisory?: string[];
+  warnings?: string[];
+}
+
+/** El motiu de bloqueig, en català. Cap codi arriba mai al text. */
+export const BLOCKING_REASON_TEXT: Record<string, string> = {
+  provider_not_real:
+    "El servei d'anàlisi no té cap model real configurat: una simulació no llegeix el plec i mai seria vigent.",
+  model_not_pinned: "El model d'anàlisi no està fixat a una versió autoritzada.",
+  price_unknown: "No es coneix el preu del model: no es pot estimar ni limitar el cost.",
+  budget_exhausted: "El pressupost d'anàlisi de la plataforma està esgotat fins a una nova autorització.",
+  budget_exceeded: "El cost estimat d'aquesta anàlisi supera el límit per anàlisi.",
+  package_incomplete:
+    "Al paquet documental hi falten documents: només es pot analitzar acceptant-ho explícitament.",
+  quality_unknown:
+    "La qualitat del text d'algun plec és dolenta o desconeguda: cal reprocessar-lo o revisar-lo abans d'analitzar.",
+  quality_warning: "El text d'algun plec té avisos de qualitat: cal acceptar-ho explícitament.",
+  selection_not_canonical:
+    "En una licitació pública l'anàlisi és la canònica: no es poden triar documents, perfil ni forçar-la.",
+  analysis_too_large: "Aquesta anàlisi supera el límit de fragments del pilot i no es pot llançar.",
+  nothing_analyzable: "Cap plec té text analitzable: processa els plecs primer.",
+};
+
+export function blockingReasonText(code: string | null | undefined): string {
+  if (!code) return "";
+  return Object.hasOwn(BLOCKING_REASON_TEXT, code) ? BLOCKING_REASON_TEXT[code] : "No es pot iniciar l'anàlisi.";
+}
+
+export const PROVIDER_BASIS_TEXT: Record<ProviderBasis, string> = {
+  real: "Lectura real del plec",
+  simulation: "Simulació: no llegeix el plec i el resultat no serà mai vigent",
+  unconfigured: "Sense motor d'anàlisi configurat: no es pot llegir el plec",
+  gold: "Dades de referència: no és una lectura del plec",
+};
+
+/** Avisos de la quota que no bloquegen. */
+export const QUOTE_WARNING_TEXT: Record<string, string> = {
+  previous_run_completed_empty:
+    "L'última anàlisi d'aquests plecs va quedar com a anàlisi acabada sense resultats: cal revisar-la abans de tornar-la a demanar.",
+};
+
+/** Acceptacions explícites de qui confirma (§6.1.3-4). Entren a la quota nova. */
+export interface QuoteAcceptance {
+  accept_incomplete_package?: boolean;
+  acknowledge_quality?: boolean;
 }
 
 export interface AnalysisLimits {
@@ -103,10 +228,15 @@ export interface AnalysisLimits {
   confirm_roles: string[];
 }
 
-/** Preview del volum d'una anàlisi. No crida cap proveïdor ni crea cap feina. */
-export function previewAnalysis(companyId: string, tenderId: string, force: boolean) {
+/**
+ * Preview del volum d'una anàlisi. No crida cap proveïdor ni crea cap feina.
+ * `acceptance`: les acceptacions explícites (paquet incomplet, qualitat), que
+ * formen part de la identitat de la quota i s'han de tornar a calcular.
+ */
+export function previewAnalysis(companyId: string, tenderId: string, force: boolean, acceptance?: QuoteAcceptance) {
   return api.post<AnalysisQuote>(`/companies/${companyId}/tenders/${tenderId}/analysis-quotes`, {
     force,
+    ...acceptance,
   });
 }
 

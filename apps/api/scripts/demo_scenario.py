@@ -319,9 +319,14 @@ async def analyse(client, base: str, tender_id: str) -> None:  # type: ignore[no
     from app.jobs.worker import Worker
     from app.models.enums import WorkJobType
     from app.services.bid_workspace import current_requirement_run
+    from app.services.requirement_analysis import latest_simulation_run
 
     async with SessionFactory() as session:
-        current = await current_requirement_run(session, uuid_of(tender_id))
+        # Amb `fixture` el run es una simulacio i mai no es vigent (3B-2 §6.3): la
+        # demo el troba amb la mateixa regla que la cache de simulacions.
+        current = await current_requirement_run(
+            session, uuid_of(tender_id)
+        ) or await latest_simulation_run(session, uuid_of(tender_id))
     if current is not None:
         print(
             f"  ja hi ha una analisi vigent: {current.status.value}, "
@@ -910,10 +915,6 @@ async def run_tender_flow(  # type: ignore[no-untyped-def]
     created = expect(await client.post(f"{base}/tenders/{tender_id}/workspace", json={}), 200)
     workspace_id = created["workspace"]["id"]
     print(f"  {'creada' if created['created'] else 'ja existia'}: {workspace_id}")
-    checklist = expect(
-        await client.post(f"{base}/workspaces/{workspace_id}/checklist/regenerate"), 200
-    )
-    print(f"  checklist: {checklist['total']} items")
 
     step(f"{label} | Go/No-Go")
     detail = expect(await client.get(f"{base}/workspaces/{workspace_id}"), 200)
@@ -929,6 +930,13 @@ async def run_tender_flow(  # type: ignore[no-untyped-def]
             200,
         )
         print(f"  GO registrat (avisos oberts: {', '.join(detail['open_warnings']) or 'cap'})")
+
+    # Despres del GO: reconciliar la checklist es feina de preparacio i, com la
+    # resta del pas Preparar, el backend l'exigeix amb un GO vigent (3B-2 §7.1.6).
+    checklist = expect(
+        await client.post(f"{base}/workspaces/{workspace_id}/checklist/regenerate"), 200
+    )
+    print(f"  checklist: {checklist['total']} items")
 
     step(f"{label} | dossier")
     synced = expect(await client.post(f"{base}/workspaces/{workspace_id}/dossier/sync"), 200)

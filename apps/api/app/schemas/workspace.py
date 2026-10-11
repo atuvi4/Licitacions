@@ -12,7 +12,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.enums import (
     AnalysisBasis,
@@ -215,9 +215,15 @@ class ComplianceCountersRead(BaseModel):
 
 
 class DossierCoverageRead(BaseModel):
-    """Cobertura DOCUMENTAL dels obligatoris. No es el compliment."""
+    """Cobertura DOCUMENTAL dels obligatoris. No es el compliment.
 
-    mandatory_total: int = 0
+    `analysis_state` diu si hi ha analisi del plec darrere dels comptadors (3B-2
+    §7.1.3). Amb `absent`, `mandatory_total` es nul: «0 de 0» volia dir «ningu no
+    ho ha llegit», no «el plec no en te». Nomes `absent` el deixa nul.
+    """
+
+    analysis_state: Literal["absent", "current", "stale"]
+    mandatory_total: int | None = 0
     covered: int = 0
     missing_document: int = 0
     needs_review: int = 0
@@ -225,6 +231,21 @@ class DossierCoverageRead(BaseModel):
     expired_documents: int = 0
     optional_total: int = 0
     optional_covered: int = 0
+
+    @model_validator(mode="after")
+    def _total_is_null_only_without_analysis(self) -> DossierCoverageRead:
+        if (self.analysis_state == "absent") != (self.mandatory_total is None):
+            raise ValueError("mandatory_total es nul nomes (i sempre) sense analisi")
+        return self
+
+    @classmethod
+    def of(cls, counters: Any, analysis_state: str) -> DossierCoverageRead:
+        """Dels comptadors del dossier (`DossierCoverageCounters`) i el seu estat."""
+        fields = [name for name in cls.model_fields if name != "analysis_state"]
+        values = {name: getattr(counters, name) for name in fields}
+        if analysis_state == "absent":
+            values["mandatory_total"] = None
+        return cls(analysis_state=analysis_state, **values)
 
 
 class WorkspaceSummary(ORMModel):
@@ -247,6 +268,9 @@ class WorkspaceSummary(ORMModel):
     human_decision: WorkspaceDecisionType | None = None
     analysis_basis: AnalysisBasis = AnalysisBasis.PROVIDER_NOT_CONFIGURED
     analysis_outdated: bool = False
+    #: Si hi ha analisi del plec darrere (3B-2 §7.1.3), amb el calcul del dossier.
+    #: L'etiqueta de l'estat `analysis` en depen («Pendent d'analisi» sense cap).
+    analysis_state: Literal["absent", "current", "stale"] = "absent"
     created_at: datetime
 
 

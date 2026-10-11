@@ -6,7 +6,6 @@ import { useMemo, useState } from "react";
 import { CurrentTab } from "@/components/knowledge/CurrentTab";
 import { DeclareDialog, type DeclareTarget } from "@/components/knowledge/DeclareDialog";
 import { HistoricTab } from "@/components/knowledge/HistoricTab";
-import { PendingTab } from "@/components/knowledge/PendingTab";
 import { ScopeDialog } from "@/components/knowledge/ScopeDialog";
 import { QualificationTab } from "@/components/knowledge/qualification/QualificationTab";
 import { EMPTY_RECORDS, type KnowledgeView } from "@/components/knowledge/view";
@@ -22,7 +21,6 @@ import {
   canEditKnowledge,
   canVerifyKnowledge,
   indexSnapshot,
-  summarize,
   type KnowledgeRecords,
   type KnowledgeSnapshot,
   type Observation,
@@ -32,31 +30,26 @@ import { searchMatcher } from "@/lib/text";
 import type { Certification, FinancialYear, Insurance, Person, Project, Registration, Service } from "@/lib/types";
 
 /**
- * Coneixement de l'empresa (fase 2B del motor): què sap Tuvi de l'empresa, amb
- * quina garantia, i què falta validar. Tres vistes sobre les mateixes dades:
- * la feina pendent, el que és actual per categoria, i el que diu l'històric.
- * La quarta, «Qualificació i mitjans», és l'entrada de solvència, experiència,
- * assegurances, registres, persones, equips i recursos quantitatius (0052).
+ * Coneixement de l'empresa (fase 2B del motor): què sap Tuvi de l'empresa i
+ * amb quin estat. Tres vistes sobre les mateixes dades: el que és actual per
+ * categoria, «Qualificació i mitjans» (solvència, experiència, assegurances,
+ * registres, persones, equips i recursos quantitatius, 0052) i el que diu
+ * l'històric.
  *
  * Tot l'estat que es pinta surt de la fotografia (`/knowledge/snapshot`): una
  * dada només surt «Verificada» si la fotografia diu que ho és, és a dir, si té
- * evidència enllaçada.
+ * evidència enllaçada. «Declarat» és un estat vàlid, no una tasca pendent:
+ * l'evidència només es demana quan una licitació la requereix. Per això no hi
+ * ha cap mesurador global ni cap llista de tasques (addendum 3B-2, B1–B3, B5):
+ * cada ítem porta el seu estat i les seves accions.
  */
 
-type TabKey = "pendents" | "actual" | "qualificacio" | "historic";
-const TABS: TabKey[] = ["pendents", "actual", "qualificacio", "historic"];
+type TabKey = "actual" | "qualificacio" | "historic";
+const TABS: TabKey[] = ["actual", "qualificacio", "historic"];
 
 function isTab(value: string | null): value is TabKey {
   return value !== null && (TABS as string[]).includes(value);
 }
-
-const TILES: Array<{ key: "verified" | "declared" | "pending" | "historic" | "unknown"; label: string; hint: string }> = [
-  { key: "verified", label: "Verificat", hint: "amb evidència" },
-  { key: "declared", label: "Declarat", hint: "sense acreditar encara" },
-  { key: "pending", label: "Per acreditar", hint: "dades amb feina pendent" },
-  { key: "historic", label: "Històric detectat", hint: "suggeriments per revisar" },
-  { key: "unknown", label: "Desconegut", hint: "normes, fets i línies sense dada" },
-];
 
 export default function CompanyKnowledgePage() {
   const path = useCompanyPath();
@@ -113,7 +106,6 @@ export default function CompanyKnowledgePage() {
   }
 
   const index = useMemo(() => indexSnapshot(snapshot.data), [snapshot.data]);
-  const summary = useMemo(() => summarize(snapshot.data, vocabulary.data), [snapshot.data, vocabulary.data]);
 
   const title = "Coneixement de l'empresa";
   if (snapshot.error && !snapshot.data) {
@@ -170,9 +162,9 @@ export default function CompanyKnowledgePage() {
   /** Verificada segons la fotografia: editar-la n'invalidarà la verificació. */
   const isVerified = (recordId: string) => index.claims.get(recordId)?.source === "current_verified";
 
-  const todo = summary.pending + summary.historic;
+  // Sempre s'obre al coneixement actual: cap vista de «feina pendent» (B5).
   const urlTab = searchParams?.get("tab") ?? null;
-  const tab: TabKey = isTab(urlTab) ? urlTab : (picked ?? (todo > 0 ? "pendents" : "actual"));
+  const tab: TabKey = isTab(urlTab) ? urlTab : (picked ?? "actual");
   const secondaryError =
     observations.error ??
     records.error ??
@@ -189,7 +181,7 @@ export default function CompanyKnowledgePage() {
     <>
       <PageHeader
         title={title}
-        description={`Què sap Tuvi de ${companyName}: què és actual, què es pot acreditar i què falta validar.`}
+        description={`Què sap Tuvi de ${companyName} i amb quin estat: declarat, verificat amb evidència o detectat a l'històric. L'evidència només es demana quan una licitació la requereix.`}
       />
 
       {secondaryError && (
@@ -197,16 +189,6 @@ export default function CompanyKnowledgePage() {
           <ErrorNotice message={`Una part de les dades no s'ha pogut carregar: ${secondaryError}`} onRetry={reload} />
         </div>
       )}
-
-      <dl className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5" aria-label="Resum del coneixement">
-        {TILES.map((tile) => (
-          <div key={tile.key} data-tile={tile.key} className="rounded-card border border-border bg-surface px-4 py-3 shadow-card">
-            <dt className="text-caption font-medium text-muted">{tile.label}</dt>
-            <dd className="mt-0.5 font-heading text-[24px] leading-tight font-semibold text-ink tabular-nums">{summary[tile.key]}</dd>
-            <p className="text-caption text-muted">{tile.hint}</p>
-          </div>
-        ))}
-      </dl>
 
       {(!canEdit || !canDecide || !canVerify) && (
         <p className="mb-4 text-[13px] leading-5 text-warning">
@@ -230,16 +212,14 @@ export default function CompanyKnowledgePage() {
       <Tabs
         className="mb-5"
         items={[
-          { key: "pendents", label: "Pendents de validar", count: todo > 0 ? todo : undefined, countLevel: "attention" },
           { key: "actual", label: "Coneixement actual" },
           { key: "qualificacio", label: "Qualificació i mitjans" },
-          { key: "historic", label: "Històric detectat", count: summary.historic > 0 ? summary.historic : undefined },
+          { key: "historic", label: "Històric detectat" },
         ]}
         value={tab}
         onChange={(key) => setPicked(key as TabKey)}
       />
 
-      {tab === "pendents" && <PendingTab view={view} onShowCurrent={() => showTab("actual")} />}
       {tab === "actual" && <CurrentTab view={view} />}
       {tab === "qualificacio" && <QualificationTab view={view} />}
       {tab === "historic" && <HistoricTab view={view} onShowCurrent={() => showTab("actual")} />}

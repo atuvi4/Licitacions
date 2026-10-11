@@ -15,6 +15,12 @@ Les regles del model que la base no pot garantir sola, i que aqui s'imposen:
 * els conjunts (territoris, blocs d'un fet, criteris d'un requisit) es
   substitueixen; una repeticio no es cap canvi.
 
+Tota escriptura rep una `Provenance` explicita (0060): el router de tenant
+(`owner_manual`), el gold (`gold`), l'operador de plataforma sobre una licitacio
+publica (`operator`, `app.api.v1.routers.platform_structure`) i la promocio
+d'una proposta (`promoted`, `app.services.structure_proposals`). Una fila nova
+en porta la provenance; una fila que canvia de valor es torna a segellar.
+
 Res d'aixo llegeix el coneixement de cap empresa ni crea cap resultat.
 """
 
@@ -44,6 +50,7 @@ from app.models.tender_structure import TenderBlock, TenderSite
 from app.models.tenders import Tender, TenderLot
 from app.schemas.tender_scope import PROOF_SCHEMA_V1, validate_proof
 from app.services import tender_structure
+from app.services.structure_provenance import Provenance
 
 # Les tres entitats citables de 0049 entren al mateix mecanisme de cites de 0048.
 tender_structure._LINKS.update(
@@ -197,20 +204,29 @@ async def load_scope_item(
 
 
 async def create_scope_item(
-    session: AsyncSession, tender: Tender, fields: dict[str, Any]
+    session: AsyncSession, tender: Tender, fields: dict[str, Any], *, provenance: Provenance
 ) -> TenderScopeItem:
     _check_scope(fields)
     await _assert_block(session, tender, fields.get("block_id"))
     await _assert_lot(session, tender, fields.get("tender_lot_id"))
     await _assert_site(session, tender, fields.get("site_id"))
-    item = TenderScopeItem(tender_id=tender.id, **{k: fields.get(k) for k in SCOPE_FIELDS})
+    item = TenderScopeItem(
+        tender_id=tender.id,
+        **{k: fields.get(k) for k in SCOPE_FIELDS},
+        **provenance.create_kwargs(),
+    )
     session.add(item)
     await session.flush()
     return item
 
 
 async def update_scope_item(
-    session: AsyncSession, tender: Tender, item: TenderScopeItem, fields: dict[str, Any]
+    session: AsyncSession,
+    tender: Tender,
+    item: TenderScopeItem,
+    fields: dict[str, Any],
+    *,
+    provenance: Provenance,
 ) -> bool:
     """S'aplica nomes el que arriba; la coherencia es comprova sobre el resultat."""
     merged = {k: fields[k] if k in fields else getattr(item, k) for k in SCOPE_FIELDS}
@@ -229,6 +245,7 @@ async def update_scope_item(
             setattr(item, name, value)
             changed = True
     if changed:
+        provenance.stamp_update(item)
         await session.flush()
     return changed
 
@@ -326,6 +343,8 @@ async def set_territories(
     tender: Tender,
     requirement: Requirement,
     territories: list[dict[str, Any]],
+    *,
+    provenance: Provenance,
 ) -> bool:
     """Substitueix els territoris del requisit. **Son un conjunt**: la mateixa
     identitat nomes hi es una vegada, l'ordre no compta i el mateix contingut no
@@ -363,6 +382,8 @@ async def set_territories(
                     code_system=_normalise_text(territory.get("code_system")),
                     qualifier=_normalise_text(territory.get("qualifier")),
                     site_id=territory.get("site_id"),
+                    # Nomes les files noves: una identitat que ja hi era conserva la seva.
+                    **provenance.create_kwargs(),
                 )
             )
     await session.flush()
@@ -376,6 +397,7 @@ async def set_territory_semantics(
     *,
     completeness: TerritoryCompleteness | None = None,
     territories: list[dict[str, Any]] | None = None,
+    provenance: Provenance,
 ) -> list[str]:
     """Completesa i territoris alhora: la regla es comprova sobre l'estat FINAL
     (canviar a `not_applicable` i buidar la llista en una sola peticio es valid)
@@ -394,7 +416,9 @@ async def set_territory_semantics(
     if completeness is not None and requirement.territory_completeness != completeness:
         requirement.territory_completeness = completeness
         touched.append(f"completesa={completeness}")
-    if territories is not None and await set_territories(session, tender, requirement, territories):
+    if territories is not None and await set_territories(
+        session, tender, requirement, territories, provenance=provenance
+    ):
         touched.append(f"territoris={final_count}")
     return touched
 
@@ -416,7 +440,12 @@ def set_proof(requirement: Requirement, proof: list[Any] | None) -> bool:
 
 
 async def set_award_links(
-    session: AsyncSession, tender: Tender, requirement: Requirement, criterion_ids: list[uuid.UUID]
+    session: AsyncSession,
+    tender: Tender,
+    requirement: Requirement,
+    criterion_ids: list[uuid.UUID],
+    *,
+    provenance: Provenance,
 ) -> bool:
     """El requisit es la cara exigible d'aquests criteris. Ni punts ni text es copien."""
     wanted = list(dict.fromkeys(criterion_ids))
@@ -432,7 +461,11 @@ async def set_award_links(
     for criterion_id in wanted:
         if criterion_id not in current:
             requirement.award_links.append(
-                RequirementAwardLink(requirement_id=requirement.id, award_criterion_id=criterion_id)
+                RequirementAwardLink(
+                    requirement_id=requirement.id,
+                    award_criterion_id=criterion_id,
+                    **provenance.create_kwargs(),
+                )
             )
     await session.flush()
     return True
@@ -471,11 +504,20 @@ async def load_need(
     )
     if need is None:
         raise NotFoundError("Necessitat no trobada.")
+    # Nomes s'escriu sobre una necessitat d'un requisit de la run vigent (M6).
+    from app.services import tender_structure
+
+    await tender_structure.load_requirement(session, tender, need.requirement_id)
     return need
 
 
 async def create_need(
-    session: AsyncSession, tender: Tender, requirement: Requirement, fields: dict[str, Any]
+    session: AsyncSession,
+    tender: Tender,
+    requirement: Requirement,
+    fields: dict[str, Any],
+    *,
+    provenance: Provenance,
 ) -> RequirementCapabilityNeed:
     _check_need(fields)
     await _assert_criterion(session, tender, fields.get("award_criterion_id"))
@@ -483,6 +525,7 @@ async def create_need(
         requirement_id=requirement.id,
         tender_id=tender.id,
         **{k: fields.get(k) for k in NEED_FIELDS},
+        **provenance.create_kwargs(),
     )
     session.add(need)
     await session.flush()
@@ -490,7 +533,12 @@ async def create_need(
 
 
 async def update_need(
-    session: AsyncSession, tender: Tender, need: RequirementCapabilityNeed, fields: dict[str, Any]
+    session: AsyncSession,
+    tender: Tender,
+    need: RequirementCapabilityNeed,
+    fields: dict[str, Any],
+    *,
+    provenance: Provenance,
 ) -> bool:
     merged = {k: fields[k] if k in fields else getattr(need, k) for k in NEED_FIELDS}
     _check_need(merged)
@@ -504,6 +552,7 @@ async def update_need(
             setattr(need, name, value)
             changed = True
     if changed:
+        provenance.stamp_update(need)
         await session.flush()
     return changed
 
@@ -588,6 +637,7 @@ async def create_fact(
     value_json: dict[str, Any],
     value_schema: str,
     block_ids: list[uuid.UUID],
+    provenance: Provenance,
 ) -> TenderContractFact:
     _check_fact_blocks(fact_code, block_ids)
     wanted = list(dict.fromkeys(block_ids))
@@ -595,7 +645,11 @@ async def create_fact(
         await _assert_block(session, tender, block_id)
     await _assert_scope_free(session, tender, fact_code=fact_code, block_ids=wanted, except_id=None)
     fact = TenderContractFact(
-        tender_id=tender.id, fact_code=fact_code, value_json=value_json, value_schema=value_schema
+        tender_id=tender.id,
+        fact_code=fact_code,
+        value_json=value_json,
+        value_schema=value_schema,
+        **provenance.create_kwargs(),
     )
     session.add(fact)
     await session.flush()
@@ -614,6 +668,7 @@ async def update_fact(
     value_json: dict[str, Any] | None = None,
     value_schema: str | None = None,
     block_ids: list[uuid.UUID] | None = None,
+    provenance: Provenance,
 ) -> bool:
     """S'aplica nomes el que arriba. Les invariants (facturacio general sense
     blocs, un sol fet per codi + abast) es comproven sobre l'estat FINAL abans
@@ -652,6 +707,7 @@ async def update_fact(
                 session.add(ContractFactBlock(fact_id=fact.id, block_id=block_id))
         changed = True
     if changed:
+        provenance.stamp_update(fact)
         await session.flush()
     return changed
 

@@ -34,7 +34,7 @@ from app.models.review import ReviewItem, ReviewItemRevision, ReviewItemSource
 from app.services import review_view
 from tests import test_requirement_analysis as base
 from tests.test_requirement_analysis import QUOTE_27
-from tests.test_requirement_analysis_v3 import _evidence, _requirement, _run_v3
+from tests.test_requirement_analysis_v3 import _evidence, _requirement, _run_v3_real
 
 analyzable = base.analyzable
 _clean_provider = base._clean_provider
@@ -66,7 +66,7 @@ def _payload(extraction_id):
 
 @pytest.fixture
 async def extracted(session, analyzable):
-    run = await _run_v3(session, analyzable, _payload(analyzable["extraction"].id))
+    run = await _run_v3_real(session, analyzable, _payload(analyzable["extraction"].id))
     rows = {r.title: r for r in (await session.scalars(sa.select(Requirement))).all()}
     return {"run": run, "tender_id": analyzable["document"].tender_id, "rows": rows}
 

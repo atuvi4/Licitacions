@@ -99,6 +99,10 @@ class TenderAnalysisRun(UUIDPrimaryKeyMixin, Base):
     rules_version: Mapped[str] = mapped_column(sa.String(40), nullable=False)
     #: SHA-256 d'EXACTAMENT els set inputs anteriors.
     inputs_hash: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    #: 3B-2 §4.4 (0059): si el paquet documental constava com a incomplet en crear la
+    #: run, si qui la va demanar ho va acceptar explicitament. Nul si no constava com
+    #: a incomplet. No entra a l'`inputs_hash`: no es una entrada del motor.
+    accepted_incomplete_package: Mapped[bool | None] = mapped_column(sa.Boolean)
     is_current: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = _created_at()
 

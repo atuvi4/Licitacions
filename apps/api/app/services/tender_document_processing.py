@@ -32,7 +32,12 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.errors import NoContentToExtractError, ProcessingInProgressError
-from app.models.enums import DownloadStatus, ExtractionStatus, PageExtractionStatus
+from app.models.enums import (
+    DownloadStatus,
+    ExtractionStatus,
+    PageExtractionStatus,
+    TenderDocumentOrigin,
+)
 from app.models.tender_documents import (
     TenderDocumentContent,
     TenderDocumentExtraction,
@@ -41,6 +46,7 @@ from app.models.tender_documents import (
     TenderExtractionIssue,
 )
 from app.models.tenders import Tender, TenderDocument
+from app.services.document_alias import assign_duplicate_alias
 from app.services.document_download import DownloadError, DownloadResult, download_document
 from app.services.document_parsers import extract_text_async, parser_version_for
 from app.services.extraction_qa import PageInput as QaPageInput
@@ -158,6 +164,7 @@ async def get_or_create_content(
     sha256: str,
     mime_type: str,
     detected_extension: str,
+    commit: bool = True,
 ) -> tuple[TenderDocumentContent, bool]:
     """Retorna el contingut i si s'acaba de crear.
 
@@ -166,6 +173,12 @@ async def get_or_create_content(
     d'una descarrega o d'algu que els ha pujat. Prendre els camps un per un i
     no un `DownloadResult` es el que permet que les dues entrades comparteixin
     aquest punt sense que la pujada hagi de fer veure que ha baixat res.
+
+    Amb `commit=False` no tanca la transaccio de qui crida (incorporacio atomica
+    de l'operador, 3B-2): la insercio va dins d'un SAVEPOINT i la carrera pel
+    mateix sha es resol igual, sense desfer la resta. Qui crida ha d'haver
+    comencat la transaccio amb alguna escriptura: pysqlite no emet `BEGIN` fins a
+    la primera, i un SAVEPOINT fora de transaccio es confirmaria en alliberar-lo.
     """
     existing = await session.scalar(
         sa.select(TenderDocumentContent).where(TenderDocumentContent.sha256 == sha256)
@@ -184,6 +197,17 @@ async def get_or_create_content(
         detected_extension=detected_extension,
         is_text_extractable=mime_type in settings.document_text_extraction_mime_types,
     )
+    if not commit:
+        try:
+            async with session.begin_nested():
+                session.add(content)
+        except IntegrityError:
+            winner = await session.scalar(
+                sa.select(TenderDocumentContent).where(TenderDocumentContent.sha256 == sha256)
+            )
+            return winner, False
+        return content, True
+
     session.add(content)
     try:
         await session.commit()
@@ -199,6 +223,27 @@ async def get_or_create_content(
     return content, True
 
 
+async def _make_current(session: AsyncSession, file: TenderDocumentFile) -> None:
+    """Fa vigent `file` i destrona qualsevol altre vigent del mateix document.
+
+    Un sol `is_current` per document (`uq_tender_document_files_current`). A
+    PostgreSQL l'index no es diferible i la unitat de treball no garanteix l'ordre
+    de dos UPDATE de la mateixa taula: per aixo el destronament es un UPDATE a
+    part, enviat ABANS de marcar el nou.
+    """
+    await session.execute(
+        sa.update(TenderDocumentFile)
+        .where(
+            TenderDocumentFile.tender_document_id == file.tender_document_id,
+            TenderDocumentFile.is_current.is_(True),
+            TenderDocumentFile.id != file.id,
+        )
+        .values(is_current=False)
+        .execution_options(synchronize_session="fetch")
+    )
+    file.is_current = True
+
+
 async def _get_or_create_content(
     session: AsyncSession, result: DownloadResult
 ) -> tuple[TenderDocumentContent, bool]:
@@ -212,7 +257,11 @@ async def _get_or_create_content(
 
 
 async def _store_extraction(
-    session: AsyncSession, content: TenderDocumentContent, result: ExtractionResult
+    session: AsyncSession,
+    content: TenderDocumentContent,
+    result: ExtractionResult,
+    *,
+    commit: bool = True,
 ) -> TenderDocumentExtraction:
     """Desa una revisio NOVA d'extraccio amb les seves pagines.
 
@@ -299,8 +348,11 @@ async def _store_extraction(
             )
         )
 
-    await session.commit()
-    await session.refresh(extraction)
+    if commit:
+        await session.commit()
+        await session.refresh(extraction)
+    else:
+        await session.flush()
 
     logger.info(
         "document.extract.done",
@@ -322,25 +374,28 @@ async def _store_extraction(
 
 
 async def _extract(
-    session: AsyncSession, content: TenderDocumentContent
+    session: AsyncSession, content: TenderDocumentContent, *, commit: bool = True
 ) -> TenderDocumentExtraction:
     """Parseja els bytes ja guardats. No fa cap peticio HTTP."""
     if not content.is_text_extractable:
-        return await _store_extraction(session, content, unsupported_result(content.mime_type))
+        return await _store_extraction(
+            session, content, unsupported_result(content.mime_type), commit=commit
+        )
 
     data = await get_storage().download(content.storage_key)
     return await _store_extraction(
-        session, content, await extract_text_async(content.mime_type, data)
+        session, content, await extract_text_async(content.mime_type, data), commit=commit
     )
 
 
 async def _ensure_current_extraction(
-    session: AsyncSession, content: TenderDocumentContent, *, force: bool
+    session: AsyncSession, content: TenderDocumentContent, *, force: bool, commit: bool = True
 ) -> tuple[TenderDocumentExtraction, bool]:
     """Retorna l'extraccio vigent i si s'ha hagut de fer feina.
 
     Es reextreu quan es demana explicitament, quan no n'hi ha cap, quan la que
-    hi ha no va acabar, o quan la `parser_version` vigent ha canviat.
+    hi ha no va acabar, o quan la `parser_version` vigent ha canviat. Amb
+    `commit=False` nomes fa flush: la transaccio es de qui crida.
     """
     current = await current_extraction_for(session, content.id)
     up_to_date = (
@@ -353,7 +408,7 @@ async def _ensure_current_extraction(
     )
     if up_to_date and not force:
         return current, False
-    return await _extract(session, content), True
+    return await _extract(session, content, commit=commit), True
 
 
 async def process_tender_document(
@@ -369,7 +424,17 @@ async def process_tender_document(
 
     Sense flags es idempotent: si ja hi ha una versio descarregada amb una
     extraccio vigent, no es toca la xarxa.
+
+    Un document pujat per l'operador (`operator_upload`, 3B-2 §2.2) no te cap URL
+    d'on tornar-lo a baixar: els seus bytes son els pujats. `force_download` no hi
+    fa res (la re-extraccio, si).
     """
+    if force_download and document.origin == TenderDocumentOrigin.OPERATOR_UPLOAD:
+        logger.info(
+            "document.process.force_download_ignored",
+            extra={"document_id": str(document.id), "origin": str(document.origin)},
+        )
+        force_download = False
     await _reclaim_stale(session, document.id)
     current = await current_file_for(session, document.id)
     has_content = current is not None and current.content_id is not None
@@ -398,7 +463,10 @@ async def process_tender_document(
         result = await download_document(document.url, client=client, resolver=resolver)
     except DownloadError as exc:
         file.download_status = DownloadStatus.FAILED
-        file.is_current = previous is None  # una fallada no destrona una versio bona
+        # Una fallada no destrona una versio bona; si no n'hi ha cap, la fallada
+        # nova substitueix la fallada vigent anterior (un sol vigent per document).
+        if previous is None:
+            await _make_current(session, file)
         file.error_code = exc.code
         file.error_message = str(exc)[:500]
         file.http_status = exc.http_status
@@ -426,6 +494,12 @@ async def process_tender_document(
         return ProcessOutcome(file=previous, reused=not force_reextract)
 
     content, created = await _get_or_create_content(session, result)
+    # Si un altre processat ha creat el mateix contingut alhora, la via de la
+    # carrera fa rollback i caduca `file` i `document`. Amb AsyncSession llegir-ne
+    # un atribut caducat faria IO implicit (MissingGreenlet): es recarreguen.
+    for instance in (file, document):
+        if sa.inspect(instance).expired_attributes:
+            await session.refresh(instance)
 
     file.content_id = content.id
     file.download_status = DownloadStatus.DOWNLOADED
@@ -438,9 +512,12 @@ async def process_tender_document(
     file.download_ms = result.download_ms
     file.downloaded_at = datetime.now(UTC)
     file.last_checked_at = datetime.now(UTC)
-    file.is_current = True
-    if previous is not None:
-        previous.is_current = False
+    await _make_current(session, file)
+    await session.commit()
+
+    # Dedup logic (3B-2 §2.1): si un altre document vigent del tender ja te
+    # aquests bytes, el de menys prioritat queda com a alies i no es llegeix.
+    await assign_duplicate_alias(session, document.tender_id, document)
     await session.commit()
 
     # Cas C: si el contingut ja hi era, aqui no es torna a parsejar res.

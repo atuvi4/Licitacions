@@ -91,7 +91,9 @@ describe("Text extret d'un plec", () => {
     const pills = [...container.querySelectorAll("[data-level]")].map((p) => `${p.textContent?.trim()}[${p.getAttribute("data-level")}]`);
     expect(pills).toContain("Poc text · possible escaneig[attention]");
     expect(pills).toContain("Avisos[attention]");
-    expect(container.textContent).toContain("v2 de 2");
+    // Versions en paraules (D6): «Versió 2 de 2», mai una «v2» críptica.
+    expect(container.textContent).toContain("Versió 2 de 2");
+    expect(container.textContent).not.toMatch(/(^|\s)v[12]\b/);
     expect(container.textContent).not.toContain("GetDocumentByIdServlet");
     const banner = screen.getByRole("status");
     expect(banner.textContent).toContain("Pàgina 2: pàgina sense text");
@@ -100,9 +102,10 @@ describe("Text extret d'un plec", () => {
     expect(screen.getByRole("link", { name: /Obre l'original/ }).getAttribute("href")).toBe("/bff/companies/c1/tender-document-files/f2/original");
     // Versions: la vigent i l'anterior, amb data.
     const versions = screen.getByText("Versions").closest("section")!;
-    expect(versions.textContent).toContain("v2");
-    expect(versions.textContent).toContain("v1");
+    expect(versions.textContent).toContain("Versió 2");
+    expect(versions.textContent).toContain("Versió 1");
     expect(versions.textContent).toContain("vigent");
+    expect(versions.textContent).toContain("Cada descàrrega del document és una versió");
   });
 
   it("la navegació de pàgines demana la pàgina següent i mostra el buit d'una pàgina sense text", async () => {

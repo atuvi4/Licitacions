@@ -17,7 +17,13 @@ import uuid
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import CompanyCtx, SessionDep
-from app.api.v1.routers.tender_structure import _annotatable, _audit, _editable, _visible_tender
+from app.api.v1.routers.tender_structure import (
+    _annotatable,
+    _audit,
+    _editable,
+    _owner,
+    _visible_tender,
+)
 from app.models.audit import AuditAction
 from app.models.requirements import Requirement
 from app.models.tender_scope import RequirementCapabilityNeed, TenderContractFact, TenderScopeItem
@@ -116,7 +122,9 @@ async def create_scope_item(
     tender_id: uuid.UUID, payload: ScopeItemCreate, session: SessionDep, ctx: CompanyCtx
 ):
     tender = await _editable(session, ctx, tender_id)
-    item = await scope.create_scope_item(session, tender, payload.model_dump())
+    item = await scope.create_scope_item(
+        session, tender, payload.model_dump(), provenance=_owner(ctx)
+    )
     await _audit(
         session, ctx, AuditAction.CREATE, "tender_scope_item", item.id,
         f"licitacio={tender.id} abast={item.service_line_code}",
@@ -138,7 +146,7 @@ async def update_scope_item(
     tender = await _editable(session, ctx, tender_id)
     item = await scope.load_scope_item(session, tender, item_id)
     fields = {name: getattr(payload, name) for name in payload.model_fields_set}
-    if await scope.update_scope_item(session, tender, item, fields):
+    if await scope.update_scope_item(session, tender, item, fields, provenance=_owner(ctx)):
         await _audit(
             session, ctx, AuditAction.UPDATE, "tender_scope_item", item.id,
             f"licitacio={tender.id} abast={item.id} camps={','.join(sorted(fields))}",
@@ -180,7 +188,7 @@ async def link_scope_item_citation(
     tender = await _editable(session, ctx, tender_id)
     item = await scope.load_scope_item(session, tender, item_id)
     await scope.link_source_ref(
-        session, entity=item, source_ref_id=payload.source_ref_id, user=ctx.user
+        session, entity=item, source_ref_id=payload.source_ref_id, provenance=_owner(ctx)
     )
     await _audit(
         session, ctx, AuditAction.UPDATE, "tender_scope_item", item.id,
@@ -235,6 +243,7 @@ async def create_contract_fact(
         value_json=payload.value_json,
         value_schema=payload.value_schema,
         block_ids=payload.block_ids,
+        provenance=_owner(ctx),
     )
     await _audit(
         session, ctx, AuditAction.CREATE, "tender_contract_fact", fact.id,
@@ -266,6 +275,7 @@ async def update_contract_fact(
         value_json=payload.value_json,
         value_schema=payload.value_schema,
         block_ids=payload.block_ids,
+        provenance=_owner(ctx),
     ):
         await _audit(
             session, ctx, AuditAction.UPDATE, "tender_contract_fact", fact.id,
@@ -311,7 +321,7 @@ async def link_fact_citation(
     tender = await _editable(session, ctx, tender_id)
     fact = await scope.load_fact(session, tender, fact_id)
     await scope.link_source_ref(
-        session, entity=fact, source_ref_id=payload.source_ref_id, user=ctx.user
+        session, entity=fact, source_ref_id=payload.source_ref_id, provenance=_owner(ctx)
     )
     await _audit(
         session, ctx, AuditAction.UPDATE, "tender_contract_fact", fact.id,
@@ -358,7 +368,7 @@ async def read_requirement_semantics(
     tender_id: uuid.UUID, requirement_id: uuid.UUID, session: SessionDep, ctx: CompanyCtx
 ):
     tender = await _visible_tender(session, ctx.company_id, tender_id)
-    requirement = await structure.load_requirement(session, tender, requirement_id)
+    requirement = await structure.load_requirement(session, tender, requirement_id, for_write=False)
     return await _semantics_read(session, requirement)
 
 
@@ -391,13 +401,14 @@ async def update_requirement_semantics(
         territories=(
             None if payload.territories is None else [t.model_dump() for t in payload.territories]
         ),
+        provenance=_owner(ctx),
     )
     if "proof" in payload.model_fields_set and scope.set_proof(
         requirement, None if payload.proof is None else [p.model_dump() for p in payload.proof]
     ):
         touched.append("proves")
     if payload.award_criterion_ids is not None and await scope.set_award_links(
-        session, tender, requirement, payload.award_criterion_ids
+        session, tender, requirement, payload.award_criterion_ids, provenance=_owner(ctx)
     ):
         touched.append(f"criteris={len(payload.award_criterion_ids)}")
     if touched:
@@ -429,7 +440,9 @@ async def create_capability_need(
 ):
     tender = await _annotatable(session, ctx, tender_id)
     requirement = await structure.load_requirement(session, tender, requirement_id)
-    need = await scope.create_need(session, tender, requirement, payload.model_dump())
+    need = await scope.create_need(
+        session, tender, requirement, payload.model_dump(), provenance=_owner(ctx)
+    )
     await _audit(
         session, ctx, AuditAction.CREATE, "requirement_capability_need", need.id,
         f"requisit={requirement.id} necessitat={need.capability_code or need.unmapped_capability}",
@@ -453,7 +466,7 @@ async def update_capability_need(
     tender = await _annotatable(session, ctx, tender_id)
     need = await scope.load_need(session, tender, need_id)
     fields = {name: getattr(payload, name) for name in payload.model_fields_set}
-    if await scope.update_need(session, tender, need, fields):
+    if await scope.update_need(session, tender, need, fields, provenance=_owner(ctx)):
         await _audit(
             session, ctx, AuditAction.UPDATE, "requirement_capability_need", need.id,
             f"necessitat={need.id} camps={','.join(sorted(fields))}",
@@ -496,7 +509,7 @@ async def link_need_citation(
     tender = await _annotatable(session, ctx, tender_id)
     need = await scope.load_need(session, tender, need_id)
     await scope.link_source_ref(
-        session, entity=need, source_ref_id=payload.source_ref_id, user=ctx.user
+        session, entity=need, source_ref_id=payload.source_ref_id, provenance=_owner(ctx)
     )
     await _audit(
         session, ctx, AuditAction.UPDATE, "requirement_capability_need", need.id,

@@ -9,6 +9,7 @@ from app.models.classification import (
     TenderDocumentRoleDecision,
     TenderDocumentRoleSuggestion,
 )
+from app.models.company_runs import CompanyTenderRequirementRun
 from app.models.compliance import (
     AssessmentEvidence,
     CompanyComplianceRun,
@@ -18,6 +19,12 @@ from app.models.cpv import CompanyCPVPreference, CPVCode, ServiceCPV
 from app.models.credentials import CompanyCertification, CompanyInsurance, CompanyRegistration
 from app.models.dimensions import WorkspaceDimension, WorkspaceDimensionObservation
 from app.models.documents import Document, DocumentLink
+from app.models.global_classification import (
+    DocumentRoleReview,
+    GlobalDocumentClassificationFinding,
+    GlobalDocumentClassificationRun,
+    GlobalDocumentRoleSuggestion,
+)
 from app.models.identity import Company, CompanyMembership, User
 from app.models.issues import WorkspaceIssue, WorkspaceIssueSourceRef
 from app.models.jobs import JobRequest, WorkJob
@@ -36,6 +43,7 @@ from app.models.knowledge import (
     SolutionCapability,
     SolutionProduct,
 )
+from app.models.llm_budget import LlmBudgetAuthorization, LlmSpendLedger
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
 from app.models.offer import (
     EconomicOffer,
@@ -43,6 +51,7 @@ from app.models.offer import (
     EconomicOfferLot,
     EconomicOfferSection,
 )
+from app.models.package import TenderPackageGap
 from app.models.people import CompanyPerson, PersonQualification
 from app.models.profile import (
     CompanyContractPreferences,
@@ -77,6 +86,7 @@ from app.models.review import (
 from app.models.solution_option_dimensions import WorkspaceSolutionOptionDimension
 from app.models.solution_options import WorkspaceSolutionOption
 from app.models.sources import IngestionRun, Source, SourceRecord
+from app.models.structure_proposals import TenderStructureProposal
 from app.models.submission import (
     SubmissionPackage,
     SubmissionPackageApproval,
@@ -176,6 +186,7 @@ __all__ = [
     "CompanyCPVPreference",
     "CompanyCertification",
     "CompanyComplianceRun",
+    "CompanyTenderRequirementRun",
     "CompanyContractPreferences",
     "CompanyFinancialYear",
     "CompanyInsurance",
@@ -196,6 +207,8 @@ __all__ = [
     "EconomicOfferSection",
     "IngestionRun",
     "JobRequest",
+    "LlmBudgetAuthorization",
+    "LlmSpendLedger",
     "PersonQualification",
     "ProjectCPV",
     "Requirement",
@@ -235,7 +248,13 @@ __all__ = [
     "TenderScopeItemSourceRefLink",
     "TenderSite",
     "TenderSiteSourceRefLink",
+    "TenderStructureProposal",
     "TenderLotCPV",
+    "TenderPackageGap",
+    "DocumentRoleReview",
+    "GlobalDocumentClassificationFinding",
+    "GlobalDocumentClassificationRun",
+    "GlobalDocumentRoleSuggestion",
     "TenderRevision",
     "TenderSourceRef",
     "RequirementSourceRefLink",

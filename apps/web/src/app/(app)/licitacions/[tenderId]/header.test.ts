@@ -87,8 +87,18 @@ describe("pestanyes", () => {
 });
 
 describe("línia de requisits de la capçalera", () => {
-  it("sense anàlisi: «Plec sense analitzar» i cap detall", () => {
-    expect(requirementsLine(null, null)).toEqual({ text: "Plec sense analitzar", detail: null, level: "neutral" });
+  it("sense anàlisi: «Encara no hi ha cap anàlisi del plec» i cap detall (el mateix text que el dossier)", () => {
+    expect(requirementsLine(null, null)).toEqual({ text: "Encara no hi ha cap anàlisi del plec", detail: null, level: "neutral" });
+    expect(requirementsLine({ run: null, requirements: [], award_criteria: [], is_stale: false, analysis_state: "absent" }, null).text).toBe(
+      "Encara no hi ha cap anàlisi del plec",
+    );
+  });
+
+  it("sense run però amb requisits escrits a mà, `analysis_state` del servidor mana: hi ha anàlisi (M1)", () => {
+    const manual = { id: "m", origin: "manual", archived_at: null, title: "RC", category: "insurance", obligation: "mandatory" } as unknown as RequirementAnalysis["requirements"][number];
+    const line = requirementsLine({ run: null, requirements: [manual, { ...manual, id: "m2" }], award_criteria: [], is_stale: false, analysis_state: "current" }, null);
+    expect(line.text).toBe("Requisits escrits a mà · 2");
+    expect(line.text).not.toContain("Encara no hi ha cap anàlisi");
   });
 
   it("amb compliment avaluat: bloquegen en vermell només si n'hi ha", () => {
@@ -115,11 +125,13 @@ describe("termini, import i candidatura", () => {
     expect(deadlineMeta(null)).toEqual({ level: "neutral", text: "Sense termini", date: null });
   });
 
-  it("termini real: dies i data, nivell del diccionari", () => {
-    const soon = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
-    expect(deadlineMeta(soon)).toMatchObject({ level: "blocking", text: "5 dies", date: formatDateTime(soon) });
-    const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
-    expect(deadlineMeta(past)).toMatchObject({ level: "blocking", text: "Tancat" });
+  it("termini real: dies naturals (regla única de lib/deadline), data i nivell del diccionari", () => {
+    const now = new Date("2026-10-09T16:00:00Z");
+    expect(deadlineMeta("2026-10-14T10:00:00Z", now)).toMatchObject({ level: "blocking", text: "5 dies", date: formatDateTime("2026-10-14T10:00:00Z") });
+    // El cas del pilot: 11 dies i 18 hores són 12 dies naturals, aquí i a Candidatures.
+    expect(deadlineMeta("2026-10-21T10:00:00Z", now)).toMatchObject({ text: "12 dies" });
+    // Un termini passat no és cap urgència: neutre, mai vermell.
+    expect(deadlineMeta("2026-10-06T10:00:00Z", now)).toMatchObject({ level: "neutral", text: "Fora de termini" });
   });
 
   it("import: valor estimat, si no pressupost base, si no «—» sense inferir", () => {
@@ -134,5 +146,13 @@ describe("termini, import i candidatura", () => {
     expect(candidatureMeta(ws)).toEqual({ status: { level: "running", label: "Preparant oferta" }, decision: { level: "ready", label: "GO" } });
     const pending = { status: "awaiting_decision", human_decision: null } as WorkspaceDetail;
     expect(candidatureMeta(pending)).toEqual({ status: { level: "attention", label: "Pendent de decisió" }, decision: null });
+  });
+
+  it("l'estat «analysis» s'etiqueta segons l'anàlisi real del plec (A13): absent, obsoleta o en curs", () => {
+    const coverage = (analysis_state: "absent" | "current" | "stale") =>
+      ({ status: "analysis", human_decision: null, dossier_coverage: { analysis_state, mandatory_total: analysis_state === "absent" ? null : 3 } }) as unknown as WorkspaceDetail;
+    expect(candidatureMeta(coverage("absent"))?.status.label).toBe("Pendent d'anàlisi");
+    expect(candidatureMeta(coverage("stale"))?.status.label).toBe("Anàlisi obsoleta");
+    expect(candidatureMeta(coverage("current"))?.status.label).toBe("En anàlisi");
   });
 });

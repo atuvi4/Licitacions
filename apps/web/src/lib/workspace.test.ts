@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { READINESS_BLOCKER_LABELS, warningLabel, STALE_REASON_LABELS, readinessBlockerLabel, staleReasonLabel } from "./workspace";
+import {
+  PREPARE_READ_ONLY_TEXT,
+  READINESS_BLOCKER_LABELS,
+  STALE_REASON_LABELS,
+  isPrepareEditable,
+  readinessBlockerLabel,
+  staleReasonLabel,
+  warningLabel,
+  workspaceStatusLabel,
+} from "./workspace";
 
 /** Els codis que emet `app/workspace/dossier.py` (BLOCKER_*). Si el backend n'afegeix un, aquesta prova ho diu. */
 const BACKEND_READINESS_BLOCKERS = [
   "decision_not_go",
+  "analysis_missing",
   "mandatory_unresolved",
   "analysis_outdated",
   "mandatory_checklist_blocked",
@@ -59,5 +69,32 @@ describe("warningLabel", () => {
   it("un codi heretat d'Object.prototype dona el text neutre, mai «undefined»", () => {
     expect(warningLabel("toString")).toBe("Avís del compliment anterior");
     expect(warningLabel("constructor")).toBe("Avís del compliment anterior");
+  });
+});
+
+describe("workspaceStatusLabel (A13)", () => {
+  it("l'estat `analysis` s'etiqueta segons l'anàlisi real del plec; el valor de l'estat no canvia", () => {
+    expect(workspaceStatusLabel({ status: "analysis", analysis_state: "absent" })).toBe("Pendent d'anàlisi");
+    expect(workspaceStatusLabel({ status: "analysis", analysis_state: "stale" })).toBe("Anàlisi obsoleta");
+    expect(workspaceStatusLabel({ status: "analysis", analysis_state: "current" })).toBe("En anàlisi");
+    // El detall porta l'estat al dossier; la llista, a la fila.
+    expect(workspaceStatusLabel({ status: "analysis", dossier_coverage: { analysis_state: "absent", mandatory_total: null } })).toBe("Pendent d'anàlisi");
+    // Sense dada (API anterior) no s'inventa res: l'etiqueta de sempre.
+    expect(workspaceStatusLabel({ status: "analysis" })).toBe("En anàlisi");
+    expect(workspaceStatusLabel({ status: "preparing_bid", analysis_state: "absent" })).toBe("Preparant oferta");
+  });
+});
+
+describe("Preparar sense GO (3B-2 §7.1.6, decisió 4)", () => {
+  it("només un GO vigent obre l'edició: la decisió vigent és l'última", () => {
+    expect(isPrepareEditable({ human_decision: "go" })).toBe(true);
+    expect(isPrepareEditable({ human_decision: null })).toBe(false);
+    expect(isPrepareEditable({ human_decision: "no_go" })).toBe(false);
+    // Ajornar després d'un GO també tanca: `human_decision` ja porta l'última.
+    expect(isPrepareEditable({ human_decision: "defer" })).toBe(false);
+  });
+
+  it("la copy del mode lectura és exactament la de la spec", () => {
+    expect(PREPARE_READ_ONLY_TEXT).toBe("Es pot consultar; s'obre a edició amb GO");
   });
 });

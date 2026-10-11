@@ -5,6 +5,7 @@ import {
   FINDING_COPY,
   PREPARE_AREAS,
   blockerCount,
+  blockersByArea,
   findingCopy,
   groupFindings,
   isPrepareArea,
@@ -38,6 +39,26 @@ describe("Recompte de bloquejos", () => {
 
   it("cap problema vol dir cap bloqueig", () => {
     expect(blockerCount([])).toBe(0);
+  });
+});
+
+describe("Recompte de bloquejos per àrea (B6)", () => {
+  it("reparteix els bloquejos per l'àrea on es resolen i ignora avisos i destins que no són àrees", () => {
+    const findings = [
+      findingFixture({ code: "mandatory_unresolved" }),
+      findingFixture({ code: "mandatory_evidence_missing" }),
+      findingFixture({ code: "economic_lot_empty", domain: "economic" }),
+      findingFixture({ code: "mandatory_checklist_blocked" }),
+      findingFixture({ code: "technical_solution_requirement_missing", severity: "warning", domain: "technical" }),
+      findingFixture({ code: "decision_not_go", domain: "workspace" }),
+      findingFixture({ code: "codi_que_no_coneixem" }),
+    ];
+    expect(blockersByArea(findings)).toEqual({ solucio: 0, oferta: 1, dossier: 2, pla: 1 });
+    expect(blockerCount(findings)).toBe(6);
+  });
+
+  it("sense problemes, tot a zero", () => {
+    expect(blockersByArea([])).toEqual({ solucio: 0, oferta: 0, dossier: 0, pla: 0 });
   });
 });
 
@@ -159,6 +180,13 @@ describe("Codis → text i destinació", () => {
 
   it("el que no es resol preparant res porta a Decidir", () => {
     expect(findingCopy("decision_not_go")?.destination).toEqual({ kind: "step", step: "decidir" });
+  });
+
+  it("sense anàlisi del plec: es diu així i porta a analitzar-lo, a la fitxa", () => {
+    const missing = findingCopy("analysis_missing");
+    expect(missing?.label).toBe("Encara no hi ha cap anàlisi del plec");
+    expect(missing?.destination).toEqual({ kind: "tender", tab: "requisits" });
+    expect(missing?.action).toBe("Analitza el plec");
   });
 
   it("els dos findings del motor antic tenen el copy nou, sense dir «anàlisi»", () => {

@@ -23,8 +23,9 @@ from app.schemas.review import ManualRequirementCreate
 from app.services import review_actions, review_runs
 from app.services.requirement_analysis import analyze_tender_requirements
 from tests import test_requirement_analysis as base
+from tests.real_provider import RealNamedFake
 from tests.test_requirement_analysis import PAGE_27, PAGE_28, tender_of
-from tests.test_requirement_analysis_v3 import V3, _evidence, _requirement, _run_v3
+from tests.test_requirement_analysis_v3 import V3, _evidence, _requirement, _run_v3_real
 
 analyzable = base.analyzable
 _clean_provider = base._clean_provider
@@ -75,7 +76,9 @@ async def run_a(session, analyzable):
     first.text = PAGE_27 + LATENCY_LINE + "\n"
     second.text = PAGE_28 + LATENCY_LINE + "\n" + GUARANTEE_LINE + "\n" + NEW_LINE + "\n"
     await session.commit()
-    run = await _run_v3(session, analyzable, _payload(analyzable["extraction"].id, rerun=False))
+    run = await _run_v3_real(
+        session, analyzable, _payload(analyzable["extraction"].id, rerun=False)
+    )
     await _awards_on(session, run)
     return {"tender_id": run.tender_id, "run_id": run.id, "analyzable": analyzable}
 
@@ -85,7 +88,14 @@ async def _rerun(session, run_a):
     analyzable = run_a["analyzable"]
     fake.queue_response(_payload(analyzable["extraction"].id, rerun=True))
     tender = await tender_of(session, analyzable["document"])
-    run = (await analyze_tender_requirements(session, tender, profile=V3, force=True)).run
+    # Una run canonica NOVA sobre el mateix corpus: un altre model real (identitat
+    # d'analisi diferent, cap reaprofitament). No `force`: en una licitacio publica un
+    # run forcat mai es vigent (3B-2 §6.4).
+    run = (
+        await analyze_tender_requirements(
+            session, tender, profile=V3, provider=RealNamedFake(model="claude-test-rerun")
+        )
+    ).run
     await _awards_on(session, run)
     assert run.is_current and run.id != run_a["run_id"]
     return run.id

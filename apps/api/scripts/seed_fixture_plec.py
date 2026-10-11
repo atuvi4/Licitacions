@@ -33,6 +33,7 @@ from app.models.enums import (  # noqa: E402
     ExtractionQuality,
     ExtractionStatus,
     PageExtractionStatus,
+    TenderDocumentOrigin,
     TenderDocumentType,
 )
 from app.models.tender_documents import (  # noqa: E402
@@ -41,7 +42,7 @@ from app.models.tender_documents import (  # noqa: E402
     TenderDocumentFile,
     TenderDocumentPage,
 )
-from app.models.tenders import TenderDocument  # noqa: E402
+from app.models.tenders import Tender, TenderDocument  # noqa: E402
 
 PARSER_VERSION = "fixture-corpus-v1"
 DOCUMENT_NAME = "Plec de clausules administratives (corpus de desenvolupament)"
@@ -62,8 +63,12 @@ async def seed(tender_id: uuid.UUID) -> None:
             print(f"Ja hi era: {existing.id}")
             return
 
+        tender = await session.get(Tender, tender_id)
         document = TenderDocument(
             tender_id=tender_id,
+            # Explicit: la font de la licitacio (potser MANUAL) governa el fixture.
+            origin=TenderDocumentOrigin.FEED,
+            governing_source_id=tender.source_id if tender else None,
             url=f"fixture://{CORPUS_ID}",
             name=DOCUMENT_NAME,
             document_type=TenderDocumentType.ADMINISTRATIVE_TERMS,

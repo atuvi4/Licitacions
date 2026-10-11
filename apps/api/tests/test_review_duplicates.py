@@ -32,7 +32,7 @@ from app.services.review_duplicates import (
 )
 from tests import test_requirement_analysis as base
 from tests.test_requirement_analysis import PAGE_27, PAGE_28
-from tests.test_requirement_analysis_v3 import _evidence, _requirement, _run_v3
+from tests.test_requirement_analysis_v3 import _evidence, _requirement, _run_v3_real
 
 analyzable = base.analyzable
 _clean_provider = base._clean_provider
@@ -193,7 +193,7 @@ async def insurance(session, analyzable):
             evidence=[_evidence(x, eid=eid, page=page, quote=LINE)],
         )
 
-    await _run_v3(
+    await _run_v3_real(
         session,
         analyzable,
         {

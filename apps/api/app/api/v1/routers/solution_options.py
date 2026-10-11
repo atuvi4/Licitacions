@@ -45,6 +45,7 @@ from app.services import economic_offer as offer_service
 from app.services import option_to_offer_line as adopt_service
 from app.services import solution_option_dimensions as link_service
 from app.services import solution_options as service
+from app.services.workspace_gate import assert_workspace_go
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/solution-options", tags=["opcions de solucio"]
@@ -156,6 +157,7 @@ async def create_option(
     """Neix sense decidir. Triar-la es una accio a part i d'una persona."""
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
 
     body = payload.model_dump(exclude={"internal_economics"})
     option = await service.create_option(
@@ -208,6 +210,7 @@ async def update_option(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     option = await service.load_option(session, workspace, option_id)
 
     fields = {
@@ -260,6 +263,7 @@ async def update_internal_economics(
     service.assert_can_edit(ctx.membership.role)
     service.assert_can_write_internal(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     option = await service.load_option(session, workspace, option_id)
 
     sent = payload.model_fields_set
@@ -316,6 +320,7 @@ async def set_selection(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     option = await service.load_option(session, workspace, option_id)
 
     await service.set_selection(
@@ -360,6 +365,7 @@ async def archive_option(
     """La treu de la llista activa. No hi ha esborrat dur. Idempotent."""
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     option = await service.load_option(session, workspace, option_id)
 
     changed = await service.archive_option(
@@ -435,6 +441,7 @@ async def attach_dimension(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     option = await service.load_option(session, workspace, option_id)
 
     changed = await link_service.attach_dimension(
@@ -491,6 +498,7 @@ async def detach_dimension(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     option = await service.load_option(session, workspace, option_id)
 
     changed = await link_service.detach_dimension(
@@ -551,6 +559,7 @@ async def to_offer_line(
     offer_service.assert_can_edit(ctx.membership.role)
     internal = offer_service.can_view_internal_economics(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     offer = await offer_service.get_offer(session, workspace)
 
     adopted = await adopt_service.to_offer_line(

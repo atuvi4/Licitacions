@@ -19,9 +19,10 @@ from sqlalchemy.orm import selectinload
 
 from app.ai.contract_v3 import counts_as_award_criterion
 from app.api.deps import CompanyCtx, CurrentUser, SessionDep
-from app.core.errors import EndpointMovedError, NotFoundError
+from app.core.errors import EndpointMovedError, NotFoundError, PermissionDeniedError
 from app.models.audit import AuditAction
-from app.models.enums import AnalysisRunStatus, RequirementOrigin
+from app.models.enums import AnalysisRunStatus, MembershipRole, RequirementOrigin
+from app.models.identity import CompanyMembership
 from app.models.requirements import (
     AwardCriterion,
     Requirement,
@@ -45,14 +46,22 @@ from app.schemas.requirements import (
     RequirementAnalysisRead,
     RequirementCitationLink,
     RequirementRead,
+    RequirementRunAdoptionIn,
+    RequirementRunAdoptionRead,
 )
-from app.services import audit, manual_requirement, manual_tender, source_refs, tender_structure
-from app.services.requirement_analysis import (
-    analysis_input,
-    run_includes_removed_document,
+from app.services import (
+    audit,
+    manual_requirement,
+    manual_tender,
+    review_runs,
+    source_refs,
+    tender_structure,
+    workspace_dossier,
 )
+from app.services.requirement_analysis import current_run_for
 from app.services.source_refs import resolve_source_ref, resolve_source_refs
-from app.tenders.visibility import visible_to_user
+from app.tenders.visibility import visible_to_company, visible_to_user
+from app.workspace.dossier import ANALYSIS_STALE
 
 router = APIRouter(tags=["analisi de plecs"])
 
@@ -134,16 +143,36 @@ async def run_analysis(tender_id: uuid.UUID, _: CurrentUser):
     response_model=RequirementAnalysisRead,
     summary="Requisits i criteris de l'analisi vigent",
 )
-async def read_analysis(tender_id: uuid.UUID, session: SessionDep, user: CurrentUser):
+async def read_analysis(
+    tender_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    company_id: uuid.UUID | None = Query(default=None),
+):
     await _load_tender(session, tender_id, user.id)
     # El conjunt EFECTIU: l'analisi vigent mes els requisits escrits a ma. Les
     # dues fonts es mantenen separades —`origin` ho diu a cada fila— perque fer
     # veure que un manual surt de l'ultima run seria atribuir a un model una
-    # cosa que ha escrit una persona.
-    effective = await manual_requirement.effective_requirements(session, tender_id)
+    # cosa que ha escrit una persona. La run es la que llegeix l'empresa de l'usuari
+    # (el seu punter o la canonica, 3B-2 §6.5); sense empresa resolta, la global.
+    company_id = await _reading_company(session, user, tender_id, company_id)
+    effective = await manual_requirement.effective_requirements(session, tender_id, company_id)
     run = effective.run
+    canonical = await current_run_for(session, tender_id)
+    # «Hi ha analisi?» es respon amb el mateix calcul que el dossier (3B-2 §7.1.3):
+    # sense run, els requisits escrits a ma son una analisi (`current`); amb run,
+    # `stale` si ja no parla dels plecs d'ara (`run_is_outdated`, la regla del 409).
+    analysis_state = await workspace_dossier.requirement_analysis_state(session, tender_id, run)
+    pointers = {
+        "effective_run_id": run.id if run is not None else None,
+        "canonical_run_id": canonical.id if canonical is not None else None,
+        "adoption_available": company_id is not None
+        and canonical is not None
+        and (run is None or run.id != canonical.id),
+        "analysis_state": analysis_state,
+    }
     if run is None and not effective.manual:
-        return RequirementAnalysisRead()
+        return RequirementAnalysisRead(**pointers)
 
     requirements = (
         await session.scalars(
@@ -214,15 +243,10 @@ async def read_analysis(tender_id: uuid.UUID, session: SessionDep, user: Current
     # `is_stale` parla NOMES de la run extreta i del corpus documental. Un
     # requisit manual no hi entra: una afirmacio humana no caduca perque s'hagi
     # tornat a llegir un PDF, i crear-ne un tampoc no fa que l'analisi cobreixi
-    # els documents d'ara.
-    # Una run que va llegir un plec ja retirat de la font tambe es obsoleta, encara
-    # que ja no quedi cap plec vigent per tornar a analitzar.
-    is_stale = False
-    if run is not None:
-        current = await analysis_input(session, tender_id)
-        is_stale = (
-            bool(current.documents) and current.fingerprint != run.input_fingerprint
-        ) or await run_includes_removed_document(session, run)
+    # els documents d'ara. Una run que va llegir un plec ja retirat de la font
+    # tambe es obsoleta. Es el mateix `stale` d'`analysis_state` (`run_is_outdated`,
+    # la regla del 409): no es calcula dues vegades.
+    is_stale = analysis_state == ANALYSIS_STALE
 
     return RequirementAnalysisRead(
         run=ExtractionRunRead.model_validate(run) if run is not None else None,
@@ -230,6 +254,113 @@ async def read_analysis(tender_id: uuid.UUID, session: SessionDep, user: Current
         award_criteria=criteria_reads,
         award_candidates=candidate_reads,
         is_stale=is_stale,
+        **pointers,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Punter per empresa (3B-2 §6.5)                                                #
+# --------------------------------------------------------------------------- #
+
+#: Qui pot decidir quina analisi es la base de l'empresa: una decisio de licitacio.
+ADOPTION_ROLES = frozenset({MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.BID_MANAGER})
+
+
+async def _membership(
+    session: SessionDep, user, company_id: uuid.UUID | None
+) -> CompanyMembership | None:
+    """La pertinenca de l'usuari a l'empresa demanada, o la seva per defecte.
+
+    Amb `company_id`, ha de ser-ne membre (si no, 404: no es confirma l'existencia
+    de l'empresa). Sense, la marcada per defecte o, si nomes en te una, aquella; si
+    no, cap. L'Administracio Tuvi no entra mai a les dades d'una empresa.
+    """
+    if user.is_superuser:
+        if company_id is not None:
+            raise NotFoundError("Empresa no trobada.")
+        return None
+    query = sa.select(CompanyMembership).where(CompanyMembership.user_id == user.id)
+    if company_id is not None:
+        membership = await session.scalar(query.where(CompanyMembership.company_id == company_id))
+        if membership is None:
+            raise NotFoundError("Empresa no trobada.")
+        return membership
+    memberships = list((await session.scalars(query)).all())
+    defaults = [m for m in memberships if m.is_default]
+    if len(defaults) == 1:
+        return defaults[0]
+    return memberships[0] if len(memberships) == 1 else None
+
+
+async def _company_sees(session: SessionDep, company_id: uuid.UUID, tender_id: uuid.UUID) -> bool:
+    return (
+        await session.scalar(
+            sa.select(Tender.id).where(Tender.id == tender_id, visible_to_company(company_id))
+        )
+    ) is not None
+
+
+async def _reading_company(
+    session: SessionDep, user, tender_id: uuid.UUID, company_id: uuid.UUID | None
+) -> uuid.UUID | None:
+    """L'empresa des de la qual es llegeix la fitxa, si n'hi ha una de resolta que
+    pugui veure la licitacio. Si no, la vista global (`None`)."""
+    membership = await _membership(session, user, company_id)
+    if membership is None or not await _company_sees(session, membership.company_id, tender_id):
+        if company_id is not None:
+            raise NotFoundError("Licitacio no trobada.")
+        return None
+    return membership.company_id
+
+
+@router.post(
+    "/tenders/{tender_id}/analysis/requirements/adopt",
+    response_model=RequirementRunAdoptionRead,
+    summary="L'empresa accepta un run de requisits com la seva base",
+)
+async def adopt_requirement_run(
+    tender_id: uuid.UUID,
+    payload: RequirementRunAdoptionIn,
+    session: SessionDep,
+    user: CurrentUser,
+):
+    """Mou el punter de l'empresa (`company_tender_requirement_runs`) a `run_id`.
+
+    Nomes una analisi real, acabada i vigent (o demanada per la mateixa empresa).
+    No escriu cap fila global: la revisio de l'empresa s'haura de reconciliar pel
+    flux habitual si representava una altra run (`reconciliation_required`).
+    """
+    membership = await _membership(session, user, payload.company_id)
+    if membership is None:
+        raise NotFoundError("Empresa no trobada.")
+    if not await _company_sees(session, membership.company_id, tender_id):
+        raise NotFoundError("Licitacio no trobada.")
+    if membership.role not in ADOPTION_ROLES:
+        raise PermissionDeniedError(
+            "El teu rol no pot decidir quina analisi es la base de l'empresa."
+        )
+    company_id = membership.company_id
+    adoption = await review_runs.adopt_requirement_run(
+        session,
+        company_id=company_id,
+        tender_id=tender_id,
+        run_id=payload.run_id,
+        user_id=user.id,
+    )
+    await audit.record(
+        session,
+        action=AuditAction.UPDATE,
+        company_id=company_id,
+        user_id=user.id,
+        entity_type="company_tender_requirement_run",
+        entity_id=payload.run_id,
+        summary=f"licitacio={tender_id} run={payload.run_id} anterior={adoption.previous_run_id}",
+    )
+    await session.commit()
+    return RequirementRunAdoptionRead(
+        effective_run_id=payload.run_id,
+        previous_run_id=adoption.previous_run_id,
+        reconciliation_required=adoption.reconciliation_required,
     )
 
 

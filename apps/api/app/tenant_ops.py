@@ -144,6 +144,23 @@ PUBLIC_TABLES = frozenset(
         "tender_contract_fact_source_ref_links",
         "tender_cpvs",
         "tender_documents",
+        # Que falta al paquet documental d'un plec (0058): del plec, no d'una empresa.
+        "tender_package_gaps",
+        # Classificacio global dels documents d'un plec i rols revisats per
+        # l'operador (0059): fets globals, cap empresa n'es propietaria. L'override
+        # d'una empresa es `tender_document_role_decisions` (tenant).
+        "global_document_classification_runs",
+        "global_document_role_suggestions",
+        "global_document_classification_findings",
+        "document_role_reviews",
+        # Propostes immutables d'estructura del plec (0060): globals, amb cita;
+        # nomes l'operador les crea i les promou (cap proposta d'empresa en 3B-2).
+        "tender_structure_proposals",
+        # Despesa d'LLM i autoritzacions de pressupost (0061, 3B-2 §6.7): de la
+        # plataforma, com el run que la genera. Cap empresa n'es propietaria, i la
+        # despesa real no s'esborra mai en destruir un tenant.
+        "llm_spend_ledger",
+        "llm_budget_authorizations",
         # La capa documental dels plecs es publica i global: els mateixos bytes
         # es comparteixen entre tenants i no pengen de cap empresa.
         "tender_document_contents",

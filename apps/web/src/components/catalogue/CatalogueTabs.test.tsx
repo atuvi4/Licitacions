@@ -11,17 +11,17 @@ vi.mock("next/navigation", () => ({
 import { CatalogueTabs } from "./CatalogueTabs";
 
 describe("CatalogueTabs", () => {
-  it("dues pestanyes, «Totes» i «Per revisar», amb la vigent marcada", () => {
+  it("dues pestanyes, «Totes» i «Radar · prioritzades» (D2), amb la vigent marcada", () => {
     render(<CatalogueTabs value="totes" />);
     const tabs = screen.getAllByRole("tab");
-    expect(tabs.map((tab) => tab.textContent)).toEqual(["Totes", "Per revisar"]);
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Totes", "Radar · prioritzades"]);
     expect(tabs[0].getAttribute("aria-selected")).toBe("true");
     expect(tabs[1].getAttribute("aria-selected")).toBe("false");
   });
 
   it("canviar de pestanya escriu ?vista= a la URL i conserva la resta de paràmetres", () => {
     render(<CatalogueTabs value="totes" />);
-    fireEvent.click(screen.getByRole("tab", { name: "Per revisar" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Radar · prioritzades" }));
     expect(push).toHaveBeenCalledWith("/licitacions?q=fibra&vista=revisar", { scroll: false });
   });
 });

@@ -12,38 +12,32 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { useResource } from "@/lib/hooks";
 import {
   RECOMMENDATION_LABELS,
-  WORKSPACE_STATUS_LABELS,
   WORKSPACE_STATUS_LEVEL,
-  deadlineLabel,
-  deadlineLevel,
+  deadlineCountdownView,
 } from "@/lib/labels";
 import type { MatchSummary } from "@/lib/matching";
-import type { WorkspaceSummary } from "@/lib/workspace";
+import { workspaceStatusLabel, type WorkspaceSummary } from "@/lib/workspace";
 
 import { attentionPills, decisionPill, groupWorkspaces, nextStep, summaryLine } from "./groups";
 
 /**
  * Llistat de candidatures (handoff L7): en quin pas és cada una i què li
- * falta, sense fusionar recomanació i decisió. Les columnes «Recomanació» i
- * «Decisió» són dues, no una: es pot veure d'un cop d'ull on el sistema deia
- * una cosa i la persona n'ha decidit una altra.
+ * falta, sense fusionar el resultat del motor i la decisió. Les columnes
+ * «Resultat de l'anàlisi» i «Decisió» són dues, no una: es pot veure d'un cop
+ * d'ull on el motor deia una cosa i la persona n'ha decidit una altra (A14: el
+ * motor no recomana ni diu GO/NO-GO; això només ho diu una persona).
  */
 
-const COLUMN_HEADERS = ["Licitació", "Termini", "Encaix", "Recomanació", "Decisió", "Estat", "Acció"];
+// A14: el motor dona un «Resultat de l'anàlisi», no una recomanació; la decisió és humana.
+const COLUMN_HEADERS = ["Licitació", "Termini", "Encaix", "Resultat de l'anàlisi", "Decisió", "Estat", "Acció"];
 const ACTION_CLASS = "min-h-11 w-full justify-center md:min-h-0 md:w-auto";
 
+/** El comptador de `lib/deadline` sobre `deadline_at` (A11): el mateix nombre que a la fitxa. */
 function DeadlineCell({ workspace }: { workspace: WorkspaceSummary }) {
-  const days = workspace.days_remaining;
-  if (days === null) {
-    return (
-      <StatusPill level="neutral" size="sm">
-        Sense termini
-      </StatusPill>
-    );
-  }
+  const countdown = deadlineCountdownView(workspace.deadline_at);
   return (
-    <StatusPill level={workspace.deadline_passed ? "blocking" : deadlineLevel(days)} size="sm">
-      {deadlineLabel(days)}
+    <StatusPill level={countdown.level} size="sm">
+      {countdown.text}
     </StatusPill>
   );
 }
@@ -122,7 +116,7 @@ export default function WorkspacesPage() {
     },
     {
       key: "recommendation",
-      header: "Recomanació",
+      header: "Resultat de l'anàlisi",
       width: "13%",
       cell: (workspace) => (
         <span className="text-[13px] text-muted">
@@ -150,7 +144,7 @@ export default function WorkspacesPage() {
       cell: (workspace) => (
         <div className="flex flex-wrap items-center gap-1">
           <StatusPill level={WORKSPACE_STATUS_LEVEL[workspace.status]} size="sm">
-            {WORKSPACE_STATUS_LABELS[workspace.status]}
+            {workspaceStatusLabel(workspace)}
           </StatusPill>
           {attentionPills(workspace).map((pill) => (
             <StatusPill key={pill.label} level={pill.level} size="sm">
@@ -182,7 +176,7 @@ export default function WorkspacesPage() {
     <>
       <PageHeader
         title="Candidatures"
-        description="Les licitacions que heu decidit mirar de prop. La recomanació és automàtica; la decisió sempre és d'una persona."
+        description="Les licitacions que heu decidit mirar de prop. El resultat de l'anàlisi és automàtic; la decisió sempre és d'una persona."
       />
 
       {workspaces.length === 0 ? (

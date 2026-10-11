@@ -176,10 +176,17 @@ def _replay_payload(x):
 
 async def _replay(session, palamos_like):
     from app.models.tenders import Tender
+    from tests.real_provider import RealNamedFake
 
     fake.queue_response(_replay_payload(palamos_like["extraction_id"]))
     tender = await session.get(Tender, palamos_like["document"].tender_id)
-    return (await analyze_tender_requirements(session, tender, profile=profiles.V3)).run
+    # Es la reproduccio d'un run real: proveidor de nom real (cap xarxa), perque la
+    # lectura de l'API nomes ensenya la run vigent (3B-2 §6.3).
+    return (
+        await analyze_tender_requirements(
+            session, tender, profile=profiles.V3, provider=RealNamedFake()
+        )
+    ).run
 
 
 # --------------------------------------------------------------------------- #

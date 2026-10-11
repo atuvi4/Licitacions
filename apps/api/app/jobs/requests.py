@@ -33,7 +33,7 @@ from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
+from app.ai.profiles import PROFILES, ExtractorProfile
 from app.ai.provider import StructuredLLMProvider, get_provider
 from app.core.config import settings
 from app.core.errors import (
@@ -42,16 +42,19 @@ from app.core.errors import (
     NotFoundError,
     NothingAnalyzableError,
     OperationBusyError,
+    PublicTenderCanonicalOnlyError,
 )
 from app.jobs.params import (
     AnalyzeParams,
     ProcessParams,
     analysis_dedupe_key,
+    canonical_analysis_dedupe_key,
     process_dedupe_key,
 )
 from app.jobs.queue import is_postgres, utcnow
 from app.models.enums import (
     AnalysisRunStatus,
+    AuditAction,
     JobOutcome,
     JobRequestStatus,
     WorkJobStatus,
@@ -60,7 +63,12 @@ from app.models.enums import (
 from app.models.jobs import ACTIVE_WORK_JOB_STATUSES, JobRequest, WorkJob
 from app.models.requirements import RequirementExtractionRun
 from app.models.tenders import Tender, TenderDocument
-from app.services.requirement_analysis import analysis_input, find_reusable_run
+from app.services import audit
+from app.services.requirement_analysis import (
+    analysis_identity,
+    analysis_input,
+    find_reusable_run,
+)
 from app.tenders.visibility import visible_to_company
 
 logger = logging.getLogger(__name__)
@@ -216,7 +224,7 @@ async def submit_analysis_request(
     tender_id: uuid.UUID,
     force: bool = False,
     document_ids: list[uuid.UUID] | None = None,
-    profile: ExtractorProfile = DEFAULT_PROFILE,
+    profile: ExtractorProfile | None = None,
     provider_factory: Callable[[], StructuredLLMProvider] = get_provider,
     expected_fingerprint: str | None = None,
     analysis_quote_id: uuid.UUID | None = None,
@@ -232,9 +240,27 @@ async def submit_analysis_request(
       entre la comprovacio i la insercio, `AnalysisInputChangedError`.
     * `analysis_quote_id`: queda desat a la peticio.
     * `before_commit`: el que ha de passar a la mateixa transaccio.
+
+    En un tender public (sense propietari) la peticio d'una empresa no pot portar
+    `force`, seleccio de documents ni un perfil que no sigui el de producte (422
+    `public_tender_canonical_only`, 3B-2 §6.4), i la normal (sense represa) fa servir
+    la clau canonica `analyze:{tender}:canonical:{analysis_identity}`: cap parametre
+    de tenant hi entra, i dues empreses comparteixen la mateixa feina. `force` i
+    `document_ids` en un tender public nomes els fa l'operador, fora d'aquesta via,
+    i aquells runs mai son canonics.
+
+    `profile` per defecte: el de producte (`REQUIREMENTS_PRODUCT_PROFILE`).
     """
-    await _load_tender(session, tender_id, company_id)
+    tender = await _load_tender(session, tender_id, company_id)
     ids = sorted(set(document_ids or []), key=str)
+    product = PROFILES[settings.REQUIREMENTS_PRODUCT_PROFILE]
+    profile = profile or product
+    public = tender.owner_company_id is None
+    if public and (force or ids or profile.name != product.name):
+        raise PublicTenderCanonicalOnlyError(
+            "En una licitacio publica l'analisi es la canonica: cap empresa no en tria "
+            "els documents, el perfil ni la pot forcar."
+        )
 
     # Un run llancat fora de la cua (script d'operador) ocupa la licitacio. No
     # depen de cap tenant, i per aixo es pot dir obertament.
@@ -319,10 +345,18 @@ async def submit_analysis_request(
             )
         elif force:
             dedupe_key = force_key
+        elif public:
+            dedupe_key = canonical_analysis_dedupe_key(
+                tender_id=tender_id,
+                analysis_identity=analysis_identity(
+                    current.documents, profile=profile, provider=llm
+                ),
+            )
         else:
             dedupe_key = analysis_dedupe_key(**identity, force=False)
-        if not force and resume_from_run_id is None:
-            # Una peticio normal pot aprofitar una execucio `force` compatible.
+        if not force and resume_from_run_id is None and not public:
+            # En una licitacio manual, una peticio normal pot aprofitar una execucio
+            # `force` compatible. En una publica, no: un run forcat mai es canonic.
             job_id = await _active_job(session, force_key)
         if job_id is None:
             job_id, created = await _insert_or_get_job(
@@ -368,6 +402,92 @@ async def submit_analysis_request(
     raise OperationBusyError("No s'ha pogut registrar la peticio ara mateix. Torna-ho a provar.")
 
 
+#: Entitat de l'auditoria d'un `force` d'operador.
+OPERATOR_FORCE_AUDIT_ENTITY = "requirement_analysis_force"
+
+
+async def submit_operator_analysis(
+    session: AsyncSession,
+    *,
+    tender_id: uuid.UUID,
+    user_id: uuid.UUID,
+    document_ids: list[uuid.UUID] | None = None,
+    profile: ExtractorProfile | None = None,
+    provider_factory: Callable[[], StructuredLLMProvider] = get_provider,
+) -> WorkJob:
+    """L'operador encua una analisi FORCADA d'un tender public (3B-2 §6.4).
+
+    Es l'unica via de `force`/`document_ids` en un tender public. Cap peticio de
+    tenant: la feina no es de cap empresa (auditoria amb `company_id=None`). El run
+    que en surti mai no sera canonic (`forced_not_canonical`). La porta de despesa
+    (§6.7) s'aplica igual quan el worker l'executi.
+    """
+    # Import diferit: el servei de documents publics importa la cua de feina.
+    from app.services.public_document_intake import load_public_tender
+
+    await load_public_tender(session, tender_id)
+    ids = sorted(set(document_ids or []), key=str)
+    if ids:
+        found = set(
+            (
+                await session.scalars(
+                    sa.select(TenderDocument.id).where(
+                        TenderDocument.tender_id == tender_id, TenderDocument.id.in_(ids)
+                    )
+                )
+            ).all()
+        )
+        if found != set(ids):
+            raise NotFoundError("Document no trobat.")
+    profile = profile or PROFILES[settings.REQUIREMENTS_PRODUCT_PROFILE]
+    current = await analysis_input(session, tender_id, document_ids=ids or None)
+    if not current.documents:
+        raise NothingAnalyzableError(
+            "Cap document d'aquesta licitacio te text extret per analitzar."
+        )
+    llm = provider_factory()
+    params = AnalyzeParams(profile=profile.name, force=True, document_ids=ids)
+    dedupe_key = analysis_dedupe_key(
+        tender_id=tender_id,
+        fingerprint=current.fingerprint,
+        profile=profile.name,
+        provider=llm.name,
+        model=llm.model,
+        document_ids=ids,
+        force=True,
+    )
+    job_id, _created = await _insert_or_get_job(
+        session,
+        {
+            "id": uuid.uuid4(),
+            "job_type": WorkJobType.ANALYZE_TENDER_REQUIREMENTS,
+            "status": WorkJobStatus.QUEUED,
+            "tender_id": tender_id,
+            "parameters": params.model_dump(mode="json"),
+            "dedupe_key": dedupe_key,
+            "input_fingerprint": current.fingerprint,
+            "provider": llm.name,
+            "model": llm.model,
+            "attempts": 0,
+            "max_attempts": 1,
+        },
+    )
+    if job_id is None:
+        await session.rollback()
+        raise OperationBusyError("No s'ha pogut encuar l'analisi ara mateix. Torna-ho a provar.")
+    await audit.record(
+        session,
+        action=AuditAction.CREATE,
+        company_id=None,
+        user_id=user_id,
+        entity_type=OPERATOR_FORCE_AUDIT_ENTITY,
+        entity_id=job_id,
+        summary=f"tender={tender_id} documents={len(ids)} profile={profile.name}",
+    )
+    await session.commit()
+    return await session.get(WorkJob, job_id)
+
+
 async def submit_process_request(
     session: AsyncSession,
     *,
@@ -378,7 +498,16 @@ async def submit_process_request(
     force_download: bool = False,
     force_reextract: bool = False,
 ) -> Submission:
-    await _load_tender(session, tender_id, company_id)
+    tender = await _load_tender(session, tender_id, company_id)
+    # Una licitacio publica (sense propietari) te documents, descarregues i
+    # extraccions globals: forcar-ne la re-descarrega o la re-extraccio es de
+    # l'operador de plataforma (3B-2 §2.4, §2.6). Sense forcar, el processat
+    # idempotent continua obert a qualsevol empresa.
+    if (force_download or force_reextract) and tender.owner_company_id is None:
+        raise PublicTenderCanonicalOnlyError(
+            "En una licitacio publica nomes l'operador de plataforma pot forcar "
+            "la re-descarrega o la re-extraccio dels plecs."
+        )
     ids = sorted(set(document_ids or []), key=str)
     if ids:
         found = set(

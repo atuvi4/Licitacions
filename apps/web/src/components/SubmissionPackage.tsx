@@ -28,13 +28,17 @@ import { formatDate, formatFileSize } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
 import { MANIFEST_FORMAT_LABELS } from "@/lib/submission";
 import { blockerCount, type FinalReadiness } from "@/lib/readiness";
-import { VALIDITY_LEVEL, deadlineLevel, packageStatusLevel, whoCanDecide } from "@/lib/labels";
+import { VALIDITY_LEVEL, deadlineCountdownView, packageStatusLevel, whoCanDecide } from "@/lib/labels";
 import { formatDateTime } from "@/lib/tenders";
 import {
+  NO_ANALYSIS_ACTION,
+  NO_ANALYSIS_COUNTER,
+  NO_ANALYSIS_TEXT,
   packageStatusLabel,
   VALIDITY_LABELS,
-  WORKSPACE_STATUS_LABELS,
-  deadlineLabel,
+  workspaceStatusLabel,
+  analysisHref,
+  hasNoAnalysis,
   readinessBlockerLabel,
   staleReasonLabel,
   type FreezeResult,
@@ -55,6 +59,21 @@ function plural(count: number, one: string, many: string): string {
 
 function shortHash(hash: string | null | undefined): string {
   return hash ? hash.slice(0, 8) : "—";
+}
+
+/**
+ * Una revisió congelada sense cap anàlisi del plec al darrere (cap run de requisits
+ * i cap obligatori): els seus zeros no volen dir res i no es pinten com a «0 de 0»
+ * (3B-2 §7.1.3).
+ */
+function frozenWithoutAnalysis(pkg: Pick<PackageDetail, "requirement_run_id" | "coverage">): boolean {
+  return pkg.requirement_run_id === null && (pkg.coverage.mandatory_total ?? 0) === 0;
+}
+
+/** «N de M» obligatoris d'una revisió, o el text de «sense anàlisi». */
+function frozenCoverageText(pkg: Pick<PackageDetail, "requirement_run_id" | "coverage">, suffix: string): string {
+  if (frozenWithoutAnalysis(pkg)) return `${NO_ANALYSIS_COUNTER} · ${NO_ANALYSIS_TEXT}`;
+  return `${pkg.coverage.mandatory_covered} de ${pkg.coverage.mandatory_total}${suffix}`;
 }
 
 /**
@@ -93,9 +112,19 @@ function ReadySummary({
         {coverage && (
           <div>
             <dt className={KICKER}>Dossier</dt>
-            <dd className="text-body text-ink">
-              {coverage.covered} de {coverage.mandatory_total} requisits obligatoris coberts
-            </dd>
+            {hasNoAnalysis(coverage) ? (
+              <dd className="flex flex-wrap items-center gap-x-2 text-body text-ink">
+                <strong>{NO_ANALYSIS_COUNTER}</strong>
+                <span>{NO_ANALYSIS_TEXT}</span>
+                <LinkButton href={analysisHref(workspace.tender_id)} variant="secondary" size="sm">
+                  {NO_ANALYSIS_ACTION} →
+                </LinkButton>
+              </dd>
+            ) : (
+              <dd className="text-body text-ink">
+                {coverage.covered} de {coverage.mandatory_total} requisits obligatoris coberts
+              </dd>
+            )}
           </div>
         )}
         {technical && (
@@ -302,7 +331,7 @@ export function SubmissionPackageSection({
 
   const statusLine = (status: WorkspaceDetail["status"], submitted: boolean) => (
     <p className="text-[13px] leading-5 text-muted">
-      Estat: <strong className="text-ink">{WORKSPACE_STATUS_LABELS[status]}</strong> ·{" "}
+      Estat: <strong className="text-ink">{workspaceStatusLabel({ status, dossier_coverage: workspace.dossier_coverage })}</strong> ·{" "}
       {submitted ? "presentada" : "encara no s'ha presentat res"}
     </p>
   );
@@ -527,17 +556,15 @@ export function SubmissionPackageSection({
               </div>
               <div>
                 <dt className="text-muted">Obligatoris coberts</dt>
-                <dd className="mt-0.5 text-ink tabular-nums">
-                  {current.coverage.mandatory_covered} de {current.coverage.mandatory_total}
-                </dd>
+                <dd className="mt-0.5 text-ink tabular-nums">{frozenCoverageText(current, "")}</dd>
               </div>
               <div className="sm:col-span-2 lg:col-span-4">
                 <dt className="text-muted">Termini</dt>
                 <dd className="mt-0.5 flex flex-wrap items-center gap-2 text-ink">
                   {current.deadline_at ? formatDateTime(current.deadline_at) : "No consta"}
-                  {current.days_remaining !== null && (
-                    <StatusPill level={deadlineLevel(current.days_remaining)} size="sm">
-                      {deadlineLabel(current.days_remaining)}
+                  {current.deadline_at && (
+                    <StatusPill level={deadlineCountdownView(current.deadline_at).level} size="sm">
+                      {deadlineCountdownView(current.deadline_at).text}
                     </StatusPill>
                   )}
                 </dd>
@@ -552,8 +579,7 @@ export function SubmissionPackageSection({
               footer={
                 <>
                   <span>
-                    {current.coverage.document_count} documents · {current.coverage.mandatory_covered} de{" "}
-                    {current.coverage.mandatory_total} obligatoris coberts
+                    {current.coverage.document_count} documents · {frozenCoverageText(current, " obligatoris coberts")}
                   </span>
                   <span>El manifest congela la identitat, les metadades i el hash dels documents, juntament amb el contingut tècnic i econòmic.</span>
                 </>
@@ -744,8 +770,7 @@ export function SubmissionPackageSection({
             <div>
               <dt className="text-muted">Documents</dt>
               <dd className="mt-0.5 text-ink">
-                {current.coverage.document_count} documents · {current.coverage.mandatory_covered} de {current.coverage.mandatory_total}{" "}
-                obligatoris
+                {current.coverage.document_count} documents · {frozenCoverageText(current, " obligatoris")}
               </dd>
             </div>
             <div>

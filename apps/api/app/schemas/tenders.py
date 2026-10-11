@@ -9,12 +9,13 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.models.enums import (
     ContractType,
+    DocumentContributionStatus,
     DocumentFileOrigin,
     DownloadStatus,
     ExtractionQuality,
@@ -22,11 +23,15 @@ from app.models.enums import (
     IngestionStatus,
     ProcedureType,
     ProcessingStatus,
+    TenderDocumentOrigin,
     TenderDocumentType,
     TenderStatus,
 )
-from app.schemas.common import ORMModel
+from app.schemas.common import APIModel, ORMModel
 from app.schemas.tender_structure import TenderBlockRead, TenderSiteRead
+from app.tenders.changes import REVISION_ORIGINS as REVISION_ORIGINS
+from app.tenders.changes import revision_origin
+from app.tenders.documents import is_analyzable_document
 
 T = TypeVar("T")
 
@@ -170,6 +175,67 @@ class TenderDocumentRead(ORMModel):
     removed_at: datetime | None = None
     #: Versio actual descarregada, si n'hi ha cap. `None` = mai processat.
     latest_file: TenderDocumentFileSummary | None = None
+    #: Paquet documental public (3B-2 §2.1). Additius i amb valor per defecte: qui
+    #: no els llegeix veu la forma de sempre. Un `pending_verification` es veu als
+    #: llistats (amb el seu estat) pero no es analitzable; un alies tampoc.
+    origin: TenderDocumentOrigin = TenderDocumentOrigin.FEED
+    contribution_status: DocumentContributionStatus = DocumentContributionStatus.NOT_APPLICABLE
+    duplicate_of_document_id: uuid.UUID | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def analyzable(self) -> bool:
+        """`ANALYZABLE_DOCUMENT` (3B-2 §2.3): pot entrar a l'analisi. La mateixa regla
+        que el selector de la base de dades (`is_analyzable_document`), mai una copia:
+        vigent, no alies i del feed, d'una pujada propia o aportat i verificat."""
+        return is_analyzable_document(self)  # type: ignore[arg-type]
+
+
+class PlatformTenderDocumentRead(TenderDocumentRead):
+    """Un document tal com el veu l'operador de plataforma: amb tota la provenance."""
+
+    governing_source_id: uuid.UUID | None = None
+    contributed_by: uuid.UUID | None = None
+    contributed_at: datetime | None = None
+    contribution_source_url: str | None = None
+    verified_by: uuid.UUID | None = None
+    verified_at: datetime | None = None
+    verification_note: str | None = None
+    retired_by: uuid.UUID | None = None
+    retired_reason: str | None = None
+    created_at: datetime | None = None
+
+
+class PlatformDocumentByUrlRequest(APIModel):
+    """Afegir un document oficial per URL (el descarrega el sistema)."""
+
+    url: str = Field(min_length=1, max_length=1000)
+    #: Pagina oficial on es publicat (perfil del contractant, PSCP).
+    source_page_url: str | None = Field(default=None, max_length=1000)
+    name: str | None = Field(default=None, max_length=500)
+    document_type: TenderDocumentType = TenderDocumentType.OTHER
+
+
+class PlatformDocumentVerifyRequest(APIModel):
+    note: str | None = Field(default=None, max_length=500)
+
+
+class PlatformDocumentRejectRequest(APIModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class PlatformDocumentRetireRequest(APIModel):
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class PlatformDocumentHandOverRequest(APIModel):
+    """Cedir un `operator_url` verificat al feed que el publica (`hand_over_to_feed`).
+
+    La prova que el feed publica la URL la treu el sistema de la darrera entrada
+    de la font; l'operador nomes en dona el motiu.
+    """
+
+    reason: str = Field(min_length=1, max_length=300)
 
 
 class TenderListItem(ORMModel):
@@ -251,6 +317,30 @@ class TenderTraceability(BaseModel):
     raw_hash: str | None = None
 
 
+class TenderPackageGapRead(BaseModel):
+    """Un forat OBERT del paquet documental. Nomes el que falta, mai les cites."""
+
+    code: str
+    #: La clau del forat: el rol que falta (`pcap`), el codi citat (`DOC-03`) o el
+    #: document afectat (id). `None` si el forat no en te.
+    key: str | None = None
+    #: Seccions que aportaria el document que falta; buit = impacte desconegut.
+    would_provide: list[str] = Field(default_factory=list)
+
+
+class TenderPackageRead(BaseModel):
+    """`complete` / `incomplete` / `unknown` i els forats oberts (3B-2 §4.4)."""
+
+    status: Literal["complete", "incomplete", "unknown"]
+    gaps: list[TenderPackageGapRead] = Field(default_factory=list)
+    #: Seccio de l'estructura -> `unknown` (buida i un forat la pot afectar, o cap
+    #: passada vigent) | `none_declared` (buida amb passada i cap forat) | `present`
+    #: (te files). La regla es `section_status_for` del motor; aqui nomes viatja.
+    section_status: dict[str, Literal["unknown", "none_declared", "present"]] = Field(
+        default_factory=dict
+    )
+
+
 class TenderDetail(ORMModel):
     id: uuid.UUID
     external_id: str
@@ -286,6 +376,12 @@ class TenderDetail(ORMModel):
     cpvs: list[TenderCPVRead] = []
     lots: list[TenderLotRead] = []
     documents: list[TenderDocumentRead] = []
+    #: Documents retirats de la font (`removed_at`), a part: `documents` continua
+    #: sent nomes la publicacio vigent. La fitxa els ensenya amb la data («Retirat
+    #: de la font des del …») en lloc de fer-los desapareixer en silenci.
+    removed_documents: list[TenderDocumentRead] = []
+    #: Estat del paquet documental (3B-2 §2.5, §4.4): global, com la licitacio.
+    package: TenderPackageRead | None = None
     traceability: TenderTraceability | None = None
     # --- Estructura del contracte (0048). `None` = no se sap; llistes buides
     # --- a les licitacions que no en tenen: cap canvi per a qui ja llegia aixo.
@@ -375,6 +471,14 @@ class TenderHistoryRevisionRead(ORMModel):
     created_at: datetime
     change_summary: dict[str, Any] | None = None
     events: list[TenderChangeEventRead] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def origin(self) -> Literal["source", "internal", "manual"]:
+        """`source` (publicat per la font), `internal` (processament de Tuvi) o
+        `manual` (licitacio oberta a ma), derivat de `trigger` amb el mapa tancat
+        `REVISION_ORIGINS`. La interficie no dedueix res del trigger."""
+        return revision_origin(self.trigger)  # type: ignore[return-value]
 
 
 # --------------------------------------------------------------------------- #

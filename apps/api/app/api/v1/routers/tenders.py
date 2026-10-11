@@ -66,11 +66,14 @@ from app.schemas.tenders import (
     TenderHistoryRevisionRead,
     TenderListItem,
     TenderLotRead,
+    TenderPackageGapRead,
+    TenderPackageRead,
     TenderRevisionRead,
     TenderTraceability,
     analysis_status_for,
 )
 from app.services import audit, manual_tender, tender_document_upload
+from app.services.tender_analysis import load_structure_view
 from app.tenders.documents import is_active_document
 from app.tenders.visibility import (
     buyer_visible_to_company,
@@ -616,6 +619,12 @@ def file_summary(file, content, extraction) -> TenderDocumentFileSummary:
     )
 
 
+def _gap_key(detail: dict | None) -> str | None:
+    """La clau d'un forat (`detail.key`): el rol, el codi citat o el document."""
+    key = (detail or {}).get("key")
+    return None if key is None else str(key)
+
+
 async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> TenderDetail:
     """La fitxa sencera, amb el filtre de visibilitat de `_load_tender`."""
     tender = await _load_tender(session, tender_id, user_id)
@@ -637,9 +646,18 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
         ).scalar_one_or_none()
 
     # Nomes els plecs vigents: un document retirat de la font (`removed_at`) ja no
-    # es part de la publicacio; l'historial de revisions en conserva el rastre.
+    # es part de la publicacio; l'historial de revisions en conserva el rastre. Els
+    # retirats van a part (`removed_documents`) perque la fitxa ho pugui dir.
     documents = [doc for doc in tender.documents if is_active_document(doc)]
+    removed = sorted(
+        (doc for doc in tender.documents if not is_active_document(doc)),
+        key=lambda doc: (doc.removed_at, doc.name),
+    )
     summaries = await _document_summaries(session, [doc.id for doc in documents])
+    # El paquet (estat, forats oberts) i l'estat de cada seccio surten de la mateixa
+    # vista pura que llegeix el motor (`section_status_for`): cap segona regla aqui.
+    # Vista global (sense empresa): el paquet es de la licitacio, no d'una empresa.
+    view, _ = await load_structure_view(session, tender)
 
     return TenderDetail(
         id=tender.id,
@@ -701,6 +719,17 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
             )
             for document in documents
         ],
+        removed_documents=[TenderDocumentRead.model_validate(document) for document in removed],
+        package=TenderPackageRead(
+            status=view.package_status,
+            gaps=[
+                TenderPackageGapRead(
+                    code=gap.code, key=_gap_key(gap.detail), would_provide=list(gap.would_provide)
+                )
+                for gap in view.gaps
+            ],
+            section_status=dict(view.section_status),
+        ),
         traceability=TenderTraceability(
             source_code=source.code,
             source_name=source.name,

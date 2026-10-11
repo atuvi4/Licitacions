@@ -2,17 +2,18 @@ import { Building2, CalendarDays, FileCheck, Search, type LucideIcon } from "luc
 
 /**
  * Els quatre destins del shell (handoff L4): tres de treball i la secció
- * Empresa, que desplega tres subdestins quan és activa. Els recomptes que
+ * Empresa, que desplega els seus subdestins quan és activa. Els recomptes que
  * s'ensenyen al costat els calcula `counts.ts`; aquí només es diu quin toca.
  */
 
-export type NavCountKey = "avui" | "oportunitats" | "candidatures" | "perfil";
+export type NavCountKey = "avui" | "oportunitats" | "candidatures";
 
 export interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
-  countKey: NavCountKey;
+  /** Absent: el destí no porta cap recompte (el perfil ja no mostra cap percentatge, B1). */
+  countKey?: NavCountKey;
 }
 
 export interface NavGroup {
@@ -32,13 +33,15 @@ export const NAVIGATION_GROUPS: NavGroup[] = [
   {
     // L'administració de la PRÒPIA empresa; la de la plataforma és l'«Administració Tuvi», fora de l'app.
     label: "Administració de l'empresa",
-    items: [{ href: "/empresa", label: "El nostre perfil", icon: Building2, countKey: "perfil" }],
+    items: [{ href: "/empresa", label: "El nostre perfil", icon: Building2 }],
   },
 ];
 
 /** Subnavegació de la secció Empresa (barra lateral i `ProfileSubnav`). */
 export const PROFILE_SUBNAV: Array<{ href: string; label: string }> = [
   { href: "/empresa", label: "Totes les àrees" },
+  // Les preferències del Radar (CPV, territoris, franja d'import) a part del coneixement (addendum 3B-2, B4).
+  { href: "/empresa/radar", label: "Preferències del Radar" },
   { href: "/empresa/coneixement", label: "Coneixement" },
   { href: "/documents", label: "Biblioteca de documents" },
   { href: "/experiencia", label: "Experiència" },

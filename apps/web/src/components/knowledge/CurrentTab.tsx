@@ -22,6 +22,7 @@ import {
   recordState,
   serviceLineLabel,
   standardLabel,
+  type Coverage,
   type KnowledgeEntry,
   type SnapshotSection,
 } from "@/lib/knowledge";
@@ -105,6 +106,20 @@ function ScopeLine({ certification, view }: { certification: Certification; view
       )}
     </div>
   );
+}
+
+/**
+ * La línia d'abast d'un fet, d'un servei o d'un paper (addendum 3B-2, B6): la
+ * cobertura territorial amb la seva completesa, tal com és al model, i «Sense
+ * especificar» quan no hi ha dada. Una FTTH pròpia o un Tier-3 sense abast no
+ * es poden comparar amb cap plec, i s'ha de veure a l'ítem.
+ */
+export function coverageLine(coverage: Coverage | null | undefined): string {
+  return `Abast: ${coverageSummary(coverage) ?? "Sense especificar"}`;
+}
+
+function CoverageLine({ coverage }: { coverage: Coverage | null | undefined }) {
+  return <p className="mt-1 text-caption text-muted">{coverageLine(coverage)}</p>;
 }
 
 function validity(expiresAt: string | null, expired: boolean): string {
@@ -194,8 +209,14 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
   const historicProducts = historicOnly(view, "products", new Set(records.products.map((item) => `${item.manufacturer} ${item.model}`))).filter((entry) =>
     entryMatches(entry, entry.key),
   );
+  // El paper d'un partner diu on cobreix (territori o cobertura); si no ho diu, es diu que no (B6).
   const roleText = (role: (typeof records.partner_roles)[number]) =>
-    [PARTNER_ROLE_LABELS[role.role] ?? role.role, lineLabel(role.service_line_code), role.territory, coverageSummary(role.coverage)]
+    [
+      PARTNER_ROLE_LABELS[role.role] ?? role.role,
+      lineLabel(role.service_line_code),
+      role.territory,
+      coverageSummary(role.coverage) ?? (role.territory ? null : "cobertura sense especificar"),
+    ]
       .filter(Boolean)
       .join(" · ");
   const partners = records.partners.filter((partner) =>
@@ -292,13 +313,14 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
                 subtitle={[
                   serviceLineLabel(service.service_line_code, vocabulary),
                   service.delivery_mode ? DELIVERY_MODE_LABELS[service.delivery_mode] : null,
-                  coverageSummary(service.coverage),
                 ]
                   .filter(Boolean)
                   .join(" · ")}
                 state={recordState(service.id, service.active ? "current" : "retired", index)}
                 {...common}
-              />
+              >
+                <CoverageLine coverage={service.coverage} />
+              </KnowledgeItem>
             ) : (
               <KnowledgeGap
                 key={service.id}
@@ -339,7 +361,7 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
               kind="operating_fact"
               recordId={fact.id}
               title={FACT_LABELS[fact.key] ?? fact.key}
-              subtitle={[fact.value ? "Sí" : "No", fact.detail, coverageSummary(fact.coverage)].filter(Boolean).join(" · ")}
+              subtitle={[fact.value ? "Sí" : "No", fact.detail].filter(Boolean).join(" · ")}
               state={recordState(fact.id, fact.lifecycle, index)}
               actions={
                 <Button size="sm" variant="ghost" className={ACTION} disabled={!canEdit} onClick={() => declare({ kind: "operating_fact", record: fact })}>
@@ -347,7 +369,9 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
                 </Button>
               }
               {...common}
-            />
+            >
+              <CoverageLine coverage={fact.coverage} />
+            </KnowledgeItem>
           ))}
           {historicFacts.map((key) => (
             <KnowledgeGap key={key} title={FACT_LABELS[key]} state={entryState(findEntry(snapshot, "facts", key))}>
@@ -515,14 +539,7 @@ export function CurrentTab({ view }: { view: KnowledgeView }) {
                           className="rounded-pill border border-border-strong px-2 py-px text-[11.5px] leading-[1.5] text-neutral-600 hover:bg-subtle"
                           aria-label={`Edita el paper ${PARTNER_ROLE_LABELS[role.role] ?? role.role} de ${partner.name}`}
                         >
-                          {[
-                            PARTNER_ROLE_LABELS[role.role] ?? role.role,
-                            role.service_line_code ? serviceLineLabel(role.service_line_code, vocabulary) : null,
-                            role.territory,
-                            coverageSummary(role.coverage),
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
+                          {roleText(role)}
                         </button>
                       </li>
                     ))}

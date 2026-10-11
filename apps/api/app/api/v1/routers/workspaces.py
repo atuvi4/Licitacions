@@ -59,6 +59,7 @@ from app.schemas.workspace import (
 )
 from app.services import audit, workspace_dossier
 from app.services import bid_workspace as service
+from app.services.workspace_gate import assert_workspace_go
 from app.tenders.visibility import visible_to_company
 from app.workspace.decision import nothing_to_do_reason
 
@@ -138,6 +139,9 @@ async def _summary(session: SessionDep, workspace: BidWorkspace) -> WorkspaceSum
         human_decision=state.latest_decision.decision if state.latest_decision else None,
         analysis_basis=state.analysis_basis,
         analysis_outdated=state.analysis_outdated,
+        analysis_state=await workspace_dossier.requirement_analysis_state(
+            session, workspace.tender_id, state.requirement_run
+        ),
         created_at=workspace.created_at,
     )
 
@@ -227,7 +231,7 @@ async def _detail(
         ],
         readiness=dossier.readiness.state,
         readiness_blockers=list(dossier.readiness.blockers),
-        dossier_coverage=DossierCoverageRead(**asdict(dossier.counters)),
+        dossier_coverage=DossierCoverageRead.of(dossier.counters, dossier.analysis_state),
         checklist=[_checklist_read(item, names) for item in items],
         tasks=[_task_read(task, names) for task in tasks],
         notes=[_note_read(note, names) for note in notes],
@@ -410,12 +414,15 @@ async def regenerate_checklist(workspace_id: uuid.UUID, session: SessionDep, ctx
     falta, i el que ja no te equivalent passa a historia.
     """
     workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     outcome = await workspace_dossier.reconcile_with_current_analysis(
         session, workspace, user_id=ctx.user.id
     )
     items = await workspace_dossier.active_checklist_items(session, workspace)
     names = await _people_names(session, {item.assigned_to for item in items})
-    run = await service.current_requirement_run(session, workspace.tender_id)
+    run = await service.current_requirement_run(
+        session, workspace.tender_id, workspace.company_id
+    )
     return ChecklistRegenerateResult(
         created=outcome.created_checklist,
         carried=outcome.carried,
@@ -439,6 +446,7 @@ async def create_checklist_item(
     ctx: CompanyCtx,
 ):
     workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     await service.assert_assignable(session, ctx.company_id, payload.assigned_to)
     item = WorkspaceChecklistItem(
         company_id=ctx.company_id,
@@ -473,7 +481,8 @@ async def update_checklist_item(
     session: SessionDep,
     ctx: CompanyCtx,
 ):
-    await service.get_workspace(session, ctx.company_id, workspace_id)
+    workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     item = await session.scalar(
         sa.select(WorkspaceChecklistItem).where(
             WorkspaceChecklistItem.id == item_id,
@@ -514,6 +523,7 @@ async def create_task(
     ctx: CompanyCtx,
 ):
     workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     await service.assert_assignable(session, ctx.company_id, payload.assigned_to)
     task = WorkspaceTask(
         company_id=ctx.company_id,
@@ -544,7 +554,8 @@ async def update_task(
     session: SessionDep,
     ctx: CompanyCtx,
 ):
-    await service.get_workspace(session, ctx.company_id, workspace_id)
+    workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     task = await session.scalar(
         sa.select(WorkspaceTask).where(
             WorkspaceTask.id == task_id,
@@ -585,6 +596,7 @@ async def create_note(
     ctx: CompanyCtx,
 ):
     workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_go(session, workspace)
     note = WorkspaceNote(
         company_id=ctx.company_id,
         workspace_id=workspace.id,

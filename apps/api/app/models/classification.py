@@ -13,7 +13,9 @@ provocar).
 * `tender_document_classification_findings`: el que no quadrava del conjunt.
 * `tender_document_role_decisions`: el rol que ha fixat una PERSONA. Penja del
   document, no de la passada: una reclassificacio (arriba un document nou) no
-  esborra el que algu ja ha decidit.
+  esborra el que algu ja ha decidit. Des de 0059 porta la versio del fitxer
+  (`content_sha256`) i es l'override de l'empresa sobre la classificacio global
+  (`app/models/global_classification.py`): una versio nova la deixa sense efecte.
 
 Tot es de **tenant**: la classificacio es la lectura que en fa una empresa, com
 la revisio de requisits.
@@ -197,6 +199,9 @@ class TenderDocumentRoleDecision(UUIDPrimaryKeyMixin, Base):
     role: Mapped[DocumentRole] = mapped_column(
         enum_column(DocumentRole, "document_role"), nullable=False
     )
+    #: La versio del fitxer sobre la qual es va decidir (0059). Un fitxer nou deixa
+    #: la decisio sense efecte ("decisio d'una versio anterior", `stale_override`).
+    content_sha256: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     decided_by: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")
     )

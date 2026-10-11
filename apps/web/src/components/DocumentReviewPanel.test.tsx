@@ -55,6 +55,23 @@ beforeEach(() => {
   uploadRaw.mockResolvedValue({ status: 201, body: {} });
 });
 
+describe("la revisió dels plecs és feina de Decidir, no de Preparar (3B-2, ruling C3)", () => {
+  it("no depèn de cap GO: el panell no sap res de la decisió i el botó hi és sempre que algú pugui revisar", async () => {
+    render(<DocumentReviewPanel workspaceId="w1" documents={2} />);
+    await flush();
+    expect(screen.getByRole("button", { name: "Marca com revisats" })).toBeTruthy();
+    expect(screen.queryByText("Es pot consultar; s'obre a edició amb GO")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Marca com revisats" }));
+    await flush();
+    expect(post).toHaveBeenCalledWith("/companies/c1/workspaces/w1/documents/review", {});
+  });
+
+  it("no accepta cap senyal de GO: la porta de Preparar no hi pinta res", () => {
+    // @ts-expect-error — `editable` no és cap prop: llegir els plecs no és preparar.
+    render(<DocumentReviewPanel workspaceId="w1" documents={2} editable={false} />);
+  });
+});
+
 async function panel(workspaceId: string | null = "w1", count = 2) {
   const onReviewed = vi.fn();
   render(
@@ -70,6 +87,15 @@ describe("estat de la revisió", () => {
   it("diu que els documents estan pendents quan ningú no els ha mirat", async () => {
     await panel();
     expect(screen.getByText(/pendents de revisió/i)).toBeTruthy();
+  });
+
+  it("explica què vol dir «Marca com revisats» i que no analitza res (D6)", async () => {
+    const { container } = render(<DocumentReviewPanel workspaceId="w1" documents={2} />);
+    await flush();
+    expect(container.textContent).toMatch(/deixa anotat que algú de l'empresa se'ls ha llegit/i);
+    expect(container.textContent).toMatch(/no analitza res/i);
+    const button = screen.getByRole("button", { name: /Marca com revisats/ });
+    expect(button.getAttribute("title")).toMatch(/no analitza/i);
   });
 
   it("no diu mai que hagin canviat els requisits", async () => {

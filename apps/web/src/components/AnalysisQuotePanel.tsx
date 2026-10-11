@@ -1,17 +1,29 @@
 "use client";
 
 /**
- * Bloc de confirmació d'una anàlisi: el volum abans de fer despesa.
+ * Bloc de confirmació d'una anàlisi: el volum i les condicions abans de fer despesa.
  *
  * Mostra el que el backend ha desat com a preview (documents, pàgines, chunks,
- * perfil i model, estimació de tokens si n'hi ha). No hi ha cap import en
- * diners: encara no hi ha billing. Si el preview ja no val, el backend en torna
- * un de nou i el bloc el substitueix: l'usuari l'ha de tornar a confirmar.
- * Mai un botó que analitzi directament: sempre preview → confirmació humana.
+ * perfil i model, estimació de tokens) i, des de 3B-2 (§6.1), sobre què es faria
+ * (`provider_basis`), el cost estimat (un sostre, només si hi ha preu), els
+ * prerequisits que falten amb text humà i les acceptacions explícites que alguns
+ * demanen (paquet incomplet, qualitat del text). Si el preview ja no val, el
+ * backend en torna un de nou i el bloc el substitueix: l'usuari l'ha de tornar a
+ * confirmar. Mai un botó que analitzi directament: sempre preview → confirmació
+ * humana, i «Inicia l'anàlisi» desactivat mentre el servidor digui `allowed=false`.
  */
 
-import { Button } from "@/components/ui";
-import type { AnalysisQuote } from "@/lib/jobs";
+import { gapImpact, gapText } from "@/app/(app)/licitacions/[tenderId]/package";
+import { Button, Checkbox } from "@/components/ui";
+import {
+  PROVIDER_BASIS_TEXT,
+  QUOTE_WARNING_TEXT,
+  blockingReasonText,
+  type AnalysisQuote,
+  type QuoteAcceptance,
+  type QuotePackageIssue,
+} from "@/lib/jobs";
+import type { PackageGapCode, TenderPackage } from "@/lib/tenders";
 
 const SKIPPED_REASONS: Record<string, string> = {
   document_not_processed: "no processat",
@@ -19,7 +31,45 @@ const SKIPPED_REASONS: Record<string, string> = {
   document_without_text: "sense text",
 };
 
+/** Motius de paquet incomplet de la quota (`prerequisites.package.issues`) que parlen d'un document. */
+const ISSUE_REASONS: Record<string, string> = {
+  document_not_processed: "sense processar",
+  document_without_text: "sense text",
+  document_not_analyzable: "sense text analitzable",
+  selected_document_skipped: "fora de l'anàlisi",
+  default_document_skipped: "fora de l'anàlisi",
+  duplicate_content: "contingut duplicat",
+  classification_not_current: "classificació no vigent",
+};
+
+/**
+ * Què falta al paquet, en humà, per a la casella d'acceptar-lo (M4): els forats de
+ * la fitxa (`gaps` amb `would_provide` o «impacte desconegut») i, si no hi són,
+ * els motius de la quota. Cap codi arriba al text.
+ */
+function packageIssueLines(
+  pkg: TenderPackage | null | undefined,
+  issues: QuotePackageIssue[],
+  names: Map<string, string>,
+): string[] {
+  if (pkg && pkg.status === "incomplete" && pkg.gaps.length > 0) {
+    return pkg.gaps.map((gap) => `${gapText(gap, names)} · ${gapImpact(gap)}`);
+  }
+  return issues.map((issue) => {
+    if (issue.code === "package_gap" && issue.gap_code) {
+      const gap = { code: issue.gap_code as PackageGapCode, key: null, would_provide: [] };
+      return `${gapText(gap, names)} · ${gapImpact(gap)}`;
+    }
+    const ids = issue.tender_document_ids ?? (issue.tender_document_id ? [issue.tender_document_id] : []);
+    const documents = ids.map((id) => names.get(id) ?? "Un document");
+    const reason = ISSUE_REASONS[issue.code] ?? "falta part del paquet documental";
+    return documents.length > 0 ? `${documents.join(", ")}: ${reason}` : `Falta part del paquet documental: ${reason}`;
+  });
+}
+
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] uppercase";
+
+const USD = new Intl.NumberFormat("ca-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function formatTokens(value: number | null): string {
   return value === null ? "—" : value.toLocaleString("ca-ES");
@@ -27,14 +77,22 @@ function formatTokens(value: number | null): string {
 
 export function AnalysisQuotePanel({
   quote,
+  pkg,
+  documents,
   notice,
   canConfirm,
   rerun,
   confirming,
   onConfirm,
   onCancel,
+  onAccept,
+  accepting = false,
 }: {
   quote: AnalysisQuote;
+  /** El paquet de la fitxa (estat i forats), per dir què falta sota la casella (M4). */
+  pkg?: TenderPackage | null;
+  /** Els documents coneguts (id → nom), per anomenar els forats d'un document. */
+  documents?: Array<{ id: string; name: string }>;
   notice: string | null;
   canConfirm: boolean;
   /** Ja hi ha una anàlisi: aquesta la tornaria a fer. */
@@ -42,9 +100,29 @@ export function AnalysisQuotePanel({
   confirming: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Torna a demanar el volum amb una acceptació explícita (forma part de la quota). */
+  onAccept?: (acceptance: QuoteAcceptance) => void;
+  accepting?: boolean;
 }) {
   const reused = quote.reusable_run_id !== null && quote.chunks_to_send === 0;
   const blocked = !quote.allowed;
+  const prerequisites = quote.prerequisites ?? null;
+  const failed = prerequisites?.failed ?? [];
+  const advisory = prerequisites?.advisory ?? [];
+  const warnings = quote.warnings ?? prerequisites?.warnings ?? [];
+  const basis = quote.provider_basis ?? prerequisites?.provider_basis ?? null;
+  const packageAccepted = Boolean(quote.accept_incomplete_package || prerequisites?.package?.accepted);
+  const qualityAcknowledged = Boolean(prerequisites?.acknowledge_quality || prerequisites?.quality?.acknowledged);
+  const askPackage = failed.includes("package_incomplete") || packageAccepted;
+  const askQuality = failed.includes("quality_warning") || qualityAcknowledged;
+  const names = new Map<string, string>([
+    ...(documents ?? []).map((document) => [document.id, document.name] as const),
+    ...quote.documents.map((document) => [document.tender_document_id, document.name] as const),
+    ...quote.skipped_documents.map((document) => [document.tender_document_id, document.name] as const),
+  ]);
+  const packageLines = askPackage ? packageIssueLines(pkg, prerequisites?.package?.issues ?? [], names) : [];
+  // Els altres motius, a part del principal (que ja surt en gran).
+  const otherFailures = failed.filter((code) => code !== quote.blocking_reason);
   // El que fa l'acció, abans del perquè no es pot: no és una acció de
   // revisió, és una extracció automàtica nova (amb cost de model).
   const whatItDoes = rerun
@@ -57,6 +135,12 @@ export function AnalysisQuotePanel({
       <p className="mt-1 font-heading text-[17px] font-semibold text-ink">Aquest és el volum</p>
       <p className="mt-1 text-muted">{whatItDoes}</p>
       {notice && <p className="mt-1.5 text-warning">{notice}</p>}
+      {basis && (
+        <p className={`mt-1.5 ${basis === "real" ? "text-ink" : "text-warning"}`}>
+          {PROVIDER_BASIS_TEXT[basis] ?? "Base de l'anàlisi desconeguda"}
+          {basis === "real" && ` · model ${quote.model}`}
+        </p>
+      )}
 
       <ul className="mt-3 divide-y divide-border border-t border-b border-border">
         {quote.documents.map((document) => (
@@ -73,7 +157,7 @@ export function AnalysisQuotePanel({
         ))}
       </ul>
 
-      <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-4">
+      <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-5">
         <div>
           <dt className={`${KICKER} text-muted`}>Pàgines</dt>
           <dd className="tabular-nums">
@@ -96,6 +180,14 @@ export function AnalysisQuotePanel({
           </dd>
         </div>
         <div>
+          <dt className={`${KICKER} text-muted`}>Cost estimat</dt>
+          <dd className="tabular-nums">
+            {quote.estimated_cost_usd === null || quote.estimated_cost_usd === undefined
+              ? "sense preu conegut"
+              : `fins a ${USD.format(quote.estimated_cost_usd)} $`}
+          </dd>
+        </div>
+        <div>
           <dt className={`${KICKER} text-muted`}>Perfil i model</dt>
           <dd className="truncate">
             {quote.profile} · {quote.model}
@@ -111,14 +203,71 @@ export function AnalysisQuotePanel({
       {reused && (
         <p className="mt-2 text-muted">Ja hi ha una anàlisi vigent d&apos;aquests plecs: no es tornarà a executar.</p>
       )}
-      {blocked && (
-        <p className="mt-2 text-danger">
-          Aquesta anàlisi supera el límit del pilot ({quote.max_chunks} chunks) i no es pot llançar.
+      {warnings.map((code) => (
+        <p key={code} className="mt-2 text-warning">
+          {QUOTE_WARNING_TEXT[code] ?? "Hi ha un avís sobre aquesta anàlisi."}
         </p>
+      ))}
+
+      {blocked && (
+        <div role="alert" className="mt-3 border border-danger/25 bg-danger-soft px-3 py-2">
+          <p className="font-semibold text-danger">No es pot iniciar: {blockingReasonText(quote.blocking_reason)}</p>
+          {otherFailures.length > 0 && (
+            <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink">
+              {otherFailures.map((code) => (
+                <li key={code}>{blockingReasonText(code)}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {advisory.length > 0 && (
+        // Amb una simulació o un resultat reaprofitat no hi ha despesa: aquests no
+        // bloquegen, però es diuen igualment.
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-muted">
+          {advisory.map((code) => (
+            <li key={code}>{blockingReasonText(code)}</li>
+          ))}
+        </ul>
+      )}
+
+      {(askPackage || askQuality) && (
+        <div className="mt-3 space-y-1.5">
+          {askPackage && (
+            <div>
+              <Checkbox
+                label="Accepto analitzar un paquet incomplet: el que diria el document que falta no s'avalua."
+                checked={packageAccepted}
+                disabled={accepting || confirming || !onAccept}
+                onChange={(event) => onAccept?.({ accept_incomplete_package: event.currentTarget.checked })}
+              />
+              {packageLines.length > 0 && (
+                <ul className="mt-1 list-disc space-y-0.5 pl-9 text-muted" aria-label="Què falta al paquet">
+                  {packageLines.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {askQuality && (
+            <Checkbox
+              label="Accepto que el text té avisos de qualitat i que l'extracció en pot quedar afectada."
+              checked={qualityAcknowledged}
+              disabled={accepting || confirming || !onAccept}
+              onChange={(event) => onAccept?.({ acknowledge_quality: event.currentTarget.checked })}
+            />
+          )}
+        </div>
       )}
 
       <div className="mt-4 flex flex-wrap items-start gap-2">
-        <Button variant="primary" onClick={onConfirm} disabled={confirming || blocked || !canConfirm} loading={confirming}>
+        <Button
+          variant="primary"
+          onClick={onConfirm}
+          disabled={confirming || accepting || blocked || !canConfirm}
+          loading={confirming}
+        >
           Inicia l&apos;anàlisi
         </Button>
         <Button variant="ghost" onClick={onCancel} disabled={confirming}>

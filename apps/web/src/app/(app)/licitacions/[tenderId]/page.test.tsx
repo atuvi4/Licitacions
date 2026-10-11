@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TenderDetail } from "@/lib/tenders";
@@ -73,6 +73,8 @@ const detail: TenderDetail = {
     { id: "d2", name: "Plec tècnic.pdf", document_type: "technical", url: "https://example.org/d2", latest_file: { file_id: "f2", version_number: 1, download_status: "failed", file_size: null, sha256: null, extraction_status: null, quality: null, page_count: null, text_char_count: null, ocr_candidate: false, extraction_id: null, processed_at: null, error_code: "timeout" } },
     { id: "d3", name: "Annex.pdf", document_type: "other", url: "https://example.org/d3", published_at: "2026-09-03", latest_file: { file_id: "f3", version_number: 2, download_status: "downloaded", file_size: 120000, sha256: "abc", extraction_status: "extracted", quality: "good", page_count: 12, text_char_count: 34567, ocr_candidate: false, extraction_id: "e3", processed_at: "2026-09-15T10:00:00Z", error_code: null } },
   ] as unknown as TenderDetail["documents"],
+  removed_documents: [],
+  package: null,
   traceability: null,
 };
 
@@ -191,14 +193,14 @@ describe("Fitxa de licitació", () => {
     const rows = [...container.querySelectorAll("tbody tr")];
     expect(rows).toHaveLength(3);
     const pill = (row: Element) => [...row.querySelectorAll("[data-level]")].map((p) => `${p.textContent?.trim()}[${p.getAttribute("data-level")}]`);
-    expect(pill(rows[0])).toContain("No descarregat[neutral]");
+    expect(pill(rows[0])).toContain("Sense text extret[neutral]");
     expect(rows[0].textContent).toContain("Processa");
     expect(pill(rows[1])).toContain("Error[blocking]");
     expect(rows[1].textContent).toContain("La descàrrega ha esgotat el temps d'espera.");
     expect(rows[1].textContent).not.toContain("timeout");
     expect(rows[1].querySelector("[title='timeout']")).not.toBeNull();
     expect(rows[1].textContent).toContain("Reprocessa");
-    expect(pill(rows[2])).toContain("Text extret[ready]");
+    expect(pill(rows[2])).toContain("Analitzat[ready]");
     expect(rows[2].textContent).toContain("12 pàg. · 34.567 caràcters");
     expect(rows[2].textContent).toContain("v2");
     expect(rows[2].querySelector("a[href='/licitacions/t1/documents/d3']")?.textContent).toContain("Obre el text");
@@ -235,7 +237,7 @@ describe("Fitxa de licitació", () => {
     const buttons = screen.getAllByRole("button", { name: /Processa|Reprocessa/ });
     expect(buttons.length).toBeGreaterThanOrEqual(3);
     for (const button of buttons) expect((button as HTMLButtonElement).disabled).toBe(true);
-    expect([...container.querySelectorAll("tbody [data-level]")].map((p) => p.textContent?.trim())).toContain("No descarregat");
+    expect([...container.querySelectorAll("tbody [data-level]")].map((p) => p.textContent?.trim())).toContain("Sense text extret");
   });
 
   it("Plecs: feina acceptada però a la cua → «En cua · pendent d'inici», mai «Processant»; les files guarden el seu estat", async () => {
@@ -248,7 +250,7 @@ describe("Fitxa de licitació", () => {
     expect(pills).toContain("En cua · pendent d'inici");
     expect(pills.some((label) => label?.startsWith("Processant"))).toBe(false);
     // L'estat de cada document és el que té desat, no el de la feina.
-    expect([...container.querySelectorAll("tbody [data-level]")].map((p) => p.textContent?.trim())).toContain("No descarregat");
+    expect([...container.querySelectorAll("tbody [data-level]")].map((p) => p.textContent?.trim())).toContain("Sense text extret");
     for (const button of screen.getAllByRole("button", { name: /Processa|Reprocessa/ })) expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -286,6 +288,17 @@ describe("Fitxa de licitació", () => {
     expect(screen.getByRole("link", { name: /Obre l'expedient a la font/ }).getAttribute("href")).toBe("https://example.org/exp-1");
   });
 
+  it("Plecs: amb 0 documents vigents la línia de cobertura del paquet es pinta igualment (N4)", async () => {
+    search = "tab=plecs";
+    respondWith(base({ "/tenders/t1": { ...detail, documents: [], package: { status: "incomplete", gaps: [{ code: "declared_by_operator", key: null, would_provide: ["requirements"] }] } } }));
+    const { container } = render(<TenderDetailPage />);
+    expect(await screen.findByRole("heading", { name: "Sense documents publicats" })).toBeTruthy();
+    expect(container.textContent).toContain("Cap document analitzable");
+    expect(container.textContent).toContain("Paquet incomplet");
+    expect(container.textContent).toContain("Falta un document (declarat per l'operador)");
+    expect(container.textContent).not.toMatch(/declared_by_operator/);
+  });
+
   it("sense candidatura ni pre-fit: no simula res i ofereix les sortides reals", async () => {
     respondWith(base({ "/companies/c1/tenders/t1/workspace": notFound(), "/companies/c1/matches/by-tender/t1": notFound(), "/companies/c1/tenders/t1/compliance": { run: { ...complianceRun, overall_result: "undetermined", confirmed_blockers_count: 0 }, assessments: [], is_stale: false } }));
     const { container } = render(<TenderDetailPage />);
@@ -296,8 +309,177 @@ describe("Fitxa de licitació", () => {
     expect(header.querySelector("[data-score-tone]")).toBeNull();
     expect(header.textContent).not.toContain("GO");
     expect(await screen.findByRole("button", { name: "Obre candidatura" })).toBeTruthy();
-    expect(screen.getByText("Aquesta licitació encara no té pre-fit calculat.")).toBeTruthy();
-    expect(screen.getByRole("link", { name: /Recalcula el pre-fit/ }).getAttribute("href")).toBe("/licitacions");
+    // Sense saber el perfil no s'afirma res: ni «per a totes» ni cap càlcul global.
+    expect(screen.getByText("Encara no s'ha calculat")).toBeTruthy();
+    expect(container.textContent).not.toMatch(/per a totes/);
+    expect(screen.queryByRole("link", { name: /Recalcula el pre-fit/ })).toBeNull();
+  });
+
+  it("pre-fit sense perfil: diu quan es calcula i no ofereix calcular-lo", async () => {
+    respondWith(base({
+      "/companies/c1/matches/by-tender/t1": notFound(),
+      "/companies/c1/summary": { counts: { cpv_preferences: 0, territories: 0, contract_preferences: 0 } },
+    }));
+    render(<TenderDetailPage />);
+    expect(
+      await screen.findByText("El pre-fit només es calcula quan el perfil té CPV, territoris o preferències de contracte"),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Calcula'l ara" })).toBeNull();
+  });
+
+  it("pre-fit amb perfil: «Calcula'l ara» el calcula només per a aquesta licitació", async () => {
+    respondWith(base({
+      "/companies/c1/matches/by-tender/t1": notFound(),
+      "/companies/c1/summary": { counts: { cpv_preferences: 3, territories: 0, contract_preferences: 0 } },
+    }));
+    post.mockResolvedValue({ tenders_evaluated: 1 });
+    render(<TenderDetailPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Calcula'l ara" }));
+    await flush();
+    expect(post).toHaveBeenCalledWith("/companies/c1/matches/recalculate?tender_id=t1", {});
+    expect(get.mock.calls.filter((call) => call[0] === "/companies/c1/matches/by-tender/t1").length).toBeGreaterThan(1);
+  });
+
+  it("Objecte: sense descripció publicada diu «Objecte no publicat al feed» i no fa servir el títol", async () => {
+    respondWith(base({ "/tenders/t1": { ...detail, description: null } }));
+    render(<TenderDetailPage />);
+    const object = await screen.findByText("Objecte no publicat al feed");
+    const fact = object.closest("div")!;
+    expect(fact.textContent).not.toContain(detail.title);
+  });
+
+  it("Plecs: badges d'estat, àlies plegats, retirats amb data, «N de M» i avís de paquet abans de la quota", async () => {
+    search = "tab=plecs";
+    const base_ = { source_document_type_code: null, mime_type: "application/pdf", published_at: null, removed_at: null, contribution_status: "not_applicable", duplicate_of_document_id: null };
+    const extracted = { file_id: "f1", version_number: 1, download_status: "downloaded", origin: "fetched", file_size: 10, sha256: "a", mime_type: "application/pdf", text_extraction_supported: true, analysis_status: "extracted", extraction_status: "extracted", quality: "good", page_count: 3, text_char_count: 300, ocr_candidate: false, extraction_id: "e1", processed_at: null, error_code: null };
+    respondWith(base({
+      "/tenders/t1": {
+        ...detail,
+        documents: [
+          { ...base_, id: "p1", name: "PCAP.pdf", document_type: "administrative_terms", url: "https://example.org/p1", origin: "feed", analyzable: true, latest_file: extracted },
+          { ...base_, id: "p2", name: "PCAP (còpia).pdf", document_type: "administrative_terms", url: "https://example.org/p2", origin: "feed", analyzable: false, duplicate_of_document_id: "p1", latest_file: extracted },
+          { ...base_, id: "p3", name: "Annex 3.pdf", document_type: "additional", url: "https://contractaciopublica.cat/a3", origin: "operator_url", contribution_status: "pending_verification", analyzable: false, latest_file: null },
+          { ...base_, id: "p4", name: "PPT.pdf", document_type: "technical_terms", url: "https://example.org/p4", origin: "feed", analyzable: true, latest_file: null },
+        ],
+        removed_documents: [
+          { ...base_, id: "r1", name: "PPT antic.pdf", document_type: "technical_terms", url: "https://example.org/r1", origin: "feed", analyzable: false, removed_at: "2026-09-30T10:00:00Z", latest_file: null },
+        ],
+        package: { status: "incomplete", gaps: [{ code: "referenced_document_missing", key: "DOC-03", would_provide: [] }] },
+      },
+    }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByText("Annex 3.pdf");
+    expect(screen.getByText("1 de 2 documents analitzables llegits")).toBeTruthy();
+    expect(screen.getByText("pendent de verificació")).toBeTruthy();
+    expect(screen.getByText("àlies de PCAP.pdf")).toBeTruthy();
+    // L'àlies no és una fila pròpia: va plegat sota el canònic.
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(3);
+    expect(screen.getByText("PPT antic.pdf")).toBeTruthy();
+    expect(screen.getByText(/Retirat de la font \(des del /)).toBeTruthy();
+    expect(container.textContent).toContain("Falta un document que cita el plec (DOC-03)");
+    expect(container.textContent).toContain("impacte desconegut");
+    expect(container.textContent).not.toMatch(/operator_url|pending_verification|referenced_document_missing/);
+  });
+
+  it("fitxa sense cap anàlisi del plec: el capçal ho diu amb accés a analitzar-lo, mai «0 de 0»", async () => {
+    respondWith(base({ "/tenders/t1/analysis/requirements": { run: null, requirements: [], award_criteria: [], is_stale: false } }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await flush();
+    const header = container.querySelector("[data-tender-header]")!;
+    expect(header.textContent).toContain("Encara no hi ha cap anàlisi del plec");
+    expect(within(header as HTMLElement).getByRole("link", { name: "Analitza el plec" }).getAttribute("href")).toBe("/licitacions/t1?tab=requisits");
+    expect(header.textContent).not.toMatch(/\b0 de 0\b/);
+  });
+
+  it("licitació manual amb requisits escrits a mà i sense run: `analysis_state` mana (current), cap «sense anàlisi» ni CTA (M1)", async () => {
+    respondWith(base({
+      "/tenders/t1": { ...detail, traceability: { source_code: "manual", source_name: "Manual", external_id: "x", source_url: null, latest_source_record_id: null, fetched_at: null } },
+      "/tenders/t1/analysis/requirements": {
+        run: null,
+        requirements: [{ id: "m1", origin: "manual", title: "Assegurança RC", category: "insurance", obligation: "mandatory", archived_at: null, evidence: [], citations: [] }],
+        award_criteria: [],
+        is_stale: false,
+        analysis_state: "current",
+      },
+    }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await flush();
+    const header = container.querySelector("[data-tender-header]")!;
+    expect(header.textContent).toContain("Requisits escrits a mà · 1");
+    expect(header.textContent).not.toContain("Encara no hi ha cap anàlisi del plec");
+    expect(within(header as HTMLElement).queryByRole("link", { name: "Analitza el plec" })).toBeNull();
+  });
+
+  it("a la pestanya Requisits la capçalera no duplica la CTA «Analitza el plec» (A8)", async () => {
+    search = "tab=requisits";
+    respondWith(base({ "/tenders/t1/analysis/requirements": { run: null, requirements: [], award_criteria: [], is_stale: false, analysis_state: "absent" } }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await flush();
+    const header = container.querySelector("[data-tender-header]")!;
+    expect(header.textContent).toContain("Encara no hi ha cap anàlisi del plec");
+    expect(within(header as HTMLElement).queryByRole("link", { name: "Analitza el plec" })).toBeNull();
+  });
+
+  it("Objecte d'una licitació manual sense descripció: «Sense descripció», mai «no publicat al feed» (M5)", async () => {
+    respondWith(base({
+      "/tenders/t1": { ...detail, description: null, traceability: { source_code: "manual", source_name: "Manual", external_id: "x", source_url: null, latest_source_record_id: null, fetched_at: null } },
+    }));
+    render(<TenderDetailPage />);
+    expect(await screen.findByText("Sense descripció")).toBeTruthy();
+    expect(screen.queryByText("Objecte no publicat al feed")).toBeNull();
+  });
+
+  it("la candidatura en estat d'anàlisi s'etiqueta segons `analysis_state` (A13)", async () => {
+    respondWith(base({
+      "/companies/c1/tenders/t1/workspace": { ...workspace, status: "analysis", human_decision: null, dossier_coverage: { analysis_state: "absent", mandatory_total: null, covered: 0, missing_document: 0, needs_review: 0, not_applicable: 0, expired_documents: 0, optional_total: 0, optional_covered: 0 } },
+    }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await flush();
+    expect(container.querySelector("[data-tender-header]")!.textContent).toContain("Pendent d'anàlisi");
+  });
+
+  it("Plecs: l'estat de cada document segueix la lectura i l'anàlisi (A5), i el recompte no compta els àlies", async () => {
+    search = "tab=plecs";
+    const base_ = { source_document_type_code: null, mime_type: "application/pdf", published_at: null, removed_at: null, contribution_status: "not_applicable", duplicate_of_document_id: null, origin: "feed", analyzable: true };
+    const extracted = { file_id: "f1", version_number: 1, download_status: "downloaded", origin: "fetched", file_size: 10, sha256: "a", mime_type: "application/pdf", text_extraction_supported: true, analysis_status: "extracted", extraction_status: "extracted", quality: "good", page_count: 3, text_char_count: 300, ocr_candidate: false, extraction_id: "e1", processed_at: null, error_code: null };
+    const documents = [
+      { ...base_, id: "p1", name: "PCAP.pdf", document_type: "administrative_terms", url: "https://example.org/p1", latest_file: extracted },
+      { ...base_, id: "p2", name: "PPT.pdf", document_type: "technical_terms", url: "https://example.org/p2", latest_file: null },
+      { ...base_, id: "p3", name: "PCAP (còpia).pdf", document_type: "administrative_terms", url: "https://example.org/p3", analyzable: false, duplicate_of_document_id: "p1", latest_file: extracted },
+    ];
+    respondWith(base({
+      "/tenders/t1": { ...detail, documents, package: { status: "complete", gaps: [], section_status: {} } },
+      "/tenders/t1/analysis/requirements": { run: null, requirements: [], award_criteria: [], is_stale: false, analysis_state: "absent" },
+    }));
+    const { container, unmount } = render(<TenderDetailPage />);
+    await screen.findByText("PPT.pdf");
+    expect(container.textContent).toContain("Plecs (2)");
+    expect(container.textContent).toContain("Text extret · requisits encara no analitzats");
+    expect(container.textContent).toContain("Sense text extret");
+    expect(container.textContent).toContain("Paquet complet");
+    expect(container.textContent).not.toContain("Analitzat");
+    unmount();
+
+    respondWith(base({
+      "/tenders/t1": { ...detail, documents, package: { status: "complete", gaps: [], section_status: {} } },
+      "/tenders/t1/analysis/requirements": { ...analysis, analysis_state: "current" },
+    }));
+    const second = render(<TenderDetailPage />);
+    await screen.findByText("PPT.pdf");
+    const rows = [...second.container.querySelectorAll("tbody tr")];
+    expect(rows.find((row) => row.textContent?.includes("PCAP.pdf"))?.textContent).toContain("Analitzat");
+    expect(rows.find((row) => row.textContent?.includes("PPT.pdf"))?.textContent).toContain("Sense text extret");
+  });
+
+  it("els requisits es llegeixen des de l'empresa activa (`company_id`)", async () => {
+    respondWith(base());
+    render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    expect(get.mock.calls.map((call) => call[0])).toContain("/tenders/t1/analysis/requirements?company_id=c1");
   });
 
   it("estat i tipus que el diccionari no coneix: fallbacks catalans, mai el codi cru", async () => {
@@ -307,6 +489,27 @@ describe("Fitxa de licitació", () => {
     expect(container.textContent).toContain("Estat desconegut");
     expect(container.textContent).toContain("Tipus desconegut");
     expect(container.textContent).not.toMatch(/nou_estat|nou_proc|toString/);
+  });
+
+  it("termini passat: «Fora de termini» al capçal i l'estat cru de la font a part (A12)", async () => {
+    respondWith(base({ "/tenders/t1": { ...detail, status: "open", deadline_at: "2026-09-01T10:00:00Z" } }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    const header = container.querySelector("[data-tender-header]")!;
+    expect(header.textContent).toContain("Fora de termini");
+    expect(header.textContent).toContain("Estat a la font: En termini");
+    const pills = [...header.querySelectorAll("[data-level]")].map((pill) => pill.textContent?.trim());
+    expect(pills).not.toContain("En termini");
+  });
+
+  it("termini obert: l'estat de la font tal qual i cap «Estat a la font»", async () => {
+    respondWith(base());
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    const header = container.querySelector("[data-tender-header]")!;
+    expect(header.textContent).toContain("En termini");
+    expect(header.textContent).not.toContain("Fora de termini");
+    expect(header.textContent).not.toContain("Estat a la font");
   });
 
   it("ja no disponible a la font: etiqueta amb la data al capçal, sense canviar l'estat ni dir «retirada»", async () => {
@@ -341,6 +544,43 @@ describe("Fitxa de licitació", () => {
     render(<TenderDetailPage />);
     expect(await screen.findByRole("heading", { name: "Aquesta licitació ja no hi és" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Ves a Oportunitats" }).getAttribute("href")).toBe("/licitacions");
+  });
+
+  it("Historial: la traçabilitat tècnica (hashes, SourceRecord) va plegada sota «Detalls tècnics» (D5)", async () => {
+    search = "tab=historial";
+    respondWith(base({
+      "/tenders/t1": {
+        ...detail,
+        traceability: { source_code: "placsp_agregadas", source_name: "PLACSP", external_id: "ext-1", source_url: null, latest_source_record_id: "sr-99", fetched_at: "2026-09-10T00:00:00Z", parser_version: "agregadas-v3", raw_hash: "deadbeef".repeat(8) },
+      },
+    }));
+    render(<TenderDetailPage />);
+    await screen.findByTestId("history");
+    const summary = screen.getByText("Detalls tècnics");
+    const details = summary.closest("details")!;
+    expect(details).not.toBeNull();
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain("SourceRecord actual");
+    expect(details.textContent).toContain("sr-99");
+    expect(details.textContent).toContain("deadbeef");
+  });
+
+  it("CPV: el nom oficial al costat del codi, i mai el codi repetit com a descripció (D4)", async () => {
+    respondWith(base({
+      "/tenders/t1": {
+        ...detail,
+        cpvs: [
+          { cpv_code: "32412100", description: "Xarxa de telecomunicacions", is_main: true },
+          { cpv_code: "32500000", description: "CPV 32500000", is_main: false },
+        ],
+      },
+    }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await flush();
+    expect(container.textContent).toContain("Xarxa de telecomunicacions");
+    expect(container.textContent).toContain("32500000");
+    expect(container.textContent).not.toContain("CPV 32500000");
   });
 
   it("error de xarxa → E1 amb reintent", async () => {

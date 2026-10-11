@@ -44,6 +44,7 @@ from app.models.tenders import Tender, TenderLot
 from app.models.workspace import BidWorkspace, WorkspaceTechnicalSolution
 from app.offer.lot_label import GLOBAL_LABEL
 from app.services import economic_offer as service
+from tests.conftest import grant_go
 
 EUR = "EUR"
 
@@ -97,6 +98,7 @@ async def _workspace(db, company, tender, *, tender_lot_id=None) -> BidWorkspace
     db.add(workspace)
     await db.commit()
     await db.refresh(workspace)
+    await grant_go(db, workspace)
     return workspace
 
 
@@ -1926,6 +1928,7 @@ async def _requirement_row(db, tender_id, *, tender_lot_id=None) -> Requirement:
             schema_version="requirements-schema-v1",
             provider="fake",
             model="fake",
+            run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
             is_current=True,
         )
         db.add(run)

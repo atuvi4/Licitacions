@@ -300,14 +300,16 @@ async def test_a_new_planning_version_is_a_changed_preview(
     client_a, tenant_a, plec, session, monkeypatch
 ):
     quote = await create_quote(client_a, tenant_a[1].id, plec["document"].tender_id)
-    monkeypatch.setattr(analysis_planning, "PLANNING_VERSION", "analysis-planning-v2")
+    # Una versio qualsevol diferent de la vigent (Task 8 ja ha passat a la v2).
+    next_version = f"{analysis_planning.PLANNING_VERSION}-next"
+    monkeypatch.setattr(analysis_planning, "PLANNING_VERSION", next_version)
 
     response = await confirm_quote(client_a, tenant_a[1].id, quote["id"])
 
     new = await _assert_replaced(
         response, session, quote["id"], "preview_changed", AnalysisQuoteStatus.SUPERSEDED
     )
-    assert new["planning_version"] == "analysis-planning-v2"
+    assert new["planning_version"] == next_version
 
 
 async def test_an_expired_quote_is_shown_again(client_a, tenant_a, plec, session):

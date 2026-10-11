@@ -391,6 +391,28 @@ describe("DecisionPanel · l'acte de decidir", () => {
     expect(dialog().textContent).toContain("El termini de presentació ja ha passat");
   });
 
+  it("la fila «Termini» del modal diu «Fora de termini» amb el comptador únic, mai «Ja ha passat» (N2)", () => {
+    renderPanel({
+      deadline_at: "2026-09-01T10:00:00Z",
+      deadline_passed: true,
+      days_remaining: -38,
+      go_requires_reason: true,
+      decision_warnings: ["deadline_passed"],
+    });
+    fireEvent.click(button(/Presentar-se · GO/));
+    const row = [...dialog().querySelectorAll("dt")].find((dt) => dt.textContent === "Termini")!.nextElementSibling!;
+    expect(row.textContent).toContain("Fora de termini");
+    expect(row.textContent).toMatch(/2026/);
+    expect(dialog().textContent).not.toContain("Ja ha passat");
+  });
+
+  it("sense data de termini la fila «Termini» diu «No consta» (N2)", () => {
+    renderPanel({ deadline_at: null, deadline_passed: false, days_remaining: null });
+    fireEvent.click(button(/Presentar-se · GO/));
+    const row = [...dialog().querySelectorAll("dt")].find((dt) => dt.textContent === "Termini")!.nextElementSibling!;
+    expect(row.textContent).toBe("No consta");
+  });
+
   it("amb recommendation, counters, eligibility i analysis_basis informats, el modal no en mostra res", () => {
     const base = workspaceFixture();
     renderPanel({

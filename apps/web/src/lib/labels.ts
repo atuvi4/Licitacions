@@ -25,8 +25,16 @@ import type {
 import { formatDate } from "@/lib/format";
 import { jobErrorMessage, type JobRequest, type JobRequestStatus } from "@/lib/jobs";
 import type { MatchStatus } from "@/lib/matching";
-import type { AnalysisState, RequirementAnalysis, ReviewStatus } from "@/lib/requirements";
-import type { DocumentState, TenderStatus } from "@/lib/tenders";
+import {
+  COMPLETED_EMPTY_TEXT,
+  liveManualRequirements,
+  requirementAnalysisState,
+  type AnalysisState,
+  type RequirementAnalysis,
+  type ReviewStatus,
+} from "@/lib/requirements";
+import { isDeadlinePassed } from "@/lib/deadline";
+import { TENDER_STATUS_LABELS, labelOf, type DocumentState, type TenderStatus } from "@/lib/tenders";
 import type {
   AvailabilityStatus,
   CompletenessSection,
@@ -82,7 +90,6 @@ export {
   PROCEDURE_TYPE_LABELS,
   TENDER_DOCUMENT_LABELS,
   TENDER_STATUS_LABELS,
-  daysUntilDeadline,
   documentState,
   formatBytes,
   formatDateTime,
@@ -108,7 +115,6 @@ export {
   WARNING_LABELS,
   WORKSPACE_STATUS_LABELS,
   checklistReconciliationMessage,
-  deadlineLabel,
   reconciliationMessage,
 } from "@/lib/workspace";
 export {
@@ -249,6 +255,8 @@ export const ANALYSIS_STATE_LEVEL: Record<AnalysisState, Level> = {
   not_analyzed: "neutral",
   analyzing: "running",
   completed: "ready",
+  // Sense resultats no és complet: demana una persona (3B-2 §6.3).
+  completed_empty: "attention",
   // Parcial no és complet, mai.
   partial: "attention",
   error: "blocking",
@@ -390,14 +398,42 @@ export function jobLevel(request: Pick<JobRequest, "status" | "outcome">): Level
 }
 
 /**
- * Nivell del comptador de dies (abans, un to per mòdul): un termini passat
- * o a menys d'una setmana bloqueja; a tres setmanes demana atenció.
+ * El termini es compta a UN sol lloc (`lib/deadline`, A11): el mateix nombre de
+ * dies i el mateix text a la fitxa, a Oportunitats, a Candidatures i al workspace.
  */
-export function deadlineLevel(days: number | null): Level {
-  if (days === null) return "neutral";
-  if (days <= 7) return "blocking";
-  if (days <= 21) return "attention";
-  return "neutral";
+export { deadlineCountdown, deadlineCountdownView, deadlineLevel, isDeadlinePassed } from "@/lib/deadline";
+
+export interface TenderStatusView {
+  label: string;
+  level: Level;
+  /** L'estat cru de la font quan NO és el que es mostra; es diu a part. */
+  sourceStatus: string | null;
+}
+
+/**
+ * Estats crus sobre els quals mana el termini: la font diu «obert» (o no diu
+ * res que se sàpiga llegir). Una anul·lació, una adjudicació, una resolució o
+ * una fase d'adjudicació publicades per la font tenen precedència: són fets
+ * posteriors al termini, no una contradicció amb ell.
+ */
+const DEADLINE_OVERRIDES_STATUS: ReadonlySet<string> = new Set(["open", "unknown"]);
+
+/**
+ * L'estat vigent d'una licitació (A12): si el termini ja ha passat i la font
+ * encara la publica com a oberta (o amb un estat desconegut), és «Fora de
+ * termini» i l'estat cru es mostra a part («Estat a la font: …»). Si la font ja
+ * diu anul·lada, adjudicada, resolta o pendent d'adjudicació, mana la font. Sense
+ * termini vençut, l'estat de la font tal qual.
+ */
+export function tenderStatusView(tender: { status: string; deadline_at: string | null }, now: Date = new Date()): TenderStatusView {
+  const source = labelOf(TENDER_STATUS_LABELS, tender.status, "Estat desconegut");
+  const known = Object.hasOwn(TENDER_STATUS_LEVEL, tender.status);
+  const deadlineRules = !known || DEADLINE_OVERRIDES_STATUS.has(tender.status);
+  if (deadlineRules && isDeadlinePassed(tender.deadline_at, now)) {
+    return { label: "Fora de termini", level: "neutral", sourceStatus: source };
+  }
+  const level = known ? TENDER_STATUS_LEVEL[tender.status as TenderStatus] : "neutral";
+  return { label: source, level, sourceStatus: null };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -508,9 +544,17 @@ export function ANALYSIS_STATUS_TEXT(analysis: RequirementAnalysis | null, jobRe
       : IN_PROGRESS_TEXT;
   }
   const run = analysis?.run;
-  if (!run) return "Plec sense analitzar";
+  if (!run) {
+    // Sense run, `analysis_state` del servidor mana (M1): els requisits escrits a
+    // mà d'una licitació manual són una anàlisi, i no es diu «cap anàlisi».
+    if (analysis && requirementAnalysisState(analysis) === "current") {
+      return `Requisits escrits a mà · ${liveManualRequirements(analysis)}`;
+    }
+    return "Encara no hi ha cap anàlisi del plec";
+  }
   if (run.status === "pending" || run.status === "running") return IN_PROGRESS_TEXT;
   if (run.status === "failed") return "L'anàlisi ha fallat";
+  if (run.status === "completed_empty") return COMPLETED_EMPTY_TEXT;
   const when = formatDate(run.completed_at ?? run.started_at);
   if (analysis?.is_stale) return `Anàlisi del ${when} · el plec ha canviat`;
   if (run.status === "partial") {

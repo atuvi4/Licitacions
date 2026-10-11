@@ -31,7 +31,7 @@ from app.services.manual_requirement import effective_requirements
 from tests import test_requirement_analysis as base
 from tests.conftest import TEST_PASSWORD, login
 from tests.test_requirement_analysis import PAGE_27, PAGE_28
-from tests.test_requirement_analysis_v3 import _evidence, _requirement, _run_v3
+from tests.test_requirement_analysis_v3 import _evidence, _requirement, _run_v3_real
 
 analyzable = base.analyzable
 _clean_provider = base._clean_provider
@@ -65,7 +65,7 @@ async def palamos_like(session, analyzable):
             evidence=[_evidence(x, eid="e1", quote=LATENCY_LINE)],
         ),
     ], "award_candidates": []}
-    await _run_v3(session, analyzable, payload)
+    await _run_v3_real(session, analyzable, payload)
     rows = {r.title: r for r in (await session.scalars(sa.select(Requirement))).all()}
     assert set(rows) == {ORDINARY, INSURANCE, LATENCY}
     return {"tender_id": analyzable["document"].tender_id, "rows": rows,
@@ -321,7 +321,7 @@ async def test_b_d_requisit_manual_de_64_trucades_sense_cita(session, palamos_li
     # No va a la taula global de requisits ni al conjunt efectiu.
     assert await session.scalar(
         sa.select(sa.func.count()).select_from(Requirement)) == requirements_before
-    effective = await effective_requirements(session, tid)
+    effective = await effective_requirements(session, tid, None)
     assert {r.title for r in effective.all} == {ORDINARY, INSURANCE, LATENCY}
     item = await session.get(ReviewItem, uuid.UUID(body["canonical_id"]))
     assert item.origin_hint.value == "manual_review"

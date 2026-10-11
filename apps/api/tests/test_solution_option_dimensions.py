@@ -24,6 +24,7 @@ import sqlalchemy as sa
 from app.models.enums import MembershipRole
 from app.models.solution_option_dimensions import WorkspaceSolutionOptionDimension
 from app.models.solution_options import WorkspaceSolutionOption
+from tests.conftest import grant_go
 
 pytestmark = pytest.mark.asyncio
 
@@ -587,6 +588,7 @@ async def test_the_option_must_belong_to_the_workspace_in_the_url(
             db, company_id=company.id, tender=tender, user_id=user.id
         )
     ).workspace
+    await grant_go(db, other_workspace, user)
     await db.commit()
 
     leaked = await client_a.put(

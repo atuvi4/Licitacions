@@ -24,10 +24,12 @@ import sqlalchemy as sa
 from app.models.audit import AuditLog
 from app.models.classification import (
     TenderDocumentClassificationRun,
+    TenderDocumentRoleDecision,
     TenderDocumentRoleSuggestion,
 )
-from app.models.enums import MembershipRole, TenderDocumentType
+from app.models.enums import DownloadStatus, MembershipRole, TenderDocumentType
 from app.models.identity import CompanyMembership
+from app.models.tender_documents import TenderDocumentContent, TenderDocumentFile
 from app.models.tenders import TenderDocument
 from tests.classification_gold import assert_matches_gold, load_gold
 from tests.fixtures.pdf_builder import build_pdf
@@ -365,3 +367,109 @@ async def test_a_tender_without_documents_has_no_classification(client_a, tenant
     assert read == {"run": None, "documents": [], "findings": []}
     run = (await client_a.post(_base(company, tender) + "/document-classification")).json()
     assert run["run"] is None
+
+
+# --------------------------------------------------------------------------- #
+# 3B-2: tenders publics, override ancorat a la versio del fitxer               #
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_public_tender_is_refused_for_reclassify_and_decide(client_a, tenant_a, db):
+    """Els endpoints tenant no escriuen mai en un tender public: `tender_not_manual`."""
+    from tests.test_global_classification import (
+        PCAP_PDF,
+        make_public_tender,
+        processed_feed_document,
+    )
+
+    _, company = tenant_a
+    tender = await make_public_tender(db)
+    pcap = await processed_feed_document(
+        db, tender, "PCAP.pdf", TenderDocumentType.ADMINISTRATIVE_TERMS, PCAP_PDF
+    )
+    base = BASE.format(company=company.id, tender=tender.id)
+
+    assert (await client_a.get(base + "/document-classification")).status_code == 200
+    response = await client_a.post(base + "/document-classification")
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "tender_not_manual"
+    response = await client_a.put(
+        base + f"/document-classification/documents/{pcap.id}/role", json={"role": "ppt"}
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "tender_not_manual"
+    assert await db.scalar(sa.select(sa.func.count()).select_from(TenderDocumentRoleDecision)) == 0
+    await db.refresh(pcap)
+    assert pcap.document_type == TenderDocumentType.ADMINISTRATIVE_TERMS
+
+
+async def test_a_decision_is_anchored_to_the_current_file_version(client_a, tenant_a, db):
+    _, company = tenant_a
+    tender = await _tender(client_a, company)
+    classification = await _receive_twin(client_a, company, tender)
+    document = classification["documents"][0]
+    await _decide(client_a, company, tender, document["tender_document_id"], "pcap")
+
+    decision = await db.scalar(
+        sa.select(TenderDocumentRoleDecision).where(
+            TenderDocumentRoleDecision.tender_document_id
+            == uuid.UUID(document["tender_document_id"])
+        )
+    )
+    assert decision.content_sha256 == document["sha256"]
+
+
+async def test_a_new_file_version_makes_the_decision_stale_and_visible(client_a, tenant_a, db):
+    """Un fitxer nou invalida la decisio: es diu (`stale_override`) i torna a revisio."""
+    _, company = tenant_a
+    tender = await _tender(client_a, company)
+    uploaded = await _upload_single(client_a, company, tender, "PCAP.pdf", build_pdf([PCAP]))
+    await client_a.post(_base(company, tender) + "/document-classification")
+    document_id = uuid.UUID(uploaded["id"])
+    assert (await _decide(client_a, company, tender, uploaded["id"], "ppt")).status_code == 200
+
+    # Una versio nova del fitxer (com faria una nova pujada o descarrega).
+    old = await db.scalar(
+        sa.select(TenderDocumentFile).where(
+            TenderDocumentFile.tender_document_id == document_id,
+            TenderDocumentFile.is_current.is_(True),
+        )
+    )
+    content = TenderDocumentContent(
+        sha256="d" * 64,
+        storage_key="tests/versio-nova.pdf",
+        file_size=10,
+        mime_type="application/pdf",
+        is_text_extractable=True,
+    )
+    db.add(content)
+    await db.flush()
+    old.is_current = False
+    await db.flush()
+    db.add(
+        TenderDocumentFile(
+            tender_document_id=document_id,
+            content_id=content.id,
+            version_number=old.version_number + 1,
+            is_current=True,
+            download_status=DownloadStatus.DOWNLOADED,
+            origin=old.origin,
+        )
+    )
+    await db.commit()
+
+    read = (await client_a.get(_base(company, tender) + "/document-classification")).json()
+    item = next(d for d in read["documents"] if d["tender_document_id"] == uploaded["id"])
+    assert item["sha256"] == "d" * 64
+    assert item["role_source"] == "stale_override"
+    assert item["role"] != "ppt"  # la decisio antiga ja no mana
+    assert item["needs_review"] is True
+
+
+async def test_no_role_proposal_endpoint_exists():
+    """3B-2: cap workflow de propostes de rol (ni tenant ni d'operador)."""
+    from app.main import app
+
+    paths = [getattr(route, "path", "") for route in app.routes]
+    assert not [p for p in paths if "propos" in p and "role" in p]
+    assert not [p for p in paths if "role-proposal" in p or "role_proposal" in p]

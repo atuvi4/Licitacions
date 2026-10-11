@@ -38,7 +38,7 @@ from app.models.enums import MembershipRole
 from app.models.tender_documents import TenderDocumentContent, TenderDocumentFile
 from app.models.tenders import TenderDocument
 from app.models.workspace import BidWorkspace
-from app.tenders.documents import ACTIVE_DOCUMENT
+from app.tenders.documents import ANALYZABLE_DOCUMENT
 
 #: Qui pot afirmar que ha revisat els plecs. Es una constatacio sobre la
 #: candidatura, no una edicio tecnica: els mateixos que decideixen.
@@ -95,6 +95,8 @@ async def fingerprint_of(session: AsyncSession, tender_id: uuid.UUID) -> Documen
 
     Un plec retirat de la font (`removed_at`) ja no es del conjunt vigent: la
     seva retirada canvia l'empremta i la revisio humana torna a caducar.
+    Tampoc un alies ni una aportacio de l'operador sense verificar (3B-2 §2.3):
+    nomes entra el que es analitzable (`ANALYZABLE_DOCUMENT`).
     """
     rows = (
         await session.execute(
@@ -117,7 +119,7 @@ async def fingerprint_of(session: AsyncSession, tender_id: uuid.UUID) -> Documen
                 TenderDocumentContent.id == TenderDocumentFile.content_id,
                 isouter=True,
             )
-            .where(TenderDocument.tender_id == tender_id, ACTIVE_DOCUMENT)
+            .where(TenderDocument.tender_id == tender_id, ANALYZABLE_DOCUMENT)
         )
     ).all()
 

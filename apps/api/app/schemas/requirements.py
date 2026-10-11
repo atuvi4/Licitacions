@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -33,6 +33,7 @@ from app.models.enums import (
     RequirementObligation,
     RequirementOperator,
     RequirementOrigin,
+    RequirementRunBasis,
     RequirementScope,
     RequirementTiming,
     ReviewStatus,
@@ -260,6 +261,11 @@ class ExtractionRunRead(ORMModel):
     skipped_documents: list[Any] | None = None
     error_code: str | None = None
     error_message: str | None = None
+    #: 0061 (3B-2 §6.3): la base desada del run (`real`, `simulation`,
+    #: `unconfigured`, `gold`). Nomes un run `real` pot ser vigent.
+    run_basis: RequirementRunBasis
+    #: Cert en un `completed_empty`: «analisi acabada sense resultats: cal revisar».
+    needs_review: bool = False
 
     #: Sobre QUE s'ha construit aquesta analisi. `status` nomes diu que el
     #: proces ha acabat; aixo diu si darrere hi ha una lectura real del plec o
@@ -362,6 +368,36 @@ class RequirementAnalysisRead(BaseModel):
     award_candidates: list[AwardCriterionRead] = Field(default_factory=list)
     #: Cert si els documents han canviat des de l'analisi vigent.
     is_stale: bool = False
+    #: 3B-2 §6.5: la run que llegeix l'empresa (el seu punter o la canonica), la
+    #: canonica global, i si n'hi ha una de canonica que l'empresa encara no ha
+    #: adoptat. Sense empresa resolta, la vista es la global i no s'hi pot adoptar.
+    effective_run_id: uuid.UUID | None = None
+    canonical_run_id: uuid.UUID | None = None
+    adoption_available: bool = False
+    #: `absent` / `current` / `stale` de l'analisi que llegeix l'empresa, amb el
+    #: MATEIX calcul que el dossier (`requirement_analysis_state`, 3B-2 §7.1.3):
+    #: sense run pero amb requisits escrits a ma es `current`. La fitxa no en
+    #: dedueix cap altre: una sola font de veritat per a «hi ha analisi?».
+    analysis_state: Literal["absent", "current", "stale"] = "absent"
+
+
+class RequirementRunAdoptionIn(BaseModel):
+    """Una empresa accepta un run de requisits com la seva base (3B-2 §6.5)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: uuid.UUID
+    #: L'empresa per la qual s'adopta; per defecte, la de l'usuari (la marcada per
+    #: defecte o l'unica).
+    company_id: uuid.UUID | None = None
+
+
+class RequirementRunAdoptionRead(BaseModel):
+    effective_run_id: uuid.UUID
+    #: La run que l'empresa llegia abans, si era una altra.
+    previous_run_id: uuid.UUID | None = None
+    #: La revisio de l'empresa representa una altra run: cal reconciliar-la.
+    reconciliation_required: bool
 
 
 class ReviewRequest(BaseModel):

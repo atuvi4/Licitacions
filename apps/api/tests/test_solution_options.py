@@ -955,6 +955,7 @@ async def test_a_requirement_from_another_tender_is_refused(client_a, db, candid
         schema_version="v1",
         provider="fake",
         model="cap: run de prova",
+        run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
         is_current=True,
     )
     db.add(run)

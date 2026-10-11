@@ -989,7 +989,7 @@ async def preview(
     session: AsyncSession, *, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> ReconciliationPreview:
     """La previsualitzacio d'aquesta empresa. No escriu res i no fa commit."""
-    current_id = await review_runs.current_run_id(session, tender_id)
+    current_id = await review_runs.current_run_id(session, tender_id, company_id)
     current = await session.get(RequirementExtractionRun, current_id) if current_id else None
     requirement_runs = await review_runs.represented_requirement_run_ids(
         session, company_id, tender_id)

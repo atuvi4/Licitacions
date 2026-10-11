@@ -274,7 +274,7 @@ async def test_el_pla_no_construeix_proveidor_ni_escriu(session, analyzable, mon
     plan, chunks = await probe.build_probe_plan(
         session, tender, chunks_raw=None,
         locators={"X": ("administrative_terms", 28)},
-        provider_name="anthropic", model="claude-sonnet-5",
+        provider_name="anthropic", model="claude-sonnet-5", profile=profiles.V3,
     )
 
     assert await _counts(session) == before
@@ -297,7 +297,8 @@ async def test_el_pla_amb_seleccio_nomes_compta_els_triats(session, analyzable, 
     tender = await session.get(Tender, analyzable["document"].tender_id)
 
     plan, chunks = await probe.build_probe_plan(
-        session, tender, chunks_raw="1", locators={}, provider_name="x", model="y"
+        session, tender, chunks_raw="1", locators={}, provider_name="x", model="y",
+        profile=profiles.V3,
     )
 
     assert len(chunks) == 2
@@ -316,7 +317,8 @@ async def test_un_document_d_adjudicacio_atura_el_pla(session, analyzable, monke
 
     with pytest.raises(probe.ProbeError, match="adjudicacio"):
         await probe.build_probe_plan(
-            session, tender, chunks_raw=None, locators={}, provider_name="x", model="y"
+            session, tender, chunks_raw=None, locators={}, provider_name="x", model="y",
+            profile=profiles.V3,
         )
 
 
@@ -591,7 +593,7 @@ async def test_el_pla_no_imprimeix_la_dsn(session, analyzable):
     tender = await session.get(Tender, analyzable["document"].tender_id)
     plan, _ = await probe.build_probe_plan(
         session, tender, chunks_raw=None, locators={}, provider_name="x", model="y",
-        database="licitacions_v3_probe_palamos", alembic_revision="head",
+        database="licitacions_v3_probe_palamos", alembic_revision="head", profile=profiles.V3,
     )
 
     rendered = probe.render_plan(plan)
@@ -708,7 +710,8 @@ async def test_el_pla_de_represa_d_un_canari_bo(session, palamos_like, one_page_
     )
 
     preview = await probe.preview_resume(
-        session, tender, canary.id, provider_name="fake", model=settings.LLM_MODEL
+        session, tender, canary.id, provider_name="fake", model=settings.LLM_MODEL,
+        profile=profiles.V3,
     )
 
     assert (preview.reused, preview.send, preview.provider_calls) == ([0, 2, 4], [1, 3], 2)
@@ -726,7 +729,8 @@ async def test_el_pla_de_represa_torna_a_enviar_el_triat_que_va_fallar(
     )
 
     preview = await probe.preview_resume(
-        session, tender, canary.id, provider_name="fake", model=settings.LLM_MODEL
+        session, tender, canary.id, provider_name="fake", model=settings.LLM_MODEL,
+        profile=profiles.V3,
     )
 
     assert (preview.reused, preview.send, preview.provider_calls) == ([0, 4], [1, 2, 3], 3)
@@ -745,7 +749,8 @@ async def test_el_pla_de_represa_no_construeix_proveidor_ni_escriu(
     fake.SENT_PAYLOADS.clear()
 
     await probe.preview_resume(
-        session, tender, canary.id, provider_name="fake", model=settings.LLM_MODEL
+        session, tender, canary.id, provider_name="fake", model=settings.LLM_MODEL,
+        profile=profiles.V3,
     )
 
     assert await _counts(session) == before
@@ -783,7 +788,9 @@ async def test_la_represa_conserva_les_negatives_de_la_canonada(
         monkeypatch.setattr(probe, "analysis_input", changed)
 
     with pytest.raises(probe.ProbeError, match=reason):
-        await probe.preview_resume(session, tender, run_id, provider_name="fake", model=model)
+        await probe.preview_resume(
+            session, tender, run_id, provider_name="fake", model=model, profile=profiles.V3
+        )
 
 
 async def test_la_represa_d_un_run_v1_es_refusa_pel_perfil(session, palamos_like, one_page_chunks):
@@ -798,7 +805,8 @@ async def test_la_represa_d_un_run_v1_es_refusa_pel_perfil(session, palamos_like
 
     with pytest.raises(probe.ProbeError, match="profile_mismatch"):
         await probe.preview_resume(
-            session, tender, v1.id, provider_name="fake", model=settings.LLM_MODEL
+            session, tender, v1.id, provider_name="fake", model=settings.LLM_MODEL,
+            profile=profiles.V3,
         )
 
 
@@ -807,9 +815,12 @@ async def test_la_represa_d_un_run_v1_es_refusa_pel_perfil(session, palamos_like
 # --------------------------------------------------------------------------- #
 
 
-def _cli_args(*extra):
+def _cli_args(*extra, profile="v3"):
+    """Els tests de la CLI son de la v3 (canari, represa): el perfil s'hi diu explicit,
+    perque el per defecte de la CLI es el de producte (`REQUIREMENTS_PRODUCT_PROFILE`)."""
     return probe.build_parser().parse_args(
-        ["--database-url", NO_PASSWORD_DSN, "--expediente", "2024-3137", *extra]
+        ["--database-url", NO_PASSWORD_DSN, "--expediente", "2024-3137", "--profile", profile,
+         *extra]
     )
 
 
@@ -963,8 +974,34 @@ async def _truncated_canary(session, palamos_like):
 
 async def _preview(session, tender, run_id, only=None):
     return await probe.preview_resume(
-        session, tender, run_id, provider_name="fake", model=settings.LLM_MODEL, only_raw=only
+        session, tender, run_id, provider_name="fake", model=settings.LLM_MODEL, only_raw=only,
+        profile=profiles.V3,
     )
+
+
+async def test_la_represa_d_un_canari_superat_es_refusa(session, palamos_like, one_page_chunks):
+    """M1: la sonda passa `superseded` a `plan_resume` (un parcial ja no es mai vigent;
+    el que el fa irrepresable es un run real mes nou)."""
+    from datetime import UTC, datetime
+
+    canary, tender = await _truncated_canary(session, palamos_like)
+    session.add(
+        RequirementExtractionRun(
+            tender_id=tender.id,
+            status=AnalysisRunStatus.COMPLETED,
+            input_fingerprint=canary.input_fingerprint,
+            extractor_version="v",
+            prompt_version="v",
+            schema_version="v",
+            provider="anthropic",
+            model="m",
+            started_at=datetime.now(UTC),
+        )
+    )
+    await session.commit()
+
+    with pytest.raises(probe.ProbeError, match="run_not_current"):
+        await _preview(session, tender, canary.id, "2")
 
 
 async def test_la_represa_selectiva_envia_nomes_el_triat(session, palamos_like, one_page_chunks):
@@ -1033,7 +1070,8 @@ async def test_la_represa_selectiva_conserva_les_negatives(
 
     with pytest.raises(probe.ProbeError, match=reason):
         await probe.preview_resume(
-            session, tender, run_id, provider_name="fake", model=model, only_raw="2"
+            session, tender, run_id, provider_name="fake", model=model, only_raw="2",
+            profile=profiles.V3,
         )
 
 
@@ -1105,7 +1143,8 @@ async def test_cadena_canari_selectiva_i_represa_normal(
     assert retry.status == AnalysisRunStatus.PARTIAL
     assert retry.error_code == "chunks_not_selected", "els pendents no son errors"
     assert (retry.chunks_completed, retry.chunks_failed) == (3, 0)
-    assert retry.is_current
+    # Un parcial mai no es vigent (3B-2 §6.3); es repren igualment perque es el mes nou.
+    assert not retry.is_current
     coverage = {c["index"]: (c["status"], c.get("origin"), c.get("error"))
                 for c in retry.chunk_coverage["chunks"]}
     assert coverage == {
@@ -1200,10 +1239,223 @@ async def test_canviar_limit_i_temps_no_trenca_la_represa(
 
     preview = await _preview(session, tender, canary.id, "2")
     plan, _ = await probe.build_probe_plan(
-        session, tender, chunks_raw=None, locators={}, provider_name="x", model="y"
+        session, tender, chunks_raw=None, locators={}, provider_name="x", model="y",
+        profile=profiles.V3,
     )
 
     assert (preview.reused, preview.send) == ([0, 4], [2])
     rendered = probe.render_plan(plan)
     assert "limit de sortida 16000 tokens" in rendered
     assert "temps maxim per crida 300 s" in rendered
+
+
+# --------------------------------------------------------------------------- #
+# `--paid-run` passa per la mateixa porta que el worker (3B-2 §6.7)            #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("setup", "code"),
+    [("no_price", "price_unknown"), ("not_pinned", "model_not_pinned"),
+     ("exhausted", "budget_exhausted")],
+)
+async def test_un_run_pagat_de_la_sonda_es_refusa_abans_de_cap_crida(
+    session, session_factory, palamos_like, one_page_chunks, monkeypatch, capsys, setup, code
+):
+    from decimal import Decimal
+
+    from app.models.enums import LlmBudgetScope
+    from app.models.llm_budget import LlmSpendLedger
+    from tests.quota_support import TEST_MODEL, pin_real_model
+    from tests.real_provider import RealNamedFake
+
+    tender = await session.get(Tender, palamos_like["document"].tender_id)
+    tender.expediente_number = "2024-3137"
+    if setup == "no_price":
+        pin_real_model(monkeypatch, price=False)
+    elif setup == "not_pinned":
+        pin_real_model(monkeypatch, model="claude-un-altre")
+    else:
+        pin_real_model(monkeypatch)
+        session.add(LlmSpendLedger(
+            chunk_index=0, provider="anthropic", model=TEST_MODEL, input_tokens=1,
+            output_tokens=1, cost_usd=Decimal("10.5"), budget_scope=LlmBudgetScope.RUN,
+        ))
+    await session.commit()
+    provider = RealNamedFake([EMPTY_V3] * 2)
+
+    code_ = await _cli(session_factory, _cli_args("--chunks", "0,2", "--paid-run"),
+                       provider, monkeypatch)
+
+    out = capsys.readouterr().out
+    assert code_ == probe.EXIT_NOT_ALLOWED
+    assert code in out
+    assert provider.calls == 0
+    assert await session.scalar(sa.select(sa.func.count(RequirementExtractionRun.id))) == 0
+
+
+# --------------------------------------------------------------------------- #
+# --profile v1|v2|v3 (3B-2 §6.7): per defecte, el perfil de producte           #
+# --------------------------------------------------------------------------- #
+
+
+def test_el_perfil_per_defecte_es_el_de_producte(monkeypatch):
+    args = probe.build_parser().parse_args(["--expediente", "x", "--plan-only"])
+
+    assert args.profile is None, "sense --profile, es decideix en executar"
+    assert settings.REQUIREMENTS_PRODUCT_PROFILE == "v1"
+    assert probe.resolve_profile(args.profile) is profiles.V1
+    monkeypatch.setattr(settings, "REQUIREMENTS_PRODUCT_PROFILE", "v2")
+    assert probe.resolve_profile(None) is profiles.V2
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"), [("v1", profiles.V1), ("v2", profiles.V2), ("v3", profiles.V3)]
+)
+def test_cada_perfil_es_resol_pel_nom(name, expected):
+    args = probe.build_parser().parse_args(
+        ["--expediente", "x", "--profile", name, "--plan-only"]
+    )
+
+    assert probe.resolve_profile(args.profile) is expected
+    assert "v3" not in profiles.PROFILES, "la v3 continua fora del registre public"
+
+
+def test_un_perfil_desconegut_es_refusa_abans_de_res():
+    with pytest.raises(SystemExit) as exc:
+        probe.build_parser().parse_args(["--expediente", "x", "--profile", "v9", "--plan-only"])
+    assert exc.value.code == 2
+    with pytest.raises(probe.ProbeError, match="v9"):
+        probe.resolve_profile("v9")
+
+
+async def test_el_perfil_no_te_cap_valor_ocult_per_defecte(session, analyzable):
+    """Un sol perfil: el que la CLI resol. Les funcions internes no en suposen cap."""
+    import inspect
+
+    for function in (probe.build_probe_plan, probe.preview_resume):
+        parameter = inspect.signature(function).parameters["profile"]
+        assert parameter.default is inspect.Parameter.empty, function.__name__
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY, function.__name__
+
+    tender = await session.get(Tender, analyzable["document"].tender_id)
+    with pytest.raises(TypeError, match="profile"):
+        await probe.build_probe_plan(
+            session, tender, chunks_raw=None, locators={}, provider_name="x", model="y"
+        )
+    with pytest.raises(TypeError, match="profile"):
+        await probe.preview_resume(
+            session, tender, uuid.uuid4(), provider_name="fake", model=settings.LLM_MODEL
+        )
+
+
+async def test_el_pla_porta_el_perfil_les_pagines_els_omesos_i_la_qa(session, analyzable):
+    tender = await session.get(Tender, analyzable["document"].tender_id)
+
+    plan, chunks = await probe.build_probe_plan(
+        session, tender, chunks_raw=None, locators={}, provider_name="x", model="y",
+        profile=profiles.V1,
+    )
+
+    assert plan.profile == "v1"
+    assert (plan.extractor_version, plan.prompt_version, plan.schema_version) == (
+        profiles.V1.extractor_version, profiles.V1.prompt_version, profiles.V1.schema_version,
+    )
+    assert (plan.pages_total, plan.chunks_total) == (2, len(chunks))
+    assert plan.skipped == []
+    # Cap QA avaluada encara: `unknown`, que NO vol dir bona.
+    assert plan.qa_status == "unknown"
+    assert plan.qa_by_document == {analyzable["document"].name: None}
+    rendered = probe.render_plan(plan)
+    assert "PLA v1" in rendered and "Perfil v1:" in rendered
+    assert "pagines: 2" in rendered and "omesos: 0" in rendered and "QA: unknown" in rendered
+
+    analyzable["extraction"].qa_status = "good"
+    await session.commit()
+    plan, _ = await probe.build_probe_plan(
+        session, tender, chunks_raw=None, locators={}, provider_name="x", model="y",
+        profile=profiles.V1,
+    )
+
+    assert plan.qa_status == "good"
+    assert plan.qa_by_document == {analyzable["document"].name: "good"}
+    assert "QA: good" in probe.render_plan(plan)
+
+
+async def test_el_pla_diu_els_documents_omesos(session, analyzable):
+    from app.models.enums import TenderDocumentType
+    from app.models.tenders import TenderDocument
+
+    tender = await session.get(Tender, analyzable["document"].tender_id)
+    session.add(TenderDocument(
+        tender_id=tender.id, name="Annex sense baixar.pdf",
+        document_type=TenderDocumentType.ADDITIONAL, url="https://example.com/annex.pdf",
+    ))
+    await session.commit()
+
+    plan, _ = await probe.build_probe_plan(
+        session, tender, chunks_raw=None, locators={}, provider_name="x", model="y",
+        profile=profiles.V1,
+    )
+
+    assert plan.skipped == [{"name": "Annex sense baixar.pdf", "reason": "document_not_processed"}]
+    rendered = probe.render_plan(plan)
+    assert "omesos: 1" in rendered and "document_not_processed" in rendered
+
+
+async def test_la_cli_passa_el_perfil_triat_a_la_canonada(
+    session, session_factory, palamos_like, one_page_chunks, monkeypatch, capsys
+):
+    """El perfil de la CLI arriba al run pagat: amb `--profile v1` el run es v1."""
+    tender = await session.get(Tender, palamos_like["document"].tender_id)
+    tender.expediente_number = "2024-3137"
+    await session.commit()
+    fake.SENT_PAYLOADS.clear()
+    provider = fake.FakeProvider([{"requirements": []}], model=settings.LLM_MODEL)
+
+    code = await _cli(session_factory, _cli_args("--chunks", "0", "--paid-run", profile="v1"),
+                      provider, monkeypatch)
+
+    assert code == probe.EXIT_OK
+    out = capsys.readouterr().out
+    assert "PLA v1" in out and "Perfil v1:" in out
+    run_id = next(line.split("=", 1)[1] for line in out.splitlines() if line.startswith("RUN_ID="))
+    run = await session.get(RequirementExtractionRun, uuid.UUID(run_id), populate_existing=True)
+    assert run.extractor_version == profiles.V1.extractor_version
+    assert run.prompt_version == profiles.V1.prompt_version
+
+
+@pytest.mark.postgres
+async def test_el_pla_v1_sobre_postgres_imprimeix_el_pla_i_no_construeix_proveidor(
+    session, session_factory, analyzable, monkeypatch, capsys
+):
+    """`--profile v1 --plan-only` sobre la base de test (PostgreSQL, schema aillat): el pla
+    diu documents, pagines, chunks, omesos i QA, i no construeix cap proveidor ni escriu."""
+    import app.ai.provider as provider_module
+    import app.evaluation.benchmark as benchmark
+
+    def _forbidden(*_a, **_k):
+        raise AssertionError("el pla no ha de construir cap proveidor")
+
+    monkeypatch.setattr(provider_module, "get_provider", _forbidden)
+    monkeypatch.setattr(benchmark, "resolve_provider", _forbidden)
+    assert session.bind.dialect.name == "postgresql"
+    tender = await session.get(Tender, analyzable["document"].tender_id)
+    tender.expediente_number = "2024-3137"
+    analyzable["extraction"].qa_status = "good"
+    await session.commit()
+    before = await _counts(session)
+    fake.SENT_PAYLOADS.clear()
+
+    code = await _cli(session_factory, _cli_args("--plan-only", profile="v1"),
+                      SimpleNamespace(name="fake", model=settings.LLM_MODEL), monkeypatch)
+
+    assert code == probe.EXIT_OK
+    out = capsys.readouterr().out
+    assert "PLA v1" in out and "Perfil v1:" in out
+    assert "Documents: 1 · pagines: 2 · chunks: 1 · omesos: 0" in out
+    assert "QA: good" in out
+    assert "NO s'ha construit ni cridat cap proveidor i no s'ha escrit res." in out
+    assert fake.SENT_PAYLOADS == []
+    assert await _counts(session) == before
+    assert "postgresql" not in out and "@" not in out

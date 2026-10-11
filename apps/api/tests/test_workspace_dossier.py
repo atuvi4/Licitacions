@@ -82,7 +82,7 @@ from app.workspace.relevance import (
     required_document_count,
 )
 from app.workspace.transitions import TransitionActor
-from tests.conftest import satisfy_final_gate
+from tests.conftest import grant_go, satisfy_final_gate
 
 DEADLINE = datetime.now(UTC) + timedelta(days=40)
 TODAY = date.today()
@@ -1015,6 +1015,7 @@ async def test_the_api_exposes_coverage_and_readiness_separately(db, client_a, c
     """§5: cobertura no es compliment, i readiness no es cap d'elles."""
     workspace, company = certified["workspace"], certified["company"]
     base = f"/api/v1/companies/{company.id}/workspaces/{workspace.id}"
+    await grant_go(db, workspace)
 
     synced = await client_a.post(f"{base}/dossier/sync")
     assert synced.status_code == 200, synced.text
@@ -1046,6 +1047,7 @@ async def test_the_api_refuses_to_advance_and_says_why(db, client_a, certified):
 async def test_the_workspace_detail_carries_the_readiness(db, client_a, certified):
     workspace, company = certified["workspace"], certified["company"]
     base = f"/api/v1/companies/{company.id}/workspaces/{workspace.id}"
+    await grant_go(db, workspace)
     await client_a.post(f"{base}/dossier/sync")
 
     detail = (await client_a.get(base)).json()
@@ -2521,6 +2523,7 @@ class TestReconciliacioPerLAPI:
         )
         workspace = await open_workspace(db, company.id, tender, user.id)
         base = f"/api/v1/companies/{company.id}/workspaces/{workspace.id}"
+        await grant_go(db, workspace, user)
 
         async def dossier_items() -> dict[str, dict]:
             body = (await client_a.get(f"{base}/dossier")).json()

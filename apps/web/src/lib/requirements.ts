@@ -8,7 +8,21 @@
 
 import type { AnalysisBasis } from "@/lib/compliance";
 
-export type AnalysisRunStatus = "pending" | "running" | "completed" | "partial" | "failed";
+/**
+ * `completed_empty` (3B-2 §6.3): una lectura real acabada sense cap requisit ni
+ * criteri sobre prou pàgines. Mai és vigent i demana una persona que ho revisi.
+ */
+export type AnalysisRunStatus = "pending" | "running" | "completed" | "completed_empty" | "partial" | "failed";
+
+/** Sobre què es va construir un run de requisits (0061). Només `real` pot ser vigent. */
+export type RequirementRunBasis = "real" | "simulation" | "unconfigured" | "gold";
+
+/** Qui pot decidir quina anàlisi és la base de l'empresa (`ADOPTION_ROLES` del servidor). */
+export const ADOPTION_ROLES = ["owner", "admin", "bid_manager"] as const;
+
+export function canAdoptAnalysis(role: string | null | undefined): boolean {
+  return role !== null && role !== undefined && (ADOPTION_ROLES as readonly string[]).includes(role);
+}
 
 export type RequirementCategory =
   | "deadline"
@@ -176,6 +190,10 @@ export interface ExtractionRun {
   }> | null;
   error_code: string | null;
   error_message: string | null;
+  /** La base desada del run (0061). Una simulació (`simulation`) mai és vigent. */
+  run_basis: RequirementRunBasis;
+  /** Cert en un `completed_empty`: «anàlisi acabada sense resultats: cal revisar». */
+  needs_review: boolean;
 }
 
 export interface RequirementAnalysis {
@@ -185,6 +203,47 @@ export interface RequirementAnalysis {
   award_candidates?: AwardCriterion[];
   /** Els documents han canviat des de l'anàlisi vigent. */
   is_stale: boolean;
+  /** 3B-2 §6.5: la run que llegeix l'empresa (el seu punter o la canònica). */
+  effective_run_id?: string | null;
+  /** La canònica global, si n'hi ha. */
+  canonical_run_id?: string | null;
+  /** Hi ha una anàlisi canònica nova que l'empresa encara no ha adoptat. */
+  adoption_available?: boolean;
+  /**
+   * «Hi ha anàlisi?» segons el servidor, amb el MATEIX càlcul que el dossier
+   * (3B-2 §7.1.3): sense run però amb requisits escrits a mà és `current`.
+   */
+  analysis_state?: RequirementAnalysisState;
+}
+
+/** `absent` (cap anàlisi), `current` (vigent, també la humana) o `stale` (obsoleta). */
+export type RequirementAnalysisState = "absent" | "current" | "stale";
+
+/**
+ * L'única lectura de «hi ha anàlisi del plec?» a la fitxa (M1). Mana el que diu
+ * el servidor (`analysis_state`, el mateix càlcul que el dossier). Només si el
+ * servidor encara no ho envia (API anterior) es dedueix amb la mateixa regla, per
+ * no deixar la fitxa muda: una run obsoleta és `stale`, una run és `current`, i
+ * sense run els requisits escrits a mà vius també són una anàlisi.
+ */
+export function requirementAnalysisState(analysis: RequirementAnalysis | null | undefined): RequirementAnalysisState {
+  if (!analysis) return "absent";
+  if (analysis.analysis_state) return analysis.analysis_state;
+  if (analysis.run) return analysis.is_stale ? "stale" : "current";
+  return liveManualRequirements(analysis) > 0 ? "current" : "absent";
+}
+
+/** Requisits escrits a mà i no arxivats. */
+export function liveManualRequirements(analysis: RequirementAnalysis): number {
+  return analysis.requirements.filter((item) => item.origin === "manual" && !item.archived_at).length;
+}
+
+/** Resposta d'adoptar una anàlisi com la base de l'empresa. */
+export interface RequirementRunAdoption {
+  effective_run_id: string;
+  previous_run_id: string | null;
+  /** La revisió de l'empresa representava una altra run: cal reconciliar-la. */
+  reconciliation_required: boolean;
 }
 
 /** Estat visible de l'anàlisi. Es deriva aquí perquè és pura presentació. */
@@ -192,6 +251,7 @@ export type AnalysisState =
   | "not_analyzed"
   | "analyzing"
   | "completed"
+  | "completed_empty"
   | "partial"
   | "error"
   | "stale";
@@ -201,15 +261,22 @@ export function analysisState(analysis: RequirementAnalysis | null): AnalysisSta
   const { status } = analysis.run;
   if (status === "pending" || status === "running") return "analyzing";
   if (status === "failed") return "error";
+  if (status === "completed_empty") return "completed_empty";
   if (analysis.is_stale) return "stale";
   if (status === "partial") return "partial";
   return "completed";
 }
 
+/** El copy de `completed_empty` (3B-2 §6.3): el mateix a tot arreu. */
+export const COMPLETED_EMPTY_TEXT = "Anàlisi acabada sense resultats: cal revisar";
+/** Una simulació (`fake`) mai és vigent (3B-2 §6.3). */
+export const SIMULATION_NOT_CURRENT_TEXT = "Anàlisi de simulació: no és vigent";
+
 export const ANALYSIS_STATE_LABELS: Record<AnalysisState, string> = {
   not_analyzed: "No analitzat",
   analyzing: "Analitzant",
   completed: "Complet",
+  completed_empty: "Sense resultats · cal revisar",
   partial: "Parcial",
   error: "Error",
   stale: "Obsolet",

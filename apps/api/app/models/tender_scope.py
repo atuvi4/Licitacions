@@ -42,6 +42,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column
 from app.models.enums import AreaKind, ContractFactCode, NeedComparator, NeedType
 from app.models.review import in_values
+from app.models.structure_proposals import StructureProvenanceMixin, provenance_checks
 
 MONEY = sa.Numeric(18, 2)
 #: Quantitats amb decimals (metres, hores): mai float.
@@ -74,9 +75,10 @@ def _source_ref_link_columns(entity_table: str, entity_column: str, prefix: str)
 # --------------------------------------------------------------------------- #
 
 
-class TenderScopeItem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class TenderScopeItem(UUIDPrimaryKeyMixin, TimestampMixin, StructureProvenanceMixin, Base):
     __tablename__ = "tender_scope_items"
     __table_args__ = (
+        *provenance_checks(),
         sa.Index("ix_tender_scope_items_tender_id", "tender_id"),
         sa.Index("ix_tender_scope_items_block_id", "block_id"),
         # O bloc o lot: el bloc ja determina el lot si en te.
@@ -140,6 +142,8 @@ class TenderScopeItemSourceRefLink(UUIDPrimaryKeyMixin, Base):
     scope_item_id, source_ref_id, created_by, created_at = _source_ref_link_columns(
         "tender_scope_items", "scope_item_id", "scope_item_source_ref"
     )
+    #: Sense actor, la passada del productor (0060). Mai NULL alhora que `created_by`.
+    producer_run_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True))
 
 
 # --------------------------------------------------------------------------- #
@@ -147,9 +151,10 @@ class TenderScopeItemSourceRefLink(UUIDPrimaryKeyMixin, Base):
 # --------------------------------------------------------------------------- #
 
 
-class RequirementTerritory(UUIDPrimaryKeyMixin, Base):
+class RequirementTerritory(UUIDPrimaryKeyMixin, StructureProvenanceMixin, Base):
     __tablename__ = "requirement_territories"
     __table_args__ = (
+        *provenance_checks(),
         sa.Index("ix_requirement_territories_requirement_id", "requirement_id"),
         sa.CheckConstraint(in_values("kind", AreaKind), name="kind_valid"),
         # Un territori ha d'apuntar a alguna cosa: un nom, un codi o una seu.
@@ -179,9 +184,12 @@ class RequirementTerritory(UUIDPrimaryKeyMixin, Base):
     )
 
 
-class RequirementCapabilityNeed(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class RequirementCapabilityNeed(
+    UUIDPrimaryKeyMixin, TimestampMixin, StructureProvenanceMixin, Base
+):
     __tablename__ = "requirement_capability_needs"
     __table_args__ = (
+        *provenance_checks(),
         sa.Index("ix_requirement_capability_needs_requirement_id", "requirement_id"),
         sa.Index("ix_requirement_capability_needs_tender_id", "tender_id"),
         sa.CheckConstraint(in_values("comparator", NeedComparator), name="comparator_valid"),
@@ -242,13 +250,17 @@ class RequirementCapabilityNeedSourceRefLink(UUIDPrimaryKeyMixin, Base):
     need_id, source_ref_id, created_by, created_at = _source_ref_link_columns(
         "requirement_capability_needs", "need_id", "capability_need_source_ref"
     )
+    producer_run_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True))
 
 
-class RequirementAwardLink(Base):
+class RequirementAwardLink(StructureProvenanceMixin, Base):
     """El requisit es la cara exigible del criteri. Nomes la relacio."""
 
     __tablename__ = "requirement_award_links"
-    __table_args__ = (sa.Index("ix_requirement_award_links_criterion", "award_criterion_id"),)
+    __table_args__ = (
+        *provenance_checks(),
+        sa.Index("ix_requirement_award_links_criterion", "award_criterion_id"),
+    )
 
     requirement_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True),
@@ -270,9 +282,10 @@ class RequirementAwardLink(Base):
 # --------------------------------------------------------------------------- #
 
 
-class TenderContractFact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class TenderContractFact(UUIDPrimaryKeyMixin, TimestampMixin, StructureProvenanceMixin, Base):
     __tablename__ = "tender_contract_facts"
     __table_args__ = (
+        *provenance_checks(),
         sa.Index("ix_tender_contract_facts_tender_id", "tender_id"),
         sa.CheckConstraint(in_values("fact_code", ContractFactCode), name="fact_code_valid"),
     )
@@ -327,3 +340,4 @@ class TenderContractFactSourceRefLink(UUIDPrimaryKeyMixin, Base):
     fact_id, source_ref_id, created_by, created_at = _source_ref_link_columns(
         "tender_contract_facts", "fact_id", "contract_fact_source_ref"
     )
+    producer_run_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True))

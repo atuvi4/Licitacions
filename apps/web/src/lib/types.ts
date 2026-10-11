@@ -455,6 +455,8 @@ export interface DashboardSummary {
     people: number;
     qualifications: number;
     cpv_preferences: number;
+    /** 0 o 1: preferències de contracte desades. */
+    contract_preferences: number;
     projects: number;
     documents: number;
     document_links: number;

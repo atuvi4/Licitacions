@@ -25,8 +25,8 @@ export type Mode = {
 
 export const MODES: Mode[] = [
   { value: "all", label: "Totes amb pre-fit", count: "total_tenders" },
-  // «Per revisar» és l'etiqueta del mockup 03 per al mode `candidate` (B).
-  { value: "candidate", label: "Per revisar", status: "candidate", count: "candidates" },
+  // «Prioritzades» (addendum 3B-2, D2): les candidates que el Radar prioritza; abans «Per revisar» (mockup 03).
+  { value: "candidate", label: "Prioritzades", status: "candidate", count: "candidates" },
   { value: "low_fit", label: "Encaix baix", status: "low_fit", count: "low_fit" },
   { value: "excluded", label: "Descartades", status: "excluded", count: "excluded" },
   {
@@ -90,7 +90,7 @@ export function feedQuery({
   });
 }
 
-/** `?match_status=` de la URL (cerca global, «Avui»): només un mode real; la resta, «Per revisar». */
+/** `?match_status=` de la URL (cerca global, «Avui»): només un mode real; la resta, «Prioritzades». */
 export function modeFromParam(value: string | null): string {
   if (!value) return "candidate";
   return MODES.some((option) => option.value === value && option.status) ? value : "candidate";
@@ -102,7 +102,7 @@ export function countApplied(filters: Filters): number {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Pestanyes: «Totes» (catàleg complet) i «Per revisar» (vista del pre-fit)     */
+/* Pestanyes: «Totes» (catàleg complet) i «Radar · prioritzades» (pre-fit)      */
 /* -------------------------------------------------------------------------- */
 
 export type CatalogueTab = "totes" | "revisar";

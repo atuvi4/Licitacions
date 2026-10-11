@@ -456,6 +456,65 @@ La mostra suma 37 chunks per perfil. Extrapolant dels tokens registrats a
 són uns 425 k + 159 k tokens per a V1 i uns 547 k + 187 k per a V2. És una
 estimació, no una mesura: el cost real depèn del text de cada chunk.
 
+## Base del run i qui el pot veure vigent (3B-2)
+
+Operació i prova disposable: `docs/ops/public-intake-runbook.md`.
+
+**`run_basis`.** Cada run de requisits porta la columna `run_basis` (NOT NULL,
+migració 0061), derivada del nom del proveïdor amb `RequirementRunBasis.for_provider`:
+
+| `run_basis` | Proveïdor |
+| --- | --- |
+| `real` | qualsevol proveïdor que no sigui un dels següents |
+| `simulation` | `fake`, `fixture` |
+| `unconfigured` | buit |
+| `gold` | `gold` o `gold:*` (el carregador d'avaluació) |
+
+**Mai vigent si no és real.** Només un run `real` (o `gold`), `completed` i amb el
+corpus actual pot ser `is_current`. Un run `simulation`/`unconfigured` mai ho és; un
+`partial` tampoc; un run real el corpus del qual ja no és l'actual en tancar-lo no es
+promou (`input_changed`); un run `force` d'una licitació pública tampoc
+(`forced_not_canonical`). A PostgreSQL, el CHECK `current_is_real_or_gold` ho imposa a
+la base de dades. Prova: `tests/test_requirement_run_basis.py`.
+
+**`completed_empty`.** Un run real que acaba sense cap requisit ni criteri sobre 5 o més
+pàgines analitzades (`COMPLETED_EMPTY_MIN_PAGES`) es desa amb estat `completed_empty` i
+`needs_review`. No es promou ni es reaprofita: ho decideix una persona. El downgrade de
+0061 el refusa. Prova: `test_un_run_real_buit_sobre_cinc_pagines_es_completed_empty` i
+`test_un_run_real_buit_sobre_menys_de_cinc_pagines_es_completat`.
+
+**Punter per empresa i adopció.** El run és global (cap run registra empresa);
+cada empresa té un punter `company_tender_requirement_runs` (PK `company_id`,
+`tender_id`) al run que ha acceptat. Sense punter, llegeix el canònic global. Un run
+canònic nou no substitueix el que l'empresa té acceptat: l'ha d'adoptar
+(`POST .../tenders/{tender_id}/analysis/requirements/adopt`, cos `run_id`), i només es
+pot adoptar una anàlisi real, acabada i vigent o demanada per la mateixa empresa
+(`requirement_run_not_adoptable`; una simulació no s'adopta mai). Adoptar no escriu cap
+fila global i pot exigir reconciliació de la revisió de l'empresa. Proves:
+`tests/test_company_run_pointer.py`.
+
+**Eina d'acceptació de L'Escala** (només lectura; **no s'ha executat** contra cap base
+real en aquesta fase). `python -m app.evaluation.lescala_acceptance` compara la
+fotografia d'una licitació de la base amb l'oracle públic del repositori
+(`datasets/analysis/lescala-2026.tender-gold.json`, 9 documents esperats per SHA-256, i
+`datasets/classification/lescala-2026.gold.json`). La sessió és de només lectura
+(PostgreSQL amb `default_transaction_read_only`; SQLite amb `PRAGMA query_only`) i la
+DSN no porta mai contrasenya. La sortida són diferències classificades
+(`not_in_source_docs`, `extraction_missed`, `structure_not_authored`, `oracle_outdated`,
+`unverifiable`) amb la via de coincidència (`dedup_key` o títol normalitzat); mai una
+ordre d'omplir res, mai cap edició per quadrar amb l'oracle. Només amb PCAP i PPT,
+2 de 9 documents hi són i 7 surten com `not_in_source_docs`. Proves:
+`tests/test_lescala_acceptance_tool.py`; E2E amb `fake` i zero crides al proveïdor:
+`tests/test_public_tender_e2e_fake.py`.
+
+**Gates de 3B-2 (resum).** Cadena Alembic `0057→0061→0057→0061` en PostgreSQL
+disposable; SQLite complet i PostgreSQL focal; aïllament de tenants; prova A/B de dues
+empreses sobre el mateix tender públic; run `fake` mai vigent; document oficial
+suplementari i revisió de rol que sobreviuen a un sync 1044 posterior; estructura
+global amb permisos; web (vitest, tsc, lint, build) i QA visual; prova disposable
+**sense LLM** (fixture pública + `fake`) fins al pas 5 de l'acceptació i bloqueig
+honest al pas 6 (`provider_not_real`). Cap crida pagada; pilot intacte.
+
 ## El benchmark no veu dades de l'empresa
 
 4B és tenant-agnostic i això també. Al proveïdor només hi va text públic del

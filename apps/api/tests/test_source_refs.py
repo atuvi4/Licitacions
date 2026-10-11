@@ -881,3 +881,24 @@ async def test_a_removed_document_cannot_be_cited_over_http(client_a, db, tenant
         .where(TenderSourceRef.tender_id == uuid.UUID(tender_id))
     )
     assert count == 0
+
+
+async def test_an_alias_cannot_be_cited(client_a, db, tenant_a):
+    """3B-2 §2.3: nomes es cita el que es analitzable; un alies es cita pel canonic."""
+    from app.models.tenders import TenderDocument
+
+    _, company = tenant_a
+    tender_id = await _tender(client_a, company)
+    canonical = await _upload(client_a, company, tender_id, name="PCAP.pdf", data=PLEC)
+    copy = await _upload(client_a, company, tender_id, name="PCAP copia.pdf", data=PLEC_V2)
+    document = await db.get(TenderDocument, uuid.UUID(copy["id"]))
+    document.duplicate_of_document_id = uuid.UUID(canonical["id"])
+    await db.commit()
+    page = await _page_of(db, copy["file"]["extraction_id"])
+
+    response = await client_a.post(
+        PAGE_REF.format(company=company.id, tender=tender_id),
+        json={"extraction_id": copy["file"]["extraction_id"], "page_id": str(page.id)},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "source_ref_document_not_analyzable"

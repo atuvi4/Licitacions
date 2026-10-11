@@ -1,0 +1,4 @@
+4. Equip tecnic. L'adjudicatari ha de disposar, com a minim, d'un tecnic amb certificacio en xarxes de fibra optica i d'un tecnic en telefonia IP.
+5. Informes. S'ha de lliurar un informe mensual d'incidencies i actuacions, amb el temps de resposta de cada incidencia.
+6. Materials. Els materials de substitucio han de ser nous i compatibles amb l'electronica de xarxa existent.
+7. Confidencialitat. L'adjudicatari no pot difondre la topologia de la xarxa municipal ni les dades de configuracio.

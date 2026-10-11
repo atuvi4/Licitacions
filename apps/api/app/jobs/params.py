@@ -68,6 +68,16 @@ def analysis_dedupe_key(
     return f"analyze:{tender_id}:{mode}:{digest}"
 
 
+def canonical_analysis_dedupe_key(*, tender_id: uuid.UUID, analysis_identity: str) -> str:
+    """Clau d'una analisi canonica d'un tender public (3B-2 §6.4).
+
+    Nomes la licitacio i la identitat d'analisi (`requirement_analysis.analysis_identity`):
+    cap parametre de cap tenant. Dues empreses que demanen el mateix plec amb el
+    mateix motor comparteixen la mateixa feina.
+    """
+    return f"analyze:{tender_id}:canonical:{analysis_identity}"
+
+
 def process_dedupe_key(*, tender_id: uuid.UUID, params: ProcessParams) -> str:
     digest = _digest(_ids(params.document_ids), params.force_download, params.force_reextract)
     return f"process:{tender_id}:{digest}"

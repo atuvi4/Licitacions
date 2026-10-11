@@ -5,7 +5,8 @@
  *
  * - **Pre-fit**: "ens interessa?" (metadades de la licitació).
  * - **Elegibilitat**: "podem acreditar que complim?" (requisits del plec).
- * - **Recomanació automàtica**: el que suggereix el sistema.
+ * - **Resultat de l'anàlisi** (`recommendation`): el que diu el motor; mai una
+ *   «recomanació» ni un GO/NO-GO a la interfície (A14).
  * - **Decisió humana**: el que ha decidit una persona. És l'única oficial.
  *
  * Un 91 de pre-fit amb recomanació REVIEW i decisió PENDENT són tres coses
@@ -164,6 +165,8 @@ export interface WorkspaceSummary {
   human_decision: WorkspaceDecisionType | null;
   analysis_basis: AnalysisBasis;
   analysis_outdated: boolean;
+  /** Si hi ha anàlisi del plec darrere (A13), amb el càlcul del dossier. */
+  analysis_state?: DossierAnalysisState;
   created_at: string;
 }
 
@@ -356,8 +359,16 @@ export interface DossierGroup {
   items: DossierItem[];
 }
 
+/**
+ * Si hi ha anàlisi del plec darrere dels comptadors (3B-2 §7.1.3). Amb `absent`,
+ * `mandatory_total` és `null`: «0 de 0» volia dir «ningú no l'ha llegit».
+ */
+export type DossierAnalysisState = "absent" | "current" | "stale";
+
 export interface DossierCoverageCounters {
-  mandatory_total: number;
+  analysis_state: DossierAnalysisState;
+  /** `null` només (i sempre) sense cap anàlisi del plec. */
+  mandatory_total: number | null;
   covered: number;
   missing_document: number;
   needs_review: number;
@@ -446,9 +457,41 @@ export const READINESS_LABELS: Record<WorkspaceReadiness, string> = {
   ready_for_final_review: "A punt per a la revisió final",
 };
 
+/** Sense cap anàlisi del plec (3B-2 §7.1.3): el mateix text a tots els llocs. */
+export const NO_ANALYSIS_TEXT = "Encara no hi ha cap anàlisi del plec";
+/** El que ocupa el lloc de la fracció «N de M» quan no hi ha anàlisi (A6): mai un «0 de 0». */
+export const NO_ANALYSIS_COUNTER = "Requisits encara no analitzats";
+export const NO_ANALYSIS_DETAIL = `${NO_ANALYSIS_TEXT}: no se sap quins requisits obligatoris té.`;
+export const NO_ANALYSIS_ACTION = "Analitza el plec";
+
+/** On es demana l'anàlisi del plec: a la fitxa de la licitació. */
+export function analysisHref(tenderId: string): string {
+  return `/licitacions/${tenderId}?tab=requisits`;
+}
+
+/**
+ * Preparar sense GO (3B-2 §7.1.6, decisió 4 del propietari, addendum A18): el
+ * pas es pot obrir i llegir, però tota mutació o generació exigeix una decisió
+ * humana GO vigent. La decisió vigent és l'última (`human_decision`): un NO-GO
+ * o un ajornament posteriors tornen a tancar l'edició. El backend ho imposa
+ * igual (403 `decision_required`); aquí només es decideix com es pinta. Copy
+ * exacta de la spec.
+ */
+export const PREPARE_READ_ONLY_TEXT = "Es pot consultar; s'obre a edició amb GO";
+
+export function isPrepareEditable(workspace: Pick<WorkspaceDetail, "human_decision">): boolean {
+  return workspace.human_decision === "go";
+}
+
+/** Cert si els comptadors del dossier no tenen cap anàlisi al darrere. */
+export function hasNoAnalysis(coverage: Pick<DossierCoverageCounters, "analysis_state" | "mandatory_total"> | null | undefined): boolean {
+  return coverage?.analysis_state === "absent" || coverage?.mandatory_total === null;
+}
+
 /** Text de cada blocador. Derivat del codi que envia l'API, mai text lliure. */
 export const READINESS_BLOCKER_LABELS: Record<string, string> = {
   decision_not_go: "Encara no hi ha una decisió humana de GO.",
+  analysis_missing: NO_ANALYSIS_DETAIL,
   mandatory_unresolved: "Hi ha requisits obligatoris sense resoldre al compliment.",
   mandatory_checklist_blocked: "Hi ha items obligatoris de la checklist marcats com a bloquejats.",
   mandatory_evidence_missing: "Falten documents per a requisits obligatoris.",
@@ -493,6 +536,23 @@ export const WORKSPACE_STATUS_LABELS: Record<WorkspaceStatus, string> = {
   submitted: "Presentada",
   withdrawn: "Retirada",
 };
+
+/**
+ * L'etiqueta de l'estat d'una candidatura (A13). L'estat `analysis` no diu res de
+ * si hi ha cap anàlisi: s'etiqueta segons `analysis_state` (de la fila a la
+ * llista, del dossier al detall). El valor de l'estat no canvia; només el text.
+ */
+export function workspaceStatusLabel(workspace: {
+  status: WorkspaceStatus;
+  analysis_state?: DossierAnalysisState;
+  dossier_coverage?: Pick<DossierCoverageCounters, "analysis_state" | "mandatory_total"> | null;
+}): string {
+  if (workspace.status !== "analysis") return WORKSPACE_STATUS_LABELS[workspace.status];
+  const state = workspace.analysis_state ?? workspace.dossier_coverage?.analysis_state;
+  if (state === "absent") return "Pendent d'anàlisi";
+  if (state === "stale") return "Anàlisi obsoleta";
+  return WORKSPACE_STATUS_LABELS.analysis;
+}
 
 export const DECISION_LABELS: Record<WorkspaceDecisionType, string> = {
   go: "GO",
@@ -580,13 +640,8 @@ export const DECISION_REASON_LABELS: Record<string, string> = {
     "Aquesta decisió és anterior a l'historial de canvis: no consta sobre quin estat de la licitació es va prendre.",
 };
 
-/** Text del comptador de dies. Mai s'amaga un termini passat. */
-export function deadlineLabel(days: number | null): string | null {
-  if (days === null) return null;
-  if (days < 0) return `Termini tancat fa ${Math.abs(days)} ${Math.abs(days) === 1 ? "dia" : "dies"}`;
-  if (days === 0) return "Venç avui";
-  return `${days} ${days === 1 ? "dia" : "dies"} restants`;
-}
+// El comptador de dies («N dies», «Fora de termini») viu a `lib/deadline`: una
+// sola regla, a partir de `deadline_at`, per a totes les pantalles (A11/A12).
 
 
 /* -------------------------------------------------------------------------- */

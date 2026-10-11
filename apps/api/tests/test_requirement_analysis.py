@@ -175,7 +175,9 @@ async def test_extracts_a_requirement_with_validated_evidence(session, analyzabl
     assert outcome.reused is False
     run = outcome.run
     assert run.status == AnalysisRunStatus.COMPLETED
-    assert run.is_current is True
+    # 3B-2 §6.3: el proveidor fals es una simulacio i mai no passa a vigent.
+    assert run.is_current is False
+    assert run.run_basis == "simulation"
     assert run.requirements_extracted == 1
     assert run.provider == "fake"
     assert run.extractor_version == "tender-requirements-v1"
@@ -1060,24 +1062,28 @@ class TestProveidorDeSimulacio:
         assert AnalysisBasis.for_provider(run.provider) == AnalysisBasis.SIMULATION
         assert AnalysisBasis.for_provider(run.provider).is_trustworthy is False
 
-    async def test_una_simulacio_si_que_dona_veredicte_de_compliment(self, session, corpus):
-        """El punt de tot plegat: amb requisits, el compliment deixa d'estar cec."""
+    async def test_una_simulacio_no_alimenta_el_compliment(self, session, corpus):
+        """3B-2 §6.3: una simulacio mai no es vigent, i per tant el compliment no la
+        llegeix com si fos el plec (abans en donava un veredicte)."""
         from app.ai.providers.fixture import FixtureProvider
-        from app.models.enums import EligibilityResult
         from app.models.identity import Company
-        from app.services.compliance_analysis import analyze_company_compliance
+        from app.services.compliance_analysis import (
+            NoRequirementsError,
+            analyze_company_compliance,
+        )
 
         company = Company(legal_name="Empresa de prova")
         session.add(company)
         await session.flush()
 
         tender = await tender_of(session, corpus["document"])
-        await analyze_tender_requirements(session, tender, provider=FixtureProvider())
+        run = (
+            await analyze_tender_requirements(session, tender, provider=FixtureProvider())
+        ).run
+        assert (run.requirements_extracted, run.is_current) == (6, False)
 
-        outcome = await analyze_company_compliance(session, company, tender)
-
-        assert outcome.run.requirements_total == 6
-        assert outcome.run.overall_result != EligibilityResult.UNDETERMINED
+        with pytest.raises(NoRequirementsError):
+            await analyze_company_compliance(session, company, tender)
 
 
 

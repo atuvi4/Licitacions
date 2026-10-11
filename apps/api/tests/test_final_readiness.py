@@ -67,6 +67,7 @@ from app.workspace.readiness import (
     Finding,
     evaluate_final,
 )
+from tests.conftest import grant_go
 
 # --------------------------------------------------------------------------- #
 # Construccio                                                                   #
@@ -109,6 +110,7 @@ async def _run(db, tender) -> RequirementExtractionRun:
         schema_version="requirements-schema-v1",
         provider="fake",
         model="fake",
+        run_basis="real",  # fila sintetica vigent (0061: a PG nomes real/gold)
         is_current=True,
     )
     db.add(run)
@@ -162,6 +164,7 @@ async def _workspace(db, company, tender, *, tender_lot_id=None) -> BidWorkspace
     db.add(workspace)
     await db.commit()
     await db.refresh(workspace)
+    await grant_go(db, workspace)
     return workspace
 
 

@@ -12,6 +12,10 @@ public (sense cap empresa propietaria) i despres crida els serveis interns
 mateixos que fan servir els routers, sense cap politica de tenant. Res del que
 fa llegeix coneixement de cap empresa ni crea cap resultat d'analisi.
 
+Tot el que escriu porta provenance `gold` (autoritat `producer`, 0060) i la run
+del gold com a `producer_run_id`: les cites sense persona que les enllaci queden
+atribuides a aquesta passada, mai a ningu.
+
 Els fitxers reals no son al repositori: cada document es dona d'alta amb el
 seu nom i el SHA-256 del gold de classificacio, sense bytes (`file_size = 0`,
 no extraible). Les cites son `document_file` amb la localitzacio (document +
@@ -38,6 +42,7 @@ from app.models.enums import (
     AwardEvaluationType,
     ContractFactCode,
     ContractType,
+    DocumentContributionStatus,
     DocumentFileOrigin,
     DownloadStatus,
     ExtractionConfidence,
@@ -52,6 +57,7 @@ from app.models.enums import (
     RequirementTiming,
     ReviewStatus,
     SourceType,
+    TenderDocumentOrigin,
     TenderDocumentType,
     TenderSiteRole,
     TenderStatus,
@@ -68,6 +74,7 @@ from app.models.tenders import Buyer, Tender, TenderCPV, TenderDocument
 from app.services import manual_requirement, source_refs, tender_structure
 from app.services import tender_scope as scope
 from app.services.cpv import ensure_cpv_code
+from app.services.structure_provenance import Provenance
 
 ANALYSIS_DATASETS = Path(__file__).resolve().parents[2] / "datasets" / "analysis"
 
@@ -224,6 +231,10 @@ class _Loader:
                 document_type=TenderDocumentType(spec["document_type"]),
                 url=f"gold://{self.case}/{spec['path']}",
                 mime_type=spec["mime_type"],
+                # La font gold governa aquests documents (nomes d'avaluacio, sense bytes).
+                origin=TenderDocumentOrigin.FEED,
+                governing_source_id=loaded.tender.source_id,
+                contribution_status=DocumentContributionStatus.NOT_APPLICABLE,
             )
             self.session.add(document)
             await self.session.flush()
@@ -279,19 +290,32 @@ class _Loader:
             ref = await self.ref(citation)
             await link(entity, ref)
 
+    @property
+    def provenance(self) -> Provenance:
+        """`gold` amb la run del gold: l'unic productor d'aquest carregador."""
+        assert self.loaded is not None
+        return Provenance.gold(
+            self.loaded.run.id, actor_id=self.user.id if self.user is not None else None
+        )
+
     async def _link_structure(self, entity: Any, ref: TenderSourceRef) -> None:
         await tender_structure.link_source_ref(
-            self.session, entity=entity, source_ref_id=ref.id, user=self.user
+            self.session, entity=entity, source_ref_id=ref.id, provenance=self.provenance
         )
 
     async def _link_scope(self, entity: Any, ref: TenderSourceRef) -> None:
         await scope.link_source_ref(
-            self.session, entity=entity, source_ref_id=ref.id, user=self.user
+            self.session, entity=entity, source_ref_id=ref.id, provenance=self.provenance
         )
 
     async def _link_requirement(self, requirement: Requirement, ref: TenderSourceRef) -> None:
+        assert self.loaded is not None
         await manual_requirement.link_source_ref(
-            self.session, requirement=requirement, source_ref_id=ref.id, user=self.user
+            self.session,
+            requirement=requirement,
+            source_ref_id=ref.id,
+            user=self.user,
+            producer_run_id=self.loaded.run.id,
         )
 
     # ------------------------------------------------------------------ #
@@ -315,6 +339,7 @@ class _Loader:
                     "billing_terms_json": spec.get("billing_terms_json"),
                     "billing_schema": spec.get("billing_schema"),
                 },
+                provenance=self.provenance,
             )
             loaded.blocks[spec["code"]] = block
             await self.cite(block, spec.get("sources", []), link=self._link_structure)
@@ -338,6 +363,7 @@ class _Loader:
                     "latitude": _money(spec.get("latitude")),
                     "longitude": _money(spec.get("longitude")),
                 },
+                provenance=self.provenance,
             )
             loaded.sites[spec["key"]] = site
             await self.cite(site, spec.get("sources", []), link=self._link_structure)
@@ -396,6 +422,7 @@ class _Loader:
                     "specs_schema": spec.get("specs_schema"),
                     "unit_base_price_ex_vat": _money(spec.get("unit_base_price_ex_vat")),
                 },
+                provenance=self.provenance,
             )
             loaded.scope_items[spec["code"]] = item
             await self.cite(item, spec.get("sources", []), link=self._link_scope)
@@ -445,6 +472,7 @@ class _Loader:
                     }
                     for t in spec.get("territories", [])
                 ],
+                provenance=self.provenance,
             )
             scope.set_proof(requirement, spec.get("proof", []))
             await scope.set_award_links(
@@ -452,6 +480,7 @@ class _Loader:
                 loaded.tender,
                 requirement,
                 [loaded.criteria[code].id for code in spec.get("criteria", [])],
+                provenance=self.provenance,
             )
             await self.session.flush()
 
@@ -480,6 +509,7 @@ class _Loader:
                             else None
                         ),
                     },
+                    provenance=self.provenance,
                 )
                 loaded.needs[spec["code"]].append(need)
                 await self.cite(need, citations, link=self._link_scope)
@@ -495,6 +525,7 @@ class _Loader:
                 value_json=spec["value_json"],
                 value_schema=spec["value_schema"],
                 block_ids=self._block_ids(spec.get("blocks", [])),
+                provenance=self.provenance,
             )
             loaded.facts[spec["code"]] = fact
             await self.cite(fact, spec.get("sources", []), link=self._link_scope)

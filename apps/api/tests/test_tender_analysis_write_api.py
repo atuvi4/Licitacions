@@ -205,7 +205,7 @@ async def test_a_lost_race_returns_the_other_run_instead_of_a_500(
     real = router_module._analyze_and_commit
     calls = {"n": 0}
 
-    async def racing(session, company_id, tender_id):
+    async def racing(session, company_id, tender_id, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             async with session_factory() as other:
@@ -220,7 +220,7 @@ async def test_a_lost_race_returns_the_other_run_instead_of_a_500(
                     "tender_analysis_runs.tender_id, tender_analysis_runs.inputs_hash"
                 ),
             )
-        return await real(session, company_id, tender_id)
+        return await real(session, company_id, tender_id, **kwargs)
 
     monkeypatch.setattr(router_module, "_analyze_and_commit", racing)
     response = await client_a.post(f"{_base(company.id, tender.id)}/runs")
@@ -235,7 +235,7 @@ async def test_a_second_conflict_is_a_stable_409(db, tenant_a, client_a, monkeyp
     tender, *_ = await _synthetic_tender(db)
     await _twin(db, company, client_a)
 
-    async def always_conflicts(session, company_id, tender_id):
+    async def always_conflicts(session, company_id, tender_id, **kwargs):
         raise IntegrityError(
             "INSERT",
             {},
@@ -260,7 +260,7 @@ async def test_an_unrelated_integrity_error_is_not_masked_as_a_race(
     await _twin(db, company, client_a)
     calls = {"n": 0}
 
-    async def unrelated(session, company_id, tender_id):
+    async def unrelated(session, company_id, tender_id, **kwargs):
         calls["n"] += 1
         raise IntegrityError("INSERT", {}, Exception("FOREIGN KEY constraint failed"))
 
@@ -278,7 +278,7 @@ async def test_a_retry_that_hits_an_unrelated_integrity_error_propagates(
     await _twin(db, company, client_a)
     calls = {"n": 0}
 
-    async def race_then_unrelated(session, company_id, tender_id):
+    async def race_then_unrelated(session, company_id, tender_id, **kwargs):
         calls["n"] += 1
         message = (
             "UNIQUE constraint failed: tender_analysis_runs.company_id, "
@@ -314,11 +314,14 @@ async def test_two_simultaneous_requests_get_the_same_run(db, tenant_a, client_f
 
 
 # --------------------------------------------------------------------------- #
-# RULES_VERSION v3 i copy versionat (spec 3.4 i 3.11)                           #
+# RULES_VERSION vigent (v4) i copy versionat (spec 3.4 i 3.11)                   #
 # --------------------------------------------------------------------------- #
 
 V2 = "phase3a-analysis-v2"
 V3 = "phase3a-analysis-v3"
+#: La versio vigent. 3B-2 la puja a `phase3b-analysis-v4` (forats del paquet i
+#: divergencia de rols); el copy de la v4 es el de la v3.
+CURRENT = "phase3b-analysis-v4"
 _EXPLAINED = (
     "fit_assessments",
     "need_assessments",
@@ -383,30 +386,36 @@ async def test_a_v2_run_keeps_rendering_its_v2_copy_text_for_text(
                 # (que un run v2 real no pot contenir) no te text v2 i surt neutre.
                 assert code not in web
                 assert registry.explanation_text(code, V2) == registry.UNKNOWN_EXPLANATION_TEXT
-    # La v3 activa, i amb un copy que ja diu una altra cosa per a tots els codis.
+    # La versio vigent (v4 des de 3B-2: el copy es el de la v3) activa, i amb un copy
+    # que ja diu una altra cosa per a tots els codis.
     monkeypatch.setitem(
         registry.EXPLANATIONS_BY_VERSION,
-        V3,
-        {code: f"v3 · {text}" for code, text in registry.EXPLANATIONS_BY_VERSION[V3].items()},
+        CURRENT,
+        {
+            code: f"vigent · {text}"
+            for code, text in registry.EXPLANATIONS_BY_VERSION[CURRENT].items()
+        },
     )
     monkeypatch.setitem(
         registry.QUESTIONS_BY_VERSION,
-        V3,
-        {code: f"v3 · {text}" for code, text in registry.QUESTIONS_BY_VERSION[V3].items()},
+        CURRENT,
+        {code: f"vigent · {text}" for code, text in registry.QUESTIONS_BY_VERSION[CURRENT].items()},
     )
-    assert analysis.RULES_VERSION == V3
+    assert analysis.RULES_VERSION == CURRENT
     after = await client_a.get(f"{url}/current")
     assert after.status_code == 200 and after.json()["id"] == before["id"]
     assert after.json()["rules_version"] == V2
     assert _rendered(after.json()) == saved
     by_id = await client_a.get(f"{url}/runs/{before['id']}")
     assert _rendered(by_id.json()) == saved
-    # Un run v3 renderitza el copy v3.
+    # Un run de la versio vigent renderitza el copy de la versio vigent.
     recalculated = await client_a.post(f"{url}/runs")
     assert recalculated.status_code == 201, recalculated.text
     fresh = _rendered(recalculated.json())
-    assert fresh["questions"] and all(t.startswith("v3 · ") for t in fresh["questions"].values())
-    assert all(t.startswith("v3 · ") for t in fresh["explanations"].values())
+    assert fresh["questions"] and all(
+        t.startswith("vigent · ") for t in fresh["questions"].values()
+    )
+    assert all(t.startswith("vigent · ") for t in fresh["explanations"].values())
 
 
 async def test_v3_never_reuses_a_v2_run_and_leaves_it_intact(db, tenant_a, client_a, monkeypatch):
@@ -423,7 +432,7 @@ async def test_v3_never_reuses_a_v2_run_and_leaves_it_intact(db, tenant_a, clien
     assert first.status_code == 201, first.text
     body = first.json()
     assert body["reused"] is False and body["id"] != v2["id"]
-    assert body["rules_version"] == V3 and body["is_current"] is True
+    assert body["rules_version"] == CURRENT and body["is_current"] is True
     assert body["inputs_hash"] != v2["inputs_hash"]
     again = await client_a.post(f"{url}/runs")
     assert again.status_code == 200, again.text

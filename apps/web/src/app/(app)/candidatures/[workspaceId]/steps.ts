@@ -3,13 +3,31 @@ import { formatDate } from "@/lib/format";
 import { stepOf } from "@/lib/labels";
 import { describeChange } from "@/lib/tender-changes";
 import { formatDateTime } from "@/lib/tenders";
+import { blockerCountLabel } from "@/lib/readiness";
 import {
   DECISION_LABELS,
   DECISION_REASON_LABELS,
+  NO_ANALYSIS_TEXT,
+  PREPARE_READ_ONLY_TEXT,
   WARNING_LABELS,
+  hasNoAnalysis,
+  isPrepareEditable,
   type WorkspaceDetail,
   type WorkspaceStatus,
 } from "@/lib/workspace";
+
+export { PREPARE_READ_ONLY_TEXT };
+
+export type PrepareMode = "edit" | "read-only";
+
+/**
+ * Com es pinten Preparar i Tancar (3B-2 §7.1.6, decisió 4): editables només
+ * amb un GO vigent; si no, visibles però en lectura. El valor surt de la
+ * decisió humana, mai de l'estat de la feina.
+ */
+export function prepareMode(workspace: Pick<WorkspaceDetail, "human_decision">): PrepareMode {
+  return isPrepareEditable(workspace) ? "edit" : "read-only";
+}
 
 /**
  * Els tres passos de la candidatura (handoff L12). No és cap màquina d'estats
@@ -56,7 +74,13 @@ export interface StepItem {
   pill: { level: Level; text: string } | null;
 }
 
-export function stepperItems(workspace: WorkspaceDetail): StepItem[] {
+/**
+ * `readinessBlockers`: el nombre de pendents de la preparació final (la mateixa
+ * lectura que el distintiu «N pendents de preparació» i que Tancar, A15), o
+ * `null` mentre no se sap. Un sol comptador: `readiness_blockers` del workspace
+ * no hi compta.
+ */
+export function stepperItems(workspace: WorkspaceDetail, readinessBlockers: number | null = null): StepItem[] {
   const real = stepOf(workspace.status);
   const decided = workspace.human_decision;
   const latest = workspace.latest_decision;
@@ -85,16 +109,22 @@ export function stepperItems(workspace: WorkspaceDetail): StepItem[] {
 
   // Pas 3. Només «fet» quan s'ha presentat de debò: aprovar un paquet no és presentar.
   const step3State: StepState = submitted ? "done" : real === "tancar" ? "on" : "todo";
-  const blockers = workspace.readiness_blockers.length;
+  // Sense cap anàlisi del plec, el recompte de pendents no diu res del que el
+  // plec exigeix: es diu el que passa (3B-2 §7.1.3).
+  const noAnalysis = hasNoAnalysis(workspace.dossier_coverage);
   const step3Note = closedNoGo
     ? "tancada amb NO-GO"
     : withdrawn
       ? "retirada"
       : submitted
         ? "presentada"
-        : blockers > 0
-          ? `${blockers} ${blockers === 1 ? "cosa" : "coses"} per resoldre`
-          : "dossier complet";
+        : noAnalysis
+          ? NO_ANALYSIS_TEXT.charAt(0).toLowerCase() + NO_ANALYSIS_TEXT.slice(1)
+          : readinessBlockers === null
+            ? "comprovant la preparació"
+            : readinessBlockers > 0
+              ? blockerCountLabel(readinessBlockers)
+              : "a punt per tancar";
 
   return [
     { key: "decidir", number: 1, label: STEP_TITLES.decidir, state: step1State, note: decisionText, pill: step1Pill },
@@ -128,7 +158,7 @@ export function primaryBanner(workspace: WorkspaceDetail): PageBanner | null {
     ...workspace.decision_reasons
       .filter((code) => code !== "tender_changed_since_decision")
       .map((code) => DECISION_REASON_LABELS[code] ?? code),
-    ...workspace.changes_since_decision.map(describeChange),
+    ...workspace.changes_since_decision.map((event) => describeChange(event)),
   ];
 
   type Candidate = Omit<PageBanner, "reasons"> & {

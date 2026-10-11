@@ -15,6 +15,7 @@ from app.evaluation import tender_gold
 from app.knowledge import vocabulary
 from app.models.requirements import AwardCriterion
 from app.services import tender_structure
+from tests.structure_support import PROV
 from tests.test_tender_gold_lescala import CASE
 
 
@@ -105,7 +106,9 @@ async def test_citation_statements_do_not_grow_with_the_number_of_criteria(db, c
         db.add(clone)
         await db.flush()
         for ref in refs:
-            await tender_structure.link_source_ref(db, entity=clone, source_ref_id=ref.id)
+            await tender_structure.link_source_ref(
+                db, entity=clone, source_ref_id=ref.id, provenance=PROV
+            )
     await db.commit()
 
     with _Select(engine) as after:

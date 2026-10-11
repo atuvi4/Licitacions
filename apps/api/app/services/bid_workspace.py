@@ -55,7 +55,7 @@ from app.models.workspace import (
     WorkspaceTask,
 )
 from app.services import audit
-from app.services.tender_analysis import AnalysisStatus, current_analysis
+from app.services.tender_analysis import AnalysisStatus, current_analysis, package_state
 from app.services.tender_lifecycle import (
     is_actionable,
     load_change_log,
@@ -63,6 +63,7 @@ from app.services.tender_lifecycle import (
     revision_of,
 )
 from app.tenders.changes import ChangeImpact
+from app.tenders.deadline import days_until_deadline, deadline_has_passed
 from app.workspace.analysis_snapshot import build_snapshot
 from app.workspace.checklist import (
     applies_to_workspace_lot,
@@ -182,14 +183,13 @@ async def current_compliance_run(
 
 
 async def current_requirement_run(
-    session: AsyncSession, tender_id: uuid.UUID
+    session: AsyncSession, tender_id: uuid.UUID, company_id: uuid.UUID | None = None
 ) -> RequirementExtractionRun | None:
-    return await session.scalar(
-        sa.select(RequirementExtractionRun).where(
-            RequirementExtractionRun.tender_id == tender_id,
-            RequirementExtractionRun.is_current.is_(True),
-        )
-    )
+    """La run de requisits que llegeix l'empresa: el seu punter o la canonica
+    (3B-2 §6.5). Sense empresa, la canonica global."""
+    from app.services import manual_requirement
+
+    return await manual_requirement.effective_run(session, tender_id, company_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,14 +412,7 @@ class WorkspaceState:
 
 def _days_remaining(deadline: datetime | None, now: datetime | None = None) -> int | None:
     """Dies fins al termini. Calculat, no persistit: dema seria mentida."""
-    if deadline is None:
-        return None
-    moment = now or datetime.now(UTC)
-    if deadline.tzinfo is None:
-        deadline = deadline.replace(tzinfo=UTC)
-    delta = deadline - moment
-    # Divisio entera cap avall: si falten 30 hores, en falta 1 dia complet.
-    return delta.days if delta.total_seconds() >= 0 else -((-delta).days + 1)
+    return days_until_deadline(deadline, now)
 
 
 async def load_state(
@@ -445,7 +438,9 @@ async def load_state(
     )
 
     compliance = await current_compliance_run(session, workspace.company_id, workspace.tender_id)
-    requirements = await current_requirement_run(session, workspace.tender_id)
+    requirements = await current_requirement_run(
+        session, workspace.tender_id, workspace.company_id
+    )
     counters = await compliance_counters(session, compliance, workspace.tender_lot_id)
 
     match = await session.scalar(
@@ -519,7 +514,7 @@ async def load_state(
     if lot_is_gone(lot):
         reasons.append("lot_removed")
 
-    deadline_passed = days is not None and days < 0
+    deadline_passed = deadline_has_passed(deadline, now)
     analysis_status: AnalysisStatus | None = None
     analysis_warnings: AnalysisDecisionWarnings | None = None
     if with_analysis:
@@ -615,7 +610,7 @@ async def create_workspace(
             raise NotFoundError("Lot no trobat en aquesta licitacio.")
 
     compliance = await current_compliance_run(session, company_id, tender.id)
-    requirements = await current_requirement_run(session, tender.id)
+    requirements = await current_requirement_run(session, tender.id, company_id)
     prefit = await session.scalar(
         sa.select(CompanyTenderMatch.score).where(
             CompanyTenderMatch.company_id == company_id,
@@ -673,7 +668,7 @@ async def relevant_requirements(
     from app.services import manual_requirement
 
     effective = await manual_requirement.effective_requirements(
-        session, workspace.tender_id
+        session, workspace.tender_id, workspace.company_id
     )
     requirements = sorted(
         effective.all, key=lambda r: (str(r.category), r.title or "")
@@ -734,7 +729,7 @@ async def regenerate_checklist(
     humana ni els items que ja existien.
     """
     created = await generate_checklist(session, workspace, user_id=user_id)
-    run = await current_requirement_run(session, workspace.tender_id)
+    run = await current_requirement_run(session, workspace.tender_id, workspace.company_id)
     if run is not None:
         workspace.current_requirement_run_id = run.id
     compliance = await current_compliance_run(
@@ -883,7 +878,9 @@ async def record_decision(
         )
     # La fotografia es construeix amb el MATEIX objecte d'avisos que ha decidit
     # si calia motiu: `snapshot.warnings` no pot divergir del que es veia.
-    snapshot = build_snapshot(analysis, warnings)
+    # 3B-2 §4.4: i l'estat del paquet documental del plec en aquell moment.
+    package = await package_state(session, workspace.tender_id)
+    snapshot = build_snapshot(analysis, warnings, package)
 
     try:
         record = WorkspaceDecision(

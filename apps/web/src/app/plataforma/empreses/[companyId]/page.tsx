@@ -36,7 +36,7 @@ import {
   pilotProgress,
   relativeTime,
 } from "@/lib/platform";
-import { WORKSPACE_STATUS_LABELS } from "@/lib/workspace";
+import { workspaceStatusLabel } from "@/lib/workspace";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
@@ -245,7 +245,7 @@ function ClientSpace({ company }: { company: PlatformCompanyDetail }) {
                       <td className="max-w-[12rem] truncate px-4 py-3 text-muted">{tender.buyer_name ?? "—"}</td>
                       <td className="px-4 py-3">
                         <StatusPill level={WORKSPACE_STATUS_LEVEL[tender.status]} size="sm">
-                          {WORKSPACE_STATUS_LABELS[tender.status]}
+                          {workspaceStatusLabel(tender)}
                         </StatusPill>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-muted">{formatDate(tender.deadline_at)}</td>

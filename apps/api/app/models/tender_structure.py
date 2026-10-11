@@ -37,15 +37,17 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column
 from app.models.enums import TenderSiteRole
 from app.models.review import in_values
+from app.models.structure_proposals import StructureProvenanceMixin, provenance_checks
 
 MONEY = sa.Numeric(18, 2)
 #: Prou per a qualsevol coordenada en graus decimals (sis decimals ≈ 10 cm).
 COORDINATE = sa.Numeric(9, 6)
 
 
-class TenderBlock(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class TenderBlock(UUIDPrimaryKeyMixin, TimestampMixin, StructureProvenanceMixin, Base):
     __tablename__ = "tender_blocks"
     __table_args__ = (
+        *provenance_checks(),
         sa.UniqueConstraint("tender_id", "code", name="uq_tender_blocks_tender_code"),
         sa.Index("ix_tender_blocks_tender_id", "tender_id"),
         sa.CheckConstraint(
@@ -88,9 +90,10 @@ class TenderBlock(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         return f"<TenderBlock {self.code} {self.name[:30]}>"
 
 
-class TenderSite(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class TenderSite(UUIDPrimaryKeyMixin, TimestampMixin, StructureProvenanceMixin, Base):
     __tablename__ = "tender_sites"
     __table_args__ = (
+        *provenance_checks(),
         sa.UniqueConstraint("tender_id", "code", name="uq_tender_sites_tender_code"),
         sa.Index("ix_tender_sites_tender_id", "tender_id"),
         sa.CheckConstraint(in_values("role", TenderSiteRole), name="role_valid"),
@@ -201,6 +204,9 @@ class TenderBlockSourceRefLink(UUIDPrimaryKeyMixin, Base):
         sa.Uuid(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="SET NULL", name="fk_block_source_ref_author"),
     )
+    #: Sense actor (via interna d'un productor), la passada que l'ha enllacat
+    #: (0060). Mai NULL alhora que `created_by` en un enllac nou.
+    producer_run_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )
@@ -232,6 +238,9 @@ class TenderSiteSourceRefLink(UUIDPrimaryKeyMixin, Base):
         sa.Uuid(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="SET NULL", name="fk_site_source_ref_author"),
     )
+    #: Sense actor (via interna d'un productor), la passada que l'ha enllacat
+    #: (0060). Mai NULL alhora que `created_by` en un enllac nou.
+    producer_run_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )
@@ -267,6 +276,9 @@ class AwardCriterionSourceRefLink(UUIDPrimaryKeyMixin, Base):
         sa.Uuid(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="SET NULL", name="fk_criterion_source_ref_author"),
     )
+    #: Sense actor (via interna d'un productor), la passada que l'ha enllacat
+    #: (0060). Mai NULL alhora que `created_by` en un enllac nou.
+    producer_run_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )

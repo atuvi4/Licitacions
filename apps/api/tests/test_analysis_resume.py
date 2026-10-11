@@ -9,6 +9,7 @@ els mateixos indexs bons) amb el proveidor fals.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -32,6 +33,7 @@ from app.services.requirement_analysis import (
     analysis_input,
     analyze_tender_requirements,
     plan_resume,
+    run_is_superseded,
 )
 from app.services.requirement_chunking import build_chunks
 from tests.jobs_support import confirm_quote, create_quote, run_worker
@@ -264,7 +266,9 @@ async def test_el_run_real_passa_la_comprovacio(session, plec23):
         ({"tender_id": uuid.uuid4()}, "run_not_found"),
         ({"status": AnalysisRunStatus.COMPLETED}, "run_not_partial"),
         ({"status": AnalysisRunStatus.FAILED}, "run_not_partial"),
-        ({"is_current": False}, "run_not_current"),
+        # Un fallit per un error del model (no del worker) no es repren (3B-2 §6.6).
+        ({"status": AnalysisRunStatus.FAILED, "error_code": "all_chunks_failed"},
+         "run_not_partial"),
         ({"input_fingerprint": "0" * 64}, "input_changed"),
         ({"prompt_version": "requirements-v0"}, "profile_mismatch"),
         ({"schema_version": "requirements-schema-v0"}, "profile_mismatch"),
@@ -281,6 +285,19 @@ async def test_qualsevol_diferencia_rebutja_la_represa(session, plec23, changes,
         plan_resume(_source_like(run, **changes), **(await _context(session, run)))
 
     assert caught.value.details["reason"] == reason
+
+
+async def test_un_parcial_superat_rebutja_la_represa(session, plec23):
+    """3B-2 §6.3: un parcial ja no es mai vigent; el que el fa irrepresable es que
+    n'hi hagi un de mes nou (`run_is_superseded`)."""
+    run = await _partial_run(session, plec23)
+    assert run.is_current is False
+    plan_resume(run, **(await _context(session, run)))  # no superat: es repren
+
+    with pytest.raises(ResumeNotAllowedError) as caught:
+        plan_resume(run, **(await _context(session, run)), superseded=True)
+
+    assert caught.value.details["reason"] == "run_not_current"
 
 
 async def test_un_altre_pla_de_chunks_rebutja_la_represa(session, plec23, monkeypatch):
@@ -396,13 +413,14 @@ async def test_nomes_s_envien_els_chunks_fallits(session, plec23):
     assert sent_first_pages == sorted(index + 1 for index in FAILED)
 
 
-async def test_el_run_nou_es_complet_i_vigent(session, plec23):
+async def test_el_run_nou_es_complet_i_no_vigent_perque_es_simulat(session, plec23):
     run, resumed, _ = await _resume(session, plec23)
 
     assert resumed.id != run.id
     assert resumed.status == AnalysisRunStatus.COMPLETED
     assert (resumed.chunks_total, resumed.chunks_completed, resumed.chunks_failed) == (22, 22, 0)
-    assert resumed.is_current is True
+    # 3B-2 §6.3: amb el proveidor fals es una simulacio i mai no passa a vigent.
+    assert resumed.is_current is False
     assert resumed.provider_metadata["resumed_from_run_id"] == str(run.id)
     assert resumed.provider_metadata["reused_chunks"] == list(GOOD)
 
@@ -508,12 +526,12 @@ async def test_una_represa_que_torna_a_fallar_queda_parcial_i_es_pot_tornar_a_re
     )
     plan = plan_resume(resumed, **(await _context(session, resumed)))
     assert plan.send == frozenset({12})
-    # I el run d'origen, ja substituit, no es pot reprendre.
+    # I el run d'origen, ja substituit per un de mes nou, no es pot reprendre.
+    original = await session.get(RequirementExtractionRun, run.id, populate_existing=True)
+    superseded = await run_is_superseded(session, original)
+    assert superseded is True
     with pytest.raises(ResumeNotAllowedError):
-        plan_resume(
-            await session.get(RequirementExtractionRun, run.id, populate_existing=True),
-            **(await _context(session, run)),
-        )
+        plan_resume(original, **(await _context(session, run)), superseded=superseded)
 
 
 # --------------------------------------------------------------------------- #
@@ -540,14 +558,17 @@ async def test_quote_confirmacio_i_worker_envien_nomes_13(
         f"/api/v1/companies/{company_id}/job-requests/{confirmed.json()['id']}"
     )
     assert final.json()["status"] == JobRequestStatus.SUCCEEDED.value
-    current = await session.scalar(
-        sa.select(RequirementExtractionRun).where(
+    # La represa es un run nou (simulat: mai vigent, 3B-2 §6.3).
+    resumed = await session.scalar(
+        sa.select(RequirementExtractionRun)
+        .where(
             RequirementExtractionRun.tender_id == run.tender_id,
-            RequirementExtractionRun.is_current.is_(True),
-        ).execution_options(populate_existing=True)
+            RequirementExtractionRun.id != run.id,
+        )
+        .execution_options(populate_existing=True)
     )
-    assert current.id != run.id
-    assert current.provider_metadata["resumed_from_run_id"] == str(run.id)
+    assert resumed.is_current is False
+    assert resumed.provider_metadata["resumed_from_run_id"] == str(run.id)
 
 
 async def test_si_el_run_deixa_de_ser_reprenible_la_confirmacio_no_crea_res(
@@ -558,11 +579,19 @@ async def test_si_el_run_deixa_de_ser_reprenible_la_confirmacio_no_crea_res(
     quote = await create_quote(
         client_a, company_id, run.tender_id, json={"resume_from_run_id": str(run.id)}
     )
-    # Entremig, algu fa una analisi completa nova i el parcial deixa de ser vigent.
-    await session.execute(
-        sa.update(RequirementExtractionRun)
-        .where(RequirementExtractionRun.id == run.id)
-        .values(is_current=False)
+    # Entremig, algu fa una analisi completa nova: el parcial queda superat.
+    session.add(
+        RequirementExtractionRun(
+            tender_id=run.tender_id,
+            status=AnalysisRunStatus.COMPLETED,
+            input_fingerprint=run.input_fingerprint,
+            extractor_version="v",
+            prompt_version="v",
+            schema_version="v",
+            provider="anthropic",
+            model="m",
+            started_at=datetime.now(UTC),
+        )
     )
     await session.commit()
 

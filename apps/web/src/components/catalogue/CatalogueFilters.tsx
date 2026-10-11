@@ -17,6 +17,11 @@ import {
 
 export const SEARCH_PLACEHOLDER = "Cerca per títol, expedient, organisme o descripció";
 
+/** El camp NUTS, perquè «Filtra per NUTS» (C1) hi pugui posar el focus. */
+export const NUTS_INPUT_ID = "catalogue-nuts";
+/** Els codis NUTS presents al catàleg (C2): només codis, cap nom inventat. */
+export const NUTS_LIST_ID = "catalogue-nuts-codes";
+
 /** Una opció del cercador: el servei diu `code`; aquí es guarda com a `number` (és un número de CPV, no un codi intern). */
 interface CpvOption {
   number: string;
@@ -24,9 +29,11 @@ interface CpvOption {
 }
 
 /**
- * Codi o prefix CPV amb ajuda: escriure paraules consulta `/cpv-codes?q=` i
- * triar una opció posa el codi al filtre; escriure dígits fixa directament un
- * codi o un prefix (`4531` troba tot el que hi comença).
+ * Codi o prefix CPV amb ajuda: escriure paraules consulta `/cpv-codes?q=` (codi
+ * o paraula de la descripció del catàleg) i triar una opció posa el codi al
+ * filtre; escriure dígits fixa directament un codi o un prefix (`4531` troba
+ * tot el que hi comença). El filtre s'aplica SEMPRE pel codi (addendum 3B-2,
+ * C3): el text sol no filtra res, i es diu.
  */
 function CpvLookup({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const listId = useId();
@@ -71,12 +78,15 @@ function CpvLookup({ value, onChange }: { value: string; onChange: (value: strin
     onChange(next);
   }
 
+  // Text que no és cap codi i encara no s'ha resolt en un codi: no filtra.
+  const typedWord = text.trim() !== "" && !/^[\d\s-]+$/.test(text.trim()) && text.trim() !== value;
+
   return (
     <div className="relative">
-      <Field label="CPV" hint="Codi, prefix (4531…) o paraula">
+      <Field label="CPV" hint="Codi o prefix (4531…). Per trobar el codi al catàleg, escriu una part del codi o de la descripció (cerca «conté»); el filtre s'aplica sempre pel codi triat.">
         <Input
           value={text}
-          placeholder="45314320 o «fibra»"
+          placeholder="45314320"
           role="combobox"
           aria-expanded={options.length > 0}
           aria-controls={listId}
@@ -88,6 +98,11 @@ function CpvLookup({ value, onChange }: { value: string; onChange: (value: strin
           }}
         />
       </Field>
+      {typedWord && (
+        <p role="note" className="mt-1 text-caption text-warning">
+          El text no filtra: tria un codi de la llista.
+        </p>
+      )}
       {options.length > 0 && (
         <ul
           id={listId}
@@ -189,10 +204,25 @@ export function CatalogueFilters({
             <Field label="Organisme" hint="Part del nom">
               <Input value={filters.buyer_q} onChange={(event) => set({ buyer_q: event.target.value })} />
             </Field>
-            <Field label="Territori (NUTS)" hint="Prefix: ES51, ES5…">
-              <Input value={filters.nuts} placeholder="ES51" onChange={(event) => set({ nuts: event.target.value })} />
+            <Field label="Territori (NUTS)" hint="Prefix: ES51, ES5… Es mostra el codi tal com el publica la font.">
+              <Input
+                id={NUTS_INPUT_ID}
+                list={NUTS_LIST_ID}
+                value={filters.nuts}
+                placeholder="ES51"
+                autoComplete="off"
+                onChange={(event) => set({ nuts: event.target.value })}
+              />
+              <datalist id={NUTS_LIST_ID}>
+                {(facets?.nuts_codes ?? []).map((code) => (
+                  <option key={code} value={code} />
+                ))}
+              </datalist>
             </Field>
-            <Field label="Lloc d'execució" hint="Municipi o comarca">
+            <Field
+              label="Lloc d'execució (cobertura parcial)"
+              hint="Municipi o comarca. Moltes licitacions de la font només indiquen el codi NUTS, no el lloc."
+            >
               <Input value={filters.place_q} onChange={(event) => set({ place_q: event.target.value })} />
             </Field>
             <Field label="Import mínim">

@@ -9,13 +9,13 @@
  * selector d'empresa ni «Administració de l'empresa».
  */
 
-import { Building2, LayoutGrid, LogOut, Search, ShieldCheck } from "lucide-react";
+import { Building2, FileText, LayoutGrid, LogOut, Search, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { type FormEvent, type ReactNode, useState } from "react";
 
 import { cn } from "@/components/ui";
-import { initials, PLATFORM_HOME } from "@/lib/platform";
+import { initials, PLATFORM_HOME, PLATFORM_TENDERS } from "@/lib/platform";
 
 import { usePlatformSession } from "./PlatformSession";
 
@@ -37,6 +37,7 @@ function PlatformSidebar() {
   const pathname = usePathname();
   const { companiesCount } = usePlatformSession();
   const onCompanies = pathname.startsWith(PLATFORM_HOME);
+  const onTenders = pathname.startsWith(PLATFORM_TENDERS);
   return (
     <aside className="hidden w-[212px] shrink-0 flex-col bg-sidebar text-sidebar-ink lg:flex">
       <div className="flex items-center justify-between px-4 pt-4 pb-5">
@@ -67,6 +68,20 @@ function PlatformSidebar() {
               <Building2 size={16} strokeWidth={1.5} aria-hidden />
               <span className="flex-1">Empreses</span>
               {companiesCount !== undefined && <span className="text-[12px] tabular-nums">{companiesCount}</span>}
+            </Link>
+          </li>
+          <li>
+            {/* Licitacions públiques: l'entrada cap als documents públics oficials (3B-2 §7.1.5, C4). */}
+            <Link
+              href={PLATFORM_TENDERS}
+              aria-current={onTenders ? "page" : undefined}
+              className={cn(
+                "flex min-h-9 items-center gap-2.5 px-2.5 py-2 text-[14px] leading-5 transition-colors",
+                onTenders ? "bg-sidebar-hover font-semibold text-white" : "text-sidebar-ink/80 hover:bg-white/8 hover:text-white",
+              )}
+            >
+              <FileText size={16} strokeWidth={1.5} aria-hidden />
+              <span className="flex-1">Licitacions</span>
             </Link>
           </li>
           <li>

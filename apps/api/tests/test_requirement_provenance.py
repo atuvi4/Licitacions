@@ -15,9 +15,13 @@ from app.models.enums import AnalysisRunStatus, ReviewStatus
 from app.models.requirements import Requirement, RequirementEvidence, RequirementExtractionRun
 from app.models.tender_documents import TenderDocumentExtraction, TenderDocumentPage
 from app.models.tenders import Tender
-from app.services.requirement_analysis import analyze_tender_requirements
+from app.services.requirement_analysis import (
+    FORCED_NOT_CANONICAL,
+    analyze_tender_requirements,
+)
 from app.services.tender_document_processing import process_tender_document
 from tests.fixtures.pdf_builder import build_pdf
+from tests.real_provider import RealNamedFake
 
 PUBLIC_IP = "93.184.216.34"
 CLAUSE = (
@@ -163,16 +167,48 @@ async def test_the_same_input_and_config_reuses_the_run(session, processed):
 
 
 async def test_force_creates_a_new_run(session, processed):
+    """`force` torna a analitzar (run nou, cap reaprofitament), pero en una licitacio
+    PUBLICA nomes el fa l'operador i aquell run mai es canonic (3B-2 §6.4): el
+    vigent es queda i el forcat queda marcat `forced_not_canonical`."""
     extraction = await current_extraction(session)
     fake.queue_response(payload_for(extraction.id, 1))
     tender = await session.get(Tender, processed.tender_id)
-    first = await analyze_tender_requirements(session, tender)
+    assert tender.owner_company_id is None
+    # Proveidor de nom real: una simulacio mai no es vigent (3B-2 §6.3).
+    first = await analyze_tender_requirements(session, tender, provider=RealNamedFake())
 
     fake.queue_response(payload_for(extraction.id, 1))
-    second = await analyze_tender_requirements(session, tender, force=True)
+    second = await analyze_tender_requirements(
+        session, tender, force=True, provider=RealNamedFake()
+    )
 
     assert second.reused is False
     assert second.run.id != first.run.id
+    assert second.run.status == AnalysisRunStatus.COMPLETED
+    assert second.run.error_code == FORCED_NOT_CANONICAL
+    await session.refresh(first.run)
+    assert first.run.is_current is True
+    assert second.run.is_current is False
+
+
+async def test_force_in_a_manual_tender_still_replaces_the_current_run(
+    session, processed, tenant_a
+):
+    """En una licitacio MANUAL els plecs son del propietari: el seu `force` continua
+    donant el run vigent, com abans de 3B-2."""
+    extraction = await current_extraction(session)
+    tender = await session.get(Tender, processed.tender_id)
+    tender.owner_company_id = tenant_a[1].id
+    await session.commit()
+    fake.queue_response(payload_for(extraction.id, 1))
+    first = await analyze_tender_requirements(session, tender, provider=RealNamedFake())
+
+    fake.queue_response(payload_for(extraction.id, 1))
+    second = await analyze_tender_requirements(
+        session, tender, force=True, provider=RealNamedFake()
+    )
+
+    assert second.reused is False and second.run.id != first.run.id
     await session.refresh(first.run)
     assert first.run.is_current is False
     assert second.run.is_current is True
@@ -233,7 +269,7 @@ async def test_a_failed_run_does_not_dethrone_the_previous_one(session, processe
     extraction = await current_extraction(session)
     fake.queue_response(payload_for(extraction.id, 1))
     tender = await session.get(Tender, processed.tender_id)
-    good = (await analyze_tender_requirements(session, tender)).run
+    good = (await analyze_tender_requirements(session, tender, provider=RealNamedFake())).run
     assert good.requirements_extracted == 1
 
     requirement_id = (await session.scalar(sa.select(Requirement))).id

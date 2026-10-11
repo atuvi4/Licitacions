@@ -21,7 +21,7 @@ l'abast: l'analisi nomes escriu a les set taules de 0051.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date
 from typing import Any
 
@@ -30,25 +30,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis import engine
 from app.analysis.fingerprint import (
+    PACKAGE_INCOMPLETE,
     BlockView,
     CriterionView,
     FactView,
     NeedView,
+    PackageGapView,
     RequirementView,
     ScopeItemView,
     SiteView,
     TenderStructureView,
     TerritoryView,
     inputs_hash,
+    package_status_for,
     review_revision_hash,
+    section_presence,
+    section_status_for,
+    sha256_of,
     structure_fingerprint,
 )
-from app.analysis.registry import RULES_VERSION
+from app.analysis.registry import RULES_VERSION, ExplanationCode
 from app.analysis.territory import Area, Coverage
 from app.core.errors import AnalysisPrerequisitesMissingError, NotFoundError
 from app.models.classification import TenderDocumentClassificationRun
-from app.models.enums import KnowledgeLifecycle
+from app.models.enums import KnowledgeLifecycle, RoleSource
 from app.models.knowledge import CompanyPartner, PartnerRoleRow
+from app.models.package import TenderPackageGap
 from app.models.profile import CompanyService
 from app.models.requirements import AwardCriterion
 from app.models.tender_analysis import (
@@ -61,10 +68,12 @@ from app.models.tender_analysis import (
     TenderFitAssessment,
 )
 from app.models.tender_structure import TenderSite
-from app.models.tenders import Tender
+from app.models.tenders import Tender, TenderDocument
 from app.services import (
     company_knowledge,
     document_classification,
+    document_roles,
+    global_document_classification,
     manual_requirement,
     requirement_analysis,
     tender_lifecycle,
@@ -82,16 +91,71 @@ def _site_key(site: TenderSite) -> str:
     return SiteView(code=site.code, name=site.name, role=str(site.role)).key
 
 
+@dataclass(frozen=True, slots=True)
+class PackageState:
+    """L'estat del paquet documental d'un plec (3B-2 §4.4)."""
+
+    status: str
+    #: Nomes els forats OBERTS.
+    gaps: tuple[PackageGapView, ...]
+    #: Hi ha una passada de classificacio global vigent.
+    has_run: bool
+
+
+async def package_state(session: AsyncSession, tender_id: uuid.UUID) -> PackageState:
+    """`incomplete` si hi ha algun forat obert (amb passada de classificacio global o
+    sense: els forats son fets); sense forats, `complete` amb passada vigent i
+    `unknown` sense. Els forats resolts no hi son mai."""
+    run = await global_document_classification.current_global_run(session, tender_id)
+    rows = await session.scalars(
+        sa.select(TenderPackageGap)
+        .where(TenderPackageGap.tender_id == tender_id, TenderPackageGap.resolved_at.is_(None))
+        .order_by(TenderPackageGap.created_at, TenderPackageGap.id)
+    )
+    gaps = tuple(
+        PackageGapView(
+            code=str(gap.code),
+            detail=gap.detail,
+            would_provide=tuple(str(item) for item in (gap.would_provide or [])),
+            producer=str(gap.producer),
+        )
+        for gap in rows
+    )
+    has_run = run is not None
+    return PackageState(package_status_for(gaps, has_run=has_run), gaps, has_run)
+
+
 async def load_structure_view(
-    session: AsyncSession, tender: Tender
+    session: AsyncSession, tender: Tender, company_id: uuid.UUID | None = None
 ) -> tuple[TenderStructureView, dict[str, Any]]:
-    """L'estructura vigent del plec com a vista pura, i les versions llegides."""
+    """L'estructura vigent del plec com a vista pura, i les versions llegides.
+
+    Els requisits i criteris son els de la run EFECTIVA de l'empresa (3B-2 §6.5:
+    el seu punter o la canonica); sense empresa, la canonica global. Per aixo
+    `extraction_run_id` (i l'`inputs_hash` v3) segueix el punter de cada empresa.
+
+    La vista porta tambe l'estat del paquet documental (`package_status`, els forats
+    oberts i `section_status`, 3B-2 §4.4); a l'empremta nomes hi entra quan hi ha
+    forats (vegeu `TenderStructureView.canonical`).
+
+    * Qualsevol forat obert fa el paquet `incomplete`, amb passada global o sense (una
+      licitacio manual no en te mai: un forat declarat per l'operador hi val igual),
+      tambe un `format_not_analyzable`: aquell document no el podem llegir. Sense
+      forats: `complete` amb passada vigent, `unknown` sense.
+    * Una seccio amb files es `present` encara que un forat la nomeni: les files son
+      fets citats (la troballa del forat hi es igualment).
+    * Una seccio buida es `unknown` si un forat la nomena, si no hi ha passada vigent,
+      o si un forat amb impacte desconegut (`would_provide` buit) es d'un codi que pot
+      afectar-ho tot (`referenced_document_missing`, `required_role_missing`,
+      `no_text`). `format_not_analyzable` i `declared_by_operator` sense
+      `would_provide` no deixen mai cap seccio `unknown`: nomes en surt la troballa.
+    """
     await session.refresh(tender, attribute_names=["blocks", "sites", "lots"])
     lots = {lot.id: lot.external_lot_id for lot in tender.lots}
     blocks = {b.id: b for b in tender.blocks}
     sites = {s.id: s for s in tender.sites}
 
-    effective = await manual_requirement.effective_requirements(session, tender.id)
+    effective = await manual_requirement.effective_requirements(session, tender.id, company_id)
     requirements = list(effective.all)
     criteria: list[AwardCriterion] = []
     if effective.run is not None:
@@ -266,6 +330,15 @@ async def load_structure_view(
             for f in facts
         ),
     )
+    package = await package_state(session, tender.id)
+    view = replace(
+        view,
+        package_status=package.status,
+        gaps=package.gaps,
+        section_status=section_status_for(
+            section_presence(view), package.gaps, has_run=package.has_run
+        ),
+    )
     revision = await tender_lifecycle.latest_analysis_affecting_revision(session, tender.id)
     versions = {
         "tender_revision_id": revision.id if revision else None,
@@ -401,6 +474,90 @@ async def _classification_run_id(
     )
 
 
+async def _classification_inputs(
+    session: AsyncSession,
+    company_id: uuid.UUID,
+    tender_id: uuid.UUID,
+    *,
+    divergences: tuple[engine.RoleDivergenceView, ...] | None = None,
+) -> dict[str, str | None]:
+    """Els dos inputs de classificacio de l'`inputs_hash` (3B-2 §3.2).
+
+    La passada GLOBAL vigent (la mateixa per a totes les empreses) i el hash dels
+    overrides de rol d'AQUESTA empresa, ancorats a la versio del fitxer. La
+    passada tenant (`classification_run_id`) es continua desant a la run, pero ja
+    no entra al hash.
+
+    Si algun override diverteix del rol global (`ROLE_OVERRIDE_DIVERGES`), la
+    divergencia tambe hi entra: una revisio de rol de l'operador es informativa (no
+    canvia la revisio del plec ni la passada global) pero pot fer apareixer o
+    desapareixer la troballa, i aleshores l'analisi ha de constar com a caducada.
+    Sense divergencies el valor es exactament el de `role_overrides_hash`.
+    `divergences`: les ja calculades per qui crida (`analyze_tender`), per no tornar a
+    passar el resolutor; si no, es calculen aqui (`is_stale`), una sola vegada.
+    """
+    run = await global_document_classification.current_global_run(session, tender_id)
+    overrides = await document_roles.role_overrides_hash(session, tender_id, company_id)
+    if overrides is not None:
+        if divergences is None:
+            divergences = await role_divergences(session, tender_id, company_id)
+        if divergences:
+            overrides = sha256_of([overrides, [d.as_dict() for d in divergences]])
+    return {
+        "global_classification_run_id": str(run.id) if run else None,
+        "role_overrides_hash": overrides,
+    }
+
+
+async def role_divergences(
+    session: AsyncSession, tender_id: uuid.UUID, company_id: uuid.UUID
+) -> tuple[engine.RoleDivergenceView, ...]:
+    """Els documents analitzables on el rol efectiu de l'empresa (el seu override
+    vigent) no es el global (3B-2 §3.2, opcio A).
+
+    Es compara el rol; si la capa global nomes te el tipus del feed (`role=None`), el
+    tipus efectiu. Un override d'una versio anterior (`stale_override`) no mana i no
+    diverteix.
+    """
+    mine = await document_roles.effective_document_roles(session, tender_id, company_id)
+    overridden = [d for d, role in mine.items() if role.source == RoleSource.PERSON]
+    if not overridden:
+        return ()
+    shared = await document_roles.effective_document_roles(session, tender_id, None)
+    names = dict(
+        (
+            await session.execute(
+                sa.select(TenderDocument.id, TenderDocument.name).where(
+                    TenderDocument.id.in_(overridden)
+                )
+            )
+        ).all()
+    )
+    divergences: list[engine.RoleDivergenceView] = []
+    for document_id in overridden:
+        company_role, global_role = mine[document_id], shared.get(document_id)
+        if global_role is None:
+            continue
+        if global_role.role is not None:
+            diverges = company_role.role != global_role.role
+        else:
+            diverges = company_role.document_type != global_role.document_type
+        if not diverges:
+            continue
+        divergences.append(
+            engine.RoleDivergenceView(
+                document_id=str(document_id),
+                document_name=names.get(document_id) or "",
+                company_role=str(company_role.role) if company_role.role else None,
+                company_document_type=str(company_role.document_type),
+                global_role=str(global_role.role) if global_role.role else None,
+                global_document_type=str(global_role.document_type),
+                global_source=str(global_role.source),
+            )
+        )
+    return tuple(sorted(divergences, key=lambda d: (d.document_name, d.document_id)))
+
+
 #: Codis tancats de `details["missing"]` (mateix contracte que `requirements` del router).
 MISSING_REQUIREMENTS_OUTDATED = "requirements_outdated"
 MISSING_CLASSIFICATION_OUTDATED = "classification_outdated"
@@ -409,19 +566,22 @@ MISSING_CLASSIFICATION_OUTDATED = "classification_outdated"
 async def assert_inputs_are_current(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> None:
-    """Cap analisi nova sobre una run que va llegir un plec ja retirat de la font.
+    """Cap analisi nova sobre una run de requisits obsoleta (3B-2 §6.2).
 
-    La run d'extraccio vigent (i la de classificacio) es la base de la vista del
-    plec. Si va llegir o cita un document que ja no es a la publicacio vigent,
-    analitzar-la ara faria una analisi NOVA alimentada per aquell document. Es
-    refusa amb el mateix error de prerequisits que ja coneix la interficie; el
-    remei es el flux normal: tornar a analitzar els plecs (l'extraccio nova ja no
-    el llegeix).
+    La run d'extraccio EFECTIVA de l'empresa (el seu punter o la canonica) i la de
+    classificacio son la base de la vista del plec. La de requisits es obsoleta si
+    el corpus canonic d'ara no es el que va llegir (una re-extraccio amb bytes
+    nous, un document nou o retirat) o si va llegir o cita un document que ja no
+    es a la publicacio vigent (`requirement_analysis.run_is_outdated`). Analitzar-la
+    ara faria una analisi NOVA sobre uns plecs que ja no son aquells. Es refusa amb
+    el mateix error de prerequisits que ja coneix la interficie; el remei es el
+    flux normal: tornar a analitzar els plecs. Un canvi de paquet mai re-executa
+    res per si sol.
     """
     missing: list[str] = []
-    effective = await manual_requirement.effective_requirements(session, tender_id)
-    if effective.run is not None and await requirement_analysis.run_includes_removed_document(
-        session, effective.run
+    effective_run = await manual_requirement.effective_run(session, tender_id, company_id)
+    if effective_run is not None and await requirement_analysis.run_is_outdated(
+        session, effective_run
     ):
         missing.append(MISSING_REQUIREMENTS_OUTDATED)
     classification = await document_classification.current_run(session, company_id, tender_id)
@@ -431,8 +591,8 @@ async def assert_inputs_are_current(
         missing.append(MISSING_CLASSIFICATION_OUTDATED)
     if missing:
         raise AnalysisPrerequisitesMissingError(
-            "Els requisits vigents inclouen un document que ja no es a la font: "
-            "cal tornar a processar els plecs.",
+            "Els requisits vigents son d'uns plecs que han canviat o d'un document "
+            "que ja no es a la font: cal tornar a processar els plecs.",
             details={"missing": missing},
         )
 
@@ -564,6 +724,7 @@ async def analyze_tender(
     tender_id: uuid.UUID,
     on: date | None = None,
     persist_hook=None,
+    accept_incomplete_package: bool = False,
 ) -> AnalysisOutcome:
     """Executa (o reutilitza) l'analisi i la deixa vigent. No fa commit.
 
@@ -572,12 +733,21 @@ async def analyze_tender(
 
     Refusa (`AnalysisPrerequisitesMissingError`) si la base vigent va llegir un
     plec ja retirat de la font: vegeu `assert_inputs_are_current`.
+
+    Una run nova registra `accepted_incomplete_package`: si el paquet consta com a
+    incomplet, si qui l'ha demanada ho ha acceptat explicitament (cert o fals); si
+    no, `None`. Una run REUTILITZADA (mateix `inputs_hash`) conserva el valor amb que
+    es va crear: una acceptacio posterior sobre les mateixes entrades no el canvia (no
+    es «la darrera eleccio de l'usuari», sino la de qui la va crear).
     """
     tender = await _visible_tender(session, company_id, tender_id)
     await assert_inputs_are_current(session, company_id, tender_id)
-    view, versions = await load_structure_view(session, tender)
+    view, versions = await load_structure_view(session, tender, company_id)
     fingerprint = structure_fingerprint(view)
     company = await load_company_view(session, company_id, on=on)
+    # Una sola passada del resolutor: el motor i l'`inputs_hash` en fan servir la mateixa.
+    divergences = await role_divergences(session, tender_id, company_id)
+    company = replace(company, role_divergences=divergences)
     classification_run_id = await _classification_run_id(session, company_id, tender_id)
     digest = inputs_hash(
         tender_revision_id=str(versions["tender_revision_id"])
@@ -586,7 +756,7 @@ async def analyze_tender(
         extraction_run_id=str(versions["extraction_run_id"])
         if versions["extraction_run_id"]
         else None,
-        classification_run_id=str(classification_run_id) if classification_run_id else None,
+        **await _classification_inputs(session, company_id, tender_id, divergences=divergences),
         review_revision_hash=versions["review_revision_hash"],
         tender_structure_fingerprint=fingerprint,
         knowledge_fingerprint=company.knowledge_fingerprint,
@@ -628,6 +798,11 @@ async def analyze_tender(
             knowledge_fingerprint=company.knowledge_fingerprint,
             rules_version=RULES_VERSION,
             inputs_hash=digest,
+            accepted_incomplete_package=(
+                bool(accept_incomplete_package)
+                if view.package_status == PACKAGE_INCOMPLETE
+                else None
+            ),
             is_current=False,
         )
         session.add(run)
@@ -663,6 +838,10 @@ def summary_of(run: TenderAnalysisRun) -> dict[str, Any]:
     cands = run.delivery_candidates
     pending = ("pending_coverage", "pending_partner", "pending_validation")
     return {
+        # 3B-2 §4.4: el paquet documental tenia algun forat obert quan es va analitzar.
+        "package_incomplete": any(
+            f.explanation_code == ExplanationCode.PACKAGE_GAP for f in findings
+        ),
         "fit": {
             value: sum(1 for f in fits if f.fit_result == value)
             for value in ("satisfies", "does_not_satisfy", "unknown", "not_applicable")
@@ -709,9 +888,8 @@ async def is_stale(
     """Cert si els inputs d'ara donarien un `inputs_hash` diferent."""
     tender = await session.get(Tender, run.tender_id)
     assert tender is not None
-    view, versions = await load_structure_view(session, tender)
+    view, versions = await load_structure_view(session, tender, run.company_id)
     company = await load_company_view(session, run.company_id, on=on)
-    classification_run_id = await _classification_run_id(session, run.company_id, run.tender_id)
     digest = inputs_hash(
         tender_revision_id=str(versions["tender_revision_id"])
         if versions["tender_revision_id"]
@@ -719,7 +897,7 @@ async def is_stale(
         extraction_run_id=str(versions["extraction_run_id"])
         if versions["extraction_run_id"]
         else None,
-        classification_run_id=str(classification_run_id) if classification_run_id else None,
+        **await _classification_inputs(session, run.company_id, run.tender_id),
         review_revision_hash=versions["review_revision_hash"],
         tender_structure_fingerprint=structure_fingerprint(view),
         knowledge_fingerprint=company.knowledge_fingerprint,
@@ -752,6 +930,7 @@ async def current_analysis(
 __all__ = [
     "AnalysisOutcome",
     "AnalysisStatus",
+    "PackageState",
     "analyze_tender",
     "current_analysis",
     "current_run",
@@ -759,5 +938,7 @@ __all__ = [
     "load_company_view",
     "load_run",
     "load_structure_view",
+    "package_state",
+    "role_divergences",
     "summary_of",
 ]

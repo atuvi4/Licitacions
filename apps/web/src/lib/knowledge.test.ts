@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { claimFixture, emptySnapshotFixture, observationsFixture, snapshotFixture, vocabularyFixture } from "@/test/knowledge-fixture";
+import { claimFixture, observationsFixture, snapshotFixture, vocabularyFixture } from "@/test/knowledge-fixture";
 
 import {
   FACT_KEYS,
@@ -18,14 +18,11 @@ import {
   entryState,
   findEntry,
   groupCandidates,
-  groupPendingRecords,
   indexSnapshot,
   isPromotable,
-  pendingCandidates,
   proposalHeadline,
   recordState,
   serviceLineLabel,
-  summarize,
 } from "./knowledge";
 
 describe("estat efectiu del coneixement", () => {
@@ -76,23 +73,6 @@ describe("estat efectiu del coneixement", () => {
   });
 });
 
-describe("pendents i resum", () => {
-  it("agrupa els pendents per dada i deixa a part els papers d'un partner", () => {
-    const groups = groupPendingRecords(snapshotFixture());
-    expect(groups.map((group) => [group.subject, group.key, group.kinds])).toEqual([
-      ["certification", "ENS", ["accreditation_pending", "scope_unknown"]],
-      ["partner", "Soci Demo", ["accreditation_pending"]],
-    ]);
-    expect(pendingCandidates(snapshotFixture()).map((item) => item.observation_id)).toEqual(["o-ens", "o-iso", "o-24x7", "o-sol"]);
-  });
-
-  it("el resum compta afirmacions, feina pendent i el que no se sap de les llistes tancades", () => {
-    expect(summarize(snapshotFixture(), vocabularyFixture)).toEqual({ verified: 1, declared: 2, pending: 2, historic: 4, unknown: 6 });
-    // Empresa nova: res de res, i tot el vocabulari tancat és desconegut (2 normes + 5 fets + 3 línies).
-    expect(summarize(emptySnapshotFixture(), vocabularyFixture)).toEqual({ verified: 0, declared: 0, pending: 0, historic: 0, unknown: 10 });
-    expect(summarize(null, vocabularyFixture).unknown).toBe(0);
-  });
-});
 
 describe("candidats de l'històric", () => {
   const byId = Object.fromEntries(observationsFixture.map((item) => [item.id, item]));

@@ -162,7 +162,12 @@ export function EvidencePanel({
         </div>
         {!readOnly && (
           <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={() => setMode("library")}>
+            <Button
+              size="sm"
+              variant="secondary"
+              title="Tria un document que ja és a la biblioteca com a evidència d'aquesta dada."
+              onClick={() => setMode("library")}
+            >
               Vincula existent
             </Button>
             <Button size="sm" variant="primary" onClick={() => setMode("upload")}>

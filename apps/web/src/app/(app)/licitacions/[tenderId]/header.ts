@@ -5,15 +5,13 @@ import {
   ANALYSIS_STATUS_TEXT,
   DECISION_LABELS,
   DECISION_LEVEL,
-  WORKSPACE_STATUS_LABELS,
   WORKSPACE_STATUS_LEVEL,
-  daysUntilDeadline,
-  deadlineLevel,
+  deadlineCountdownView,
   formatDateTime,
   type Level,
 } from "@/lib/labels";
 import type { RequirementAnalysis } from "@/lib/requirements";
-import type { WorkspaceDetail } from "@/lib/workspace";
+import { workspaceStatusLabel, type WorkspaceDetail } from "@/lib/workspace";
 
 /**
  * Capçalera de decisió i pestanyes de la fitxa (handoff L9): «termini ·
@@ -81,12 +79,11 @@ export interface DeadlineMeta {
   date: string | null;
 }
 
-/** Un termini nul és desconegut, mai un bloqueig. */
-export function deadlineMeta(deadlineAt: string | null): DeadlineMeta {
-  const days = daysUntilDeadline(deadlineAt);
-  if (!deadlineAt || days === null) return { level: "neutral", text: "Sense termini", date: null };
-  const text = days < 0 ? "Tancat" : days === 0 ? "Avui" : `${days} ${days === 1 ? "dia" : "dies"}`;
-  return { level: deadlineLevel(days), text, date: formatDateTime(deadlineAt) };
+/** Un termini nul és desconegut, mai un bloqueig. El recompte és el de `lib/deadline` (A11). */
+export function deadlineMeta(deadlineAt: string | null, now: Date = new Date()): DeadlineMeta {
+  const countdown = deadlineCountdownView(deadlineAt, now);
+  if (!deadlineAt || countdown.days === null) return { level: "neutral", text: "Sense termini", date: null };
+  return { level: countdown.level, text: countdown.text, date: formatDateTime(deadlineAt) };
 }
 
 export function amountMeta(tender: {
@@ -108,7 +105,8 @@ export interface Pill {
 export function candidatureMeta(workspace: WorkspaceDetail | null): { status: Pill; decision: Pill | null } | null {
   if (!workspace) return null;
   return {
-    status: { level: WORKSPACE_STATUS_LEVEL[workspace.status], label: WORKSPACE_STATUS_LABELS[workspace.status] },
+    // L'etiqueta de l'estat `analysis` depèn de si hi ha anàlisi de debò (A13).
+    status: { level: WORKSPACE_STATUS_LEVEL[workspace.status], label: workspaceStatusLabel(workspace) },
     decision: workspace.human_decision
       ? { level: DECISION_LEVEL[workspace.human_decision], label: DECISION_LABELS[workspace.human_decision] }
       : null,

@@ -84,6 +84,17 @@ class NothingAnalyzableError(ValidationError):
     code = "nothing_analyzable"
 
 
+class PublicTenderCanonicalOnlyError(ValidationError):
+    """En una licitacio publica, una empresa no pot forcar ni substituir el canonic.
+
+    Els documents, la seva descarrega i l'extraccio d'un tender public son
+    globals (3B-2 §2.4, §2.6): forcar-ne la re-descarrega o la re-extraccio es
+    de l'operador de plataforma.
+    """
+
+    code = "public_tender_canonical_only"
+
+
 class AnalysisInProgressError(ConflictError):
     """Ja hi ha una analisi de requisits en curs per a aquesta licitacio."""
 
@@ -135,6 +146,24 @@ class AnalysisTooLargeError(ValidationError):
     """L'analisi supera el limit de chunks configurat per al pilot."""
 
     code = "analysis_too_large"
+
+
+class AnalysisNotAllowedError(ValidationError):
+    """La quota no compleix un prerequisit de §6.1 (3B-2): no es pot confirmar.
+
+    El codi de la resposta es el `blocking_reason` de la quota (`provider_not_real`,
+    `model_not_pinned`, `price_unknown`, `budget_exhausted`, `budget_exceeded`,
+    `package_incomplete`, `quality_unknown`, `quality_warning`,
+    `selection_not_canonical`); `details.failed` porta la resta d'incompliments.
+    """
+
+    code = "analysis_not_allowed"
+
+    def __init__(
+        self, message: str, *, blocking_reason: str, details: dict[str, Any] | None = None
+    ) -> None:
+        super().__init__(message, details=details)
+        self.code = blocking_reason
 
 
 class ResumeNotAllowedError(ConflictError):

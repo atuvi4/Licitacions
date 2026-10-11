@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -39,11 +38,6 @@ export function AppFrame({ children }: { children: ReactNode }) {
       <p className="truncate text-sidebar-ink/80" title={membership.company.legal_name}>
         {membership.company.legal_name}
       </p>
-      {counts.profileLine && (
-        <Link href="/empresa" className="block truncate hover:text-white">
-          {counts.profileLine} →
-        </Link>
-      )}
     </div>
   );
 
@@ -57,7 +51,6 @@ export function AppFrame({ children }: { children: ReactNode }) {
             avui: counts.avui,
             oportunitats: counts.oportunitats,
             candidatures: counts.candidatures,
-            perfil: counts.perfil,
           }}
         />
       </AppSidebar>
