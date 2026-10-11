@@ -106,8 +106,38 @@ describe("Plecs: estat honest del paquet", () => {
     rerender(<PackageNotice pkg={{ status: "incomplete", gaps: [], section_status: {} }} documents={[]} />);
     expect(container.textContent).toContain(PACKAGE_COVERAGE_TEXT.unknown);
     expect(container.textContent).not.toMatch(/falten|Falta/i);
-    rerender(<PackageNotice pkg={{ status: "incomplete", gaps: [{ code: "no_text", key: "d1", would_provide: [] }], section_status: {} }} documents={[{ ...doc({ id: "d1" }), name: "PPT.pdf" }]} />);
+    rerender(<PackageNotice pkg={{ status: "incomplete", gaps: [{ code: "referenced_document_missing", key: "DOC-03", would_provide: [] }], section_status: {} }} documents={[]} />);
     expect(container.textContent).toContain("Falten documents");
-    expect(container.textContent).toContain("PPT.pdf: sense text llegible");
+    expect(container.textContent).toContain("Falta un document que cita el plec (DOC-03)");
+  });
+
+  it("documents presents que no es poden llegir: paquet complet i avís de processament a part, mai «falten»", () => {
+    const pkg: TenderPackage = {
+      status: "complete",
+      gaps: [],
+      processing: [
+        { code: "format_not_analyzable", key: "d2", would_provide: [] },
+        { code: "no_text", key: "d3", would_provide: ["requirements"] },
+      ],
+      section_status: {},
+    };
+    const documents = [
+      { ...doc({ id: "d2" }), name: "espd-request.xml" },
+      { ...doc({ id: "d3" }), name: "Acord JGL.docx" },
+    ];
+    const { container } = render(<PackageNotice pkg={pkg} documents={documents} />);
+    expect(container.textContent).toContain("Paquet complet");
+    expect(container.textContent).toContain("Hi ha documents presents que Tuvi encara no pot processar completament");
+    const list = screen.getByRole("list", { name: "Documents presents sense processar completament" });
+    expect(list.textContent).toContain("espd-request.xml: present, en un format que Tuvi encara no pot llegir");
+    expect(list.textContent).toContain("Acord JGL.docx: present, sense text llegible per a l'anàlisi");
+    expect(container.textContent).not.toMatch(/Falten documents|Falta un|Paquet incomplet/);
+  });
+
+  it("sense avisos de processament no hi ha cap bloc de processament", () => {
+    const { container } = render(
+      <PackageNotice pkg={{ status: "complete", gaps: [], processing: [], section_status: {} }} documents={[]} />,
+    );
+    expect(container.textContent).not.toContain("processar completament");
   });
 });

@@ -329,10 +329,20 @@ class TenderPackageGapRead(BaseModel):
 
 
 class TenderPackageRead(BaseModel):
-    """`complete` / `incomplete` / `unknown` i els forats oberts (3B-2 §4.4)."""
+    """La cobertura del paquet (`complete` / `incomplete` / `unknown`, 3B-2 §4.4) i, a
+    part, la processabilitat dels documents que hi son.
+
+    `incomplete` nomes vol dir que sabem que hi falta un document del paquet public.
+    Un document present que Tuvi encara no pot llegir (format, extraccio fallida,
+    sense text) va a `processing` i no fa mai el paquet incomplet.
+    """
 
     status: Literal["complete", "incomplete", "unknown"]
+    #: Forats de COBERTURA oberts: documents que falten.
     gaps: list[TenderPackageGapRead] = Field(default_factory=list)
+    #: Forats de PROCESSABILITAT oberts: documents presents sense text llegible per a
+    #: l'analisi (`no_text`, `format_not_analyzable`). La clau es el document.
+    processing: list[TenderPackageGapRead] = Field(default_factory=list)
     #: Seccio de l'estructura -> `unknown` (buida i un forat la pot afectar, o cap
     #: passada vigent) | `none_declared` (buida amb passada i cap forat) | `present`
     #: (te files). La regla es `section_status_for` del motor; aqui nomes viatja.

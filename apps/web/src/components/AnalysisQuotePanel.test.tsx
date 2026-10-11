@@ -156,7 +156,7 @@ describe("AnalysisQuotePanel (3B-2 §6.1, §7.1.5)", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("Falta el plec de prescripcions tècniques (PPT)");
     expect(text).toContain("aportaria: requisits, abast");
-    expect(text).toContain("Plec escanejat.pdf: sense text llegible");
+    expect(text).toContain("Plec escanejat.pdf: present, sense text llegible per a l'anàlisi");
     expect(text).toContain("impacte desconegut");
     expect(text).not.toMatch(/required_role_missing|no_text|package_gap|scope_items/);
   });
@@ -238,6 +238,45 @@ describe("AnalysisQuotePanel (3B-2 §6.1, §7.1.5)", () => {
     expect(packageCoverageState(null, ["duplicate_content"])).toBe("incomplete");
     expect(blockingReasonText("package_incomplete")).not.toMatch(/falten|hi falten/i);
     expect(blockingReasonText("package_incomplete", "incomplete")).toMatch(/^Falten documents/);
+  });
+
+  it("només avisos de processament: casella pròpia que enumera els documents, mai «paquet incomplet»", () => {
+    const onAccept = vi.fn();
+    renderPanel(
+      quote(
+        {
+          allowed: false,
+          blocking_reason: "processing_incomplete",
+          documents: [
+            { tender_document_id: "d1", name: "PCAP.pdf", document_type: "administrative_terms", pages: 30, chars: 90000 },
+          ],
+          skipped_documents: [
+            { tender_document_id: "d9", name: "06_Plantilla.xlsx", document_type: "additional", reason: "document_not_analyzable" },
+          ],
+        },
+        {
+          failed: ["processing_incomplete"],
+          package: { status: "complete", issues: [], accepted: false },
+          processing: {
+            status: "partial",
+            issues: [
+              { code: "default_document_skipped", tender_document_id: "d9", reason: "document_not_analyzable" },
+              { code: "package_gap", gap_code: "format_not_analyzable", gap_id: "g1", tender_document_id: "d9" },
+            ],
+            acknowledged: false,
+          },
+        },
+      ),
+      { onAccept, pkg: { status: "complete", gaps: [], processing: [], section_status: {} } },
+    );
+    expect(document.body.textContent).toContain(BLOCKING_REASON_TEXT.processing_incomplete);
+    const box = screen.getByLabelText(/Accepto que hi ha documents presents que Tuvi encara no pot processar completament/);
+    const list = screen.getByRole("list", { name: "Documents presents que no es poden processar completament" });
+    expect(list.textContent).toContain("06_Plantilla.xlsx: en un format o estat que Tuvi encara no pot llegir");
+    expect(list.querySelectorAll("li")).toHaveLength(1);
+    expect(document.body.textContent).not.toMatch(/paquet incomplet|Falten documents/i);
+    fireEvent.click(box);
+    expect(onAccept).toHaveBeenCalledWith({ acknowledge_processing: true });
   });
 
   it("text amb avisos de qualitat: casella explícita per reconèixer-ho", () => {

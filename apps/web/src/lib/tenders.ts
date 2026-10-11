@@ -237,9 +237,15 @@ export interface TenderPackageGap {
 }
 
 export interface TenderPackage {
+  /** Cobertura: `incomplete` només si sabem que hi falta un document del paquet públic. */
   status: PackageStatus;
-  /** Només els forats oberts. */
+  /** Només els forats de COBERTURA oberts: documents que falten. */
   gaps: TenderPackageGap[];
+  /**
+   * Processabilitat: documents PRESENTS que Tuvi encara no pot llegir (format, extracció
+   * fallida, sense text). No fan mai el paquet incomplet. Absent en respostes antigues.
+   */
+  processing?: TenderPackageGap[];
   /** Secció de l'estructura → estat (M2): la regla és `section_status_for` del motor. */
   section_status: Record<string, SectionStatus>;
 }
@@ -266,6 +272,17 @@ export function packageCoverageState(pkg: TenderPackage | null | undefined, issu
   if (!pkg) return "unknown";
   if (pkg.status === "incomplete" && pkg.gaps.length === 0) return "unknown";
   return pkg.status;
+}
+
+/**
+ * Forats de PROCESSABILITAT (el document hi és però Tuvi encara no en pot llegir el
+ * text): mai fan el paquet incomplet. La mateixa regla que `PROCESSING_GAP_CODES` del
+ * servidor.
+ */
+export const PROCESSING_GAP_CODES: ReadonlySet<string> = new Set(["no_text", "format_not_analyzable"]);
+
+export function isProcessingGap(gap: { code: string }): boolean {
+  return PROCESSING_GAP_CODES.has(gap.code);
 }
 
 /** El text de cada estat de cobertura: el mateix a la quota i a Plecs. */

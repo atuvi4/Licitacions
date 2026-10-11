@@ -77,6 +77,7 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 #: Un DOCX i un XLSX són ZIP: la firma només diu «PK» i el tipus fi el declara
 #: qui puja. Bytes diferents per a v1 i v2 perquè la citació els pugui distingir.
+#: No són documents d'oficina vàlids: es guarden igual i la lectura falla (`*-v1`).
 OFFICE = b"PK\x03\x04" + b"\x00" * 64
 XLSX_V1 = b"PK\x03\x04" + b"\x01" * 64
 XLSX_V2 = b"PK\x03\x04" + b"\x02" * 64
@@ -361,7 +362,7 @@ async def test_palamos_sprint3_end_to_end(
     assert (documents, extractions, pages) == (2, 1, 2)
 
     # ------------------------------------------------------------------ #
-    # 5. DOCX i XLSX: guardats, no llegits                                #
+    # 5. DOCX i XLSX malmesos: guardats; la lectura falla i ho diu        #
     # ------------------------------------------------------------------ #
     for name, mime, data in (
         ("Plec-tecnic.docx", DOCX, OFFICE),
@@ -373,8 +374,8 @@ async def test_palamos_sprint3_end_to_end(
         )
         assert stored.status_code == 201, stored.text
         assert stored.json()["stored"] is True
-        assert stored.json()["file"]["text_extraction_supported"] is False
-        assert stored.json()["file"]["analysis_status"] == "unsupported"
+        assert stored.json()["file"]["text_extraction_supported"] is True
+        assert stored.json()["file"]["analysis_status"] == "failed"
         assert stored.json()["file"]["page_count"] == 0
         if mime == XLSX:
             spreadsheet = stored.json()

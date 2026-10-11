@@ -56,7 +56,14 @@ import {
   type PlatformClassification,
   type PlatformTenderDocument,
 } from "@/lib/platform-documents";
-import { documentRoleLabel, documentTypeLabel, formatDateTime, roleSourceLabel, type TenderDocumentType } from "@/lib/tenders";
+import {
+  documentRoleLabel,
+  documentTypeLabel,
+  formatDateTime,
+  isProcessingGap,
+  roleSourceLabel,
+  type TenderDocumentType,
+} from "@/lib/tenders";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
@@ -511,6 +518,9 @@ export default function TenderDocumentsPage() {
   const subtitle = [tender.data?.expediente_number, tender.data?.buyer?.name].filter(Boolean).join(" · ");
   const pending = rows.filter((row) => row.contribution_status === "pending_verification" && !row.removed_at).length;
   const gaps = classification.data?.gaps ?? [];
+  // Cobertura i processabilitat, separades (la mateixa regla que la fitxa i la quota).
+  const missingGaps = gaps.filter((gap) => !isProcessingGap(gap));
+  const processingGaps = gaps.filter((gap) => isProcessingGap(gap));
   const closeDialog = () => setDialog(null);
 
   return (
@@ -555,10 +565,16 @@ export default function TenderDocumentsPage() {
 
       {notice && <ResultNotice tone="success" message={notice} />}
 
-      {gaps.length > 0 && (
+      {missingGaps.length > 0 && (
         <p className="text-[13px] text-muted">
-          Forats oberts del paquet segons la classificació vigent: {gaps.length}. Un document que els resolgui
-          tanca el forat en verificar-lo.
+          Documents que falten al paquet segons la classificació vigent: {missingGaps.length}. Un document que els
+          resolgui tanca el forat en verificar-lo.
+        </p>
+      )}
+      {processingGaps.length > 0 && (
+        <p className="text-[13px] text-muted">
+          Documents presents que Tuvi encara no pot processar completament: {processingGaps.length}. No fan el paquet
+          incomplet.
         </p>
       )}
 

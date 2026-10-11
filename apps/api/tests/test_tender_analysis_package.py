@@ -262,9 +262,10 @@ def test_named_criteria_with_rows_are_still_scored():
     assert len(_gap_findings(gapped)) == 1
 
 
-def test_an_unreadable_annex_alone_makes_the_package_incomplete_but_no_section_unknown():
-    """Fix 1 (ruling 1): un DOCX que no sabem llegir: troballa i paquet incomplet, pero
-    cap seccio `unknown` i cap avaluacio suprimida."""
+def test_an_unreadable_annex_alone_is_a_processing_warning_not_an_incomplete_package():
+    """Un annex present que no sabem llegir: la troballa hi es, cap seccio `unknown` i
+    cap avaluacio suprimida, pero el paquet NO es incomplet (no hi falta cap document):
+    es un avis de processament."""
     gap = PackageGapView(
         code="format_not_analyzable",
         detail={"key": "annex.docx"},
@@ -277,7 +278,9 @@ def test_an_unreadable_annex_alone_makes_the_package_incomplete_but_no_section_u
     assert [c.readiness for c in result.candidates] == ["available"]
     (finding,) = _gap_findings(result)
     assert finding.details["impact_unknown"] is True
-    assert pure.summary(result, view)["package_incomplete"] is True
+    summary = pure.summary(result, view)
+    assert summary["package_incomplete"] is False
+    assert summary["processing_incomplete"] is True
 
 
 def test_role_override_divergence_is_informational_and_lists_the_documents():
@@ -379,13 +382,15 @@ async def test_the_view_carries_the_open_gaps_and_the_section_status(db):
     assert view.section_status["award_criteria"] == "none_declared"
 
 
-async def test_an_unreadable_docx_annex_alone_is_incomplete_without_unknown_sections(db):
-    tender = await m._public_tender(db, title="Plec sintetic amb un annex DOCX")
+async def test_an_unreadable_annex_alone_is_complete_with_a_processing_warning(db):
+    """Test obligatori 1: tots els documents presents i un format no processable:
+    paquet `complete`, avis de processament i cap seccio `unknown`."""
+    tender = await m._public_tender(db, title="Plec sintetic amb un annex illegible")
     await _global_run(db, tender)
-    await _gap(db, tender, "annex.docx", [], code=PackageGapCode.FORMAT_NOT_ANALYZABLE)
+    await _gap(db, tender, "annex.bin", [], code=PackageGapCode.FORMAT_NOT_ANALYZABLE)
     await db.commit()
     view, _ = await analysis.load_structure_view(db, tender)
-    assert view.package_status == PACKAGE_INCOMPLETE
+    assert view.package_status == PACKAGE_COMPLETE
     assert [g.code for g in view.gaps] == ["format_not_analyzable"]
     assert set(view.section_status.values()) == {"none_declared"}
 

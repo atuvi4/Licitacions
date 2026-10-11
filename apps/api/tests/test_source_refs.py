@@ -38,9 +38,11 @@ UPLOAD = "/api/v1/companies/{company}/tenders/{tender}/documents"
 VERSIONS = "/api/v1/companies/{company}/tenders/{tender}/documents/{document}/versions"
 
 PDF = "application/pdf"
-XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-XLSX_V1 = b"PK\x03\x04" + b"\x01" * 64
-XLSX_V2 = b"PK\x03\x04" + b"\x02" * 64
+#: Un full de calcul que NO sabem llegir: un .xls antic (OLE2). Un .xlsx ja es llegeix
+#: (`xlsx-v1`), i per aixo el cas «sense pagines» es un format sense parser.
+XLSX = "application/vnd.ms-excel"
+XLSX_V1 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x01" * 64
+XLSX_V2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x02" * 64
 PLEC = build_pdf(["Clausula primera. El termini es de dotze mesos. " * 4])
 PLEC_V2 = build_pdf(["Clausula primera REVISADA. El termini es de vint-i-quatre mesos. " * 4])
 
@@ -98,7 +100,7 @@ async def test_an_unreadable_spreadsheet_is_citable(client_a, db, tenant_a):
     user, company = tenant_a
     tender_id = await _tender(client_a, company)
     uploaded = await _upload(
-        client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+        client_a, company, tender_id, name="preus.xls", data=XLSX_V1, mime=XLSX
     )
     assert uploaded["file"]["analysis_status"] == "unsupported"
     assert uploaded["file"]["page_count"] == 0
@@ -127,7 +129,7 @@ async def test_the_server_derives_the_sha_from_the_real_content(client_a, db, te
     user, company = tenant_a
     tender_id = await _tender(client_a, company)
     uploaded = await _upload(
-        client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+        client_a, company, tender_id, name="preus.xls", data=XLSX_V1, mime=XLSX
     )
 
     ref = await source_refs.create_document_file_ref(
@@ -254,7 +256,7 @@ async def test_a_file_of_another_tender_cannot_be_cited(client_a, db, tenant_a):
     user, company = tenant_a
     mine = await _tender(client_a, company, title="La meva")
     other = await _tender(client_a, company, title="Una altra")
-    uploaded = await _upload(client_a, company, other, name="preus.xlsx", data=XLSX_V1, mime=XLSX)
+    uploaded = await _upload(client_a, company, other, name="preus.xls", data=XLSX_V1, mime=XLSX)
 
     with pytest.raises(source_refs.SourceRefChainError):
         await source_refs.create_document_file_ref(
@@ -306,7 +308,7 @@ async def test_a_ref_is_not_readable_from_another_tender(client_a, db, tenant_a)
     tender_id = await _tender(client_a, company)
     other = await _tender(client_a, company, title="Una altra")
     uploaded = await _upload(
-        client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+        client_a, company, tender_id, name="preus.xls", data=XLSX_V1, mime=XLSX
     )
     ref = await source_refs.create_document_file_ref(
         db,
@@ -390,7 +392,7 @@ async def test_a_spreadsheet_citation_survives_a_new_version(client_a, db, tenan
     """
     user, company = tenant_a
     tender_id = await _tender(client_a, company)
-    v1 = await _upload(client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX)
+    v1 = await _upload(client_a, company, tender_id, name="preus.xls", data=XLSX_V1, mime=XLSX)
     file_v1, sha_v1 = v1["file"]["file_id"], v1["file"]["sha256"]
 
     ref = await source_refs.create_document_file_ref(
@@ -404,7 +406,7 @@ async def test_a_spreadsheet_citation_survives_a_new_version(client_a, db, tenan
     ref_id = ref.id
 
     v2 = await _version(
-        client_a, company, tender_id, v1["id"], name="preus.xlsx", data=XLSX_V2, mime=XLSX
+        client_a, company, tender_id, v1["id"], name="preus.xls", data=XLSX_V2, mime=XLSX
     )
     assert v2["file"]["version_number"] == 2
     assert v2["file"]["sha256"] != sha_v1
@@ -631,7 +633,7 @@ async def test_two_citations_of_the_same_source_stay_two(client_a, db, tenant_a)
     user, company = tenant_a
     tender_id = await _tender(client_a, company)
     uploaded = await _upload(
-        client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX
+        client_a, company, tender_id, name="preus.xls", data=XLSX_V1, mime=XLSX
     )
 
     first = await source_refs.create_document_file_ref(
@@ -780,7 +782,7 @@ async def test_bulk_resolution_equals_single_resolution(client_a, db, tenant_a):
     first = await _upload(client_a, company, str(tender_id), name="PCAP.pdf", data=PLEC)
     second = await _upload(client_a, company, str(tender_id), name="PPT.pdf", data=PLEC_V2)
     sheet = await _upload(
-        client_a, company, str(tender_id), name="preus.xlsx", data=XLSX_V1, mime=XLSX
+        client_a, company, str(tender_id), name="preus.xls", data=XLSX_V1, mime=XLSX
     )
 
     page_ref = await source_refs.create_extracted_page_ref(
@@ -854,7 +856,7 @@ async def test_a_removed_document_cannot_be_cited_over_http(client_a, db, tenant
     _, company = tenant_a
     tender_id = await _tender(client_a, company)
     plec = await _upload(client_a, company, tender_id, name="PCAP.pdf", data=PLEC)
-    sheet = await _upload(client_a, company, tender_id, name="preus.xlsx", data=XLSX_V1, mime=XLSX)
+    sheet = await _upload(client_a, company, tender_id, name="preus.xls", data=XLSX_V1, mime=XLSX)
     page = await _page_of(db, plec["file"]["extraction_id"])
     for uploaded in (plec, sheet):
         document = await db.get(TenderDocument, uuid.UUID(uploaded["id"]))

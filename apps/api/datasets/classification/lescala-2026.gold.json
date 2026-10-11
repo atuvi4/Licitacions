@@ -2,6 +2,7 @@
   "case": "lescala-2026",
   "description": "Ajuntament de l'Escala, Telecomunicacions 2027 (servei integral de telecomunicacions, telefonia IP, electronica de xarxa i fibra municipal). Documents tal com son a la carpeta de licitacio (arrel + 'Resta Documentació/'), rebuts com un paquet ZIP. Gold de la classificacio documental (fase 1 del motor d'analisi): el resultat no ha de dependre del canal.",
   "reviewed_by": "analisi manual del 2026-09-29 (pilot_lescala_2026.md)",
+  "revision_note": "2026-10-11: el DOCX i l'XLSX ja es llegeixen per a l'analisi (parsers docx-v1 i xlsx-v1): les dues troballes format_not_analyzable desapareixen; rols i resta de troballes sense canvis.",
   "classifier_version": "document-roles-v1",
   "archive": {
     "default_location": "var/gold/lescala-2026.zip",
@@ -128,20 +129,6 @@
       "path": "04_Annex_Mestre_Inventaris_Ubicacions_FTTH_Telefonia.pdf",
       "related_path": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf",
       "detail": {"declared_code": "DOC-03"}
-    },
-    {
-      "code": "format_not_analyzable",
-      "severity": "low",
-      "path": "06_Plantilla_Formules_Licitacio_Telecomunicacions (Definitiu).xlsx",
-      "related_path": null,
-      "detail": {"read_for_classification": true}
-    },
-    {
-      "code": "format_not_analyzable",
-      "severity": "low",
-      "path": "Resta Documentació/Acord JGL PRP2026-2261.docx",
-      "related_path": null,
-      "detail": {"read_for_classification": true}
     }
   ]
 }

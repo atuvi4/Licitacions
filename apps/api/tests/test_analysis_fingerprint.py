@@ -20,8 +20,10 @@ from app.analysis.fingerprint import (
     SECTION_UNKNOWN,
     PackageGapView,
     TenderStructureView,
+    coverage_gaps,
     gap_section_status,
     package_status_for,
+    processing_gaps,
     section_presence,
     section_status_for,
     structure_fingerprint,
@@ -156,14 +158,14 @@ def test_section_status_rules():
 
 
 def test_only_some_codes_with_unknown_impact_broaden_to_every_empty_section():
-    """Fix 1 (ruling 1): un format que no sabem llegir (o un forat declarat per
-    l'operador sense `would_provide`) fa el paquet incomplet, pero no fa `unknown` cap
-    seccio. Nomes `referenced_document_missing`, `required_role_missing` i `no_text`
-    amb impacte desconegut s'estenen a totes les seccions buides."""
+    """Fix 1 (ruling 1): un format que no sabem llegir o un forat declarat per
+    l'operador sense `would_provide` no fan `unknown` cap seccio. Nomes
+    `referenced_document_missing`, `required_role_missing` i `no_text` amb impacte
+    desconegut s'estenen a totes les seccions buides. (La cobertura del paquet va a
+    `test_package_status_is_coverage_only`.)"""
     presence = section_presence(TenderStructureView(tender_id="t"))
     for code in ("format_not_analyzable", "declared_by_operator"):
         gap = PackageGapView(code=code, detail={"key": "annex.docx"}, would_provide=())
-        assert package_status_for([gap], has_run=True) == PACKAGE_INCOMPLETE
         assert set(section_status_for(presence, [gap], has_run=True).values()) == {
             SECTION_NONE_DECLARED
         }, code
@@ -172,6 +174,45 @@ def test_only_some_codes_with_unknown_impact_broaden_to_every_empty_section():
         assert set(section_status_for(presence, [gap], has_run=True).values()) == {
             SECTION_UNKNOWN
         }, code
+
+
+def test_package_status_is_coverage_only():
+    """`incomplete` NOMES si sabem que falta un document del paquet. Un document
+    present que no es pot llegir (format, extraccio fallida, sense text) no ho fa mai:
+    es processabilitat, a part."""
+    for code in ("format_not_analyzable", "no_text"):
+        gap = PackageGapView(code=code, detail={"key": "doc-1"}, would_provide=())
+        assert package_status_for([gap], has_run=True) == PACKAGE_COMPLETE, code
+        assert package_status_for([gap], has_run=False) == PACKAGE_UNKNOWN, code
+        assert processing_gaps([gap]) == (gap,) and coverage_gaps([gap]) == ()
+    for code in (
+        "referenced_document_missing",
+        "required_role_missing",
+        "annex_missing",
+        "declared_by_operator",
+        "un_codi_nou_que_no_coneixem",
+    ):
+        gap = PackageGapView(code=code, detail={"key": "x"}, would_provide=())
+        assert package_status_for([gap], has_run=True) == PACKAGE_INCOMPLETE, code
+        assert coverage_gaps([gap]) == (gap,) and processing_gaps([gap]) == ()
+    # Barrejats: mana el que falta.
+    missing = PackageGapView(code="referenced_document_missing", detail={"key": "DOC-07"})
+    unreadable = PackageGapView(code="format_not_analyzable", detail={"key": "doc-1"})
+    assert package_status_for([unreadable, missing], has_run=True) == PACKAGE_INCOMPLETE
+
+
+def test_the_fingerprint_says_complete_when_only_processing_gaps_are_open():
+    """A l'empremta hi entra l'estat de COBERTURA: amb nomes forats de processabilitat,
+    `complete` (els forats hi continuen entrant, en forma canonica)."""
+    unreadable = PackageGapView(code="format_not_analyzable", detail={"key": "doc-1"})
+    canonical = TenderStructureView(tender_id="t", gaps=(unreadable,)).canonical()
+    assert canonical["package_status"] == PACKAGE_COMPLETE
+    assert canonical["gaps"] == [unreadable.canonical()]
+    missing = PackageGapView(code="referenced_document_missing", detail={"key": "DOC-07"})
+    assert (
+        TenderStructureView(tender_id="t", gaps=(missing,)).canonical()["package_status"]
+        == PACKAGE_INCOMPLETE
+    )
 
 
 def test_package_status_rules():

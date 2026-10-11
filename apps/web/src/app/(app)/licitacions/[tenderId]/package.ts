@@ -120,8 +120,9 @@ const GAP_TEXT: Record<PackageGapCode, (gap: TenderPackageGap, names: Map<string
       : "Falta un document obligatori",
   referenced_document_missing: (gap) =>
     gap.key ? `Falta un document que cita el plec (${gap.key})` : "Falta un document que cita el plec",
-  no_text: (gap, names) => `${documentName(gap.key, names)}: sense text llegible`,
-  format_not_analyzable: (gap, names) => `${documentName(gap.key, names)}: format que no es pot llegir`,
+  no_text: (gap, names) => `${documentName(gap.key, names)}: present, sense text llegible per a l'anàlisi`,
+  format_not_analyzable: (gap, names) =>
+    `${documentName(gap.key, names)}: present, en un format que Tuvi encara no pot llegir`,
   annex_missing: (gap) => (gap.key ? `Falta un annex (${gap.key})` : "Falta un annex"),
   declared_by_operator: () => "Falta un document (declarat per l'operador)",
 };
@@ -130,6 +131,14 @@ const GAP_TEXT: Record<PackageGapCode, (gap: TenderPackageGap, names: Map<string
 export function gapText(gap: TenderPackageGap, names: Map<string, string>): string {
   const render = Object.hasOwn(GAP_TEXT, gap.code) ? GAP_TEXT[gap.code] : null;
   return render ? render(gap, names) : "Falta part del paquet documental";
+}
+
+/**
+ * Els documents presents que Tuvi encara no pot processar completament (A4 bis): una
+ * línia per document, amb el nom i el motiu. Mai diu que hi falti res.
+ */
+export function processingLines(gaps: TenderPackageGap[] | undefined, names: Map<string, string>): string[] {
+  return (gaps ?? []).map((gap) => gapText(gap, names));
 }
 
 /** Què aportaria el que falta; buit vol dir que no se sap. */

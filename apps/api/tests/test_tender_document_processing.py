@@ -360,7 +360,7 @@ async def test_a_failed_download_is_recorded_without_losing_a_good_version(
     assert good.file.is_current is True
 
 
-async def test_a_non_pdf_is_stored_but_not_parsed(session, tender_document):
+async def test_an_xml_is_stored_and_read_with_its_own_parser(session, tender_document):
     # La URL ha d'anunciar XML: una URL acabada en .pdf que retorna una altra
     # cosa es invalid_content per disseny (vegeu `resolve_mime_type`).
     from app.models.enums import TenderDocumentType
@@ -383,12 +383,12 @@ async def test_a_non_pdf_is_stored_but_not_parsed(session, tender_document):
         )
 
     assert outcome.file.download_status == DownloadStatus.DOWNLOADED
-    assert outcome.file.content.is_text_extractable is False
+    assert outcome.file.content.is_text_extractable is True
 
     extraction = await session.scalar(sa.select(TenderDocumentExtraction))
-    assert extraction.status == ExtractionStatus.SKIPPED_UNSUPPORTED
-    assert extraction.error_code == "unsupported_for_text_extraction"
-    assert extraction.quality == ExtractionQuality.NOT_APPLICABLE
+    assert extraction.status == ExtractionStatus.EXTRACTED
+    assert extraction.parser_version == "xml-v1"
+    assert extraction.error_code is None
 
 
 async def test_an_ole2_document_is_stored_but_not_parsed(session, tender_document, storage):

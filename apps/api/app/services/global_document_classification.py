@@ -21,7 +21,10 @@ mateixa per a tothom i el resultat es pot compartir.
 Les troballes de conjunt (`required_role_missing`, `referenced_document_missing`,
 `no_text`, `format_not_analyzable`) son els forats del paquet
 (`tender_package_gaps`, productor `classification`): es creen quan apareixen i
-es RESOLEN (mai s'esborren) quan una passada posterior ja no els veu.
+es RESOLEN (mai s'esborren) quan una passada posterior ja no els veu. Els dos
+primers son de COBERTURA (falta un document: el paquet es `incomplete`); `no_text`
+i `format_not_analyzable` son de PROCESSABILITAT (el document hi es pero no se'n pot
+llegir el text) i no fan mai el paquet incomplet (`analysis.fingerprint`).
 """
 
 from __future__ import annotations

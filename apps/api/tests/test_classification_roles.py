@@ -10,6 +10,9 @@ from __future__ import annotations
 import hashlib
 import io
 import zipfile
+from dataclasses import replace
+
+import pytest
 
 from app.classification import ooxml_text
 from app.classification.roles import (
@@ -176,10 +179,37 @@ def test_a_pcap_that_starts_with_its_characteristics_table_is_not_a_mismatch():
 
 
 def test_formats_the_analysis_cannot_read_are_flagged_low():
-    result = classify_documents([facts(0, "Acord.docx", "Acord de la Junta", mime=ooxml_text.DOCX)])
+    zipped = facts(0, "Annexos.zip", mime="application/zip")
+    result = classify_documents([zipped])
     assert (ClassificationFindingCode.FORMAT_NOT_ANALYZABLE, FindingSeverity.LOW) in codes(
         result, "m0"
     )
+
+
+def test_a_docx_read_only_to_classify_has_no_text_for_the_analysis():
+    """Un DOCX llegit nomes per saber-ne el rol (`ooxml`) encara no te text per a
+    l'analisi: `no_text` (processabilitat), no un format que no sabem llegir."""
+    docx = replace(
+        facts(0, "Acord.docx", "Acord de la Junta", mime=ooxml_text.DOCX), text_source="ooxml"
+    )
+    result = classify_documents([docx])
+    assert result.decisions["m0"].role is DocumentRole.APPROVAL_RESOLUTION
+    found = [f for f in result.findings if f.key == "m0"]
+    assert [(f.code, f.severity) for f in found] == [
+        (ClassificationFindingCode.NO_TEXT, FindingSeverity.MEDIUM)
+    ]
+    assert found[0].detail["read_for_classification"] is True
+
+
+@pytest.mark.parametrize("mime", [ooxml_text.DOCX, ooxml_text.XLSX, "application/xml", "text/xml"])
+def test_an_extracted_office_or_xml_document_has_no_format_finding(mime):
+    result = classify_documents([facts(0, "Annex", "Text llegit pel parser", mime=mime)])
+    assert not [
+        code
+        for code, _ in codes(result, "m0")
+        if code
+        in (ClassificationFindingCode.FORMAT_NOT_ANALYZABLE, ClassificationFindingCode.NO_TEXT)
+    ]
 
 
 # --------------------------------------------------------------------------- #

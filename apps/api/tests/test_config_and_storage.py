@@ -103,9 +103,17 @@ def test_document_settings_expose_derived_limits():
     assert settings.document_max_size_bytes == settings.DOCUMENT_MAX_SIZE_MB * 1024 * 1024
     assert "application/pdf" in settings.document_allowed_mime_types
     # El text pla hi entra des d'S3-S2: llegir-lo es descodificar-lo, sense cap
-    # dependencia nova. De la resta de formats admesos se'n guarda l'original i
-    # no se'n llegeix el text.
-    assert settings.document_text_extraction_mime_types == {"application/pdf", "text/plain"}
+    # dependencia nova. DOCX, XLSX i XML, amb els parsers deterministes de
+    # `office_text`. De la resta de formats admesos (ZIP, OLE2...) se'n guarda
+    # l'original i no se'n llegeix el text.
+    assert settings.document_text_extraction_mime_types == {
+        "application/pdf",
+        "text/plain",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/xml",
+        "text/xml",
+    }
     assert settings.document_text_extraction_mime_types <= settings.document_allowed_mime_types
     assert settings.document_allowed_ports == {80, 443}
 

@@ -117,9 +117,9 @@ describe("forats del paquet", () => {
     expect(gapText(gap({ code: "referenced_document_missing", key: "DOC-03" }), names)).toBe(
       "Falta un document que cita el plec (DOC-03)",
     );
-    expect(gapText(gap({ code: "no_text", key: "d9" }), names)).toBe("Plec escanejat.pdf: sense text llegible");
+    expect(gapText(gap({ code: "no_text", key: "d9" }), names)).toBe("Plec escanejat.pdf: present, sense text llegible per a l'anàlisi");
     expect(gapText(gap({ code: "format_not_analyzable", key: "zz" }), names)).toBe(
-      "Un document: format que no es pot llegir",
+      "Un document: present, en un format que Tuvi encara no pot llegir",
     );
     expect(gapText(gap({ code: "annex_missing", key: null }), names)).toBe("Falta un annex");
     expect(gapText(gap({ code: "declared_by_operator", key: "x" }), names)).toBe(

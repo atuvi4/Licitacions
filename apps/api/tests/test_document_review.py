@@ -104,7 +104,12 @@ async def test_a_format_we_cannot_read_counts_the_same(client_a, db, tenant_a):
     before = await document_review.fingerprint_of(db, uuid.UUID(tender_id))
 
     uploaded = await _upload(
-        client_a, company, tender_id, name="preus.xlsx", data=ZIP_BYTES, mime=XLSX
+        client_a,
+        company,
+        tender_id,
+        name="preus.xls",
+        data=b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64,
+        mime="application/vnd.ms-excel",
     )
     assert uploaded.json()["file"]["analysis_status"] == "unsupported"
 

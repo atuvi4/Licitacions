@@ -321,6 +321,30 @@ describe("Administració Tuvi · documents públics d'una licitació", () => {
     expect((form.get("file") as File).name).toBe("DOC-04.pdf");
   });
 
+  it("els forats de la classificació es compten per separat: documents que falten i documents presents sense processar", async () => {
+    respond({
+      "/platform/tenders/t1/classification": {
+        ...classification,
+        gaps: [
+          { id: "g1", code: "referenced_document_missing", detail: { key: "DOC-07" }, would_provide: [] },
+          { id: "g2", code: "format_not_analyzable", detail: { key: "d3" }, would_provide: [] },
+          { id: "g3", code: "no_text", detail: { key: "d1" }, would_provide: ["requirements"] },
+        ],
+      },
+    });
+    render(
+      <PlatformLayout>
+        <TenderDocumentsPage />
+      </PlatformLayout>,
+    );
+    await flush();
+    await flush();
+    expect(document.body.textContent).toContain("Documents que falten al paquet segons la classificació vigent: 1.");
+    expect(document.body.textContent).toContain(
+      "Documents presents que Tuvi encara no pot processar completament: 2. No fan el paquet incomplet.",
+    );
+  });
+
   it("una licitació no pública es diu amb l'error del servidor i sense cap formulari", async () => {
     respond({ "/platform/tenders/t1/documents": new ApiError(422, "tender_not_public", "Aquesta licitacio es d'una empresa: l'operador no hi entra.") });
     render(

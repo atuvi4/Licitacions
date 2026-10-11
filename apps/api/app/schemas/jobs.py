@@ -77,6 +77,9 @@ class AnalysisQuoteIn(BaseModel):
     accept_incomplete_package: bool = False
     #: Qui confirma accepta un text amb avisos de qualitat (§6.1.4). No entra al run.
     acknowledge_quality: bool = False
+    #: Qui confirma accepta que hi ha documents PRESENTS que Tuvi encara no pot
+    #: processar completament (no es cap paquet incomplet). No entra al run.
+    acknowledge_processing: bool = False
 
 
 class QuoteDocumentRead(BaseModel):

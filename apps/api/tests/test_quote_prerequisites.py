@@ -6,8 +6,12 @@ canvien entre el preview i la confirmacio, cal tornar-lo a ensenyar. Un sol
 `blocking_reason`, en aquest ordre de prioritat:
 
     provider_not_real > model_not_pinned > price_unknown > budget_exhausted >
-    budget_exceeded > package_incomplete > quality_unknown > quality_warning >
-    selection_not_canonical
+    budget_exceeded > package_incomplete > processing_incomplete > quality_unknown >
+    quality_warning > selection_not_canonical
+
+`package_incomplete` vol dir NOMES que falta un document del paquet (cobertura).
+Un document present que no es pot llegir es `processing_incomplete`, amb la seva
+propia acceptacio (`acknowledge_processing`).
 
 i la resta d'incompliments a `prerequisites.failed[]`. El handler refusa un
 proveidor no real (fora de test o de `ALLOW_SIMULATED_ANALYSIS`), un model no
@@ -82,13 +86,14 @@ async def _preview(session, plec, provider=None, **options):
 
 
 def test_l_ordre_de_prioritat_es_el_de_la_spec():
-    assert BLOCKING_PRIORITY[:9] == (
+    assert BLOCKING_PRIORITY[:10] == (
         "provider_not_real",
         "model_not_pinned",
         "price_unknown",
         "budget_exhausted",
         "budget_exceeded",
         "package_incomplete",
+        "processing_incomplete",
         "quality_unknown",
         "quality_warning",
         "selection_not_canonical",
@@ -299,9 +304,11 @@ async def test_sense_classificacio_vigent_i_amb_un_forat_el_paquet_es_incomplet(
     assert preview.prerequisites["package"]["status"] == "incomplete"
 
 
-async def test_un_plec_per_defecte_sense_text_bloqueja_package_incomplete(
+async def test_un_plec_per_defecte_present_sense_text_demana_acceptar_el_processament(
     session, plec, second_tender_document, monkeypatch
 ):
+    """Un plec que hi es pero no te text no fa el paquet incomplet: es un avis de
+    processament, amb la seva acceptacio i el document enumerat."""
     from app.models.enums import TenderDocumentType
 
     pin_real_model(monkeypatch)
@@ -310,13 +317,28 @@ async def test_un_plec_per_defecte_sense_text_bloqueja_package_incomplete(
 
     preview = await _preview(session, plec)
 
-    assert preview.blocking_reason == "package_incomplete"
-    issues = preview.prerequisites["package"]["issues"]
+    assert preview.blocking_reason == "processing_incomplete"
+    assert "package_incomplete" not in preview.prerequisites["failed"]
+    assert preview.prerequisites["package"] == {
+        "status": "complete",
+        "issues": [],
+        "accepted": False,
+    }
+    processing = preview.prerequisites["processing"]
+    assert processing["status"] == "partial"
     assert {
         "code": "default_document_skipped",
         "tender_document_id": str(second_tender_document.id),
         "reason": "document_not_processed",
-    } in issues
+    } in processing["issues"]
+
+    # Acceptar «paquet incomplet» no hi fa res; nomes l'acceptacio de processament.
+    wrong = await _preview(session, plec, accept_incomplete_package=True)
+    assert wrong.blocking_reason == "processing_incomplete"
+    acknowledged = await _preview(session, plec, acknowledge_processing=True)
+    assert acknowledged.allowed is True, acknowledged.prerequisites
+    assert acknowledged.prerequisites["processing"]["acknowledged"] is True
+    assert acknowledged.prerequisites["package"]["accepted"] is False
 
 
 # --------------------------------------------------------------------------- #
@@ -519,10 +541,11 @@ async def test_els_prerequisits_formen_part_de_la_identitat_del_preview(
 async def test_una_quota_desada_amb_la_semantica_antiga_del_paquet_no_es_reutilitza(
     session, plec, tenant_a, monkeypatch
 ):
-    """F10: el paquet `unknown` canvia la forma dels prerequisits (v2).
+    """F10 (v2) i cobertura/processament (v3) canvien la forma dels prerequisits.
 
-    Una quota desada amb la versio anterior (on «sense comprovar» es deia
-    `incomplete`) no es pot confirmar tal qual: es torna a ensenyar.
+    Una quota desada amb una versio anterior (on «sense comprovar», o un document
+    present sense text, es deia `incomplete`) no es pot confirmar tal qual: es torna
+    a ensenyar.
     """
     pin_real_model(monkeypatch)
     user, company = tenant_a
@@ -534,8 +557,8 @@ async def test_una_quota_desada_amb_la_semantica_antiga_del_paquet_no_es_reutili
         provider_factory=RealNamedFake,
     )
     assert quote.allowed
-    assert quote.prerequisites["version"] != "quote-prerequisites-v1"
-    quote.prerequisites = {**quote.prerequisites, "version": "quote-prerequisites-v1"}
+    assert quote.prerequisites["version"] == "quote-prerequisites-v3"
+    quote.prerequisites = {**quote.prerequisites, "version": "quote-prerequisites-v2"}
     await session.commit()
 
     with pytest.raises(quote_service.PreviewChangedError) as caught:
@@ -548,7 +571,7 @@ async def test_una_quota_desada_amb_la_semantica_antiga_del_paquet_no_es_reutili
             provider_factory=RealNamedFake,
         )
 
-    assert caught.value.quote.prerequisites["version"] == "quote-prerequisites-v2"
+    assert caught.value.quote.prerequisites["version"] == "quote-prerequisites-v3"
     old = await session.get(AnalysisQuote, quote.id, populate_existing=True)
     assert old.status == AnalysisQuoteStatus.SUPERSEDED
     assert await session.scalar(sa.select(sa.func.count(JobRequest.id))) == 0

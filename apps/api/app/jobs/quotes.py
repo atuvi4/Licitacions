@@ -179,6 +179,12 @@ def acknowledged_quality(quote: AnalysisQuote) -> bool:
     return bool((quote.prerequisites or {}).get("acknowledge_quality"))
 
 
+def acknowledged_processing(quote: AnalysisQuote) -> bool:
+    """L'acceptacio de processament (documents presents que no es poden llegir) es desa,
+    com la de qualitat, dins dels prerequisits de la quota: cap columna nova."""
+    return bool((quote.prerequisites or {}).get("acknowledge_processing"))
+
+
 async def _visible_owner(
     session: AsyncSession, *, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> uuid.UUID | None:
@@ -214,6 +220,7 @@ async def _preview(
     resume_from_run_id: uuid.UUID | None = None,
     accept_incomplete_package: bool = False,
     acknowledge_quality: bool = False,
+    acknowledge_processing: bool = False,
 ) -> AnalysisPreview:
     """El volum de l'analisi, i abans de res de qui es la licitacio (`_visible_owner`)."""
     await _visible_owner(session, company_id=company_id, tender_id=tender_id)
@@ -227,6 +234,7 @@ async def _preview(
         resume_from_run_id=resume_from_run_id,
         accept_incomplete_package=accept_incomplete_package,
         acknowledge_quality=acknowledge_quality,
+        acknowledge_processing=acknowledge_processing,
     )
 
 
@@ -248,6 +256,7 @@ async def create_quote(
     resume_from_run_id: uuid.UUID | None = None,
     accept_incomplete_package: bool = False,
     acknowledge_quality: bool = False,
+    acknowledge_processing: bool = False,
 ) -> AnalysisQuote:
     """Calcula i desa el preview. Nomes lectures del plec; cap proveidor.
 
@@ -261,8 +270,9 @@ async def create_quote(
     propia, com abans: el propietari tria documents, `force` i perfil (`profile`,
     per defecte el de producte).
 
-    `accept_incomplete_package` i `acknowledge_quality` (§6.1.3-4) no son inputs del
-    run: es permeten en totes dues i queden desats a la quota.
+    `accept_incomplete_package`, `acknowledge_processing` i `acknowledge_quality`
+    (§6.1.3-4) no son inputs del run: es permeten en totes dues i queden desats a la
+    quota.
     """
     if resume_from_run_id is not None and force:
         raise ValidationError("Una represa no pot ser `force`: nomes envia els chunks fallits.")
@@ -291,6 +301,7 @@ async def create_quote(
         resume_from_run_id=resume_from_run_id,
         accept_incomplete_package=accept_incomplete_package,
         acknowledge_quality=acknowledge_quality,
+        acknowledge_processing=acknowledge_processing,
     )
     if preview.is_empty:
         raise NothingAnalyzableError(
@@ -379,6 +390,7 @@ async def confirm_quote(
     acceptances = {
         "accept_incomplete_package": bool(quote.accept_incomplete_package),
         "acknowledge_quality": acknowledged_quality(quote),
+        "acknowledge_processing": acknowledged_processing(quote),
     }
     try:
         preview = await _preview(

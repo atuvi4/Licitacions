@@ -21,6 +21,7 @@ import {
   contributionBadge,
   gapImpact,
   gapText,
+  processingLines,
   originBadge,
   readingCount,
   readingLine,
@@ -98,6 +99,40 @@ export function PlecsReadingLine({ documents }: { documents: TenderDocumentMeta[
  */
 export function PackageNotice({ pkg, documents }: { pkg: TenderPackage | null; documents: TenderDocumentMeta[] }) {
   if (!pkg) return null;
+  const names = new Map(documents.map((document) => [document.id, document.name]));
+  return (
+    <div className="space-y-2">
+      <PackageCoverage pkg={pkg} names={names} />
+      <ProcessingNotice pkg={pkg} names={names} />
+    </div>
+  );
+}
+
+/**
+ * Processabilitat, a part de la cobertura: documents que hi són però que Tuvi encara
+ * no pot llegir. Mai «paquet incomplet».
+ */
+export function ProcessingNotice({ pkg, names }: { pkg: TenderPackage; names: Map<string, string> }) {
+  const lines = processingLines(pkg.processing, names);
+  if (lines.length === 0) return null;
+  return (
+    <div role="status" className="rounded-card border border-border bg-subtle px-4 py-3 text-[13px]">
+      <p className="font-heading font-semibold text-ink">
+        Hi ha documents presents que Tuvi encara no pot processar completament
+      </p>
+      <ul className="mt-1.5 space-y-1 text-ink" aria-label="Documents presents sense processar completament">
+        {lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      <p className="mt-1.5 text-muted">
+        No hi falta cap document per això: el que diuen aquests documents no s&apos;avalua mentre no es puguin llegir.
+      </p>
+    </div>
+  );
+}
+
+function PackageCoverage({ pkg, names }: { pkg: TenderPackage; names: Map<string, string> }) {
   // La mateixa semàntica que la quota (F10): `packageCoverageState`.
   const state = packageCoverageState(pkg);
   if (state === "complete") {
@@ -116,7 +151,6 @@ export function PackageNotice({ pkg, documents }: { pkg: TenderPackage | null; d
       </div>
     );
   }
-  const names = new Map(documents.map((document) => [document.id, document.name]));
   return (
     <div role="status" className="rounded-card border border-warning/25 bg-warning-soft px-4 py-3 text-[13px]">
       <p className="font-heading font-semibold text-warning">

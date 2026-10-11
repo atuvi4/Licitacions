@@ -124,6 +124,7 @@ export type BlockingReason =
   | "budget_exhausted"
   | "budget_exceeded"
   | "package_incomplete"
+  | "processing_incomplete"
   | "quality_unknown"
   | "quality_warning"
   | "selection_not_canonical"
@@ -157,9 +158,13 @@ export interface QuotePrerequisites {
   canonical?: boolean;
   accept_incomplete_package?: boolean;
   acknowledge_quality?: boolean;
+  acknowledge_processing?: boolean;
   model_pinned?: boolean;
   price_known?: boolean;
+  /** Cobertura: documents que falten (o paquet sense comprovar). */
   package?: { status: "complete" | "incomplete" | "unknown"; issues: QuotePackageIssue[]; accepted: boolean };
+  /** Documents PRESENTS que Tuvi encara no pot processar completament (o repetits). Mai «paquet incomplet». */
+  processing?: { status: "complete" | "partial"; issues: QuotePackageIssue[]; acknowledged: boolean };
   quality?: { status: QualityStatus; documents: { tender_document_id: string; qa_status: string }[]; acknowledged: boolean };
   budget?: {
     estimated_cost_usd: number | null;
@@ -188,6 +193,8 @@ export const BLOCKING_REASON_TEXT: Record<string, string> = {
   // Sense saber per què, el text per defecte no afirma que hi faltin documents
   // (F10): unknown ≠ incomplet. Amb el motiu, `blockingReasonText(code, estat)`.
   package_incomplete: `${PACKAGE_COVERAGE_TEXT.unknown.replace(/\.$/, "")}: només es pot analitzar acceptant-ho explícitament.`,
+  processing_incomplete:
+    "Hi ha documents presents que Tuvi encara no pot processar completament: cal acceptar-ho explícitament.",
   quality_unknown:
     "La qualitat del text d'algun plec és dolenta o desconeguda: cal reprocessar-lo o revisar-lo abans d'analitzar.",
   quality_warning: "El text d'algun plec té avisos de qualitat: cal acceptar-ho explícitament.",
@@ -227,6 +234,8 @@ export const QUOTE_WARNING_TEXT: Record<string, string> = {
 export interface QuoteAcceptance {
   accept_incomplete_package?: boolean;
   acknowledge_quality?: boolean;
+  /** Documents presents que encara no es poden processar completament (no és cap paquet incomplet). */
+  acknowledge_processing?: boolean;
 }
 
 export interface AnalysisLimits {

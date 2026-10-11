@@ -72,6 +72,37 @@ function packageIssueLines(
   });
 }
 
+/** Per què un document present no es pot processar completament (`prerequisites.processing.issues`). */
+const PROCESSING_REASONS: Record<string, string> = {
+  document_not_processed: "encara no s'ha processat",
+  document_not_analyzable: "en un format o estat que Tuvi encara no pot llegir",
+  document_without_text: "sense text llegible",
+  no_text: "sense text llegible per a l'anàlisi",
+  format_not_analyzable: "en un format que Tuvi encara no pot llegir",
+  duplicate_content: "contingut repetit en un altre document",
+  duplicate_bytes: "contingut repetit en un altre document",
+  duplicate_text: "contingut repetit en un altre document",
+};
+
+/**
+ * Els documents presents que Tuvi encara no pot processar completament, un per línia
+ * amb els seus motius. Mai diu que hi falti cap document.
+ */
+function processingIssueLines(issues: QuotePackageIssue[], names: Map<string, string>): string[] {
+  const reasons = new Map<string, string[]>();
+  for (const issue of issues) {
+    const key = issue.code === "package_gap" ? issue.gap_code ?? "" : issue.reason ?? issue.code;
+    const reason = PROCESSING_REASONS[key] ?? "no es pot processar completament";
+    const ids = issue.tender_document_ids ?? (issue.tender_document_id ? [issue.tender_document_id] : []);
+    for (const name of ids.length > 0 ? ids.map((id) => names.get(id) ?? "Un document") : ["Un document"]) {
+      const list = reasons.get(name) ?? [];
+      if (!list.includes(reason)) list.push(reason);
+      reasons.set(name, list);
+    }
+  }
+  return [...reasons.entries()].map(([name, list]) => `${name}: ${list.join(" · ")}`);
+}
+
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] uppercase";
 
 const USD = new Intl.NumberFormat("ca-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -118,7 +149,11 @@ export function AnalysisQuotePanel({
   const basis = quote.provider_basis ?? prerequisites?.provider_basis ?? null;
   const packageAccepted = Boolean(quote.accept_incomplete_package || prerequisites?.package?.accepted);
   const qualityAcknowledged = Boolean(prerequisites?.acknowledge_quality || prerequisites?.quality?.acknowledged);
+  const processingAcknowledged = Boolean(
+    prerequisites?.acknowledge_processing || prerequisites?.processing?.acknowledged,
+  );
   const askPackage = failed.includes("package_incomplete") || packageAccepted;
+  const askProcessing = failed.includes("processing_incomplete") || processingAcknowledged;
   const askQuality = failed.includes("quality_warning") || qualityAcknowledged;
   const names = new Map<string, string>([
     ...(documents ?? []).map((document) => [document.id, document.name] as const),
@@ -140,6 +175,9 @@ export function AnalysisQuotePanel({
           names,
         )
       : [];
+  const processingLinesList = askProcessing
+    ? processingIssueLines(prerequisites?.processing?.issues ?? [], names)
+    : [];
   const reasonText = (code: string | null | undefined) => blockingReasonText(code, packageState);
   // Els altres motius, a part del principal (que ja surt en gran).
   const otherFailures = failed.filter((code) => code !== quote.blocking_reason);
@@ -251,7 +289,7 @@ export function AnalysisQuotePanel({
         </ul>
       )}
 
-      {(askPackage || askQuality) && (
+      {(askPackage || askProcessing || askQuality) && (
         <div className="mt-3 space-y-1.5">
           {askPackage && (
             <div>
@@ -269,6 +307,26 @@ export function AnalysisQuotePanel({
               {packageLines.length > 0 && (
                 <ul className="mt-1 list-disc space-y-0.5 pl-9 text-muted" aria-label="Què falta al paquet">
                   {packageLines.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {askProcessing && (
+            <div>
+              <Checkbox
+                label="Accepto que hi ha documents presents que Tuvi encara no pot processar completament: el que diuen no s'avalua."
+                checked={processingAcknowledged}
+                disabled={accepting || confirming || !onAccept}
+                onChange={(event) => onAccept?.({ acknowledge_processing: event.currentTarget.checked })}
+              />
+              {processingLinesList.length > 0 && (
+                <ul
+                  className="mt-1 list-disc space-y-0.5 pl-9 text-muted"
+                  aria-label="Documents presents que no es poden processar completament"
+                >
+                  {processingLinesList.map((line) => (
                     <li key={line}>{line}</li>
                   ))}
                 </ul>

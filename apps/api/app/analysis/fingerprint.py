@@ -337,9 +337,12 @@ class FactView:
 # Estat del paquet documental (3B-2 §4.4)                                         #
 # --------------------------------------------------------------------------- #
 
-#: `package_status`: `incomplete` si hi ha algun forat obert (els forats son fets, amb
-#: passada de classificacio global o sense); sense forats, `complete` amb passada vigent
-#: i `unknown` sense.
+#: `package_status` es la COBERTURA del paquet: `incomplete` nomes si hi ha algun forat
+#: de cobertura obert (sabem que un document forma part del paquet public i Tuvi no el
+#: te); si no, `complete` amb passada de classificacio vigent i `unknown` sense.
+#: Que un document present no es pugui llegir (format, extraccio fallida, sense text)
+#: es una altra dimensio, la PROCESSABILITAT (`PROCESSING_GAP_CODES`): no fa mai el
+#: paquet incomplet.
 PACKAGE_COMPLETE = "complete"
 PACKAGE_INCOMPLETE = "incomplete"
 PACKAGE_UNKNOWN = "unknown"
@@ -390,6 +393,29 @@ class PackageGapView:
         }
 
 
+#: Forats de PROCESSABILITAT: el document hi es, pero Tuvi encara no en pot llegir
+#: (tot) el contingut. No son cap document que falti.
+PROCESSING_GAP_CODES = frozenset({"no_text", "format_not_analyzable"})
+
+
+def is_coverage_gap(gap: Any) -> bool:
+    """Un forat de COBERTURA: falta un document que sabem que forma part del paquet.
+
+    Qualsevol codi que no sigui de processabilitat ho es (rol obligatori que falta,
+    document citat que falta, annex que falta, forat declarat per l'operador), tambe
+    un codi que encara no coneguem: davant del dubte, el paquet no es diu complet.
+    """
+    return str(gap.code) not in PROCESSING_GAP_CODES
+
+
+def coverage_gaps(gaps: Any) -> tuple[Any, ...]:
+    return tuple(gap for gap in gaps if is_coverage_gap(gap))
+
+
+def processing_gaps(gaps: Any) -> tuple[Any, ...]:
+    return tuple(gap for gap in gaps if not is_coverage_gap(gap))
+
+
 def section_presence(view: TenderStructureView) -> dict[str, bool]:
     """Si cada seccio te alguna fila. Els territoris son els dels requisits."""
     return {
@@ -437,9 +463,13 @@ def section_status_for(presence: dict[str, bool], gaps: Any, *, has_run: bool) -
 
 
 def package_status_for(gaps: Any, *, has_run: bool) -> str:
-    """Els forats oberts son fets (tambe en una licitacio manual, que no te mai passada
-    global): amb algun, `incomplete`. `unknown` nomes sense passada i sense forats."""
-    if tuple(gaps):
+    """La cobertura del paquet. Els forats de cobertura oberts son fets (tambe en una
+    licitacio manual, que no te mai passada global): amb algun, `incomplete`. Sense
+    cap, `complete` amb passada vigent i `unknown` sense.
+
+    Els forats de processabilitat (`PROCESSING_GAP_CODES`) no hi compten: un document
+    present i verificat tanca el forat documental encara que no en tinguem text."""
+    if coverage_gaps(gaps):
         return PACKAGE_INCOMPLETE
     return PACKAGE_COMPLETE if has_run else PACKAGE_UNKNOWN
 
@@ -489,7 +519,7 @@ class TenderStructureView:
         L'estat del paquet hi entra NOMES si hi ha algun forat obert (precedent de
         `submission_deadline`): un plec sense forats conserva exactament l'empremta
         d'abans. I aleshores hi entra el que es deriva dels forats i de les files
-        (`package_status = incomplete`, els forats en forma canonica i
+        (`package_status` de cobertura, els forats en forma canonica i
         `gap_section_status`), mai la presencia o absencia d'una passada de
         classificacio global: l'empremta descriu que exigeix el plec i que hi falta,
         i que encara no s'hagi classificat no es cap propietat del plec. Per aixo
@@ -516,9 +546,11 @@ class TenderStructureView:
         # Nomes quan hi es: un plec sense termini conserva l'empremta d'abans.
         if self.submission_deadline is not None:
             canonical["submission_deadline"] = self.submission_deadline
-        # Nomes amb forats oberts: vegeu el docstring.
+        # Nomes amb forats oberts: vegeu el docstring. L'estat es la cobertura: amb
+        # nomes forats de processabilitat el paquet es `complete` (els forats hi entren
+        # igualment, i les seccions que deixen `unknown` tambe).
         if self.gaps:
-            canonical["package_status"] = PACKAGE_INCOMPLETE
+            canonical["package_status"] = package_status_for(self.gaps, has_run=True)
             canonical["gaps"] = as_set(self.gaps)
             canonical["section_status"] = gap_section_status(self)
         return canonical

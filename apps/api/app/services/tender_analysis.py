@@ -103,9 +103,10 @@ class PackageState:
 
 
 async def package_state(session: AsyncSession, tender_id: uuid.UUID) -> PackageState:
-    """`incomplete` si hi ha algun forat obert (amb passada de classificacio global o
-    sense: els forats son fets); sense forats, `complete` amb passada vigent i
-    `unknown` sense. Els forats resolts no hi son mai."""
+    """La cobertura: `incomplete` si hi ha algun forat de cobertura obert (amb passada
+    de classificacio global o sense: els forats son fets); si no, `complete` amb
+    passada vigent i `unknown` sense. `gaps` porta TOTS els forats oberts (tambe els
+    de processabilitat, que no fan el paquet incomplet). Els resolts no hi son mai."""
     run = await global_document_classification.current_global_run(session, tender_id)
     rows = await session.scalars(
         sa.select(TenderPackageGap)
@@ -138,10 +139,12 @@ async def load_structure_view(
     oberts i `section_status`, 3B-2 §4.4); a l'empremta nomes hi entra quan hi ha
     forats (vegeu `TenderStructureView.canonical`).
 
-    * Qualsevol forat obert fa el paquet `incomplete`, amb passada global o sense (una
-      licitacio manual no en te mai: un forat declarat per l'operador hi val igual),
-      tambe un `format_not_analyzable`: aquell document no el podem llegir. Sense
-      forats: `complete` amb passada vigent, `unknown` sense.
+    * Qualsevol forat de COBERTURA obert (falta un document) fa el paquet
+      `incomplete`, amb passada global o sense (una licitacio manual no en te mai: un
+      forat declarat per l'operador hi val igual). Un forat de processabilitat
+      (`no_text`, `format_not_analyzable`: el document hi es pero no el podem
+      llegir) no: va a part. Sense forats de cobertura: `complete` amb passada
+      vigent, `unknown` sense.
     * Una seccio amb files es `present` encara que un forat la nomeni: les files son
       fets citats (la troballa del forat hi es igualment).
     * Una seccio buida es `unknown` si un forat la nomena, si no hi ha passada vigent,

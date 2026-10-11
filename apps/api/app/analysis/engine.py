@@ -37,8 +37,10 @@ from app.analysis.fingerprint import (
     ScopeItemView,
     TenderStructureView,
     canonical_json,
+    coverage_gaps,
     gap_unknown_sections,
     plain_jsonable,
+    processing_gaps,
 )
 from app.analysis.registry import ExplanationCode as X
 from app.analysis.registry import QuestionCode as Q
@@ -2424,8 +2426,10 @@ def summary(result: AnalysisResult, tender: TenderStructureView) -> dict[str, An
     fits = [f for f in result.fit_assessments if f.requirement_id in mandatory]
     count = lambda value: sum(1 for f in fits if f.fit_result == value)  # noqa: E731
     return {
-        # 3B-2 §4.4: el paquet documental te algun forat obert.
-        "package_incomplete": bool(tender.gaps),
+        # 3B-2 §4.4: al paquet documental hi falta algun document (forat de
+        # cobertura). Un document present que no es pot llegir no ho es: va a part.
+        "package_incomplete": bool(coverage_gaps(tender.gaps)),
+        "processing_incomplete": bool(processing_gaps(tender.gaps)),
         "mandatory_satisfies": count(FitResult.SATISFIES.value),
         "mandatory_unknown": count(FitResult.UNKNOWN.value),
         "mandatory_does_not_satisfy": count(FitResult.DOES_NOT_SATISFY.value),

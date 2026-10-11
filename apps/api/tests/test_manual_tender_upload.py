@@ -30,6 +30,7 @@ from app.models.tender_documents import (
 )
 from app.models.tenders import TenderDocument
 from tests.fixtures.pdf_builder import build_pdf
+from tests.test_office_text import _docx, _p, _xlsx
 
 pytestmark = pytest.mark.asyncio
 
@@ -43,6 +44,10 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 #: Un DOCX i un XLSX son ZIP: els magic bytes nomes diuen "PK", i el tipus fi
 #: surt del que declara qui el puja. Es la mateixa regla que la descarrega.
 ZIP_BYTES = b"PK\x03\x04" + b"\x00" * 64
+#: Un .doc antic (OLE2): format que es guarda pero del qual no s'extreu text.
+MSWORD = "application/msword"
+OLE2_BYTES = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64
+XLSX_ROW = '<row r="1"><c r="A1" t="s"><v>0</v></c></row>'
 
 
 async def _tender(client, company, **extra) -> dict:
@@ -340,17 +345,58 @@ async def test_a_text_file_is_read_without_any_model(client_a, db, tenant_a):
 
 
 # --------------------------------------------------------------------------- #
-# G. DOCX i XLSX: guardats, no analitzats                                       #
+# G. DOCX i XLSX es llegeixen; un format sense parser es guarda sense text     #
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("name,mime", [("plec.docx", DOCX), ("preus.xlsx", XLSX)])
-async def test_an_office_file_is_stored_but_not_read(client_a, db, tenant_a, name, mime):
+@pytest.mark.parametrize(
+    "name,mime,data",
+    [
+        ("plec.docx", DOCX, _docx(_p("Objecte del contracte."))),
+        ("preus.xlsx", XLSX, _xlsx([("Preus", XLSX_ROW)], shared=["Objecte del contracte."])),
+    ],
+)
+async def test_an_office_file_is_stored_and_read(client_a, db, tenant_a, name, mime, data):
+    """DOCX i XLSX es llegeixen amb el seu parser (`docx-v1`, `xlsx-v1`)."""
+    _, company = tenant_a
+    tender = await _tender(client_a, company)
+
+    body = await _ok(client_a, company, tender["id"], name=name, data=data, mime=mime)
+
+    assert body["stored"] is True
+    assert body["file"]["text_extraction_supported"] is True
+    assert body["file"]["analysis_status"] == "extracted"
+    extraction = await db.get(TenderDocumentExtraction, uuid.UUID(body["file"]["extraction_id"]))
+    assert extraction.parser_version == ("docx-v1" if name.endswith(".docx") else "xlsx-v1")
+    pages = (
+        await db.execute(
+            sa.select(TenderDocumentPage).where(
+                TenderDocumentPage.extraction_id == extraction.id
+            )
+        )
+    ).scalars().all()
+    assert "Objecte del contracte." in pages[0].text
+
+
+async def test_a_broken_office_file_is_stored_and_its_reading_fails(client_a, db, tenant_a):
+    """Un DOCX malmes es guarda igual; la lectura falla i ho diu (no es «no suportat»)."""
+    _, company = tenant_a
+    tender = await _tender(client_a, company)
+    body = await _ok(client_a, company, tender["id"], name="p.docx", data=ZIP_BYTES, mime=DOCX)
+    assert body["stored"] is True
+    extraction = await db.get(TenderDocumentExtraction, uuid.UUID(body["file"]["extraction_id"]))
+    assert extraction.status == ExtractionStatus.FAILED
+    assert extraction.error_code == "docx_unreadable"
+
+
+async def test_an_old_office_file_is_stored_but_not_read(client_a, db, tenant_a):
     """«No analitzable» no es un error de pujada. Son dos fets diferents."""
     _, company = tenant_a
     tender = await _tender(client_a, company)
 
-    body = await _ok(client_a, company, tender["id"], name=name, data=ZIP_BYTES, mime=mime)
+    body = await _ok(
+        client_a, company, tender["id"], name="plec.doc", data=OLE2_BYTES, mime=MSWORD
+    )
 
     assert body["stored"] is True
     assert body["file"]["text_extraction_supported"] is False
@@ -374,7 +420,7 @@ async def test_an_office_file_is_stored_but_not_read(client_a, db, tenant_a, nam
 async def test_an_unsupported_format_is_not_a_failed_extraction(client_a, db, tenant_a):
     _, company = tenant_a
     tender = await _tender(client_a, company)
-    body = await _ok(client_a, company, tender["id"], name="p.docx", data=ZIP_BYTES, mime=DOCX)
+    body = await _ok(client_a, company, tender["id"], name="p.doc", data=OLE2_BYTES, mime=MSWORD)
 
     extraction = (
         await db.execute(

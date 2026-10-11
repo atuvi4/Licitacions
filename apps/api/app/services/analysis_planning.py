@@ -21,9 +21,13 @@ pot demanar i, si no, per que (un sol `blocking_reason`, en l'ordre de
 
 1. proveidor real, model pinat i preu (`llm_budget.provider_failures`);
 2. pressupost: cost estimat <= cap de run i gastat + estimat <= cap total;
-3. paquet: cap plec per defecte sense text, cap parell amb el mateix contingut, la
-   classificacio global vigent (tender public) sense troballes HIGH de paquet i cap
-   forat obert; si no, nomes amb `accept_incomplete_package`;
+3. paquet (COBERTURA): la classificacio global vigent (tender public) sense
+   troballes HIGH de document que falta i cap forat de cobertura obert; si no, nomes
+   amb `accept_incomplete_package`. `incomplete` vol dir NOMES que sabem que hi
+   falta un document del paquet public;
+3b. processament: cap plec per defecte present sense text llegible, cap parell amb
+   el mateix contingut i cap forat de processabilitat obert; si no, nomes amb
+   `acknowledge_processing`, que enumera els documents (mai «paquet incomplet»);
 4. qualitat del text: cap extraccio `unknown`/`poor`; `warning` demana
    `acknowledge_quality`;
 5. elegibilitat canonica (tender public): seleccio per defecte, perfil de producte
@@ -51,6 +55,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.profiles import ExtractorProfile
+from app.analysis.fingerprint import is_coverage_gap
 from app.core.config import settings
 from app.models.enums import (
     AnalysisRunStatus,
@@ -87,11 +92,15 @@ from app.services.requirement_chunking import Chunk, build_chunks
 PLANNING_VERSION = "analysis-planning-v2"
 
 #: Versio de la forma de `prerequisites`. v2 (revisio 3B-2, F10): `package.status`
-#: es `unknown` (no `incomplete`) quan nomes falta la classificacio vigent. Entra a
-#: la identitat del preview: una quota desada amb v1 no es confirma, es re-ensenya.
-PREREQUISITES_VERSION = "quote-prerequisites-v2"
+#: es `unknown` (no `incomplete`) quan nomes falta la classificacio vigent. v3:
+#: `package` es nomes la cobertura (documents que falten) i `processing` porta, a
+#: part, els documents presents que no es poden llegir, amb la seva acceptacio
+#: (`acknowledge_processing`). Entra a la identitat del preview: una quota desada
+#: amb una versio anterior no es confirma, es re-ensenya.
+PREREQUISITES_VERSION = "quote-prerequisites-v3"
 
 PACKAGE_INCOMPLETE = "package_incomplete"
+PROCESSING_INCOMPLETE = "processing_incomplete"
 QUALITY_UNKNOWN = "quality_unknown"
 QUALITY_WARNING = "quality_warning"
 ANALYSIS_TOO_LARGE = "analysis_too_large"
@@ -106,17 +115,26 @@ BLOCKING_PRIORITY: tuple[str, ...] = (
     llm_budget.BUDGET_EXHAUSTED,
     llm_budget.BUDGET_EXCEEDED,
     PACKAGE_INCOMPLETE,
+    PROCESSING_INCOMPLETE,
     QUALITY_UNKNOWN,
     QUALITY_WARNING,
     SELECTION_NOT_CANONICAL,
     ANALYSIS_TOO_LARGE,
 )
 
-#: Troballes de la classificacio global que fan el paquet incomplet (§6.1.3).
+#: Troballes de la classificacio global que fan el paquet incomplet (§6.1.3): falta
+#: un document que sabem que forma part del paquet.
 PACKAGE_FINDING_CODES = frozenset(
     {
         ClassificationFindingCode.REQUIRED_ROLE_MISSING,
         ClassificationFindingCode.REFERENCED_DOCUMENT_MISSING,
+    }
+)
+
+#: Troballes de la classificacio global sobre documents PRESENTS que demanen una
+#: acceptacio de processament: dos fitxers diferents amb el mateix contingut.
+PROCESSING_FINDING_CODES = frozenset(
+    {
         ClassificationFindingCode.DUPLICATE_BYTES,
         ClassificationFindingCode.DUPLICATE_TEXT,
     }
@@ -182,6 +200,7 @@ class AnalysisPreview:
     estimated_cost_usd: Decimal | None = None
     accept_incomplete_package: bool = False
     acknowledge_quality: bool = False
+    acknowledge_processing: bool = False
 
     @property
     def pages_truncated(self) -> bool:
@@ -230,6 +249,7 @@ def prerequisites_identity(prerequisites: Mapping[str, Any] | None) -> tuple | N
         tuple(prerequisites.get("failed") or ()),
         bool(prerequisites.get("accept_incomplete_package")),
         bool(prerequisites.get("acknowledge_quality")),
+        bool(prerequisites.get("acknowledge_processing")),
     )
 
 
@@ -251,9 +271,11 @@ async def _package_issues(
     *,
     public: bool,
     explicit: bool,
-) -> tuple[list[dict[str, Any]], bool]:
-    """§6.1.2-3: el que fa el paquet incomplet, i si hi ha passada global vigent."""
-    issues: list[dict[str, Any]] = [
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    """§6.1.2-3: el que falta al paquet (cobertura), el que hi es pero no es pot llegir
+    o esta repetit (processament), i si hi ha passada global vigent."""
+    # Processament: documents PRESENTS. Mai fan el paquet incomplet.
+    processing: list[dict[str, Any]] = [
         {
             "code": "selected_document_skipped" if explicit else "default_document_skipped",
             "tender_document_id": item.tender_document_id,
@@ -264,18 +286,20 @@ async def _package_issues(
     by_sha: dict[str, list[str]] = {}
     for document in current.documents:
         by_sha.setdefault(document.content_sha256, []).append(document.tender_document_id)
-    issues += [
+    processing += [
         {"code": "duplicate_content", "tender_document_ids": sorted(ids)}
         for ids in by_sha.values()
         if len(ids) > 1
     ]
+    # Cobertura: documents que falten (o que encara no s'ha comprovat si en falta cap).
+    coverage: list[dict[str, Any]] = []
 
     has_run = False
     if public:
         run = await current_global_run(session, tender_id)
         fingerprint = await compute_global_fingerprint(session, tender_id)
         if run is None or run.input_fingerprint != fingerprint:
-            issues.append({"code": "classification_not_current"})
+            coverage.append({"code": "classification_not_current"})
         else:
             has_run = True
             selected = {document.tender_document_id for document in current.documents}
@@ -285,32 +309,40 @@ async def _package_issues(
                     or str(finding.tender_document_id) in selected
                     or str(finding.related_document_id) in selected
                 )
-                if (
-                    finding.severity == FindingSeverity.HIGH
-                    and finding.code in PACKAGE_FINDING_CODES
-                    and touches
-                ):
-                    issues.append(
-                        {
-                            "code": str(finding.code),
-                            "finding_id": str(finding.id),
-                            "tender_document_id": (
-                                str(finding.tender_document_id)
-                                if finding.tender_document_id
-                                else None
-                            ),
-                        }
-                    )
+                if finding.severity != FindingSeverity.HIGH or not touches:
+                    continue
+                if finding.code in PACKAGE_FINDING_CODES:
+                    target = coverage
+                elif finding.code in PROCESSING_FINDING_CODES:
+                    target = processing
+                else:
+                    continue
+                target.append(
+                    {
+                        "code": str(finding.code),
+                        "finding_id": str(finding.id),
+                        "tender_document_id": (
+                            str(finding.tender_document_id) if finding.tender_document_id else None
+                        ),
+                    }
+                )
 
     gaps = await session.scalars(
         sa.select(TenderPackageGap)
         .where(TenderPackageGap.tender_id == tender_id, TenderPackageGap.resolved_at.is_(None))
         .order_by(TenderPackageGap.created_at, TenderPackageGap.id)
     )
-    issues += [
-        {"code": "package_gap", "gap_code": str(gap.code), "gap_id": str(gap.id)} for gap in gaps
-    ]
-    return issues, has_run
+    for gap in gaps:
+        issue = {"code": "package_gap", "gap_code": str(gap.code), "gap_id": str(gap.id)}
+        if is_coverage_gap(gap):
+            coverage.append(issue)
+        else:
+            detail = gap.detail or {}
+            document_id = detail.get("document_id") or detail.get("key")
+            processing.append(
+                {**issue, "tender_document_id": str(document_id) if document_id else None}
+            )
+    return coverage, processing, has_run
 
 
 #: Motius que nomes diuen que el paquet NO S'HA COMPROVAT, no que hi falti res.
@@ -419,11 +451,13 @@ async def _prerequisites(
         budget.update(quote_budget.snapshot)
         other += quote_budget.failures
 
-    issues, has_run = await _package_issues(
+    issues, processing, has_run = await _package_issues(
         session, preview.tender_id, current, public=public, explicit=explicit_selection
     )
     if issues and not preview.accept_incomplete_package:
         other.append(PACKAGE_INCOMPLETE)
+    if processing and not preview.acknowledge_processing:
+        other.append(PROCESSING_INCOMPLETE)
 
     quality, quality_documents = await _quality(session, current)
     if quality in (QaStatus.UNKNOWN, QaStatus.POOR):
@@ -455,12 +489,20 @@ async def _prerequisites(
         "canonical": canonical,
         "accept_incomplete_package": preview.accept_incomplete_package,
         "acknowledge_quality": preview.acknowledge_quality,
+        "acknowledge_processing": preview.acknowledge_processing,
         "model_pinned": llm_budget.MODEL_NOT_PINNED not in provider_failures,
         "price_known": price is not None,
         "package": {
             "status": _package_status(issues, has_run=has_run, public=public),
             "issues": issues,
             "accepted": bool(issues) and preview.accept_incomplete_package,
+        },
+        # Documents presents que Tuvi encara no pot processar completament (o
+        # repetits). No diuen mai que falti res al paquet.
+        "processing": {
+            "status": "partial" if processing else "complete",
+            "issues": processing,
+            "acknowledged": bool(processing) and preview.acknowledge_processing,
         },
         "quality": {
             "status": quality.value,
@@ -487,14 +529,16 @@ async def build_preview(
     resume_from_run_id: uuid.UUID | None = None,
     accept_incomplete_package: bool = False,
     acknowledge_quality: bool = False,
+    acknowledge_processing: bool = False,
 ) -> AnalysisPreview:
     """Calcula el preview d'una analisi. Nomes lectures; cap crida al proveidor.
 
     Amb `resume_from_run_id`, nomes compta els chunks fallits d'aquell run
     parcial (`plan_resume`); si no es la mateixa analisi, `ResumeNotAllowedError`.
 
-    `accept_incomplete_package` i `acknowledge_quality` son les acceptacions de qui
-    confirma (§6.1.3-4). No son inputs del run: nomes decideixen si es pot demanar.
+    `accept_incomplete_package`, `acknowledge_processing` i `acknowledge_quality` son
+    les acceptacions de qui confirma (§6.1.3-4). No son inputs del run: nomes
+    decideixen si es pot demanar.
     """
     ids = sorted({str(item) for item in document_ids or []})
     limit = settings.ANALYSIS_MAX_CHUNKS_PER_RUN if max_chunks is None else max_chunks
@@ -526,6 +570,7 @@ async def build_preview(
         ],
         accept_incomplete_package=accept_incomplete_package,
         acknowledge_quality=acknowledge_quality,
+        acknowledge_processing=acknowledge_processing,
     )
     if not current.documents:
         preview.allowed = False

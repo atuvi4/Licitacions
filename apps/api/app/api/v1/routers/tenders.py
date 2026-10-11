@@ -20,6 +20,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.orm import noload, selectinload
 
+from app.analysis.fingerprint import coverage_gaps, processing_gaps
 from app.api.deps import CompanyCtx, CurrentUser, SessionDep
 from app.api.v1.tender_filters import (
     DEFAULT_SORT,
@@ -74,6 +75,7 @@ from app.schemas.tenders import (
 )
 from app.services import audit, manual_tender, tender_document_upload
 from app.services.tender_analysis import load_structure_view
+from app.services.tender_document_processing import is_text_extractable_mime
 from app.tenders.documents import is_active_document
 from app.tenders.visibility import (
     buyer_visible_to_company,
@@ -603,7 +605,9 @@ def file_summary(file, content, extraction) -> TenderDocumentFileSummary:
         file_size=content.file_size if content else None,
         sha256=content.sha256 if content else None,
         mime_type=content.mime_type if content else None,
-        text_extraction_supported=bool(content.is_text_extractable) if content else False,
+        text_extraction_supported=(
+            is_text_extractable_mime(content.mime_type) if content else False
+        ),
         analysis_status=analysis_status_for(
             extraction.status if extraction else None,
             extraction.quality if extraction else None,
@@ -726,7 +730,13 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
                 TenderPackageGapRead(
                     code=gap.code, key=_gap_key(gap.detail), would_provide=list(gap.would_provide)
                 )
-                for gap in view.gaps
+                for gap in coverage_gaps(view.gaps)
+            ],
+            processing=[
+                TenderPackageGapRead(
+                    code=gap.code, key=_gap_key(gap.detail), would_provide=list(gap.would_provide)
+                )
+                for gap in processing_gaps(view.gaps)
             ],
             section_status=dict(view.section_status),
         ),

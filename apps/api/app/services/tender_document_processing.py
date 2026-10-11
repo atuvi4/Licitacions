@@ -376,8 +376,14 @@ async def _store_extraction(
 async def _extract(
     session: AsyncSession, content: TenderDocumentContent, *, commit: bool = True
 ) -> TenderDocumentExtraction:
-    """Parseja els bytes ja guardats. No fa cap peticio HTTP."""
-    if not content.is_text_extractable:
+    """Parseja els bytes ja guardats. No fa cap peticio HTTP.
+
+    Si es llegeix o no, ho decideix el tipus amb la configuracio VIGENT
+    (`is_text_extractable_mime`), no la columna `is_text_extractable` desada quan va
+    arribar el contingut: un DOCX desat abans que hi hagues parser de DOCX s'ha de
+    poder llegir ara sense tocar-ne la fila (els continguts son immutables).
+    """
+    if not is_text_extractable_mime(content.mime_type):
         return await _store_extraction(
             session, content, unsupported_result(content.mime_type), commit=commit
         )
@@ -386,6 +392,11 @@ async def _extract(
     return await _store_extraction(
         session, content, await extract_text_async(content.mime_type, data), commit=commit
     )
+
+
+def is_text_extractable_mime(mime_type: str | None) -> bool:
+    """Si d'aquest tipus se n'extreu text ara mateix (`DOCUMENT_TEXT_EXTRACTION_MIME_TYPES`)."""
+    return bool(mime_type) and mime_type in settings.document_text_extraction_mime_types
 
 
 async def _ensure_current_extraction(

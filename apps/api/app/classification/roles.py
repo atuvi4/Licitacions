@@ -85,8 +85,18 @@ REQUIRED_ROLES: tuple[DocumentRole, ...] = (DocumentRole.PCAP, DocumentRole.PPT)
 #: "PCAP" un fitxer que comenca pel quadre de caracteristiques.
 _COMPATIBLE = frozenset({frozenset({DocumentRole.PCAP, DocumentRole.CHARACTERISTICS_TABLE})})
 
-#: Formats dels quals la capa documental extreu text per a l'analisi.
-ANALYZABLE_MIME_TYPES = frozenset({"application/pdf", "text/plain"})
+#: Formats dels quals la capa documental extreu text per a l'analisi (els parsers de
+#: `document_parsers`: PDF, text pla, DOCX, XLSX i XML).
+ANALYZABLE_MIME_TYPES = frozenset(
+    {
+        "application/pdf",
+        "text/plain",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/xml",
+        "text/xml",
+    }
+)
 _SPREADSHEETS = frozenset(
     {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -529,16 +539,23 @@ def classify_documents(documents: Sequence[DocumentFacts]) -> Classification:
                 )
             )
 
-    # 5. Qualitat de lectura, format i rol.
+    # 5. Qualitat de lectura, format i rol. Tot aixo es PROCESSABILITAT: el document
+    # hi es; nomes diu si l'analisi en podra llegir el text, mai que falti res.
     for d in drafts:
         mime = d.facts.mime_type
-        if mime in ANALYZABLE_MIME_TYPES and not d.text_available:
+        # El text llegit nomes per classificar (`ooxml`) no arriba a l'analisi: un DOCX
+        # que encara no s'ha extret no es pot analitzar, encara que se'n sapigui el rol.
+        readable = d.text_available and d.facts.text_source != "ooxml"
+        if mime in ANALYZABLE_MIME_TYPES and not readable:
+            detail = {"mime_type": mime}
+            if d.text_available:
+                detail["read_for_classification"] = True
             findings.append(
                 Finding(
                     code=ClassificationFindingCode.NO_TEXT,
                     severity=FindingSeverity.MEDIUM,
                     key=d.facts.key,
-                    detail={"mime_type": mime},
+                    detail=detail,
                 )
             )
         elif mime not in ANALYZABLE_MIME_TYPES:
