@@ -1181,7 +1181,15 @@ async def analyze_tender_requirements(
             )
             if exc.fatal:
                 # El mateix error es repetiria a cada chunk: no se n'envia cap mes.
-                remaining = chunks[position + 1 :]
+                # Nomes compten els que s'HAURIEN enviat: un chunk no seleccionat
+                # (canari, ja marcat `not_selected`) o reaprofitat d'una represa no
+                # s'havia d'enviar mai i no es cap fallada.
+                remaining = [
+                    pending
+                    for pending in chunks[position + 1 :]
+                    if pending.index not in chunk_failures
+                    and not (plan is not None and pending.index in plan.reused)
+                ]
                 for skipped_chunk in remaining:
                     chunk_failures[skipped_chunk.index] = CHUNK_NOT_SENT
                     run.chunks_failed += 1
