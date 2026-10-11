@@ -55,6 +55,7 @@ def build_coverage(
     normalisations: Mapping[int, list[str]] | None = None,
     provider_errors: Mapping[int, dict[str, Any]] | None = None,
     rejections: Mapping[int, list[dict[str, Any]]] | None = None,
+    notes: Mapping[int, dict[str, Any]] | None = None,
     reused: Mapping[int, Mapping[str, Any]] | None = None,
     reused_from_run_id: str | None = None,
     not_sent_code: str = "not_sent",
@@ -78,7 +79,12 @@ def build_coverage(
     sanititzat d'un error HTTP (estat, tipus, missatge retallat, request_id).
 
     `rejections` diu, per a un chunk que ha respost, quins elements o cites es
-    van descartar i per que: `{item, index, stage, reason}`, mai el text.
+    van descartar i per que: `{item, index, stage, reason}` i, per a una cita, la
+    pagina citada i un diagnostic de codis (`cited_page`, `diagnosis`); per a un
+    requisit descartat, `obligation` i `category`. Mai el text.
+
+    `notes` diu les pagines on el model ha registrat incerteses o notes del
+    document (`uncertainty_pages`, `document_note_pages`). Nomes pagines.
 
     `origin` diu d'on surt el resultat de cada chunk: `sent` (s'ha enviat en
     aquest run), `reused` (copiat del run parcial `reused_from_run_id`, sense
@@ -93,6 +99,7 @@ def build_coverage(
     normalisations = normalisations or {}
     provider_errors = provider_errors or {}
     rejections = rejections or {}
+    notes = notes or {}
     reused = reused or {}
     return {
         "schema": COVERAGE_SCHEMA,
@@ -112,6 +119,7 @@ def build_coverage(
                 "normalised": normalisations.get(chunk.index),
                 "provider_error": provider_errors.get(chunk.index),
                 "rejections": rejections.get(chunk.index),
+                "notes": notes.get(chunk.index),
                 "input_tokens": _usage_field(usage, chunk.index, "input_tokens"),
                 "output_tokens": _usage_field(usage, chunk.index, "output_tokens"),
                 "stop_reason": _usage_field(usage, chunk.index, "stop_reason"),
@@ -138,6 +146,7 @@ def _reused_entry(
         "provider_error": None,
         # Els rebutjos del chunk original, per no perdre la tracabilitat.
         "rejections": source.get("rejections"),
+        "notes": source.get("notes"),
         "input_tokens": None,
         "output_tokens": None,
         "stop_reason": source.get("stop_reason"),

@@ -119,7 +119,7 @@ from app.models.tenders import Tender, TenderDocument, TenderLot
 from app.services import llm_budget
 from app.services.analysis_coverage import NOT_SELECTED, build_coverage
 from app.services.document_roles import effective_document_roles
-from app.services.evidence_validation import locate_quote
+from app.services.evidence_validation import diagnose_missing_quote, locate_quote
 from app.services.extraction_qa import QaStatus, combine_status
 from app.services.requirement_chunking import (
     DEFAULT_DOCUMENT_TYPES,
@@ -668,6 +668,59 @@ def validate_evidence_detailed(
     return kept, reasons
 
 
+def evidence_rejection_details(
+    candidates: list[EvidenceOut], chunk: Chunk
+) -> list[dict[str, Any]]:
+    """Per a cada cita rebutjada, el motiu, la pagina citada i un diagnostic SENSE text.
+
+    Mateix ordre i mateixes regles que `validate_evidence_detailed`: nomes explica el
+    rebuig (`diagnose_missing_quote`), no accepta res que aquella no accepti.
+    """
+    by_number = {page.page_number: page for page in chunk.pages}
+    texts = {page.page_number: page.text for page in chunk.pages}
+    max_quote = settings.REQUIREMENTS_MAX_QUOTE_CHARS
+    details: list[dict[str, Any]] = []
+    for candidate in candidates:
+        quote = candidate.quote[:max_quote]
+        if candidate.extraction_id != chunk.document.extraction_id:
+            details.append({"reason": EVIDENCE_EXTRACTION_MISMATCH,
+                            "cited_page": candidate.page_number})
+            continue
+        page = by_number.get(candidate.page_number)
+        if page is None:
+            details.append({"reason": EVIDENCE_PAGE_NOT_IN_CHUNK,
+                            "cited_page": candidate.page_number,
+                            "diagnosis": diagnose_missing_quote(
+                                texts, candidate.page_number, quote)})
+            continue
+        if locate_quote(page.text, quote) is None:
+            details.append({"reason": EVIDENCE_QUOTE_NOT_FOUND,
+                            "cited_page": candidate.page_number,
+                            "diagnosis": diagnose_missing_quote(
+                                texts, candidate.page_number, quote)})
+    return details
+
+
+def chunk_notes_of(parsed: Any) -> dict[str, list[int]] | None:
+    """Les pagines de les incerteses i notes que el model ha retornat per al chunk.
+
+    Nomes pagines (sense text). Abans es descartaven: una clausula que el model veu
+    indeterminada ha de quedar com a rastre, no desapareixer.
+    """
+    uncertainty = sorted({n.page_number for n in getattr(parsed, "uncertainties", []) or []
+                          if n.page_number is not None})
+    notes = sorted({n.page_number for n in getattr(parsed, "document_notes", []) or []
+                    if n.page_number is not None})
+    uncertain_without_page = sum(1 for n in getattr(parsed, "uncertainties", []) or []
+                                 if n.page_number is None)
+    if not (uncertainty or notes or uncertain_without_page):
+        return None
+    out: dict[str, Any] = {"uncertainty_pages": uncertainty, "document_note_pages": notes}
+    if uncertain_without_page:
+        out["uncertainties_without_page"] = uncertain_without_page
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Resolucio de lots                                                             #
 # --------------------------------------------------------------------------- #
@@ -1051,6 +1104,8 @@ async def analyze_tender_requirements(
     chunk_provider_errors: dict[int, dict[str, Any]] = {}
     # Per index de chunk, que s'ha descartat de la resposta i per que (codis).
     chunk_rejections: dict[int, list[dict[str, Any]]] = {}
+    # Per index de chunk, les pagines de les incerteses i notes del model (sense text).
+    chunk_notes: dict[int, dict[str, Any]] = {}
 
     if plan is not None:
         await _copy_reused_results(
@@ -1074,6 +1129,7 @@ async def analyze_tender_requirements(
             normalisations=chunk_normalisations,
             provider_errors=chunk_provider_errors,
             rejections=chunk_rejections,
+            notes=chunk_notes,
             reused=plan.reused if plan is not None else None,
             reused_from_run_id=str(plan.source.id) if plan is not None else None,
             not_sent_code=CHUNK_NOT_SENT,
@@ -1241,6 +1297,9 @@ async def analyze_tender_requirements(
         )
         if rejections:
             chunk_rejections[chunk.index] = rejections[:MAX_CHUNK_REJECTIONS]
+        notes = chunk_notes_of(parsed)
+        if notes:
+            chunk_notes[chunk.index] = notes
         run.chunks_completed += 1
         await _commit_chunk(
             session,
@@ -2059,13 +2118,14 @@ def _persist_chunk(
     for index, item in enumerate(parsed.requirements):
         evidence, reasons = validate_evidence_detailed(item.evidence, chunk)
         tally.evidence_rejected += len(reasons)
-        for reason in reasons:
-            record({"item": "requirement", "index": index, "stage": "evidence", "reason": reason})
+        for detail in evidence_rejection_details(item.evidence, chunk) if reasons else []:
+            record({"item": "requirement", "index": index, "stage": "evidence", **detail})
         if not evidence:
             # Sense cita verificable no es un requisit: nomes un candidat.
             tally.rejected += 1
             record({"item": "requirement", "index": index, "stage": "item",
-                    "reason": ITEM_NO_VALID_EVIDENCE})
+                    "reason": ITEM_NO_VALID_EVIDENCE,
+                    "obligation": str(item.obligation), "category": str(item.category)})
             continue
 
         key = requirement_dedup_key(
@@ -2138,9 +2198,8 @@ def _persist_chunk(
     for index, item in enumerate(parsed.award_criteria):
         evidence, reasons = validate_evidence_detailed(item.evidence, chunk)
         tally.evidence_rejected += len(reasons)
-        for reason in reasons:
-            record({"item": "award_criterion", "index": index, "stage": "evidence",
-                    "reason": reason})
+        for detail in evidence_rejection_details(item.evidence, chunk) if reasons else []:
+            record({"item": "award_criterion", "index": index, "stage": "evidence", **detail})
         if not evidence:
             tally.rejected += 1
             record({"item": "award_criterion", "index": index, "stage": "item",

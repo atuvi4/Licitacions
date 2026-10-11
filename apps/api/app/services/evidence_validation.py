@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 # Cometes i guions que els extractors de PDF barregen alegrement.
@@ -108,3 +109,43 @@ def locate_quote(page_text: str, quote: str) -> QuoteMatch | None:
 
 def quote_is_present(page_text: str, quote: str) -> bool:
     return locate_quote(page_text, quote) is not None
+
+
+# --------------------------------------------------------------------------- #
+# Diagnostic d'una cita rebutjada (nomes codis, mai text)                        #
+# --------------------------------------------------------------------------- #
+
+#: Caracters que nomes separen lletres d'una mateixa paraula (la ela geminada).
+_JOINERS = {"·": "", "•": ""}
+
+
+def _fold_accents(text: str) -> str:
+    """`normalize_quote` sense diacritics: nomes per DIAGNOSTICAR, mai per acceptar."""
+    decomposed = unicodedata.normalize("NFD", normalize_quote(text))
+    stripped = "".join(char for char in decomposed if unicodedata.category(char) != "Mn")
+    return "".join(_JOINERS.get(char, char) for char in stripped)
+
+
+def diagnose_missing_quote(pages: Mapping[int, str], cited_page: int, quote: str) -> str:
+    """Per que una cita no es literal a la pagina citada, en un codi sense text.
+
+    * `on_other_page:N`: es literal a una altra pagina del chunk (pagina equivocada).
+    * `accent_variant`: a la pagina citada hi es si s'ignoren accents i diacritics.
+    * `accent_variant_on_other_page:N`: el mateix, pero a una altra pagina.
+    * `absent`: no hi es enlloc del chunk (parafrasi o text inventat).
+
+    No canvia res del que s'accepta: una cita que no es literal es rebutja igualment.
+    """
+    others = [number for number in sorted(pages) if number != cited_page]
+    for number in others:
+        if quote_is_present(pages[number], quote):
+            return f"on_other_page:{number}"
+    folded = _fold_accents(quote)
+    if not folded:
+        return "absent"
+    if cited_page in pages and folded in _fold_accents(pages[cited_page]):
+        return "accent_variant"
+    for number in others:
+        if folded in _fold_accents(pages[number]):
+            return f"accent_variant_on_other_page:{number}"
+    return "absent"

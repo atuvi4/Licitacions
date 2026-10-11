@@ -1300,17 +1300,25 @@ class TestRebutjosPerElement:
 
         [chunk] = run.chunk_coverage["chunks"]
         assert run.requirements_extracted == 1
+        # Cada rebuig de cita diu la pagina citada i un diagnostic de codis (sense
+        # text); cada requisit descartat, l'obligacio i la categoria que deia el model.
+        item = {"obligation": "mandatory", "category": "economic_solvency"}
         assert chunk["rejections"] == [
-            {"item": "requirement", "index": 1, "stage": "evidence", "reason": "quote_not_found"},
-            {"item": "requirement", "index": 1, "stage": "item", "reason": "no_valid_evidence"},
-            {"item": "requirement", "index": 2, "stage": "evidence", "reason": "page_not_in_chunk"},
-            {"item": "requirement", "index": 2, "stage": "item", "reason": "no_valid_evidence"},
+            {"item": "requirement", "index": 1, "stage": "evidence", "reason": "quote_not_found",
+             "cited_page": 27, "diagnosis": "absent"},
+            {"item": "requirement", "index": 1, "stage": "item", "reason": "no_valid_evidence",
+             **item},
+            {"item": "requirement", "index": 2, "stage": "evidence", "reason": "page_not_in_chunk",
+             "cited_page": 99, "diagnosis": "on_other_page:27"},
+            {"item": "requirement", "index": 2, "stage": "item", "reason": "no_valid_evidence",
+             **item},
             {"item": "requirement", "index": 3, "stage": "evidence",
-             "reason": "extraction_mismatch"},
-            {"item": "requirement", "index": 3, "stage": "item", "reason": "no_valid_evidence"},
+             "reason": "extraction_mismatch", "cited_page": 27},
+            {"item": "requirement", "index": 3, "stage": "item", "reason": "no_valid_evidence",
+             **item},
             {"item": "requirement", "index": 4, "stage": "dedup", "reason": "duplicate_key"},
             {"item": "award_criterion", "index": 0, "stage": "evidence",
-             "reason": "quote_not_found"},
+             "reason": "quote_not_found", "cited_page": 28, "diagnosis": "absent"},
             {"item": "award_criterion", "index": 0, "stage": "item",
              "reason": "no_valid_evidence"},
         ]
@@ -1331,7 +1339,15 @@ class TestRebutjosPerElement:
         coverage = json.dumps(run.chunk_coverage, ensure_ascii=False)
         assert secret not in coverage
         [chunk] = run.chunk_coverage["chunks"]
-        assert all(set(r) == {"item", "index", "stage", "reason"} for r in chunk["rejections"])
+        # Nomes codis, enters i enums: cap camp de text lliure.
+        allowed = {"item", "index", "stage", "reason", "cited_page", "diagnosis", "obligation",
+                   "category"}
+        assert all(set(r) <= allowed for r in chunk["rejections"])
+        assert all(
+            isinstance(value, int) or value in {"absent", "accent_variant"}
+            or str(value).startswith(("on_other_page:", "accent_variant_on_other_page:"))
+            for r in chunk["rejections"] for key, value in r.items() if key == "diagnosis"
+        )
 
     async def test_un_chunk_sense_rebutjos_no_en_porta_cap(self, session, analyzable):
         extraction_id = analyzable["extraction"].id
