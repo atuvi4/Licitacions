@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -102,6 +102,10 @@ class TenderFilters:
     deadline_to: datetime | None = None
     has_lots: bool | None = None
     only_open: bool = False
+    # Estat accionable «En termini» (revisio 3B-2, F2): NO es l'estat cru de la
+    # font. Publicada (`open`, PLACSP `PUB`) I termini conegut posterior a ara,
+    # per instant exacte. Sense termini, mai; un estat final de la font, mai.
+    in_term: bool = False
     source: list[str] | None = None
     source_removed: bool | None = None
 
@@ -164,6 +168,11 @@ class TenderFilters:
             clauses.append(Tender.deadline_at <= self.deadline_to)
         if self.only_open:
             clauses.append(Tender.deadline_at >= sa.func.now())
+        if self.in_term:
+            # La mateixa regla que `deadline_has_passed`: l'instant, no el dia.
+            # `deadline_at > ara` exclou els nuls (termini desconegut).
+            clauses.append(Tender.status == TenderStatus.OPEN)
+            clauses.append(Tender.deadline_at > datetime.now(UTC))
         if self.has_lots is not None:
             # Lots vigents, com `lot_count`: un lot retirat de la font ja no hi es.
             exists = (
@@ -355,6 +364,11 @@ def tender_filters(
     deadline_to: datetime | None = Query(default=None),
     has_lots: bool | None = Query(default=None),
     only_open: bool = Query(default=False, description="Nomes amb termini encara obert"),
+    in_term: bool = Query(
+        default=False,
+        description="Estat accionable «En termini»: publicada i termini conegut posterior a ara "
+        "(per instant). No es l'estat cru de la font",
+    ),
     source: list[str] | None = Query(
         default=None, description="Codis de font tal com estan desats (`Source.code`)"
     ),
@@ -380,6 +394,7 @@ def tender_filters(
         deadline_to=deadline_to,
         has_lots=has_lots,
         only_open=only_open,
+        in_term=in_term,
         source=source,
         source_removed=source_removed,
     )

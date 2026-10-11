@@ -2,8 +2,9 @@
 
 import { X } from "lucide-react";
 
-import type { CatalogueFilters, Filters } from "@/app/(app)/licitacions/query";
+import { IN_TERM_STATUS, type CatalogueFilters, type Filters } from "@/app/(app)/licitacions/query";
 import { formatDate, formatMoney } from "@/lib/format";
+import { IN_TERM_LABEL } from "@/lib/labels";
 import {
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
@@ -42,11 +43,16 @@ function chipLabels(facets: TenderFacets | null | undefined): Record<string, (va
     deadline_to: (value) => `Termini fins a: ${formatDate(value)}`,
     contract_type: (value) => `Tipus de contracte: ${labelOf(CONTRACT_TYPE_LABELS, value, "Tipus desconegut")}`,
     procedure_type: (value) => `Procediment: ${labelOf(PROCEDURE_TYPE_LABELS, value, "Tipus desconegut")}`,
-    status: (value) => `Estat: ${labelOf(TENDER_STATUS_LABELS, value, "Estat desconegut")}`,
+    // F2: «En termini» és l'estat accionable; la resta són estats crus de la font.
+    status: (value) =>
+      value === IN_TERM_STATUS
+        ? `Estat: ${IN_TERM_LABEL}`
+        : `Estat a la font: ${labelOf(TENDER_STATUS_LABELS, value, "Estat desconegut")}`,
     source: (value) => `Font: ${sourceLabel(value, facets?.sources) ?? value}`,
     source_removed: (value) => (value === "true" ? "Ja no disponible a la font" : "Encara disponible a la font"),
     has_lots: (value) => (value === "true" ? "Amb lots" : "Sense lots"),
-    only_open: () => "Només amb termini obert",
+    // C3: no és l'estat «En termini»; només mira el termini.
+    only_open: () => "Termini obert (qualsevol estat de la font)",
   };
 }
 

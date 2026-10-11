@@ -5,7 +5,10 @@ import type { TenderMatchListItem } from "@/lib/matching";
 import type { WorkspaceSummary } from "@/lib/workspace";
 
 const get = vi.fn();
-vi.mock("@/lib/api", () => ({ api: { get: (...args: unknown[]) => get(...args) } }));
+const post = vi.fn();
+vi.mock("@/lib/api", () => ({
+  api: { get: (...args: unknown[]) => get(...args), post: (...args: unknown[]) => post(...args) },
+}));
 vi.mock("@/components/SessionProvider", () => ({ useSession: () => ({ companyId: "c1" }) }));
 
 import AvuiPage from "./page";
@@ -87,7 +90,7 @@ function matchItem(id: string, title: string, deadline: string | null): TenderMa
   };
 }
 
-const summary = { total_tenders: 148, actionable: 100, candidates: 12, high_fit: 5, low_fit: 3, excluded: 1, closed: 2, insufficient_data: 1, stale: 0, rules_version: "v1", last_calculated_at: null };
+const summary = { total_tenders: 148, evaluated_count: 148, actionable: 100, candidates: 12, high_fit: 5, low_fit: 3, excluded: 1, closed: 2, insufficient_data: 1, stale: 0, rules_version: "v1", last_calculated_at: null };
 const profile = { company: { id: "c1", legal_name: "Demo", trade_name: null }, completeness: { score: 96, sections: [] }, counts: { services: 1, territories: 1, financial_years: 1, certifications: 1, registrations: 1, insurances: 1, people: 1, qualifications: 1, cpv_preferences: 9, projects: 1, documents: 1, document_links: 1 }, expiry_alerts: [] };
 
 function respondWith(map: Record<string, unknown | Deferred | Error>) {
@@ -110,6 +113,7 @@ const flush = () => act(async () => { await new Promise((resolve) => setTimeout(
 describe("Avui", () => {
   beforeEach(() => {
     get.mockReset();
+    post.mockReset();
   });
 
   it("mentre carrega pinta l'esquelet amb el títol real i cap recompte", async () => {
@@ -161,11 +165,47 @@ describe("Avui", () => {
     expect(screen.getByRole("link", { name: /Veure les 12 a Oportunitats/ }).getAttribute("href")).toBe("/licitacions?match_status=candidate");
   });
 
+  it("F1: amb el perfil complet però cap licitació avaluada diu que el Radar no s'ha calculat i ofereix calcular-lo", async () => {
+    respondWith({
+      "/companies/c1/workspaces": [],
+      "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
+      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 46, evaluated_count: 0, actionable: 0, low_fit: 0, excluded: 0, closed: 0, insufficient_data: 0, high_fit: 0 },
+      "/companies/c1/summary": profile,
+    });
+    post.mockResolvedValue({ tenders_evaluated: 46, lots_evaluated: 0, created: 46, updated: 0, duration_ms: 10, rules_version: "v1" });
+    render(<AvuiPage />);
+    expect(await screen.findByRole("heading", { name: "El Radar encara no s'ha calculat" })).toBeTruthy();
+    expect(screen.getByText(/0 candidates de 46 licitacions: el Radar encara no s'ha calculat/)).toBeTruthy();
+    // unknown ≠ no: cap «cap coincidència», cap culpa al perfil, cap «amplia».
+    expect(document.body.textContent).not.toMatch(/cap coincidència|encaixa amb el perfil|no té CPV|amplia/);
+    expect(screen.getByText(/Radar encara no calculat \(46 licitacions\)/)).toBeTruthy();
+    const calls = get.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Calcula el pre-fit" }));
+    await flush();
+    expect(post).toHaveBeenCalledWith("/companies/c1/matches/recalculate", {});
+    expect(get.mock.calls.length).toBeGreaterThan(calls);
+  });
+
+  it("F1: amb candidatures i el Radar sense calcular, el bloc del Radar no diu «cap coincidència» i ofereix el càlcul", async () => {
+    respondWith({
+      "/companies/c1/workspaces": [workspace({ id: "w1", tender_title: "Fibra òptica municipal", days_remaining: 6 })],
+      "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
+      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 46, evaluated_count: 0 },
+      "/companies/c1/summary": profile,
+    });
+    render(<AvuiPage />);
+    expect(await screen.findByText("Fibra òptica municipal")).toBeTruthy();
+    const radar = screen.getByText("Candidates del Radar").closest("section")!;
+    expect(radar.textContent).toContain("0 candidates de 46 licitacions: el Radar encara no s'ha calculat");
+    expect(radar.textContent).not.toMatch(/cap coincidència|no té CPV/);
+    expect(radar.querySelector("button")?.textContent).toBe("Calcula el pre-fit");
+  });
+
   it("sense cap candidatura ni cap candidata: «0 candidates de N licitacions» amb la causa del perfil i la sortida al Radar (A17, B1)", async () => {
     respondWith({
       "/companies/c1/workspaces": [],
       "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
-      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336 },
+      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336, evaluated_count: 17336 },
       "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0, territories: 0, contract_preferences: 0 } },
     });
     render(<AvuiPage />);
@@ -178,16 +218,16 @@ describe("Avui", () => {
     expect(document.body.textContent).not.toMatch(/\d+ ?% /);
   });
 
-  it("amb perfil però sense cap candidata, la causa és «cap coincidència» i el total es diu igualment", async () => {
+  it("amb perfil i licitacions avaluades però cap candidata, la causa és «cap coincidència» entre les avaluades", async () => {
     respondWith({
       "/companies/c1/workspaces": [],
       "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
-      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336 },
+      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336, evaluated_count: 120 },
       "/companies/c1/summary": profile,
     });
     render(<AvuiPage />);
     expect(await screen.findByRole("heading", { name: "Encara no hi ha res a la cua" })).toBeTruthy();
-    expect(screen.getByText(/0 candidates de 17\.336 licitacions: cap coincidència/)).toBeTruthy();
+    expect(screen.getByText(/0 candidates de 17\.336 licitacions: cap coincidència entre les 120 avaluades/)).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Completa el perfil/ })).toBeNull();
   });
 
@@ -195,7 +235,7 @@ describe("Avui", () => {
     respondWith({
       "/companies/c1/workspaces": [workspace({ id: "w1", tender_title: "Fibra òptica municipal", days_remaining: 6 })],
       "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
-      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336 },
+      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336, evaluated_count: 17336 },
       "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0, territories: 0, contract_preferences: 0 } },
     });
     render(<AvuiPage />);

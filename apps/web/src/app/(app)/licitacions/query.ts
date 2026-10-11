@@ -1,5 +1,6 @@
+import { IN_TERM_LABEL } from "@/lib/labels";
 import type { MatchStatus, MatchSummary } from "@/lib/matching";
-import { buildQuery } from "@/lib/tenders";
+import { TENDER_STATUS_LABELS, buildQuery, labelOf } from "@/lib/tenders";
 
 /**
  * La consulta del feed d'Oportunitats, extreta de la pàgina (handoff L6) per
@@ -8,6 +9,36 @@ import { buildQuery } from "@/lib/tenders";
  */
 
 export const PAGE_SIZE = 25;
+
+/**
+ * Valor del filtre «Estat de la licitació» per a l'estat ACCIONABLE «En
+ * termini» (F2): viatja com a `in_term=true` (publicada i termini conegut
+ * posterior a ara, per instant, al backend), mai com a `status=open`, que és
+ * l'estat cru de la font i inclou les vençudes.
+ */
+export const IN_TERM_STATUS = "in_term";
+
+/**
+ * `only_open`: termini posterior a ara, SIGUI QUIN SIGUI l'estat de la font (C3).
+ * No és «En termini» (que també demana que la font la publiqui): el nom ho diu.
+ */
+export const ONLY_OPEN_LABEL = "Només amb termini obert (qualsevol estat de la font)";
+
+/** Els paràmetres del filtre d'estat: `in_term` o l'estat cru de la font. */
+export function statusParams(status: string): { status: string; in_term: true | undefined } {
+  return status === IN_TERM_STATUS ? { status: "", in_term: true } : { status, in_term: undefined };
+}
+
+/** «En termini» (accionable) primer; després els estats crus, dits com a estat de la font. */
+export function tenderStatusFilterOptions(statuses: string[] | undefined): Array<{ value: string; label: string }> {
+  return [
+    { value: IN_TERM_STATUS, label: IN_TERM_LABEL },
+    ...(statuses ?? []).map((value) => ({
+      value,
+      label: `${labelOf(TENDER_STATUS_LABELS, value, "Estat desconegut")} (estat de la font)`,
+    })),
+  ];
+}
 
 /**
  * Modes del feed.
@@ -81,6 +112,7 @@ export function feedQuery({
 }): string {
   return buildQuery({
     ...applied,
+    ...statusParams(applied.status),
     has_lots: applied.has_lots || undefined,
     only_open: applied.only_open || undefined,
     match_status: activeMode(mode).status,
@@ -199,7 +231,7 @@ export function catalogueQuery({
     deadline_to: applied.deadline_to ? `${applied.deadline_to}T23:59:59` : "",
     contract_type: applied.contract_type,
     procedure_type: applied.procedure_type,
-    status: applied.status,
+    ...statusParams(applied.status),
     source: applied.source,
     source_removed: applied.source_removed,
     sort,

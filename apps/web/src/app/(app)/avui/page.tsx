@@ -8,14 +8,15 @@ import { ScoreValue } from "@/components/PreFit";
 import { useSession } from "@/components/SessionProvider";
 import { Button, Card, CardHeader, ErrorState, LinkButton, PageHeader, PageSkeleton, Skeleton, StatusPill } from "@/components/ui";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { useResource } from "@/lib/hooks";
+import { api } from "@/lib/api";
+import { useMutation, useResource } from "@/lib/hooks";
 import {
   ELIGIBILITY_LABELS,
   RECOMMENDATION_LABELS,
   deadlineCountdownView,
   shortSummary,
 } from "@/lib/labels";
-import type { MatchSummary, TenderMatchListItem } from "@/lib/matching";
+import type { MatchSummary, RecalculationResult, TenderMatchListItem } from "@/lib/matching";
 import { buildQuery, type Page } from "@/lib/tenders";
 import type { DashboardSummary } from "@/lib/types";
 import type { WorkspaceSummary } from "@/lib/workspace";
@@ -101,20 +102,41 @@ function CountPill({ count }: { count: number }) {
   );
 }
 
+/** El recàlcul del pre-fit que ja existeix (`POST …/matches/recalculate`). */
+interface RadarCalculation {
+  run: () => void;
+  saving: boolean;
+  error: string | null;
+}
+
 /**
  * El bloc del Radar sense cap candidata oberta (A17): el 0 es diu sobre el
- * total de licitacions i amb la causa, i la sortida és on es resol.
+ * total de licitacions i amb la causa, i la sortida és on es resol. Sense cap
+ * licitació avaluada, la sortida és calcular-lo (F1).
  */
-function RadarEmpty({ radar, cause }: { radar: MatchSummary | null; cause: CandidatesCause | null }) {
+function RadarEmpty({
+  radar,
+  cause,
+  calculate,
+}: {
+  radar: MatchSummary | null;
+  cause: CandidatesCause | null;
+  calculate: RadarCalculation;
+}) {
   if (radar && radar.candidates > 0) {
     return <Nothing>Cap candidata amb termini obert · {candidatesLine(radar.candidates, radar.total_tenders)}.</Nothing>;
   }
   return (
     <div className="px-3.5 py-4 text-[13px] text-muted">
-      <p>{radar ? candidatesEmptyLine(radar.total_tenders, cause) : "Cap candidata"}.</p>
+      <p>{radar ? candidatesEmptyLine(radar.total_tenders, radar.evaluated_count, cause) : "Cap candidata"}.</p>
+      {calculate.error && <p className="mt-1 text-danger">{calculate.error}</p>}
       <p className="mt-1">
         Són {RADAR_NOTE}.{" "}
-        {cause === "profile" ? (
+        {cause === "not_evaluated" ? (
+          <Button size="sm" variant="secondary" loading={calculate.saving} onClick={calculate.run}>
+            Calcula el pre-fit
+          </Button>
+        ) : cause === "profile" ? (
           <Link href="/empresa/radar" className="text-brand-strong hover:text-accent-800">
             Defineix les preferències del Radar →
           </Link>
@@ -140,6 +162,8 @@ export default function AvuiPage() {
   // visibles (el mateix univers que «Totes» d'Oportunitats), A17.
   const radar = useResource<MatchSummary>(`${base}/matches/summary`);
 
+  const recalculation = useMutation();
+
   const reloadAll = useCallback(() => {
     void workspaces.reload();
     void fresh.reload();
@@ -147,15 +171,33 @@ export default function AvuiPage() {
     void radar.reload();
   }, [workspaces, fresh, profile, radar]);
 
+  const calculate: RadarCalculation = {
+    saving: recalculation.saving,
+    error: recalculation.error,
+    run: () => {
+      void (async () => {
+        const done = await recalculation.run(async () => {
+          await api.post<RecalculationResult>(`${base}/matches/recalculate`, {});
+        });
+        if (done) {
+          void fresh.reload();
+          void radar.reload();
+        }
+      })();
+    },
+  };
+
   const decisions = workspaces.data ? pendingDecisions(workspaces.data) : null;
   const blockers = workspaces.data ? openBlockers(workspaces.data) : null;
   const freshTotal = fresh.data ? fresh.data.total : undefined;
-  const cause = candidatesCause(profile.data?.counts);
+  // La causa del 0 surt del resum del Radar (avaluades), mai només del perfil (F1).
+  const cause = candidatesCause(radar.data, profile.data?.counts);
   const subtitle = todayLine(new Date(), {
     decisions: decisions?.length,
     warnings: blockers?.length,
     candidates: radar.data?.candidates,
     totalTenders: radar.data?.total_tenders,
+    evaluated: radar.data?.evaluated_count,
   });
 
   // Primera càrrega: l'esquelet amb el títol i la data reals, cap recompte.
@@ -185,12 +227,39 @@ export default function AvuiPage() {
   // amb la causa (A17). Cap mesurador de completitud ni «Completa el perfil»
   // (B1): la sortida són les Preferències del Radar.
   if (workspaces.data && workspaces.data.length === 0 && fresh.data && fresh.data.total === 0) {
-    const zero = radar.data ? candidatesEmptyLine(radar.data.total_tenders, cause) : "0 candidates";
+    const zero = radar.data
+      ? candidatesEmptyLine(radar.data.total_tenders, radar.data.evaluated_count, cause)
+      : "0 candidates";
+    const reading =
+      cause === "no_match"
+        ? ": ara mateix cap licitació oberta avaluada encaixa amb el perfil"
+        : cause === "insufficient_data"
+          ? ": les metadades de les licitacions avaluades no basten per opinar"
+          : "";
     return (
       <>
         <PageHeader title="Avui" description={subtitle} />
         <Card>
-          {cause === "profile" ? (
+          {cause === "not_evaluated" ? (
+            <EmptyState
+              icon={<Search aria-hidden strokeWidth={1.5} />}
+              title="El Radar encara no s'ha calculat"
+              description={`${zero}. Són ${RADAR_NOTE}: el pre-fit encara no s'ha calculat per a cap licitació, i per tant no se sap quines encaixen.`}
+              action={
+                <>
+                  {calculate.error && <p className="mb-2 text-[13px] text-danger">{calculate.error}</p>}
+                  <Button variant="primary" loading={calculate.saving} onClick={calculate.run}>
+                    Calcula el pre-fit
+                  </Button>
+                </>
+              }
+              secondary={
+                <LinkButton href="/licitacions" variant="secondary" size="md">
+                  Mira les oportunitats
+                </LinkButton>
+              }
+            />
+          ) : cause === "profile" ? (
             <EmptyState
               icon={<Search aria-hidden strokeWidth={1.5} />}
               title="Encara no sabem què busqueu"
@@ -210,7 +279,7 @@ export default function AvuiPage() {
             <EmptyState
               icon={<Search aria-hidden strokeWidth={1.5} />}
               title="Encara no hi ha res a la cua"
-              description={`${zero}. Són ${RADAR_NOTE}: ara mateix cap licitació oberta encaixa amb el perfil. Una candidatura es crea des d'una oportunitat, quan decidiu que val la pena mirar-la de prop.`}
+              description={`${zero}. Són ${RADAR_NOTE}${reading}. Una candidatura es crea des d'una oportunitat, quan decidiu que val la pena mirar-la de prop.`}
               action={
                 <LinkButton href="/licitacions" variant="primary" size="md">
                   Mira les oportunitats
@@ -343,7 +412,7 @@ export default function AvuiPage() {
         ) : !fresh.data ? (
           <GhostRows />
         ) : fresh.data.items.length === 0 ? (
-          <RadarEmpty radar={radar.data} cause={cause} />
+          <RadarEmpty radar={radar.data} cause={cause} calculate={calculate} />
         ) : (
           <>
             {fresh.data.items.map(({ tender, match }, index) => {

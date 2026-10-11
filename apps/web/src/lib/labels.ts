@@ -418,12 +418,20 @@ export interface TenderStatusView {
  */
 const DEADLINE_OVERRIDES_STATUS: ReadonlySet<string> = new Set(["open", "unknown"]);
 
+/** L'estat accionable «en termini» (F2): mai el nom d'un estat cru de la font. */
+export const IN_TERM_LABEL = "En termini";
+
 /**
- * L'estat vigent d'una licitació (A12): si el termini ja ha passat i la font
- * encara la publica com a oberta (o amb un estat desconegut), és «Fora de
- * termini» i l'estat cru es mostra a part («Estat a la font: …»). Si la font ja
- * diu anul·lada, adjudicada, resolta o pendent d'adjudicació, mana la font. Sense
- * termini vençut, l'estat de la font tal qual.
+ * L'estat vigent d'una licitació (A12, F2), separant l'estat accionable
+ * (derivat per Tuvi) de l'estat cru de la font (provenance):
+ * - termini conegut i passat amb la font encara «publicada» (o amb un estat
+ *   desconegut) → «Fora de termini», i l'estat cru a part («Estat a la font:
+ *   Publicada»). El venciment és per instant (`isDeadlinePassed`), no per dia.
+ * - publicada amb termini conegut i futur → «En termini».
+ * - publicada sense termini conegut → «Publicada»: mai s'afirma «En termini».
+ * - un estat final de la font (anul·lada, adjudicada, resolta, pendent
+ *   d'adjudicació) mana tal qual.
+ * Ho filtra igual el backend (`in_term`).
  */
 export function tenderStatusView(tender: { status: string; deadline_at: string | null }, now: Date = new Date()): TenderStatusView {
   const source = labelOf(TENDER_STATUS_LABELS, tender.status, "Estat desconegut");
@@ -431,6 +439,11 @@ export function tenderStatusView(tender: { status: string; deadline_at: string |
   const deadlineRules = !known || DEADLINE_OVERRIDES_STATUS.has(tender.status);
   if (deadlineRules && isDeadlinePassed(tender.deadline_at, now)) {
     return { label: "Fora de termini", level: "neutral", sourceStatus: source };
+  }
+  if (tender.status === "open") {
+    return tender.deadline_at
+      ? { label: IN_TERM_LABEL, level: TENDER_STATUS_LEVEL.open, sourceStatus: null }
+      : { label: source, level: "neutral", sourceStatus: null };
   }
   const level = known ? TENDER_STATUS_LEVEL[tender.status as TenderStatus] : "neutral";
   return { label: source, level, sourceStatus: null };

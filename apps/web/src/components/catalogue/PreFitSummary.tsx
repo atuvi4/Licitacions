@@ -1,18 +1,40 @@
 import { ScoreValue } from "@/components/PreFit";
-import { StatusPill } from "@/components/ui";
+import { Button, StatusPill } from "@/components/ui";
 import { MATCH_STATUS_LABELS, shortSummary, type TenderMatch } from "@/lib/matching";
 
 /**
- * L'únic avís de pre-fit sense calcular d'una llista (A9): a la capçalera, amb la
- * condició del perfil, i no un «Sense calcular» a cada fila.
+ * L'únic avís de pre-fit sense calcular d'una llista (A9): a la capçalera, i no un
+ * «Sense calcular» a cada fila. Diu el fet (no s'ha calculat) i ofereix el
+ * recàlcul que ja existeix; no n'atribueix la causa al perfil, perquè la llista
+ * no sap per què no s'ha calculat (revisió 3B-2, F3).
  */
-export function PreFitUncalculatedNotice({ count }: { count: number }) {
+export function PreFitUncalculatedNotice({
+  count,
+  onCalculate,
+  calculating = false,
+  error = null,
+}: {
+  count: number;
+  onCalculate?: () => void;
+  calculating?: boolean;
+  error?: string | null;
+}) {
   if (count === 0) return null;
   return (
-    <p role="status" className="border-b border-border bg-subtle px-3.5 py-2 text-[13px] text-muted">
-      El pre-fit no s&apos;ha calculat per a {count} {count === 1 ? "licitació" : "licitacions"} d&apos;aquesta pàgina: només es
-      calcula quan el perfil té CPV, territoris o preferències de contracte.
-    </p>
+    <div
+      role="status"
+      className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-subtle px-3.5 py-2 text-[13px] text-muted"
+    >
+      <p>
+        El pre-fit no s&apos;ha calculat per a {count} {count === 1 ? "licitació" : "licitacions"} d&apos;aquesta pàgina.
+        {error && <span className="block text-danger">{error}</span>}
+      </p>
+      {onCalculate && (
+        <Button size="sm" variant="secondary" loading={calculating} onClick={onCalculate}>
+          Calcula el pre-fit
+        </Button>
+      )}
+    </div>
   );
 }
 

@@ -78,6 +78,8 @@ export interface TenderMatchListItem {
 
 export interface MatchSummary {
   total_tenders: number;
+  /** Licitacions visibles amb pre-fit calculat. 0 = el Radar encara no s'ha calculat. */
+  evaluated_count: number;
   actionable: number;
   candidates: number;
   high_fit: number;
@@ -257,4 +259,29 @@ export interface PrefitProfileCounts {
 export function prefitProfileReady(counts: PrefitProfileCounts | null | undefined): boolean | null {
   if (!counts) return null;
   return counts.cpv_preferences + counts.territories + (counts.contract_preferences ?? 0) > 0;
+}
+
+/** Per què el Radar té 0 candidates (revisió 3B-2, F1). */
+export type CandidatesCause = "not_evaluated" | "profile" | "insufficient_data" | "no_match";
+
+/**
+ * La causa d'un 0 candidates, UNA sola funció per a Avui i per a Oportunitats ›
+ * Radar. `null` si no hi ha cap 0 a explicar o el resum del Radar no ha arribat.
+ *
+ * - Cap licitació avaluada → `not_evaluated`, sigui com sigui el perfil.
+ * - Avaluades i el perfil SENSE CPV, territoris NI preferències de contracte
+ *   (`prefitProfileReady === false`) → `profile`: és cert i és la raó. Amb
+ *   territoris però sense CPV, la causa del perfil no està demostrada.
+ * - Totes les avaluades sense dades suficients → `insufficient_data`.
+ * - Si no → `no_match`.
+ */
+export function candidatesCause(
+  radar: Pick<MatchSummary, "evaluated_count" | "candidates" | "insufficient_data"> | null | undefined,
+  profile?: PrefitProfileCounts | null,
+): CandidatesCause | null {
+  if (!radar || radar.candidates > 0) return null;
+  if (radar.evaluated_count === 0) return "not_evaluated";
+  if (prefitProfileReady(profile) === false) return "profile";
+  if (radar.insufficient_data === radar.evaluated_count) return "insufficient_data";
+  return "no_match";
 }

@@ -86,8 +86,10 @@ from app.services.requirement_chunking import Chunk, build_chunks
 #: tornar-lo a ensenyar. v2: prerequisits de §6.1 i cost en dolars (Task 8).
 PLANNING_VERSION = "analysis-planning-v2"
 
-#: Versio de la forma de `prerequisites`.
-PREREQUISITES_VERSION = "quote-prerequisites-v1"
+#: Versio de la forma de `prerequisites`. v2 (revisio 3B-2, F10): `package.status`
+#: es `unknown` (no `incomplete`) quan nomes falta la classificacio vigent. Entra a
+#: la identitat del preview: una quota desada amb v1 no es confirma, es re-ensenya.
+PREREQUISITES_VERSION = "quote-prerequisites-v2"
 
 PACKAGE_INCOMPLETE = "package_incomplete"
 QUALITY_UNKNOWN = "quality_unknown"
@@ -311,6 +313,24 @@ async def _package_issues(
     return issues, has_run
 
 
+#: Motius que nomes diuen que el paquet NO S'HA COMPROVAT, no que hi falti res.
+UNVERIFIED_PACKAGE_CODES = frozenset({"classification_not_current"})
+
+
+def _package_status(issues: list[dict[str, Any]], *, has_run: bool, public: bool) -> str:
+    """L'estat del paquet a la quota (revisio 3B-2, F10): unknown != incomplet.
+
+    Sense classificacio vigent i cap altre motiu, el paquet es `unknown`: no se
+    sap si hi falta res. El bloqueig (`package_incomplete` sense acceptacio,
+    §6.1.3) no canvia: nomes el que se'n diu.
+    """
+    if any(issue["code"] not in UNVERIFIED_PACKAGE_CODES for issue in issues):
+        return "incomplete"
+    if issues:
+        return "unknown"
+    return "complete" if has_run or not public else "unknown"
+
+
 async def _quality(
     session: AsyncSession, current: AnalysisInput
 ) -> tuple[QaStatus, list[dict[str, Any]]]:
@@ -438,9 +458,7 @@ async def _prerequisites(
         "model_pinned": llm_budget.MODEL_NOT_PINNED not in provider_failures,
         "price_known": price is not None,
         "package": {
-            "status": "incomplete"
-            if issues
-            else ("complete" if has_run or not public else "unknown"),
+            "status": _package_status(issues, has_run=has_run, public=public),
             "issues": issues,
             "accepted": bool(issues) and preview.accept_incomplete_package,
         },

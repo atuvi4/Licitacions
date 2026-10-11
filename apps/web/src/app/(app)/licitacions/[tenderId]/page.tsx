@@ -965,7 +965,7 @@ function TenderDetail() {
           <Card>
             <CardHeader
               title="Publicacions de la font"
-              description="Cada vegada que la font publica aquest expedient en queda una còpia, amb el seu hash i la seva data. Que hi hagi una publicació nova no vol dir que hagi canviat res: què ha canviat de veritat es veu a «Historial de canvis»."
+              description="Cada vegada que la font publica aquest expedient en queda una còpia, amb el seu hash i la seva data. Que hi hagi una publicació nova no vol dir que hagi canviat res: què ha canviat de veritat es veu a «Com ha evolucionat l'expedient», a la part «Publicat per la font»."
             />
             <div className="grid gap-4 border-b border-border px-5 py-4 sm:grid-cols-4">
               <Fact label="Vista per primer cop">{formatDateTime(data.first_seen_at)}</Fact>

@@ -18,6 +18,7 @@ import {
   hasAmountFilter,
   modeFromParam,
   tabFromParams,
+  tenderStatusFilterOptions,
   type CatalogueFilters,
   type Filters,
 } from "./query";
@@ -226,5 +227,33 @@ describe("«Totes»: el contracte de consulta del catàleg", () => {
     expect(tabFromParams(params("vista=revisar"))).toBe("revisar");
     expect(tabFromParams(params("vista=totes&match_status=candidate"))).toBe("totes");
     expect(tabFromParams(params("vista=inventada"))).toBe("totes");
+  });
+});
+
+describe("F2: «En termini» és l'estat accionable, no l'estat cru de la font", () => {
+  it("el valor `in_term` del filtre d'estat viatja com a `in_term=true`, mai com a `status=open`", () => {
+    const feed = new URLSearchParams(feedQuery({ applied: { ...EMPTY_FILTERS, status: "in_term" }, mode: "all", sort: "score", offset: 0 }));
+    expect(feed.get("in_term")).toBe("true");
+    expect(feed.has("status")).toBe(false);
+    const catalogue = new URLSearchParams(catalogueQuery({ applied: { ...EMPTY_CATALOGUE_FILTERS, status: "in_term" }, offset: 0 }));
+    expect(catalogue.get("in_term")).toBe("true");
+    expect(catalogue.has("status")).toBe(false);
+  });
+
+  it("un estat cru de la font continua sent `status=`", () => {
+    const catalogue = new URLSearchParams(catalogueQuery({ applied: { ...EMPTY_CATALOGUE_FILTERS, status: "awarded" }, offset: 0 }));
+    expect(catalogue.get("status")).toBe("awarded");
+    expect(catalogue.has("in_term")).toBe(false);
+  });
+
+  it("les opcions del filtre: «En termini» (accionable) primer i els estats crus amb el seu nom de font", () => {
+    const options = tenderStatusFilterOptions(["open", "awarded", "cancelled"]);
+    expect(options[0]).toEqual({ value: "in_term", label: "En termini" });
+    expect(options.slice(1)).toEqual([
+      { value: "open", label: "Publicada (estat de la font)" },
+      { value: "awarded", label: "Adjudicada (estat de la font)" },
+      { value: "cancelled", label: "Anul·lada (estat de la font)" },
+    ]);
+    expect(options.filter((option) => option.label === "En termini")).toHaveLength(1);
   });
 });

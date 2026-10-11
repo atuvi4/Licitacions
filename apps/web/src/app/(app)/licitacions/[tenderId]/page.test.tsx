@@ -180,6 +180,10 @@ describe("Fitxa de licitació", () => {
     fireEvent.click(screen.getByRole("tab", { name: /Historial/ }));
     expect(await screen.findByTestId("history")).toBeTruthy();
     expect(screen.getByText("Publicacions de la font")).toBeTruthy();
+    // F8: el text apunta a la secció que existeix ara, no a l'antic «Historial de canvis».
+    const publications = screen.getByText("Publicacions de la font").closest("section")!;
+    expect(publications.textContent).toContain("«Com ha evolucionat l'expedient»");
+    expect(publications.textContent).not.toContain("«Historial de canvis»");
   });
 
   it("Plecs: taula amb document, text extret, lectura i acció; cap codi intern com a text; C-1 dit clarament", async () => {
@@ -340,6 +344,32 @@ describe("Fitxa de licitació", () => {
     expect(get.mock.calls.filter((call) => call[0] === "/companies/c1/matches/by-tender/t1").length).toBeGreaterThan(1);
   });
 
+  it.each([
+    ["només territoris", { cpv_preferences: 0, territories: 2, contract_preferences: 0 }],
+    ["només preferències de contracte", { cpv_preferences: 0, territories: 0, contract_preferences: 1 }],
+    ["CPV i territoris", { cpv_preferences: 4, territories: 1, contract_preferences: 0 }],
+  ])("C5: perfil amb dades (%s) i sense càlcul → «Encara no s'ha calculat» + «Calcula'l ara», mai la condició del perfil", async (_name, counts) => {
+    respondWith(base({
+      "/companies/c1/matches/by-tender/t1": notFound(),
+      "/companies/c1/summary": { counts },
+    }));
+    const { container } = render(<TenderDetailPage />);
+    expect(await screen.findByRole("button", { name: "Calcula'l ara" })).toBeTruthy();
+    expect(screen.getByText("Encara no s'ha calculat")).toBeTruthy();
+    expect(container.textContent).not.toContain("El pre-fit només es calcula quan el perfil té");
+  });
+
+  it("C5: només amb el perfil realment buit diu la condició del perfil, i sense botó de càlcul", async () => {
+    respondWith(base({
+      "/companies/c1/matches/by-tender/t1": notFound(),
+      "/companies/c1/summary": { counts: { cpv_preferences: 0, territories: 0, contract_preferences: 0 } },
+    }));
+    const { container } = render(<TenderDetailPage />);
+    expect(await screen.findByText("El pre-fit només es calcula quan el perfil té CPV, territoris o preferències de contracte")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Calcula'l ara" })).toBeNull();
+    expect(container.textContent).not.toContain("Encara no s'ha calculat");
+  });
+
   it("Objecte: sense descripció publicada diu «Objecte no publicat al feed» i no fa servir el títol", async () => {
     respondWith(base({ "/tenders/t1": { ...detail, description: null } }));
     render(<TenderDetailPage />);
@@ -497,7 +527,9 @@ describe("Fitxa de licitació", () => {
     await screen.findByRole("heading", { level: 1 });
     const header = container.querySelector("[data-tender-header]")!;
     expect(header.textContent).toContain("Fora de termini");
-    expect(header.textContent).toContain("Estat a la font: En termini");
+    // F2: l'estat cru es diu «Publicada»; «En termini» no apareix enlloc de la fitxa.
+    expect(header.textContent).toContain("Estat a la font: Publicada");
+    expect(container.textContent).not.toContain("En termini");
     const pills = [...header.querySelectorAll("[data-level]")].map((pill) => pill.textContent?.trim());
     expect(pills).not.toContain("En termini");
   });

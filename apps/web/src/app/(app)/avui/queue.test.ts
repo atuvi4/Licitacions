@@ -112,20 +112,54 @@ describe("candidates del Radar (A17: prioritzades pel Radar, no licitacions inge
     expect(candidatesLine(3, 1)).toBe("3 candidates de 1 licitació");
   });
 
-  it("la causa del 0: sense CPV, territoris ni preferències de contracte és el perfil; si no, cap coincidència", () => {
-    expect(candidatesCause({ cpv_preferences: 0, territories: 0, contract_preferences: 0 })).toBe("profile");
-    expect(candidatesCause({ cpv_preferences: 4, territories: 0, contract_preferences: 0 })).toBe("no_match");
-    expect(candidatesCause({ cpv_preferences: 0, territories: 1, contract_preferences: 0 })).toBe("no_match");
-    expect(candidatesCause({ cpv_preferences: 0, territories: 0, contract_preferences: 1 })).toBe("no_match");
-    expect(candidatesCause(null)).toBeNull();
-    expect(candidatesCause(undefined)).toBeNull();
+  const EMPTY_PROFILE = { cpv_preferences: 0, territories: 0, contract_preferences: 0 };
+  const FULL_PROFILE = { cpv_preferences: 4, territories: 2, contract_preferences: 1 };
+  const radar = (evaluated: number, candidates = 0, insufficient = 0) => ({
+    evaluated_count: evaluated,
+    candidates,
+    insufficient_data: insufficient,
+  });
+
+  it("F1: sense cap avaluació la causa és «no calculat», tant si el perfil és complet com si és buit", () => {
+    expect(candidatesCause(radar(0), FULL_PROFILE)).toBe("not_evaluated");
+    expect(candidatesCause(radar(0), EMPTY_PROFILE)).toBe("not_evaluated");
+    expect(candidatesCause(radar(0), null)).toBe("not_evaluated");
+  });
+
+  it("amb avaluacions: el perfil buit, les dades insuficients o cap coincidència, mai deduït només del perfil", () => {
+    expect(candidatesCause(radar(46), FULL_PROFILE)).toBe("no_match");
+    expect(candidatesCause(radar(46, 0, 10), FULL_PROFILE)).toBe("no_match");
+    expect(candidatesCause(radar(46, 0, 46), FULL_PROFILE)).toBe("insufficient_data");
+    expect(candidatesCause(radar(46), EMPTY_PROFILE)).toBe("profile");
+    // Amb candidates no hi ha cap 0 a explicar; sense resum del Radar no s'afirma res.
+    expect(candidatesCause(radar(46, 3), FULL_PROFILE)).toBeNull();
+    expect(candidatesCause(null, FULL_PROFILE)).toBeNull();
+    expect(candidatesCause(undefined, EMPTY_PROFILE)).toBeNull();
   });
 
   it("el buit explica el 0 amb la causa, amb les paraules exactes", () => {
-    expect(candidatesEmptyLine(17336, "profile")).toBe("0 candidates de 17.336 licitacions: el perfil no té CPV/territoris");
-    expect(candidatesEmptyLine(17336, "no_match")).toBe("0 candidates de 17.336 licitacions: cap coincidència");
-    // Sense causa coneguda (el resum del perfil no ha arribat) no s'afirma res.
-    expect(candidatesEmptyLine(17336, null)).toBe("0 candidates de 17.336 licitacions");
+    expect(candidatesEmptyLine(46, 0, "not_evaluated")).toBe("0 candidates de 46 licitacions: el Radar encara no s'ha calculat");
+    expect(candidatesEmptyLine(17336, 17336, "profile")).toBe("0 candidates de 17.336 licitacions: el perfil no té CPV/territoris");
+    expect(candidatesEmptyLine(17336, 120, "no_match")).toBe("0 candidates de 17.336 licitacions: cap coincidència entre les 120 avaluades");
+    expect(candidatesEmptyLine(46, 1, "no_match")).toBe("0 candidates de 46 licitacions: cap coincidència entre l'única avaluada");
+    expect(candidatesEmptyLine(46, 46, "insufficient_data")).toBe("0 candidates de 46 licitacions: dades insuficients a les 46 avaluades");
+    // Sense causa coneguda no s'afirma res.
+    expect(candidatesEmptyLine(17336, 0, null)).toBe("0 candidates de 17.336 licitacions");
     expect(RADAR_NOTE).toBe("candidates prioritzades pel Radar, no licitacions ingerides");
+  });
+
+  it("F1: «no calculat» mai diu «cap coincidència» ni culpa el perfil", () => {
+    const line = candidatesEmptyLine(46, 0, candidatesCause(radar(0), FULL_PROFILE));
+    expect(line).not.toMatch(/cap coincidència|perfil|CPV|territoris|amplia/);
+  });
+
+  it("la línia del dia no compta candidates mentre el Radar no s'ha calculat", () => {
+    const date = new Date(2026, 8, 16, 10, 0, 0);
+    expect(todayLine(date, { decisions: 0, warnings: 0, candidates: 0, totalTenders: 46, evaluated: 0 })).toBe(
+      "Dimecres 16 de setembre · 0 decisions pendents, 0 avisos, Radar encara no calculat (46 licitacions)",
+    );
+    expect(todayLine(date, { decisions: 0, warnings: 0, candidates: 0, totalTenders: 46, evaluated: 46 })).toContain(
+      "0 candidates de 46 licitacions",
+    );
   });
 });

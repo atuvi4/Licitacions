@@ -103,30 +103,33 @@ describe("enllaços i textos fixos per àrea", () => {
     expect(listNames(["A", "B", "C", "D", "E", "F", "G"])).toBe("A, B, C, D i 3 més");
   });
 
-  it("l'acció depèn de l'estat real: afegir, afegir-hi dades o revisar; mai «completar» (B1)", () => {
+  it("l'acció depèn de l'estat real: afegir o revisar; una àrea amb dades mai demana «afegir-hi» ni «completar» (B1, F12)", () => {
     expect(areaActionLabel(section("registrations", "empty"))).toBe(AREA_META.registrations.add);
-    expect(areaActionLabel(section("experience", "partial"))).toBe("Afegeix-hi dades");
+    expect(areaActionLabel(section("experience", "partial"))).toBe("Revisa");
     expect(areaActionLabel(section("cpv", "complete"))).toBe("Revisa");
     expect(areaActionLabel(section("desconeguda", "empty"))).toBe("Afegeix-hi dades");
-    expect(areaActionLabel(section("experience", "partial"))).not.toMatch(/Completa/);
+    expect(areaActionLabel(section("experience", "partial"))).not.toMatch(/Completa|Afegeix/);
   });
 });
 
 describe("groupAreas", () => {
-  it("agrupa per estat, en ordre sense dada → incompleta → al dia, i plega les que estan al dia", () => {
+  it("F12: només «Sense dada» i «Amb dades»; cap grup «Amb dada incompleta» ni «Al dia»", () => {
     const groups = groupAreas(SECTIONS);
-    expect(groups.map((group) => group.key)).toEqual(["empty", "partial", "complete"]);
-    expect(groups.map((group) => group.label)).toEqual(["Sense dada", "Amb dada incompleta", "Al dia"]);
-    expect(groups[0].tint).toBe("blocking");
+    expect(groups.map((group) => group.key)).toEqual(["empty", "with_data"]);
+    expect(groups.map((group) => group.label)).toEqual(["Sense dada", "Amb dades"]);
+    // C4: «Sense dada» en to neutre: cap tint vermell.
+    expect(groups[0].tint).toBeUndefined();
     expect(groups[0].rows.map((row) => row.key)).toEqual(["registrations", "insurances"]);
+    // Les àrees amb dades (també les que el servidor marca «partial») es veuen juntes, sense plegar.
     expect(groups[1].collapsed).toBeFalsy();
-    expect(groups[2].collapsed).toBe(true);
+    expect(groups[1].rows.map((row) => row.key)).toContain("experience");
     expect(groups.reduce((sum, group) => sum + group.rows.length, 0)).toBe(SECTIONS.length);
+    expect(groups.map((group) => group.label).join(" ")).not.toMatch(/incompleta|Al dia/);
   });
 
   it("no pinta cap grup buit", () => {
     const groups = groupAreas(SECTIONS.filter((item) => item.status !== "empty"));
-    expect(groups.map((group) => group.key)).toEqual(["partial", "complete"]);
+    expect(groups.map((group) => group.key)).toEqual(["with_data"]);
   });
 });
 
@@ -139,11 +142,11 @@ describe("línies de context", () => {
     expect(profileContext("Empresa Demo Telecom SL", 11, null)).toBe("Empresa Demo Telecom SL · 11 àrees");
   });
 
-  it("el peu compta les àrees que demanen atenció, sense cap percentatge de completitud (B1)", () => {
-    expect(footerLine(SECTIONS)).toBe("4 àrees demanen atenció · 7 al dia");
-    expect(footerLine(SECTIONS.map((item) => ({ ...item, status: "complete" as const })))).toBe("Les 11 àrees estan al dia");
-    expect(footerLine([section("cpv", "empty"), ...SECTIONS.slice(1, 3)])).toBe("1 àrea demana atenció · 2 al dia");
-    expect(footerLine(SECTIONS)).not.toMatch(/%/);
+  it("F12: el peu compta de manera neutra (amb dades / sense dada), sense «demanen atenció» ni «al dia» (B1)", () => {
+    expect(footerLine(SECTIONS)).toBe("9 àrees amb dades · 2 sense dada");
+    expect(footerLine(SECTIONS.map((item) => ({ ...item, status: "complete" as const })))).toBe("Les 11 àrees tenen dades");
+    expect(footerLine([section("cpv", "empty"), ...SECTIONS.slice(1, 3)])).toBe("2 àrees amb dades · 1 sense dada");
+    expect(footerLine(SECTIONS)).not.toMatch(/%|atenció|al dia/);
   });
 
   it("emptyAreas dona el recompte i els noms de les àrees sense dada", () => {

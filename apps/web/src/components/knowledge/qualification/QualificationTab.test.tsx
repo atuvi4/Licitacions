@@ -144,7 +144,9 @@ describe("Qualificació i mitjans: estructura", () => {
     const titles = within(nav).getAllByRole("button").map((button) => button.querySelector("span")?.textContent);
     expect(titles).toEqual(["Solvència econòmica", "Experiència", "Assegurances", "Registres", "Persones", "Equips", "Recursos quantitatius"]);
     expect(within(nav).getByRole("button", { name: /Solvència econòmica/ }).getAttribute("aria-current")).toBe("true");
-    expect(within(nav).getByRole("button", { name: /Solvència econòmica/ }).textContent).toContain("2 fitxes · 1 per verificar");
+    // F13 (B2): declarat és un estat vàlid; les targetes compten de manera neutra, mai «N per verificar».
+    expect(within(nav).getByRole("button", { name: /Solvència econòmica/ }).textContent).toContain("2 fitxes · 1 verificada");
+    expect(nav.textContent).not.toMatch(/per verificar/);
     expect(container.textContent).not.toMatch(FORBIDDEN);
   });
 

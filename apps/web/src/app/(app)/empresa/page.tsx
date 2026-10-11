@@ -4,7 +4,6 @@ import Link from "next/link";
 
 import { useCompanyPath, useSession } from "@/components/SessionProvider";
 import {
-  Banner,
   Button,
   Card,
   CardHeader,
@@ -29,7 +28,6 @@ import {
   expiryRoute,
   footerLine,
   groupAreas,
-  listNames,
   profileContext,
   splitRadarSections,
 } from "./areas";
@@ -105,8 +103,9 @@ function RadarCard({ sections }: { sections: CompletenessSection[] }) {
               </Link>
               <p className="text-caption text-muted">{sentence(section.detail)}</p>
             </div>
-            <StatusPill level={COMPLETENESS_LEVEL[section.status]} size="sm" className="shrink-0">
-              {section.status === "empty" ? "Sense dada" : section.status === "partial" ? "Parcial" : "Definida"}
+            {/* Amb alguna dada és «Definida»: tenir menys codis dels «recomanats» no és cap mancança (F12). */}
+            <StatusPill level={section.status === "empty" ? COMPLETENESS_LEVEL.empty : COMPLETENESS_LEVEL.complete} size="sm" className="shrink-0">
+              {section.status === "empty" ? "Sense dada" : "Definida"}
             </StatusPill>
           </li>
         ))}
@@ -170,7 +169,6 @@ export default function ProfileHubPage() {
   const { radar, knowledge: sections } = splitRadarSections(completeness.sections);
   const empties = emptyAreas(sections);
   const groups = groupAreas(sections);
-  const firstEmptyKey = empties.first?.key;
   const updatedAt = company.data?.updated_at ?? null;
 
   const columns: Array<DataTableColumn<CompletenessSection>> = [
@@ -192,11 +190,8 @@ export default function ProfileHubPage() {
       key: "have",
       header: "Què hi tenim",
       width: "28%",
-      cell: (section) => (
-        <span className={section.status === "empty" ? "font-medium text-danger" : undefined}>
-          {sentence(section.detail)}
-        </span>
-      ),
+      // El text del servidor tal qual (ja neutre i amb accents a l'origen, C4); to neutre.
+      cell: (section) => <span>{sentence(section.detail)}</span>,
     },
     {
       key: "depends",
@@ -210,12 +205,8 @@ export default function ProfileHubPage() {
       width: "18%",
       align: "right",
       cell: (section) => (
-        <LinkButton
-          href={areaLink(section.key)}
-          variant={section.key === firstEmptyKey ? "primary" : "secondary"}
-          size="sm"
-          className={ACTION_CLASS}
-        >
+        // Cap acció primària: el perfil no és una llista de deures (MUST 4, C4).
+        <LinkButton href={areaLink(section.key)} variant="secondary" size="sm" className={ACTION_CLASS}>
           {areaActionLabel(section)}
         </LinkButton>
       ),
@@ -227,30 +218,14 @@ export default function ProfileHubPage() {
       <PageHeader
         title="El nostre perfil"
         description={profileContext(companyName, sections.length, updatedAt)}
-        actions={
-          empties.first ? (
-            <LinkButton href={areaLink(empties.first.key)} variant="primary" size="md">
-              {areaActionLabel(empties.first)}
-            </LinkButton>
-          ) : undefined
-        }
       />
 
-      {empties.first && (
-        <Banner
-          level="attention"
-          kicker={`${empties.count} ${empties.count === 1 ? "àrea" : "àrees"} sense dada`}
-          className="mb-4"
-          action={
-            <LinkButton href={areaLink(empties.first.key)} variant="secondary" size="sm">
-              Comença per {areaTitle(empties.first)}
-            </LinkButton>
-          }
-        >
-          <strong className="font-medium">{listNames(empties.names)}</strong>. Mentre no hi hagi
-          dada, els requisits que en depenen surten com a «sense dada», que no és ni un sí ni un
-          no. No cal omplir-ho tot: l&apos;evidència només es demana quan un plec l&apos;exigeix.
-        </Banner>
+      {/* C4: el que vol dir «sense dada», com a informació; cap bàner ni crida a completar. */}
+      {empties.count > 0 && (
+        <p className="mb-4 text-caption leading-5 text-muted">
+          Mentre una àrea no tingui dades, els requisits que en depenen surten com a «sense dada», que no és ni
+          un sí ni un no. No cal omplir-ho tot: l&apos;evidència només es demana quan un plec l&apos;exigeix.
+        </p>
       )}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">

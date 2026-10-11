@@ -45,7 +45,7 @@ describe("countPendingDecisions", () => {
 
 describe("openOpportunities", () => {
   const base = {
-    total_tenders: 9, actionable: 0, candidates: 0, high_fit: 0, low_fit: 0, excluded: 0,
+    total_tenders: 9, evaluated_count: 0, actionable: 0, candidates: 0, high_fit: 0, low_fit: 0, excluded: 0,
     closed: 0, insufficient_data: 0, stale: 0, rules_version: "v1",
   };
 

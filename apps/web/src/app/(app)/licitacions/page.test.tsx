@@ -78,7 +78,7 @@ function item(id: string, overrides: Partial<TenderMatchListItem["tender"]> = {}
   };
 }
 
-const summary: MatchSummary = { total_tenders: 148, actionable: 100, candidates: 12, high_fit: 5, low_fit: 30, excluded: 4, closed: 40, insufficient_data: 2, stale: 0, rules_version: "v1", last_calculated_at: "2026-09-15T00:00:00Z" };
+const summary: MatchSummary = { total_tenders: 148, evaluated_count: 88, actionable: 100, candidates: 12, high_fit: 5, low_fit: 30, excluded: 4, closed: 40, insufficient_data: 2, stale: 0, rules_version: "v1", last_calculated_at: "2026-09-15T00:00:00Z" };
 const facets: TenderFacets = { statuses: ["open", "awarded"], procedure_types: ["open"], contract_types: ["services", "works"], nuts_codes: ["ES511"], total_tenders: 148 };
 const profile = { company: { id: "c1", legal_name: "Demo", trade_name: null }, completeness: { score: 96, sections: [] }, counts: { services: 1, territories: 1, financial_years: 1, certifications: 1, registrations: 1, insurances: 1, people: 1, qualifications: 1, cpv_preferences: 9, projects: 1, documents: 1, document_links: 1 }, expiry_alerts: [] };
 
@@ -229,7 +229,7 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     const { container } = render(<TendersFeedPage />);
     await screen.findByText("Licitació t1");
     expect(container.querySelector("[data-cpv-match]")).toBeNull();
-    fireEvent.change(screen.getByLabelText("CPV"), { target: { value: "32" } });
+    fireEvent.change(screen.getByLabelText(/^CPV/), { target: { value: "32" } });
     fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
     await flush();
     expect(lastQuery()).toBe("cpv=32&match_status=candidate&sort=score&limit=25&offset=0");
@@ -244,7 +244,7 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     const details = container.querySelector("details")!;
     expect(details.open).toBe(false);
     expect(details.querySelector("summary")?.textContent).toContain("Filtres");
-    fireEvent.change(screen.getByLabelText("CPV"), { target: { value: "45314320" } });
+    fireEvent.change(screen.getByLabelText(/^CPV/), { target: { value: "45314320" } });
     fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
     await flush();
     expect(lastQuery()).toBe("cpv=45314320&match_status=candidate&sort=score&limit=25&offset=0");
@@ -266,20 +266,65 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     expect(push).toHaveBeenCalledWith("/licitacions/t1");
   });
 
-  it("buit en candidates sense CPV al perfil → B1 amb la sortida cap a les preferències del Radar", async () => {
+  it("buit en candidates amb el perfil realment buit (sense CPV, territoris ni preferències) → B1 amb la sortida cap a les preferències del Radar", async () => {
     search = "match_status=candidate";
-    respondWith(base([], 0, { "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0 } } }));
+    respondWith(base([], 0, {
+      "/companies/c1/matches/summary": { ...summary, candidates: 0 },
+      "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0, territories: 0, contract_preferences: 0 } },
+    }));
     const { container } = render(<TendersFeedPage />);
     expect(await screen.findByRole("heading", { name: "Encara no sabem què busqueu" })).toBeTruthy();
     expect(screen.getByRole("link", { name: /Defineix les preferències del Radar/ }).getAttribute("href")).toBe("/empresa/radar");
     expect(container.textContent).not.toMatch(/Completa el perfil|3 passos/);
   });
 
+  it("retoc: territoris sí, CPV no, avaluades > 0 i 0 candidates → no culpa el perfil (mateixa causa que Avui)", async () => {
+    search = "match_status=candidate";
+    respondWith(base([], 0, {
+      "/companies/c1/matches/summary": { ...summary, evaluated_count: 88, candidates: 0, insufficient_data: 2 },
+      "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0, territories: 2, contract_preferences: 0 } },
+    }));
+    const { container } = render(<TendersFeedPage />);
+    expect(await screen.findByRole("heading", { name: "Cap candidata ara mateix" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Encara no sabem què busqueu" })).toBeNull();
+    expect(container.textContent).not.toMatch(/no té CPV|Sense això no podem ordenar/);
+  });
+
+  it("F1: Radar amb el perfil complet però cap licitació avaluada → «El Radar encara no s'ha calculat» + càlcul, mai «ampliar»", async () => {
+    search = "match_status=candidate";
+    const zero = { ...summary, evaluated_count: 0, actionable: 0, candidates: 0, high_fit: 0, low_fit: 0, excluded: 0, closed: 0, insufficient_data: 0, total_tenders: 46 };
+    respondWith(base([], 0, { "/companies/c1/matches/summary": zero }));
+    post.mockResolvedValue({ tenders_evaluated: 46, lots_evaluated: 0, created: 46, updated: 0, duration_ms: 10, rules_version: "v1" });
+    const { container } = render(<TendersFeedPage />);
+    expect(await screen.findByRole("heading", { name: "El Radar encara no s'ha calculat" })).toBeTruthy();
+    expect(container.textContent).toContain("El pre-fit encara no s'ha calculat per a cap de les 46 licitacions");
+    expect(container.textContent).not.toMatch(/Cap candidata|ampliar|encaixa prou|Encara no sabem què busqueu/);
+    // Els comptadors de les vistes no pinten zeros que semblin resultats.
+    const views = screen.getByRole("group", { name: "Vistes" });
+    expect(within(views).getByRole("button", { name: /Prioritzades/ }).textContent).toBe("Prioritzades");
+    fireEvent.click(screen.getByRole("button", { name: "Calcula el pre-fit" }));
+    await flush();
+    expect(post).toHaveBeenCalledWith("/companies/c1/matches/recalculate", {});
+  });
+
+  it("F1: amb el perfil buit però cap avaluació, tampoc culpa el perfil: diu que no s'ha calculat", async () => {
+    search = "match_status=candidate";
+    respondWith(base([], 0, {
+      "/companies/c1/matches/summary": { ...summary, evaluated_count: 0, candidates: 0 },
+      "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0 } },
+    }));
+    render(<TendersFeedPage />);
+    expect(await screen.findByRole("heading", { name: "El Radar encara no s'ha calculat" })).toBeTruthy();
+  });
+
   it("buit en candidates amb CPV → «Cap candidata ara mateix» i «Mira les N obertes» passa a «Totes»", async () => {
     search = "match_status=candidate";
     respondWith(base([], 0));
-    render(<TendersFeedPage />);
+    const { container } = render(<TendersFeedPage />);
     expect(await screen.findByRole("heading", { name: "Cap candidata ara mateix" })).toBeTruthy();
+    // Avaluades i cap candidata: es diu entre quantes, i no es culpa el perfil (F1).
+    expect(container.textContent).toContain("Cap de les 88 licitacions avaluades encaixa prou amb el perfil declarat");
+    expect(container.textContent).not.toMatch(/ampliar/);
     fireEvent.click(screen.getByRole("button", { name: /Mira les 100 obertes/ }));
     await flush();
     expect(lastQuery()).toBe("only_open=true&sort=score&limit=25&offset=0");
@@ -427,6 +472,89 @@ describe("Oportunitats · Totes (catàleg complet)", () => {
     expect(screen.getByRole("list", { name: "Filtres actius" }).textContent).not.toContain("Text:");
   });
 
+  it("F2: el filtre «En termini» demana l'estat accionable (`in_term`), no l'estat cru `open`", async () => {
+    respondWith(base([item("t1")], 1, { "/companies/c1/tenders/facets": catalogueFacets }));
+    render(<TendersFeedPage />);
+    await screen.findByText("Licitació t1");
+    const select = screen.getByLabelText(/^Estat de la licitació/) as HTMLSelectElement;
+    const labels = [...select.options].map((option) => option.textContent);
+    expect(labels).toContain("En termini");
+    expect(labels).toContain("Publicada (estat de la font)");
+    expect(labels.filter((label) => label === "En termini")).toHaveLength(1);
+    fireEvent.change(select, { target: { value: "in_term" } });
+    fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
+    await flush();
+    expect(lastQuery()).toBe("mode=all&in_term=true&sort=published&limit=25&offset=0");
+    expect(screen.getByRole("list", { name: "Filtres actius" }).textContent).toContain("Estat: En termini");
+  });
+
+  it("C3: «termini obert» i «En termini» conviuen sense contradir-se: l'ajuda diu la diferència", async () => {
+    search = "vista=revisar";
+    respondWith(base([item("t1")], 1));
+    render(<TendersFeedPage />);
+    await screen.findByText("Licitació t1");
+    const checkbox = screen.getByRole("checkbox", { name: "Només amb termini obert (qualsevol estat de la font)" });
+    expect(checkbox).toBeTruthy();
+    const help = screen.getByText(/Inclou les licitacions amb termini posterior a ara/);
+    expect(help.textContent).toContain("«En termini»");
+    expect(screen.getByLabelText(/^Estat de la licitació/).closest("label")!.textContent).toContain(
+      "publicada i amb el termini encara obert",
+    );
+  });
+
+  it("F16: una paraula al CPV sense triar cap codi no s'aplica en silenci: avís visible, cap xip, cap `cpv=`", async () => {
+    respondWith(base([item("t1")], 46, {
+      "/companies/c1/tenders/facets": catalogueFacets,
+      "/cpv-codes": [{ code: "32562000", description: "Cables de fibra òptica" }],
+    }));
+    render(<TendersFeedPage />);
+    await screen.findByText("Licitació t1");
+    fireEvent.change(screen.getByLabelText(/^CPV/), { target: { value: "fibra" } });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    // Escriure «fibra» mostra opcions (nom + codi).
+    expect(screen.getByRole("button", { name: /32562000.*Cables de fibra òptica/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
+    await flush();
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("El filtre de CPV no s'ha aplicat");
+    expect(alert.textContent).toContain("«fibra»");
+    expect(lastQuery()).not.toContain("cpv=");
+    expect(screen.queryByRole("list", { name: "Filtres actius" })?.textContent ?? "").not.toContain("CPV");
+    // Triar l'opció aplica el codi amb xip visible i treu l'avís.
+    fireEvent.click(screen.getByRole("button", { name: /32562000/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
+    await flush();
+    expect(lastQuery()).toContain("cpv=32562000");
+    expect(screen.getByRole("list", { name: "Filtres actius" }).textContent).toContain("CPV: 32562000");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("F16: a la vista del Radar el CPV també és el cercador: una paraula no es converteix en xip ni en `cpv=fibra`", async () => {
+    search = "vista=revisar";
+    respondWith(base([item("t1")], 1, { "/cpv-codes": [{ code: "32562000", description: "Cables de fibra òptica" }] }));
+    render(<TendersFeedPage />);
+    await screen.findByText("Licitació t1");
+    fireEvent.change(screen.getByLabelText(/^CPV/), { target: { value: "fibra" } });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    expect(screen.getByRole("button", { name: /32562000/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
+    await flush();
+    expect(screen.getByRole("alert").textContent).toContain("El filtre de CPV no s'ha aplicat");
+    expect(lastQuery()).not.toContain("cpv=");
+    expect(document.body.textContent).not.toContain("CPV: fibra");
+  });
+
+  it("F2: a la vista del Radar, el filtre «En termini» també viatja com a `in_term=true`", async () => {
+    search = "vista=revisar";
+    respondWith(base([item("t1")], 1));
+    render(<TendersFeedPage />);
+    await screen.findByText("Licitació t1");
+    fireEvent.change(screen.getByLabelText(/^Estat de la licitació/), { target: { value: "in_term" } });
+    fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
+    await flush();
+    expect(lastQuery()).toBe("in_term=true&match_status=candidate&sort=score&limit=25&offset=0");
+  });
+
   it("amb text, «Ordena per rellevància» només canvia l'ordre i ho diu: cap resultat amagat (C6)", async () => {
     search = "q=fibra";
     respondWith(base([item("t1")], 1));
@@ -540,7 +668,15 @@ describe("Oportunitats · Totes (catàleg complet)", () => {
     expect(second.textContent).not.toContain("Pre-fit 0");
     const notices = screen.getAllByText(/El pre-fit no s'ha calculat per a 1 licitació/);
     expect(notices).toHaveLength(1);
-    expect(notices[0].textContent).toContain("CPV, territoris o preferències de contracte");
+    // F3: la franja no culpa el perfil (no se sap si és la causa); ofereix calcular-lo.
+    const notice = notices[0].closest("[role='status']")!;
+    expect(notice.textContent).not.toMatch(/CPV|territoris|perfil/);
+    post.mockResolvedValue({ tenders_evaluated: 2, lots_evaluated: 0, created: 1, updated: 1, duration_ms: 10, rules_version: "v1" });
+    const before = matchCalls().length;
+    fireEvent.click(within(notice as HTMLElement).getByRole("button", { name: "Calcula el pre-fit" }));
+    await flush();
+    expect(post).toHaveBeenCalledWith("/companies/c1/matches/recalculate", {});
+    expect(matchCalls().length).toBeGreaterThan(before);
 
     // Una sola acció a la targeta (D3).
     expect(within(first).getByRole("link", { name: "Obre la fitxa" }).getAttribute("href")).toBe("/licitacions/t1");

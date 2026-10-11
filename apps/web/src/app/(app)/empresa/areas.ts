@@ -134,10 +134,13 @@ export function areaLink(key: string): string {
   return SECTION_LINKS[key] ?? "/empresa";
 }
 
-/** Cap verb de «completar» (B1): afegir-hi dades o revisar-les, sense cap percentatge al darrere. */
+/**
+ * Cap verb de «completar» (B1): afegir-ne quan no n'hi ha cap, revisar-les quan
+ * n'hi ha. Una àrea amb dades declarades sense evidència no és cap tasca global
+ * (F12): l'evidència la demana una licitació concreta.
+ */
 export function areaActionLabel(section: Pick<CompletenessSection, "key" | "status">): string {
   if (section.status === "empty") return areaMeta(section.key).add;
-  if (section.status === "partial") return "Afegeix-hi dades";
   return "Revisa";
 }
 
@@ -163,24 +166,26 @@ export function splitRadarSections(sections: CompletenessSection[]): {
 }
 
 export interface AreaGroup {
-  key: CompletenessStatus;
+  key: "empty" | "with_data";
   label: string;
   rows: CompletenessSection[];
   tint?: RowTint;
   collapsed?: boolean;
 }
 
-const GROUP_ORDER: Array<Omit<AreaGroup, "rows">> = [
-  { key: "empty", label: "Sense dada", tint: "blocking" },
-  { key: "partial", label: "Amb dada incompleta" },
-  { key: "complete", label: "Al dia", collapsed: true },
+const GROUP_ORDER: Array<Omit<AreaGroup, "rows"> & { statuses: CompletenessStatus[] }> = [
+  // To neutre (C4): «Sense dada» és un fet, no una alarma ni una crida a completar.
+  { key: "empty", label: "Sense dada", statuses: ["empty"] },
+  // `partial` i `complete` del servidor són una mètrica de completitud (dada
+  // sense evidència = parcial): aquí no es separen ni es diuen «incompletes» (F12).
+  { key: "with_data", label: "Amb dades", statuses: ["partial", "complete"] },
 ];
 
-/** Grups per estat real, en ordre de gravetat; els grups buits no es pinten. */
+/** Dos grups de fet: sense cap dada o amb dades; els grups buits no es pinten. */
 export function groupAreas(sections: CompletenessSection[]): AreaGroup[] {
-  return GROUP_ORDER.map((group) => ({
+  return GROUP_ORDER.map(({ statuses, ...group }) => ({
     ...group,
-    rows: sections.filter((section) => section.status === group.key),
+    rows: sections.filter((section) => statuses.includes(section.status)),
   })).filter((group) => group.rows.length > 0);
 }
 
@@ -198,12 +203,15 @@ export function profileContext(companyName: string, areaCount: number, updatedAt
   return updatedAt ? `${base} · última modificació ${formatDate(updatedAt)}` : base;
 }
 
-/** Peu de la taula: compta àrees, mai un percentatge de completitud (B1). */
+/**
+ * Peu de la taula: compta àrees de manera neutra (amb dades / sense dada), mai
+ * un percentatge de completitud (B1) ni una llista de deures (F12).
+ */
 export function footerLine(sections: CompletenessSection[]): string {
-  const attention = sections.filter((section) => section.status !== "complete").length;
-  const upToDate = sections.length - attention;
-  if (attention === 0) return `Les ${sections.length} àrees estan al dia`;
-  return `${attention} ${attention === 1 ? "àrea demana" : "àrees demanen"} atenció · ${upToDate} al dia`;
+  const empty = sections.filter((section) => section.status === "empty").length;
+  const withData = sections.length - empty;
+  if (empty === 0) return `Les ${sections.length} àrees tenen dades`;
+  return `${withData} ${withData === 1 ? "àrea" : "àrees"} amb dades · ${empty} sense dada`;
 }
 
 function days(n: number): string {

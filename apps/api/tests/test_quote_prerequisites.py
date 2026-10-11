@@ -270,6 +270,33 @@ async def test_sense_classificacio_global_vigent_el_paquet_no_es_complet(
     assert preview.blocking_reason == "package_incomplete"
     codes = [issue["code"] for issue in preview.prerequisites["package"]["issues"]]
     assert codes == ["classification_not_current"]
+    # F10 (revisio 3B-2): no comprovat no vol dir que hi faltin documents. El
+    # bloqueig es el mateix (§6.1.3), pero l'estat del paquet es `unknown`.
+    assert preview.prerequisites["package"]["status"] == "unknown"
+
+
+async def test_sense_classificacio_vigent_i_amb_un_forat_el_paquet_es_incomplet(
+    session, tender_document, monkeypatch
+):
+    pin_real_model(monkeypatch)
+    plec = await _add_extracted_pages(session, tender_document, pages=2)
+    await set_quality(session, plec["extraction"], "good")
+    session.add(
+        TenderPackageGap(
+            tender_id=plec["document"].tender_id,
+            code=PackageGapCode.DECLARED_BY_OPERATOR,
+            producer=PackageGapProducer.OPERATOR,
+            detail={"note": "falta el DOC-03"},
+        )
+    )
+    await session.commit()
+
+    preview = await _preview(session, plec)
+
+    assert preview.blocking_reason == "package_incomplete"
+    codes = {issue["code"] for issue in preview.prerequisites["package"]["issues"]}
+    assert codes == {"classification_not_current", "package_gap"}
+    assert preview.prerequisites["package"]["status"] == "incomplete"
 
 
 async def test_un_plec_per_defecte_sense_text_bloqueja_package_incomplete(
@@ -484,6 +511,44 @@ async def test_els_prerequisits_formen_part_de_la_identitat_del_preview(
 
     replacement = caught.value.quote
     assert replacement.blocking_reason == "quality_warning"
+    old = await session.get(AnalysisQuote, quote.id, populate_existing=True)
+    assert old.status == AnalysisQuoteStatus.SUPERSEDED
+    assert await session.scalar(sa.select(sa.func.count(JobRequest.id))) == 0
+
+
+async def test_una_quota_desada_amb_la_semantica_antiga_del_paquet_no_es_reutilitza(
+    session, plec, tenant_a, monkeypatch
+):
+    """F10: el paquet `unknown` canvia la forma dels prerequisits (v2).
+
+    Una quota desada amb la versio anterior (on «sense comprovar» es deia
+    `incomplete`) no es pot confirmar tal qual: es torna a ensenyar.
+    """
+    pin_real_model(monkeypatch)
+    user, company = tenant_a
+    quote = await quote_service.create_quote(
+        session,
+        company_id=company.id,
+        user_id=user.id,
+        tender_id=plec["document"].tender_id,
+        provider_factory=RealNamedFake,
+    )
+    assert quote.allowed
+    assert quote.prerequisites["version"] != "quote-prerequisites-v1"
+    quote.prerequisites = {**quote.prerequisites, "version": "quote-prerequisites-v1"}
+    await session.commit()
+
+    with pytest.raises(quote_service.PreviewChangedError) as caught:
+        await quote_service.confirm_quote(
+            session,
+            company_id=company.id,
+            user_id=user.id,
+            role="owner",
+            quote_id=quote.id,
+            provider_factory=RealNamedFake,
+        )
+
+    assert caught.value.quote.prerequisites["version"] == "quote-prerequisites-v2"
     old = await session.get(AnalysisQuote, quote.id, populate_existing=True)
     assert old.status == AnalysisQuoteStatus.SUPERSEDED
     assert await session.scalar(sa.select(sa.func.count(JobRequest.id))) == 0

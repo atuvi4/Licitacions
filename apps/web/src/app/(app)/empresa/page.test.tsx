@@ -88,28 +88,24 @@ describe("El nostre perfil (hub)", () => {
     // Capçalera: empresa · N àrees de coneixement · última modificació (de GET /companies/{id}).
     expect(screen.getByText(/Empresa Demo Telecom SL · 9 àrees · última modificació/)).toBeTruthy();
 
-    // Bàner d'atenció amb els noms de les àrees buides i acció cap a la primera.
-    const banner = screen.getByRole("status");
-    expect(banner.textContent).toContain("2 àrees sense dada");
-    expect(banner.textContent).toContain("Registres i classificacions");
-    expect(banner.textContent).toContain("Assegurances");
-    expect(banner.querySelector("a")?.getAttribute("href")).toBe("/empresa/registres");
+    // C4 (MUST 4): cap bàner ni acció principal que cridi a completar les àrees buides.
+    expect(container.textContent).not.toMatch(/Comença per/);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(container.querySelector("a[data-variant='primary']")).toBeNull();
 
-    // Grups: «Al dia» plegat; en desplegar-lo, files = les 9 àrees de coneixement (sense CPV ni àmbit geogràfic).
+    // Grups (F12): «Sense dada» (to neutre, mai vermell) i «Amb dades»; files = les 9 àrees de coneixement.
     const table = container.querySelector("table")!;
-    expect(table.querySelectorAll("tbody p.font-medium").length).toBe(4);
-    expect(table.querySelectorAll("tbody tr[data-tint='blocking']").length).toBe(2);
-    fireEvent.click(screen.getByRole("button", { name: /Al dia/ }));
+    expect(table.querySelectorAll("tbody tr[data-tint]").length).toBe(0);
+    expect(table.querySelectorAll("tbody .text-danger").length).toBe(0);
+    expect(table.textContent).toContain("Sense dada");
     expect(table.querySelectorAll("tbody p.font-medium").length).toBe(SECTIONS.length - 2);
+    expect(container.textContent).not.toMatch(/Amb dada incompleta|Al dia/);
     expect(table.querySelector("a[href='/empresa/cpv']")).toBeNull();
     expect(table.querySelector("a[href='/empresa/territoris']")).toBeNull();
 
-    // Acció: primari només a la primera fila «Sense dada»; cada àrea porta a la seva pantalla.
+    // Acció: cap primària (no és una llista de deures); cada àrea porta a la seva pantalla.
     const actions = [...table.querySelectorAll("a[href]")];
-    const registrations = actions.find((a) => a.getAttribute("href") === "/empresa/registres")!;
-    expect(registrations.getAttribute("data-variant")).toBe("primary");
-    const insurances = actions.find((a) => a.getAttribute("href") === "/empresa/assegurances")!;
-    expect(insurances.getAttribute("data-variant")).not.toBe("primary");
+    expect(actions.some((a) => a.getAttribute("href") === "/empresa/registres")).toBe(true);
     expect(actions.some((a) => a.getAttribute("href") === "/empresa/dades")).toBe(true);
     expect(actions.some((a) => a.getAttribute("href") === "/experiencia")).toBe(true);
     expect(container.textContent).not.toMatch(/Completa-ho/);
@@ -120,8 +116,9 @@ describe("El nostre perfil (hub)", () => {
     for (const cell of depends) expect(cell.textContent).not.toMatch(/\d/);
     expect(container.textContent).not.toContain("Què desbloquejaries");
 
-    // Cap mesurador de completitud enlloc (B1): el peu només compta àrees.
-    expect(screen.getByText("4 àrees demanen atenció · 5 al dia")).toBeTruthy();
+    // Cap mesurador de completitud enlloc (B1): el peu només compta àrees, de manera neutra (F12).
+    expect(screen.getByText("7 àrees amb dades · 2 sense dada")).toBeTruthy();
+    expect(container.textContent).not.toMatch(/demanen atenció/);
     expect(container.textContent).not.toMatch(/%/);
     expect(container.textContent).not.toMatch(/completitud/i);
 
@@ -143,6 +140,40 @@ describe("El nostre perfil (hub)", () => {
     expect(expiries.querySelector("a[href='/empresa/assegurances']")).not.toBeNull();
   });
 
+  it("F12/C4: els textos del servidor (ja neutres i amb accents a l'origen) es mostren tal qual; cap «dada incompleta» ni deure", async () => {
+    // Els textos exactes de `services/completeness.py` (test_dashboard ho fixa al backend).
+    const serverSections: CompletenessSection[] = [
+      { ...section("general", "Dades generals", "complete", "12 de 12 camps informats") },
+      { ...section("services", "Serveis", "partial", "1 servei actiu"), ratio: 0.33 },
+      { ...section("territories", "Àmbit geogràfic", "partial", "1 territori on es vol treballar"), ratio: 0.5 },
+      { ...section("cpv", "CPV", "partial", "2 CPV d'interès actius"), ratio: 0.66 },
+      { ...section("certifications", "Certificacions", "partial", "2 certificacions · 1 amb evidència documental · 1 declarada"), ratio: 0.75, requires_evidence: true },
+      { ...section("registrations", "Registres i classificacions", "partial", "1 registre · declarat"), ratio: 0.5, requires_evidence: true },
+      { ...section("experience", "Experiència", "partial", "3 projectes · 2 amb evidència documental · 1 declarat"), ratio: 0.83, requires_evidence: true },
+    ];
+    respondWith({
+      "/companies/c1/summary": { ...summary, completeness: { score: 61, sections: serverSections }, expiry_alerts: [] },
+      "/companies/c1": company,
+    });
+    const { container } = render(<ProfileHubPage />);
+    expect(await screen.findByText("Registres i classificacions")).toBeTruthy();
+    const text = container.textContent ?? "";
+    expect(text).not.toMatch(/Amb dada incompleta|demanen atenció|demana atenció|Afegeix-hi dades/);
+    expect(text).not.toMatch(/sense evidencia|sense evidència|certificacio\(s\)|evidencia\b|interes\b|recomanats/);
+    expect(text).toContain("2 certificacions · 1 amb evidència documental · 1 declarada");
+    expect(text).toContain("1 registre · declarat");
+    expect(text).toContain("3 projectes · 2 amb evidència documental · 1 declarat");
+    expect(text).toContain("2 CPV d'interès actius");
+    // L'estat d'una àrea amb dades és informació: l'acció és «Revisa», mai un deure.
+    const table = container.querySelector("table")!;
+    const registrations = [...table.querySelectorAll("a[href='/empresa/registres']")];
+    expect(registrations.map((a) => a.textContent)).toEqual(["Revisa"]);
+    expect(screen.getByText("Les 5 àrees tenen dades")).toBeTruthy();
+    // El Radar: dades definides, sense «Parcial» per tenir menys codis dels «recomanats».
+    const radar = screen.getByRole("heading", { name: "Preferències del Radar" }).closest("section")!;
+    expect(radar.textContent).not.toContain("Parcial");
+  });
+
   it("un perfil a zero no té cap benvinguda d'onboarding: les mateixes àrees, el bàner i el Radar a part (B1)", async () => {
     respondWith({
       "/companies/c1/summary": { ...summary, completeness: { score: 0, sections: SECTIONS.map((item) => ({ ...item, status: "empty" as const, detail: "cap dada" })) }, expiry_alerts: [] },
@@ -152,8 +183,11 @@ describe("El nostre perfil (hub)", () => {
     expect(await screen.findByText("Registres i classificacions")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: /Tres coses del perfil/ })).toBeNull();
     expect(container.textContent).not.toMatch(/Per començar|uns 10 minuts|3 passos|%/);
-    const banner = screen.getByRole("status");
-    expect(banner.textContent).toContain("9 àrees sense dada");
+    // C4: les àrees buides surten al grup «Sense dada», en to neutre, sense bàner que cridi a completar.
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(container.textContent).not.toMatch(/Comença per/);
+    expect(container.querySelector("table")!.textContent).toContain("Sense dada");
+    expect(container.querySelectorAll("tbody tr[data-tint]").length).toBe(0);
     const radar = screen.getByRole("heading", { name: "Preferències del Radar" }).closest("section")!;
     expect(radar.textContent).toMatch(/cap dada/i);
     expect(radar.textContent).toContain("Sense dada");

@@ -244,6 +244,37 @@ export interface TenderPackage {
   section_status: Record<string, SectionStatus>;
 }
 
+/**
+ * Motius de la quota (`prerequisites.package.issues`) que només diuen que el
+ * paquet NO S'HA COMPROVAT, no que hi falti res (`analysis_planning._package_issues`).
+ */
+const UNVERIFIED_PACKAGE_ISSUES: ReadonlySet<string> = new Set(["classification_not_current"]);
+
+/**
+ * La cobertura del paquet, UNA sola semàntica per a la quota i per a Plecs (F10):
+ * - `incomplete` només amb forats explícits (els `gaps` de la fitxa o un motiu de
+ *   la quota que no sigui «sense comprovar»);
+ * - `unknown` quan no s'ha comprovat (classificació no vigent) o no se sap: mai
+ *   es converteix en «falten documents»;
+ * - `complete` quan la classificació vigent no hi troba cap forat.
+ * `issueCodes`: els codis de la quota, quan n'hi ha; manen sobre la fitxa.
+ */
+export function packageCoverageState(pkg: TenderPackage | null | undefined, issueCodes?: string[]): PackageStatus {
+  if (issueCodes && issueCodes.length > 0) {
+    return issueCodes.some((code) => !UNVERIFIED_PACKAGE_ISSUES.has(code)) ? "incomplete" : "unknown";
+  }
+  if (!pkg) return "unknown";
+  if (pkg.status === "incomplete" && pkg.gaps.length === 0) return "unknown";
+  return pkg.status;
+}
+
+/** El text de cada estat de cobertura: el mateix a la quota i a Plecs. */
+export const PACKAGE_COVERAGE_TEXT: Record<PackageStatus, string> = {
+  complete: "Paquet verificat: segons la classificació vigent no falta cap document del plec.",
+  incomplete: "Falten documents",
+  unknown: "Encara no s'ha verificat si el paquet documental és complet.",
+};
+
 /** D'on surt el rol efectiu d'un document (`RoleSource` del servidor). */
 export type RoleSource = "classifier" | "person" | "operator" | "global_classifier" | "feed" | "stale_override";
 
@@ -400,7 +431,9 @@ export function sourceLabel(code: string | null | undefined, sources?: SourceFac
 
 export const TENDER_STATUS_LABELS: Record<TenderStatus, string> = {
   pre_announcement: "Anunci previ",
-  open: "En termini",
+  // Estat CRU de la font (PLACSP `PUB`): un fet, no un judici temporal. «En
+  // termini» és l'estat accionable derivat del termini (`tenderStatusView`, F2).
+  open: "Publicada",
   pending_award: "Pendent d'adjudicació",
   awarded: "Adjudicada",
   resolved: "Resolta",

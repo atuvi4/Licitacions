@@ -19,8 +19,9 @@ import { PreFitUncalculatedNotice } from "@/components/catalogue/PreFitSummary";
 import { useSession } from "@/components/SessionProvider";
 import { Button, Card, ErrorState, LoadingRows, Select } from "@/components/ui";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { useResource } from "@/lib/hooks";
-import type { TenderMatchListItem } from "@/lib/matching";
+import { api } from "@/lib/api";
+import { useMutation, useResource } from "@/lib/hooks";
+import type { RecalculationResult, TenderMatchListItem } from "@/lib/matching";
 import type { CataloguePage, TenderFacets } from "@/lib/tenders";
 
 const INGEST_COMMAND = "python -m app.ingestion.sync --source placsp_agregadas --max-pages 2";
@@ -83,6 +84,16 @@ export function CatalogueView() {
     companyId ? `/companies/${companyId}/matches?${query}` : null,
   );
   const facets = useResource<TenderFacets>(companyId ? `/companies/${companyId}/tenders/facets` : null);
+  // El recàlcul que ja existeix, des de la franja «no s'ha calculat» (F3).
+  const recalculation = useMutation();
+
+  async function recalculate() {
+    if (!companyId) return;
+    const done = await recalculation.run(async () => {
+      await api.post<RecalculationResult>(`/companies/${companyId}/matches/recalculate`, {});
+    });
+    if (done) await list.reload();
+  }
 
   const items = list.data?.items ?? [];
   const total = list.data?.total ?? 0;
@@ -270,7 +281,12 @@ export function CatalogueView() {
           renderEmpty()
         ) : (
           <>
-            <PreFitUncalculatedNotice count={items.filter(({ match }) => !match).length} />
+            <PreFitUncalculatedNotice
+              count={items.filter(({ match }) => !match).length}
+              onCalculate={() => void recalculate()}
+              calculating={recalculation.saving}
+              error={recalculation.error}
+            />
             <div role="list" aria-label="Licitacions del catàleg" aria-busy={list.loading}>
               {items.map(({ tender, match }) => (
                 <div role="listitem" key={tender.id}>

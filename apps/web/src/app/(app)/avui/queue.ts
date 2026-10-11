@@ -1,6 +1,6 @@
 import { isPendingDecision } from "@/components/shell/counts";
 import { ELIGIBILITY_HINTS, ELIGIBILITY_LABELS, WARNING_LABELS, type Level } from "@/lib/labels";
-import type { DashboardSummary } from "@/lib/types";
+import { candidatesCause, type CandidatesCause } from "@/lib/matching";
 import type { WorkspaceSummary } from "@/lib/workspace";
 
 /**
@@ -57,21 +57,16 @@ export function blockerReasons(workspace: WorkspaceSummary): BlockerReason[] {
 
 /**
  * Les «candidates» són el que el Radar ha prioritzat amb el perfil, no les
- * licitacions ingerides: sense CPV, territoris ni preferències de contracte
- * el Radar no pot prioritzar res i el 0 s'explica per aquí; amb perfil, el 0
- * vol dir que cap licitació hi coincideix. El total (`summary.total_tenders`)
+ * licitacions ingerides. El 0 té quatre lectures diferents i la causa surt
+ * del resum del Radar (`evaluated_count` i els recomptes per estat), mai només
+ * del perfil (revisió 3B-2, F1): sense cap licitació avaluada, el Radar
+ * encara no s'ha calculat (unknown ≠ no). El total (`summary.total_tenders`)
  * és l'univers visible per a l'empresa: el mateix «Totes» d'Oportunitats.
  */
 export const RADAR_NOTE = "candidates prioritzades pel Radar, no licitacions ingerides";
 
-export type CandidatesCause = "profile" | "no_match";
-
-export const CANDIDATES_CAUSE_TEXT: Record<CandidatesCause, string> = {
-  profile: "el perfil no té CPV/territoris",
-  no_match: "cap coincidència",
-};
-
-type RadarProfileCounts = Pick<DashboardSummary["counts"], "cpv_preferences" | "territories" | "contract_preferences">;
+// La causa del 0 és UNA sola funció compartida amb Oportunitats › Radar (`lib/matching`).
+export { candidatesCause, type CandidatesCause };
 
 const COUNT = new Intl.NumberFormat("ca-ES");
 
@@ -88,17 +83,28 @@ export function candidatesLine(candidates: number, totalTenders: number): string
   return `${plural(candidates, "candidata", "candidates")} de ${plural(totalTenders, "licitació", "licitacions")}`;
 }
 
-/** Per què hi ha 0 candidates; `null` mentre el resum del perfil no ha arribat. */
-export function candidatesCause(counts: RadarProfileCounts | null | undefined): CandidatesCause | null {
-  if (!counts) return null;
-  const empty = counts.cpv_preferences === 0 && counts.territories === 0 && counts.contract_preferences === 0;
-  return empty ? "profile" : "no_match";
+function evaluatedPhrase(evaluated: number): string {
+  return evaluated === 1 ? "l'única avaluada" : `les ${formatCount(evaluated)} avaluades`;
 }
 
-/** «0 candidates de 17.336 licitacions: el perfil no té CPV/territoris». Sense causa coneguda, no s'afirma res. */
-export function candidatesEmptyLine(totalTenders: number, cause: CandidatesCause | null): string {
+/** El text de cada causa, amb les avaluades quan la causa en parla. */
+export function candidatesCauseText(cause: CandidatesCause, evaluated: number): string {
+  switch (cause) {
+    case "not_evaluated":
+      return "el Radar encara no s'ha calculat";
+    case "profile":
+      return "el perfil no té CPV/territoris";
+    case "insufficient_data":
+      return `dades insuficients a ${evaluatedPhrase(evaluated)}`;
+    case "no_match":
+      return `cap coincidència entre ${evaluatedPhrase(evaluated)}`;
+  }
+}
+
+/** «0 candidates de 46 licitacions: el Radar encara no s'ha calculat». Sense causa coneguda, no s'afirma res. */
+export function candidatesEmptyLine(totalTenders: number, evaluated: number, cause: CandidatesCause | null): string {
   const line = candidatesLine(0, totalTenders);
-  return cause ? `${line}: ${CANDIDATES_CAUSE_TEXT[cause]}` : line;
+  return cause ? `${line}: ${candidatesCauseText(cause, evaluated)}` : line;
 }
 
 export interface QueueCounts {
@@ -106,6 +112,8 @@ export interface QueueCounts {
   warnings?: number;
   candidates?: number;
   totalTenders?: number;
+  /** Licitacions amb pre-fit calculat; amb 0 la línia no compta candidates. */
+  evaluated?: number;
 }
 
 /** «Dimecres 16 de setembre · 3 decisions pendents, 5 avisos, 12 candidates de 17.336 licitacions». */
@@ -121,5 +129,9 @@ export function todayLine(date: Date, counts: QueueCounts): string {
   ) {
     return `${day} · comptant la feina pendent…`;
   }
-  return `${day} · ${plural(counts.decisions, "decisió pendent", "decisions pendents")}, ${plural(counts.warnings, "avís", "avisos")}, ${candidatesLine(counts.candidates, counts.totalTenders)}`;
+  const radar =
+    counts.evaluated === 0
+      ? `Radar encara no calculat (${plural(counts.totalTenders, "licitació", "licitacions")})`
+      : candidatesLine(counts.candidates, counts.totalTenders);
+  return `${day} · ${plural(counts.decisions, "decisió pendent", "decisions pendents")}, ${plural(counts.warnings, "avís", "avisos")}, ${radar}`;
 }

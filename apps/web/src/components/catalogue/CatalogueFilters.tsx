@@ -3,13 +3,16 @@
 import { Search, SlidersHorizontal } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
-import { countCatalogueFilters, type CatalogueFilters as Filters } from "@/app/(app)/licitacions/query";
+import {
+  countCatalogueFilters,
+  tenderStatusFilterOptions,
+  type CatalogueFilters as Filters,
+} from "@/app/(app)/licitacions/query";
 import { Button, Field, Input, Select } from "@/components/ui";
 import { api } from "@/lib/api";
 import {
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
-  TENDER_STATUS_LABELS,
   buildQuery,
   labelOf,
   type TenderFacets,
@@ -33,9 +36,19 @@ interface CpvOption {
  * o paraula de la descripció del catàleg) i triar una opció posa el codi al
  * filtre; escriure dígits fixa directament un codi o un prefix (`4531` troba
  * tot el que hi comença). El filtre s'aplica SEMPRE pel codi (addendum 3B-2,
- * C3): el text sol no filtra res, i es diu.
+ * C3): el text sol no filtra res, i es diu. `onUnresolved` avisa el formulari
+ * del text que no és cap codi ni cap opció triada, perquè en aplicar-lo ho
+ * digui en lloc d'ignorar-lo en silenci (F16).
  */
-function CpvLookup({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+export function CpvLookup({
+  value,
+  onChange,
+  onUnresolved,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onUnresolved?: (text: string | null) => void;
+}) {
   const listId = useId();
   const [text, setText] = useState(value);
   const [options, setOptions] = useState<CpvOption[]>([]);
@@ -80,6 +93,10 @@ function CpvLookup({ value, onChange }: { value: string; onChange: (value: strin
 
   // Text que no és cap codi i encara no s'ha resolt en un codi: no filtra.
   const typedWord = text.trim() !== "" && !/^[\d\s-]+$/.test(text.trim()) && text.trim() !== value;
+  const unresolved = typedWord ? text.trim() : null;
+  useEffect(() => {
+    onUnresolved?.(unresolved);
+  }, [unresolved, onUnresolved]);
 
   return (
     <div className="relative">
@@ -131,6 +148,20 @@ function CpvLookup({ value, onChange }: { value: string; onChange: (value: strin
   );
 }
 
+/**
+ * F16: en aplicar els filtres amb una paraula al CPV que no s'ha resolt en cap
+ * codi, es diu que el CPV no s'ha aplicat (i no surt cap xip). Mai en silenci.
+ */
+export function CpvNotApplied({ text, className }: { text: string | null; className?: string }) {
+  if (!text) return null;
+  return (
+    <p role="alert" className={`border border-warning/25 bg-warning-soft px-3.5 py-2 text-[13px] text-ink ${className ?? ""}`}>
+      <strong className="font-semibold">El filtre de CPV no s&apos;ha aplicat:</strong> «{text}» no és cap codi CPV. Tria&apos;n
+      un de la llista de suggeriments o escriu un codi o prefix (4531…).
+    </p>
+  );
+}
+
 const optionsOf = (values: string[] | undefined, labels: Record<string, string>, kind: string) =>
   (values ?? []).map((value) => ({
     value,
@@ -163,8 +194,16 @@ export function CatalogueFilters({
   const advancedCount = countCatalogueFilters({ ...filters, q: "" });
   const sources = (facets?.sources ?? []).map((source) => ({ value: source.code, label: source.name }));
 
+  // F16: el text del CPV que no s'ha resolt en cap codi, i el que s'ha intentat aplicar.
+  const [unresolvedCpv, setUnresolvedCpv] = useState<string | null>(null);
+  const [rejectedCpv, setRejectedCpv] = useState<string | null>(null);
+  useEffect(() => {
+    if (unresolvedCpv === null) setRejectedCpv(null);
+  }, [unresolvedCpv]);
+
   function submit(event: FormEvent) {
     event.preventDefault();
+    setRejectedCpv(unresolvedCpv);
     onApply();
   }
 
@@ -200,7 +239,7 @@ export function CatalogueFilters({
         </summary>
         <div className="border-t border-border px-4 py-4">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <CpvLookup value={filters.cpv} onChange={(cpv) => set({ cpv })} />
+            <CpvLookup value={filters.cpv} onChange={(cpv) => set({ cpv })} onUnresolved={setUnresolvedCpv} />
             <Field label="Organisme" hint="Part del nom">
               <Input value={filters.buyer_q} onChange={(event) => set({ buyer_q: event.target.value })} />
             </Field>
@@ -259,11 +298,11 @@ export function CatalogueFilters({
                 onChange={(event) => set({ procedure_type: event.target.value })}
               />
             </Field>
-            <Field label="Estat de la licitació" hint="Segons la font">
+            <Field label="Estat de la licitació" hint="«En termini»: publicada i amb el termini encara obert">
               <Select
                 value={filters.status}
                 placeholder="Tots"
-                options={optionsOf(facets?.statuses, TENDER_STATUS_LABELS, "Estat desconegut")}
+                options={tenderStatusFilterOptions(facets?.statuses)}
                 onChange={(event) => set({ status: event.target.value })}
               />
             </Field>
@@ -297,6 +336,7 @@ export function CatalogueFilters({
           </div>
         </div>
       </details>
+      <CpvNotApplied text={rejectedCpv} className="mt-3" />
     </form>
   );
 }

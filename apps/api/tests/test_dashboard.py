@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 PDF = b"%PDF-1.4 evidencia dashboard"
@@ -79,7 +80,9 @@ async def test_una_dada_sense_evidencia_es_parcial(client_a, tenant_a):
     sections = sections_of((await client_a.get(f"{base}/summary")).json())
     assert sections["certifications"]["requires_evidence"] is True
     assert sections["certifications"]["status"] == "partial"
-    assert "sense evidencia" in sections["certifications"]["detail"]
+    # Revisio 3B-2 (F12): el detall es informacio neutra i amb accents; declarat
+    # sense evidencia no es cap mancanca global.
+    assert sections["certifications"]["detail"] == "1 certificació · declarada"
 
     await client_a.post(
         f"{base}/documents",
@@ -94,7 +97,7 @@ async def test_una_dada_sense_evidencia_es_parcial(client_a, tenant_a):
 
     sections = sections_of((await client_a.get(f"{base}/summary")).json())
     assert sections["certifications"]["status"] == "complete"
-    assert "tots amb evidencia" in sections["certifications"]["detail"]
+    assert sections["certifications"]["detail"] == "1 certificació · amb evidència documental"
 
 
 async def test_experiencia_sense_evidencia_no_arriba_al_maxim(client_a, tenant_a):
@@ -107,6 +110,48 @@ async def test_experiencia_sense_evidencia_no_arriba_al_maxim(client_a, tenant_a
     # Volum complet (3 projectes) pero cap acreditat: exactament la meitat.
     assert sections["experience"]["status"] == "partial"
     assert sections["experience"]["points"] == 5.0
+    assert sections["experience"]["detail"] == "3 projectes · declarats"
+
+
+async def test_els_textos_del_perfil_son_neutres_i_amb_accents(client_a, tenant_a):
+    """Revisio 3B-2 (F12, C4): els textos es corregeixen a l'origen, no al web."""
+    _, company = tenant_a
+    base = f"/api/v1/companies/{company.id}"
+    first = (await client_a.post(f"{base}/certifications", json={"name": "ISO 9001"})).json()
+    await client_a.post(f"{base}/certifications", json={"name": "ISO 14001"})
+    await client_a.post(
+        f"{base}/documents",
+        files={"file": ("iso9001.pdf", PDF, "application/pdf")},
+        data={
+            "category": "certification",
+            "entity_type": "company_certification",
+            "entity_id": first["id"],
+            "relationship_type": "certificate",
+        },
+    )
+
+    body = (await client_a.get(f"{base}/summary")).json()
+    sections = sections_of(body)
+
+    assert sections["certifications"]["detail"] == (
+        "2 certificacions · 1 amb evidència documental · 1 declarada"
+    )
+    assert sections["registrations"]["detail"] == "cap registre registrat"
+    assert sections["insurances"]["detail"] == "cap pòlissa registrada"
+    assert sections["cpv"]["detail"] == "0 CPV d'interès actius"
+    assert sections["services"]["detail"] == "0 serveis actius"
+    assert sections["solvency"]["detail"] == (
+        "0 exercicis amb facturació · 0 de 5 llindars de contracte"
+    )
+    assert sections["documents"]["detail"] == "1 document a la biblioteca"
+    assert sections["territories"]["label"] == "Àmbit geogràfic"
+    assert sections["solvency"]["label"] == "Solvència econòmica"
+    assert sections["team"]["label"] == "Equip humà"
+    assert sections["experience"]["label"] == "Experiència"
+    for section in sections.values():
+        detail = section["detail"]
+        unaccented = r"evidencia|certificacio\b|interes\b|recomanats|\((s|es|ns)\)"
+        assert not re.search(unaccented, detail), (section["key"], detail)
 
 
 async def test_la_puntuacio_puja_en_omplir_el_perfil(client_a, tenant_a):

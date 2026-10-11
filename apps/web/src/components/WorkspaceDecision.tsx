@@ -27,6 +27,7 @@ import { formatDateTime } from "@/lib/tenders";
 import {
   DECISION_LABELS,
   analysisWarningLabel,
+  decisionReasonCopy,
   warningLabel,
   type AnalysisDecisionSnapshotV1,
   type WorkspaceDecisionEntry,
@@ -157,6 +158,10 @@ export function DecisionPanel({
   // obligatori i mostra els avisos que ell ha vist, encara que la prop sigui vella.
   const needsReason = pending === "go" && (workspace.go_requires_reason || reasonRequiredByBackend);
   const shownWarnings = reasonRequiredByBackend ? backendCodes : warnings;
+  // F11: l'absència d'anàlisi es diu a part dels avisos d'una anàlisi existent.
+  const panelCopy = decisionReasonCopy(warnings);
+  const modalCopy = decisionReasonCopy(shownWarnings);
+  const backendCopy = decisionReasonCopy(backendCodes);
   const forbidden = apiError?.status === 403;
   const otherError = mutation.error && !reasonRequiredByBackend && !forbidden ? mutation.error : null;
 
@@ -252,9 +257,7 @@ export function DecisionPanel({
         {workspace.go_requires_reason ? (
           <p className="text-[13px] leading-5 text-muted">
             Motiu · obligatori si aproves:{" "}
-            <span className="text-ink">
-              el registre de la decisió inclou {plural(warnings.length, "avís", "avisos")} de l&apos;anàlisi del plec.
-            </span>{" "}
+            <span className="text-ink">{panelCopy.line}.</span>{" "}
             NO-GO i ajornar no en demanen.
           </p>
         ) : (
@@ -328,9 +331,7 @@ export function DecisionPanel({
 
           <div className="rounded-card border border-border px-4 py-3">
             <p className="text-[13px] font-semibold text-ink">
-              {shownWarnings.length > 0
-                ? "Avisos de l'anàlisi del plec que quedaran registrats"
-                : "Cap avís de l'anàlisi del plec."}
+              {shownWarnings.length > 0 ? modalCopy.heading : "Cap avís de l'anàlisi del plec."}
             </p>
             {shownWarnings.length > 0 ? (
               <ul className="mt-1.5 space-y-1">
@@ -348,13 +349,15 @@ export function DecisionPanel({
           </div>
 
           <Field
-            label={needsReason ? "Motiu (obligatori: hi ha avisos de l'anàlisi del plec)" : "Motiu (opcional)"}
+            label={needsReason ? modalCopy.label : "Motiu (opcional)"}
             hint={`${reason.length} de ${REASON_MAX_LENGTH} caràcters`}
             error={
               reasonRequiredByBackend
-                ? backendWarnings.length > 0
-                  ? `Cal un motiu: el registre inclou avisos de l'anàlisi del plec: ${backendWarnings.map((l) => (/[.!?]$/.test(l) ? l : `${l}.`)).join(" ")}`
-                  : "Cal un motiu: el registre inclou avisos de l'anàlisi del plec."
+                ? backendCopy.missing && backendCopy.warnings.length === 0
+                  ? "Cal un motiu: encara no hi ha cap anàlisi del plec."
+                  : backendWarnings.length > 0
+                    ? `Cal un motiu: el registre inclou avisos de l'anàlisi del plec: ${backendWarnings.map((l) => (/[.!?]$/.test(l) ? l : `${l}.`)).join(" ")}`
+                    : "Cal un motiu: el registre inclou avisos de l'anàlisi del plec."
                 : undefined
             }
             required={needsReason}
@@ -366,7 +369,7 @@ export function DecisionPanel({
               onChange={(event) => setReason(event.target.value)}
               placeholder={
                 needsReason
-                  ? "Per què es presenta l'empresa malgrat els avisos de l'anàlisi del plec?"
+                  ? modalCopy.placeholder
                   : "Opcional: context per a qui ho llegeixi d'aquí a sis mesos."
               }
             />

@@ -39,7 +39,9 @@ describe("CatalogueRow", () => {
     expect(container.textContent).not.toContain("Ja no disponible a la font");
 
     rerender(<CatalogueRow tender={tender({ source_removed_at: "2026-09-20T08:00:00Z" })} match={null} />);
-    expect(container.textContent).toContain("En termini");
+    // Sense termini conegut, l'estat és el de la font («Publicada»), mai «En termini» (F2).
+    expect(container.textContent).toContain("Publicada");
+    expect(container.textContent).not.toContain("En termini");
     expect(container.textContent).toContain("Ja no disponible a la font");
     expect(container.textContent).not.toContain("Anul·lada");
 
@@ -51,7 +53,14 @@ describe("CatalogueRow", () => {
   it("termini passat → «Fora de termini» amb l'estat de la font a part (A12); termini obert → l'estat de la font", () => {
     const { container, rerender } = render(<CatalogueRow tender={tender({ deadline_at: "2026-09-01T10:00:00Z" })} match={null} />);
     expect(container.textContent).toContain("Fora de termini");
-    expect(container.textContent).toContain("Estat a la font: En termini");
+    // F2: l'estat cru (PLACSP PUB) es diu «Publicada», mai «En termini» sota «Fora de termini».
+    expect(container.textContent).toContain("Estat a la font: Publicada");
+    expect(container.textContent).not.toContain("En termini");
+    rerender(<CatalogueRow tender={tender({ deadline_at: "2026-10-05T12:00:00Z" })} match={null} />);
+    expect(container.textContent).toContain("Fora de termini");
+    expect(container.textContent).not.toContain("En termini");
+    rerender(<CatalogueRow tender={tender({ deadline_at: null })} match={null} />);
+    expect(container.textContent).not.toContain("En termini");
     rerender(<CatalogueRow tender={tender({ deadline_at: "2099-09-01T10:00:00Z" })} match={null} />);
     expect(container.textContent).toContain("En termini");
     expect(container.textContent).not.toContain("Fora de termini");

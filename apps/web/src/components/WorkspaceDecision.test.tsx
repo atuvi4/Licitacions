@@ -491,6 +491,39 @@ describe("DecisionPanel · l'acte de decidir", () => {
     expect(document.body.textContent).not.toContain("compliment anterior");
   });
 
+  it("F11: sense cap anàlisi, el motiu obligatori ho diu tal qual i mai «avís de l'anàlisi»", async () => {
+    post.mockRejectedValue(new ApiError(422, "decision_reason_required", "x", [], { warnings: ["analysis_missing"], basis: "analysis_v3" }));
+    renderPanel({ go_requires_reason: true, decision_warnings: ["analysis_missing"] }, { kind: "absent" } as DecisionAnalysisState);
+    expect(document.body.textContent).toContain(
+      "Motiu · obligatori si aproves: encara no hi ha cap anàlisi del plec. NO-GO i ajornar no en demanen.",
+    );
+    expect(document.body.textContent).not.toMatch(/avís de l'anàlisi|avisos de l'anàlisi/);
+    fireEvent.click(button(/Presentar-se · GO/));
+    const text = dialog().textContent ?? "";
+    expect(text).toContain("Motiu (obligatori: encara no hi ha cap anàlisi del plec)");
+    expect(text).toContain("Encara no hi ha cap anàlisi del plec");
+    expect(text).not.toMatch(/avís de l'anàlisi|avisos de l'anàlisi/);
+    expect(dialog().querySelector("textarea")!.getAttribute("placeholder")).toBe(
+      "Per què es presenta l'empresa sense cap anàlisi del plec?",
+    );
+    fireEvent.change(dialog().querySelector("textarea")!, { target: { value: "m" } });
+    fireEvent.click(submitButton());
+    await flush();
+    expect(dialog().textContent).toContain("Cal un motiu: encara no hi ha cap anàlisi del plec.");
+    expect(dialog().textContent).not.toMatch(/avís de l'anàlisi|avisos de l'anàlisi/);
+  });
+
+  it("F11: sense anàlisi i amb un altre avís, se separen: l'absència d'anàlisi i l'avís", () => {
+    renderPanel({ go_requires_reason: true, decision_warnings: ["analysis_missing", "deadline_passed"] });
+    expect(document.body.textContent).toContain(
+      "Motiu · obligatori si aproves: encara no hi ha cap anàlisi del plec, i el registre de la decisió inclou 1 avís més. NO-GO i ajornar no en demanen.",
+    );
+    fireEvent.click(button(/Presentar-se · GO/));
+    const text = dialog().textContent ?? "";
+    expect(text).toContain("Motiu (obligatori: encara no hi ha cap anàlisi del plec i hi ha avisos)");
+    expect(text).toContain("El termini de presentació ja ha passat");
+  });
+
   it("zero-state del bloc d'avisos", () => {
     renderPanel({ decision_warnings: [] });
     fireEvent.click(button(/Presentar-se · GO/));
@@ -507,7 +540,7 @@ describe("DecisionPanel · l'acte de decidir", () => {
     fireEvent.click(button(/Presentar-se · GO/));
     const text = dialog().textContent ?? "";
     for (const label of [
-      "Encara no hi ha anàlisi del plec",
+      "Encara no hi ha cap anàlisi del plec",
       "L'anàlisi del plec està desactualitzada",
       "L'anàlisi detecta possibles bloqueigs (no confirmats)",
       "El termini de presentació ja ha passat",
@@ -688,7 +721,7 @@ describe("DecisionHistory", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("Registre del moment (anàlisi del plec): sense anàlisi vigent");
     expect(text).not.toContain("compleix");
-    expect(text).toContain("Es va decidir sabent-ho: Encara no hi ha anàlisi del plec");
+    expect(text).toContain("Es va decidir sabent-ho: Encara no hi ha cap anàlisi del plec");
     expect(text).not.toContain("no es van registrar");
     expect(text).not.toContain("compliment anterior");
   });

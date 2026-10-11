@@ -196,15 +196,26 @@ async def list_matches(
 
 @router.get("/summary", response_model=MatchSummary, summary="Metriques del pre-fit")
 async def match_summary(session: SessionDep, ctx: CompanyCtx):
+    # Recomptes per estat nomes sobre licitacions VISIBLES: el mateix univers
+    # que `total_tenders`, perque `evaluated_count` i els estats es puguin
+    # comparar entre si (p. ex. «totes les avaluades tenen dades insuficients»).
     counts = dict(
         (
             await session.execute(
                 sa.select(CompanyTenderMatch.status, sa.func.count())
-                .where(CompanyTenderMatch.company_id == ctx.company_id)
+                .join(Tender, Tender.id == CompanyTenderMatch.tender_id)
+                .where(
+                    CompanyTenderMatch.company_id == ctx.company_id,
+                    visible_to_company(ctx.company_id),
+                )
                 .group_by(CompanyTenderMatch.status)
             )
         ).all()
     )
+    # Quantes licitacions visibles tenen pre-fit calculat. Amb 0, el Radar
+    # encara no s'ha calculat: la UI no pot dir «cap coincidencia» ni culpar
+    # el perfil (revisio 3B-2, F1/F3). Mai es dedueix del perfil.
+    evaluated = sum(int(value) for value in counts.values())
     # L'univers del mode "Totes". Sense el filtre comptaria tambe les
     # licitacions privades d'altres empreses, i el comptador delataria el que
     # la llista amaga.
@@ -219,8 +230,10 @@ async def match_summary(session: SessionDep, ctx: CompanyCtx):
         await session.execute(
             sa.select(sa.func.count())
             .select_from(CompanyTenderMatch)
+            .join(Tender, Tender.id == CompanyTenderMatch.tender_id)
             .where(
                 CompanyTenderMatch.company_id == ctx.company_id,
+                visible_to_company(ctx.company_id),
                 CompanyTenderMatch.score >= HIGH_FIT_THRESHOLD,
             )
         )
@@ -240,8 +253,11 @@ async def match_summary(session: SessionDep, ctx: CompanyCtx):
             await session.execute(
                 sa.select(sa.func.count())
                 .select_from(CompanyTenderMatch)
+                .join(Tender, Tender.id == CompanyTenderMatch.tender_id)
                 .where(
                     CompanyTenderMatch.company_id == ctx.company_id,
+                    # El mateix univers que la resta del resum: nomes visibles.
+                    visible_to_company(ctx.company_id),
                     sa.or_(
                         CompanyTenderMatch.company_profile_changed_at.is_(None),
                         CompanyTenderMatch.company_profile_changed_at < profile.profile_changed_at,
@@ -256,6 +272,7 @@ async def match_summary(session: SessionDep, ctx: CompanyCtx):
 
     return MatchSummary(
         total_tenders=total,
+        evaluated_count=evaluated,
         actionable=count_of(MatchStatus.CANDIDATE) + count_of(MatchStatus.LOW_FIT),
         candidates=count_of(MatchStatus.CANDIDATE),
         high_fit=high_fit,

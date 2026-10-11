@@ -42,7 +42,9 @@ describe("xips dels filtres actius (C5)", () => {
     expect(label("min_amount")).toContain("Import mínim: 50.000");
     expect(label("deadline_to")).toMatch(/^Termini fins a: .*2026/);
     expect(label("contract_type")).toBe("Tipus de contracte: Serveis");
-    expect(label("status")).toBe("Estat: En termini");
+    // F2: `open` és l'estat cru de la font («Publicada»); «En termini» és només `in_term`.
+    expect(label("status")).toBe("Estat a la font: Publicada");
+    expect(catalogueFilterChips({ ...EMPTY_CATALOGUE_FILTERS, status: "in_term" }, facets)[0].label).toBe("Estat: En termini");
     expect(label("source")).toBe(`Font: ${sourceLabel("placsp_agregadas", facets.sources)}`);
     expect(label("source_removed")).toBe("Ja no disponible a la font");
     expect(chips.map((chip) => chip.label).join(" ")).not.toMatch(/placsp_agregadas|services\b|\bopen\b/);
@@ -51,7 +53,8 @@ describe("xips dels filtres actius (C5)", () => {
 
   it("els del feed: lots, només obertes i la resta amb els mateixos rètols", () => {
     const chips = feedFilterChips({ ...EMPTY_FILTERS, q: "manteniment", has_lots: "false", only_open: true, procedure_type: "restricted" });
-    expect(chips.map((chip) => chip.label)).toEqual(["Text: «manteniment»", "Procediment: Restringit", "Sense lots", "Només amb termini obert"]);
+    // C3: «termini obert» no és l'estat «En termini»: diu que no mira l'estat de la font.
+    expect(chips.map((chip) => chip.label)).toEqual(["Text: «manteniment»", "Procediment: Restringit", "Sense lots", "Termini obert (qualsevol estat de la font)"]);
     expect(feedFilterChips(EMPTY_FILTERS)).toEqual([]);
   });
 

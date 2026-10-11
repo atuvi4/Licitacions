@@ -1,7 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { BLOCKING_REASON_TEXT, type AnalysisQuote, type QuotePrerequisites } from "@/lib/jobs";
+import { PackageNotice } from "@/app/(app)/licitacions/[tenderId]/PlecsOverview";
+import { BLOCKING_REASON_TEXT, blockingReasonText, type AnalysisQuote, type QuotePrerequisites } from "@/lib/jobs";
+import { PACKAGE_COVERAGE_TEXT, packageCoverageState } from "@/lib/tenders";
 
 import { AnalysisQuotePanel } from "./AnalysisQuotePanel";
 
@@ -30,7 +32,7 @@ function quote(overrides: Partial<AnalysisQuote> = {}, prerequisites: Partial<Qu
     allowed: true,
     blocking_reason: null,
     prerequisites: {
-      version: "quote-prerequisites-v1",
+      version: "quote-prerequisites-v2",
       provider_basis: "real",
       failed: [],
       advisory: [],
@@ -173,6 +175,71 @@ describe("AnalysisQuotePanel (3B-2 §6.1, §7.1.5)", () => {
     expect(text).not.toMatch(/package_gap|referenced_document_missing|document_not_processed/);
   });
 
+  it("F10: paquet sense verificar (classificació no vigent) → mai «hi falten documents»; casella de paquet sense verificar", () => {
+    const pkg = { status: "unknown" as const, gaps: [], section_status: {} };
+    const { container } = renderPanel(
+      quote(
+        { allowed: false, blocking_reason: "package_incomplete" },
+        { failed: ["package_incomplete"], package: { status: "unknown", issues: [{ code: "classification_not_current" }], accepted: false } },
+      ),
+      { pkg },
+    );
+    const text = container.textContent ?? "";
+    expect(text).toContain(PACKAGE_COVERAGE_TEXT.unknown);
+    expect(text).toContain("Encara no s'ha verificat si el paquet documental és complet");
+    expect(text).not.toMatch(/falten documents|hi falten|Falta part|classificació no vigent/i);
+    expect(screen.getByRole("checkbox", { name: /Accepto analitzar un paquet sense verificar/ })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: /paquet incomplet/ })).toBeNull();
+    // La mateixa semàntica i el mateix text que la pestanya Plecs.
+    const { container: plecs } = render(<PackageNotice pkg={pkg} documents={[]} />);
+    expect(plecs.textContent).toContain(PACKAGE_COVERAGE_TEXT.unknown);
+  });
+
+  it("F10: un estat `incomplete` sense cap motiu explícit (només classificació no vigent) també és «sense verificar»", () => {
+    const { container } = renderPanel(
+      quote(
+        { allowed: false, blocking_reason: "package_incomplete" },
+        { failed: ["package_incomplete"], package: { status: "incomplete", issues: [{ code: "classification_not_current" }], accepted: false } },
+      ),
+    );
+    expect(container.textContent).toContain(PACKAGE_COVERAGE_TEXT.unknown);
+    expect(container.textContent).not.toMatch(/falten documents|hi falten/i);
+  });
+
+  it("F10: amb forats explícits → «Falten documents» amb la llista, igual que a Plecs", () => {
+    const pkg = {
+      status: "incomplete" as const,
+      gaps: [{ code: "required_role_missing" as const, key: "ppt", would_provide: ["requirements"] }],
+      section_status: {},
+    };
+    const { container } = renderPanel(
+      quote(
+        { allowed: false, blocking_reason: "package_incomplete" },
+        { failed: ["package_incomplete"], package: { status: "incomplete", issues: [{ code: "classification_not_current" }, { code: "package_gap", gap_code: "required_role_missing" }], accepted: false } },
+      ),
+      { pkg },
+    );
+    const text = container.textContent ?? "";
+    expect(text).toContain("Falten documents");
+    expect(text).toContain("Falta el plec de prescripcions tècniques (PPT)");
+    expect(screen.getByRole("checkbox", { name: /Accepto analitzar un paquet incomplet/ })).toBeTruthy();
+    const { container: plecs } = render(<PackageNotice pkg={pkg} documents={[]} />);
+    expect(plecs.textContent).toContain("Falten documents");
+  });
+
+  it("F10: la semàntica és una sola funció (quota i Plecs)", () => {
+    expect(packageCoverageState({ status: "unknown", gaps: [], section_status: {} })).toBe("unknown");
+    expect(packageCoverageState({ status: "incomplete", gaps: [], section_status: {} })).toBe("unknown");
+    expect(packageCoverageState({ status: "incomplete", gaps: [{ code: "no_text", key: "d1", would_provide: [] }], section_status: {} })).toBe("incomplete");
+    expect(packageCoverageState({ status: "complete", gaps: [], section_status: {} })).toBe("complete");
+    expect(packageCoverageState(null)).toBe("unknown");
+    expect(packageCoverageState(null, ["classification_not_current"])).toBe("unknown");
+    expect(packageCoverageState(null, ["classification_not_current", "package_gap"])).toBe("incomplete");
+    expect(packageCoverageState(null, ["duplicate_content"])).toBe("incomplete");
+    expect(blockingReasonText("package_incomplete")).not.toMatch(/falten|hi falten/i);
+    expect(blockingReasonText("package_incomplete", "incomplete")).toMatch(/^Falten documents/);
+  });
+
   it("text amb avisos de qualitat: casella explícita per reconèixer-ho", () => {
     const onAccept = vi.fn();
     renderPanel(quote({ allowed: false, blocking_reason: "quality_warning" }, { failed: ["quality_warning"] }), { onAccept });
@@ -181,7 +248,7 @@ describe("AnalysisQuotePanel (3B-2 §6.1, §7.1.5)", () => {
   });
 
   it("una acceptació ja feta es veu marcada i el botó es pot fer servir", () => {
-    renderPanel(quote({ accept_incomplete_package: true }, { accept_incomplete_package: true, package: { status: "incomplete", issues: [], accepted: true } }));
+    renderPanel(quote({ accept_incomplete_package: true }, { accept_incomplete_package: true, package: { status: "incomplete", issues: [{ code: "package_gap" }], accepted: true } }));
     expect((screen.getByRole("checkbox", { name: /Accepto analitzar un paquet incomplet/ }) as HTMLInputElement).checked).toBe(true);
     expect((screen.getByRole("button", { name: "Inicia l'anàlisi" }) as HTMLButtonElement).disabled).toBe(false);
   });

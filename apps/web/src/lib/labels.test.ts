@@ -375,7 +375,7 @@ describe("ANALYSIS_STATUS_TEXT amb requisits escrits a mà (M1)", () => {
 describe("tenderStatusView (A12)", () => {
   const now = new Date("2026-10-09T16:00:00Z");
   it("termini passat amb estat obert o desconegut → «Fora de termini», amb l'estat cru a part", () => {
-    expect(tenderStatusView({ status: "open", deadline_at: "2026-10-09T15:00:00Z" }, now)).toEqual({ label: "Fora de termini", level: "neutral", sourceStatus: "En termini" });
+    expect(tenderStatusView({ status: "open", deadline_at: "2026-10-09T15:00:00Z" }, now)).toEqual({ label: "Fora de termini", level: "neutral", sourceStatus: "Publicada" });
     expect(tenderStatusView({ status: "unknown", deadline_at: "2026-09-01T15:00:00Z" }, now)).toEqual({ label: "Fora de termini", level: "neutral", sourceStatus: "Sense determinar" });
     expect(tenderStatusView({ status: "estat_nou", deadline_at: "2026-09-01T15:00:00Z" }, now)).toEqual({ label: "Fora de termini", level: "neutral", sourceStatus: "Estat desconegut" });
   });
@@ -388,6 +388,24 @@ describe("tenderStatusView (A12)", () => {
     expect(tenderStatusView({ status: "open", deadline_at: "2026-10-21T10:00:00Z" }, now)).toEqual({ label: "En termini", level: "ready", sourceStatus: null });
     expect(tenderStatusView({ status: "cancelled", deadline_at: null }, now)).toEqual({ label: "Anul·lada", level: "blocking", sourceStatus: null });
     expect(tenderStatusView({ status: "estat_nou", deadline_at: null }, now)).toEqual({ label: "Estat desconegut", level: "neutral", sourceStatus: null });
+  });
+  it("F2: l'estat cru `open` (PLACSP PUB) es diu «Publicada», mai «En termini»", () => {
+    expect(TENDER_STATUS_LABELS.open).toBe("Publicada");
+    expect(Object.values(TENDER_STATUS_LABELS)).not.toContain("En termini");
+  });
+  it("F2 acceptance: PUB amb termini 05/10/2026 revisada després → «Fora de termini», mai «En termini»", () => {
+    const view = tenderStatusView({ status: "open", deadline_at: "2026-10-05T12:00:00Z" }, now);
+    expect(view).toEqual({ label: "Fora de termini", level: "neutral", sourceStatus: "Publicada" });
+    expect(JSON.stringify(view)).not.toContain("En termini");
+  });
+  it("F2: el venciment és per instant, no per dia natural", () => {
+    const moment = new Date("2026-10-09T10:00:00Z");
+    expect(tenderStatusView({ status: "open", deadline_at: "2026-10-09T09:59:00Z" }, moment).label).toBe("Fora de termini");
+    expect(tenderStatusView({ status: "open", deadline_at: "2026-10-09T10:01:00Z" }, moment).label).toBe("En termini");
+  });
+  it("F2: termini desconegut mai afirma «En termini»; un estat desconegut amb termini futur tampoc", () => {
+    expect(tenderStatusView({ status: "open", deadline_at: null }, now)).toEqual({ label: "Publicada", level: "neutral", sourceStatus: null });
+    expect(tenderStatusView({ status: "unknown", deadline_at: "2026-10-21T10:00:00Z" }, now).label).toBe("Sense determinar");
   });
 });
 

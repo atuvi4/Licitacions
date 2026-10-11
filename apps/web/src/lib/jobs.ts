@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
+import { PACKAGE_COVERAGE_TEXT, type PackageStatus } from "@/lib/tenders";
 
 export type JobType = "process_tender_documents" | "analyze_tender_requirements";
 export type JobRequestStatus = "accepted" | "succeeded" | "failed" | "cancelled";
@@ -184,8 +185,9 @@ export const BLOCKING_REASON_TEXT: Record<string, string> = {
   price_unknown: "No es coneix el preu del model: no es pot estimar ni limitar el cost.",
   budget_exhausted: "El pressupost d'anàlisi de la plataforma està esgotat fins a una nova autorització.",
   budget_exceeded: "El cost estimat d'aquesta anàlisi supera el límit per anàlisi.",
-  package_incomplete:
-    "Al paquet documental hi falten documents: només es pot analitzar acceptant-ho explícitament.",
+  // Sense saber per què, el text per defecte no afirma que hi faltin documents
+  // (F10): unknown ≠ incomplet. Amb el motiu, `blockingReasonText(code, estat)`.
+  package_incomplete: `${PACKAGE_COVERAGE_TEXT.unknown.replace(/\.$/, "")}: només es pot analitzar acceptant-ho explícitament.`,
   quality_unknown:
     "La qualitat del text d'algun plec és dolenta o desconeguda: cal reprocessar-lo o revisar-lo abans d'analitzar.",
   quality_warning: "El text d'algun plec té avisos de qualitat: cal acceptar-ho explícitament.",
@@ -195,8 +197,16 @@ export const BLOCKING_REASON_TEXT: Record<string, string> = {
   nothing_analyzable: "Cap plec té text analitzable: processa els plecs primer.",
 };
 
-export function blockingReasonText(code: string | null | undefined): string {
+/**
+ * El motiu en català. `packageState` (de `packageCoverageState`, la mateixa
+ * semàntica que Plecs) diu per què el paquet bloqueja: només amb forats
+ * explícits es diu que falten documents (F10).
+ */
+export function blockingReasonText(code: string | null | undefined, packageState?: PackageStatus): string {
   if (!code) return "";
+  if (code === "package_incomplete" && packageState === "incomplete") {
+    return `${PACKAGE_COVERAGE_TEXT.incomplete} al paquet documental: només es pot analitzar acceptant-ho explícitament.`;
+  }
   return Object.hasOwn(BLOCKING_REASON_TEXT, code) ? BLOCKING_REASON_TEXT[code] : "No es pot iniciar l'anàlisi.";
 }
 

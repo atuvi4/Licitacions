@@ -75,6 +75,9 @@ class MatchSummary(BaseModel):
     """Metriques per al dashboard. Cap d'elles parla de guanyar ni de presentar."""
 
     total_tenders: int
+    # Licitacions visibles amb pre-fit calculat per a l'empresa. 0 = el Radar
+    # encara no s'ha calculat (no vol dir «cap coincidencia»).
+    evaluated_count: int
     actionable: int
     candidates: int
     high_fit: int

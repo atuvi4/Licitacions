@@ -23,7 +23,12 @@ import {
   type QuoteAcceptance,
   type QuotePackageIssue,
 } from "@/lib/jobs";
-import type { PackageGapCode, TenderPackage } from "@/lib/tenders";
+import {
+  PACKAGE_COVERAGE_TEXT,
+  packageCoverageState,
+  type PackageGapCode,
+  type TenderPackage,
+} from "@/lib/tenders";
 
 const SKIPPED_REASONS: Record<string, string> = {
   document_not_processed: "no processat",
@@ -120,7 +125,22 @@ export function AnalysisQuotePanel({
     ...quote.documents.map((document) => [document.tender_document_id, document.name] as const),
     ...quote.skipped_documents.map((document) => [document.tender_document_id, document.name] as const),
   ]);
-  const packageLines = askPackage ? packageIssueLines(pkg, prerequisites?.package?.issues ?? [], names) : [];
+  const packageIssues = prerequisites?.package?.issues ?? [];
+  // La mateixa semàntica que la pestanya Plecs (F10): sense forats explícits, el
+  // paquet és «sense verificar» i mai es diu que hi falten documents.
+  const packageState = packageCoverageState(
+    pkg,
+    packageIssues.map((issue) => issue.code),
+  );
+  const packageLines =
+    askPackage && packageState === "incomplete"
+      ? packageIssueLines(
+          pkg,
+          packageIssues.filter((issue) => issue.code !== "classification_not_current"),
+          names,
+        )
+      : [];
+  const reasonText = (code: string | null | undefined) => blockingReasonText(code, packageState);
   // Els altres motius, a part del principal (que ja surt en gran).
   const otherFailures = failed.filter((code) => code !== quote.blocking_reason);
   // El que fa l'acció, abans del perquè no es pot: no és una acció de
@@ -211,11 +231,11 @@ export function AnalysisQuotePanel({
 
       {blocked && (
         <div role="alert" className="mt-3 border border-danger/25 bg-danger-soft px-3 py-2">
-          <p className="font-semibold text-danger">No es pot iniciar: {blockingReasonText(quote.blocking_reason)}</p>
+          <p className="font-semibold text-danger">No es pot iniciar: {reasonText(quote.blocking_reason)}</p>
           {otherFailures.length > 0 && (
             <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink">
               {otherFailures.map((code) => (
-                <li key={code}>{blockingReasonText(code)}</li>
+                <li key={code}>{reasonText(code)}</li>
               ))}
             </ul>
           )}
@@ -226,7 +246,7 @@ export function AnalysisQuotePanel({
         // bloquegen, però es diuen igualment.
         <ul className="mt-2 list-disc space-y-0.5 pl-5 text-muted">
           {advisory.map((code) => (
-            <li key={code}>{blockingReasonText(code)}</li>
+            <li key={code}>{reasonText(code)}</li>
           ))}
         </ul>
       )}
@@ -236,11 +256,16 @@ export function AnalysisQuotePanel({
           {askPackage && (
             <div>
               <Checkbox
-                label="Accepto analitzar un paquet incomplet: el que diria el document que falta no s'avalua."
+                label={
+                  packageState === "incomplete"
+                    ? "Accepto analitzar un paquet incomplet: el que diria el document que falta no s'avalua."
+                    : "Accepto analitzar un paquet sense verificar: si hi falta algun document, el que diria no s'avalua."
+                }
                 checked={packageAccepted}
                 disabled={accepting || confirming || !onAccept}
                 onChange={(event) => onAccept?.({ accept_incomplete_package: event.currentTarget.checked })}
               />
+              {packageState === "unknown" && <p className="mt-1 pl-9 text-muted">{PACKAGE_COVERAGE_TEXT.unknown}</p>}
               {packageLines.length > 0 && (
                 <ul className="mt-1 list-disc space-y-0.5 pl-9 text-muted" aria-label="Què falta al paquet">
                   {packageLines.map((line) => (

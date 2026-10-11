@@ -70,17 +70,18 @@ CONTRACT_THRESHOLD_FIELDS = (
 
 # Pes de cada area. Han de sumar 100.
 SECTIONS: tuple[tuple[str, str, int, bool], ...] = (
-    # (clau, etiqueta, pes, necessita evidencia documental)
+    # (clau, etiqueta, pes, necessita evidencia documental). Les etiquetes i els
+    # detalls es mostren a la UI: van amb accents (revisio 3B-2, F12).
     ("general", "Dades generals", 12, False),
     ("services", "Serveis", 10, False),
-    ("territories", "Ambit geografic", 8, False),
+    ("territories", "Àmbit geogràfic", 8, False),
     ("cpv", "CPV", 8, False),
-    ("solvency", "Solvencia economica", 12, False),
+    ("solvency", "Solvència econòmica", 12, False),
     ("certifications", "Certificacions", 10, True),
     ("registrations", "Registres i classificacions", 8, True),
     ("insurances", "Assegurances", 8, True),
-    ("team", "Equip huma", 8, True),
-    ("experience", "Experiencia", 10, True),
+    ("team", "Equip humà", 8, True),
+    ("experience", "Experiència", 10, True),
     ("documents", "Documents", 6, False),
 )
 
@@ -141,13 +142,56 @@ def _accredited_ratio(total: int, with_evidence: int) -> float:
     return 0.5 + 0.5 * min(with_evidence / total, 1.0)
 
 
-def _evidence_detail(noun: str, total: int, with_evidence: int) -> str:
+@dataclass(frozen=True, slots=True)
+class _Noun:
+    """Un nom amb singular, plural i genere: els textos de la UI van amb accents."""
+
+    one: str
+    many: str
+    feminine: bool
+
+    def count(self, total: int) -> str:
+        return f"{total} {self.one if total == 1 else self.many}"
+
+
+CERTIFICATION = _Noun("certificació", "certificacions", feminine=True)
+REGISTRATION = _Noun("registre", "registres", feminine=False)
+INSURANCE = _Noun("pòlissa", "pòlisses", feminine=True)
+PROJECT = _Noun("projecte", "projectes", feminine=False)
+PERSON = _Noun("persona", "persones", feminine=True)
+QUALIFICATION = _Noun("titulació", "titulacions", feminine=True)
+SERVICE = _Noun("servei actiu", "serveis actius", feminine=False)
+TERRITORY = _Noun("territori", "territoris", feminine=False)
+FINANCIAL_YEAR = _Noun("exercici", "exercicis", feminine=False)
+DOCUMENT = _Noun("document", "documents", feminine=False)
+
+
+def _declared(total: int, noun: _Noun) -> str:
+    if noun.feminine:
+        return "declarada" if total == 1 else "declarades"
+    return "declarat" if total == 1 else "declarats"
+
+
+def _evidence_detail(noun: _Noun, total: int, with_evidence: int) -> str:
+    """Que hi ha i amb quina evidencia, com a informacio (revisio 3B-2, F12).
+
+    Declarat sense evidencia es un estat valid: no es diu «sense evidencia» com
+    una mancanca; l'evidencia la demana una licitacio concreta.
+    """
     if total == 0:
-        return f"cap {noun} registrat"
-    missing = total - with_evidence
-    if missing <= 0:
-        return f"{total} {noun}(s), tots amb evidencia documental"
-    return f"{total} {noun}(s), {missing} sense evidencia documental"
+        return f"cap {noun.one} {'registrada' if noun.feminine else 'registrat'}"
+    head = noun.count(total)
+    missing = total - min(with_evidence, total)
+    if missing == 0:
+        if total == 1:
+            return f"{head} · amb evidència documental"
+        return f"{head} · {'totes' if noun.feminine else 'tots'} amb evidència documental"
+    if missing == total:
+        return f"{head} · {_declared(total, noun)}"
+    return (
+        f"{head} · {total - missing} amb evidència documental · "
+        f"{missing} {_declared(missing, noun)}"
+    )
 
 
 async def compute_profile_completeness(
@@ -173,7 +217,7 @@ async def compute_profile_completeness(
     )
     results["services"] = (
         min(active_services / TARGET_SERVICES, 1.0),
-        f"{active_services} servei(s) actiu(s) de {TARGET_SERVICES} recomanats",
+        SERVICE.count(active_services),
     )
 
     # --- Ambit geografic ---
@@ -188,7 +232,7 @@ async def compute_profile_completeness(
     )
     results["territories"] = (
         min(territories / TARGET_TERRITORIES, 1.0),
-        f"{territories} territori(s) on es vol treballar",
+        f"{TERRITORY.count(territories)} on es vol treballar",
     )
 
     # --- CPV ---
@@ -204,7 +248,7 @@ async def compute_profile_completeness(
     )
     results["cpv"] = (
         min(cpvs / TARGET_CPVS, 1.0),
-        f"{cpvs} CPV actiu(s) d'interes de {TARGET_CPVS} recomanats",
+        f"{cpvs} CPV d'interès {'actiu' if cpvs == 1 else 'actius'}",
     )
 
     # --- Solvencia economica ---
@@ -232,8 +276,8 @@ async def compute_profile_completeness(
     results["solvency"] = (
         0.6 * min(years / TARGET_FINANCIAL_YEARS, 1.0)
         + 0.4 * (thresholds / len(CONTRACT_THRESHOLD_FIELDS)),
-        f"{years} exercici(s) amb facturacio, "
-        f"{thresholds}/{len(CONTRACT_THRESHOLD_FIELDS)} llindars de contracte",
+        f"{FINANCIAL_YEAR.count(years)} amb facturació · "
+        f"{thresholds} de {len(CONTRACT_THRESHOLD_FIELDS)} llindars de contracte",
     )
 
     # --- Certificacions (necessiten evidencia) ---
@@ -246,7 +290,7 @@ async def compute_profile_completeness(
     certified = await _with_evidence(session, company_id, LinkedEntityType.COMPANY_CERTIFICATION)
     results["certifications"] = (
         _accredited_ratio(certifications, certified),
-        _evidence_detail("certificacio", certifications, certified),
+        _evidence_detail(CERTIFICATION, certifications, certified),
     )
 
     # --- Registres (necessiten evidencia) ---
@@ -259,7 +303,7 @@ async def compute_profile_completeness(
     registered = await _with_evidence(session, company_id, LinkedEntityType.COMPANY_REGISTRATION)
     results["registrations"] = (
         _accredited_ratio(registrations, registered),
-        _evidence_detail("registre", registrations, registered),
+        _evidence_detail(REGISTRATION, registrations, registered),
     )
 
     # --- Assegurances (necessiten evidencia) ---
@@ -272,7 +316,7 @@ async def compute_profile_completeness(
     insured = await _with_evidence(session, company_id, LinkedEntityType.COMPANY_INSURANCE)
     results["insurances"] = (
         _accredited_ratio(insurances, insured),
-        _evidence_detail("polissa", insurances, insured),
+        _evidence_detail(INSURANCE, insurances, insured),
     )
 
     # --- Equip huma (necessita titulacions, i les titulacions evidencia) ---
@@ -300,8 +344,8 @@ async def compute_profile_completeness(
         if qualifications:
             team_ratio += 0.3 + 0.3 * min(accredited_qualifications / qualifications, 1.0)
         team_detail = (
-            f"{people} persona(es), {qualifications} titulacio(ns), "
-            f"{accredited_qualifications} amb evidencia"
+            f"{PERSON.count(people)} · {QUALIFICATION.count(qualifications)} · "
+            f"{accredited_qualifications} amb evidència documental"
         )
     results["team"] = (team_ratio, team_detail)
 
@@ -322,11 +366,7 @@ async def compute_profile_completeness(
         experience_ratio = 0.5 * min(projects / TARGET_PROJECTS, 1.0) + 0.5 * min(
             projects_accredited / projects, 1.0
         )
-        experience_detail = (
-            f"{projects} projecte(s), {projects - projects_accredited} sense evidencia"
-            if projects_accredited < projects
-            else f"{projects} projecte(s), tots amb evidencia"
-        )
+        experience_detail = _evidence_detail(PROJECT, projects, projects_accredited)
     results["experience"] = (experience_ratio, experience_detail)
 
     # --- Documents ---
@@ -336,7 +376,7 @@ async def compute_profile_completeness(
     )
     results["documents"] = (
         min(documents / TARGET_DOCUMENTS, 1.0),
-        f"{documents} document(s) a la biblioteca",
+        f"{DOCUMENT.count(documents)} a la biblioteca",
     )
 
     sections = [

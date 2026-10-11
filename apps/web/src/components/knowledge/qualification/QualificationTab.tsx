@@ -485,7 +485,9 @@ export function QualificationTab({ view }: { view: KnowledgeView }) {
           {QUALIFICATION_SECTIONS.map((item) => {
             const active = item.key === section;
             const total = states[item.key].length;
-            const toVerify = states[item.key].filter((state) => state.state === "declared").length;
+            // F13 (B2): «declarat» és un estat vàlid, no una tasca. Es compten les
+            // verificades com a informació; mai «N per verificar» fora d'una licitació.
+            const verified = states[item.key].filter((state) => state.state === "verified").length;
             return (
               <li key={item.key}>
                 <button
@@ -501,7 +503,7 @@ export function QualificationTab({ view }: { view: KnowledgeView }) {
                   <span className={cn("text-[13px] leading-5", active ? "font-semibold text-ink" : "font-medium text-ink")}>{item.title}</span>
                   <span className="text-caption text-muted tabular-nums">
                     {total === 0 ? "Sense dades" : `${total} ${total === 1 ? "fitxa" : "fitxes"}`}
-                    {toVerify > 0 && ` · ${toVerify} per verificar`}
+                    {verified > 0 && ` · ${verified} ${verified === 1 ? "verificada" : "verificades"}`}
                   </span>
                 </button>
               </li>

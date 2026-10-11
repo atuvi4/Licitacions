@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { TenderDocumentMeta, TenderPackage } from "@/lib/tenders";
+import { PACKAGE_COVERAGE_TEXT, type TenderDocumentMeta, type TenderPackage } from "@/lib/tenders";
 
 import { DocumentBadges, PackageNotice, PlecsReadingLine, RemovedDocuments } from "./PlecsOverview";
 
@@ -92,8 +92,22 @@ describe("Plecs: estat honest del paquet", () => {
     const { container, rerender } = render(<PackageNotice pkg={{ status: "complete", gaps: [], section_status: {} }} documents={[]} />);
     expect(container.textContent).not.toMatch(/falten|Falta/);
     rerender(<PackageNotice pkg={{ status: "unknown", gaps: [], section_status: {} }} documents={[]} />);
-    expect(container.textContent).toMatch(/Encara no s'ha comprovat si el paquet és complet/);
+    expect(container.textContent).toContain("Encara no s'ha verificat si el paquet documental és complet.");
     rerender(<PackageNotice pkg={null} documents={[]} />);
     expect(container.textContent).toBe("");
+  });
+
+  it("F10: tres estats amb copy pròpia; un «incomplet» sense forats explícits no diu mai que falten documents", () => {
+    const { container, rerender } = render(<PackageNotice pkg={{ status: "complete", gaps: [], section_status: {} }} documents={[]} />);
+    expect(container.textContent).toContain("verificat");
+    rerender(<PackageNotice pkg={{ status: "unknown", gaps: [], section_status: {} }} documents={[]} />);
+    expect(container.textContent).toContain(PACKAGE_COVERAGE_TEXT.unknown);
+    expect(container.textContent).not.toMatch(/falten|Falta/i);
+    rerender(<PackageNotice pkg={{ status: "incomplete", gaps: [], section_status: {} }} documents={[]} />);
+    expect(container.textContent).toContain(PACKAGE_COVERAGE_TEXT.unknown);
+    expect(container.textContent).not.toMatch(/falten|Falta/i);
+    rerender(<PackageNotice pkg={{ status: "incomplete", gaps: [{ code: "no_text", key: "d1", would_provide: [] }], section_status: {} }} documents={[{ ...doc({ id: "d1" }), name: "PPT.pdf" }]} />);
+    expect(container.textContent).toContain("Falten documents");
+    expect(container.textContent).toContain("PPT.pdf: sense text llegible");
   });
 });

@@ -604,7 +604,7 @@ export function warningLabel(code: string): string {
 
 /** Vocabulari tancat dels avisos de l'anàlisi del plec (v3). Separat de WARNING_LABELS. */
 export const ANALYSIS_WARNING_LABELS: Record<string, string> = {
-  analysis_missing: "Encara no hi ha anàlisi del plec",
+  analysis_missing: "Encara no hi ha cap anàlisi del plec",
   analysis_stale: "L'anàlisi del plec està desactualitzada",
   blocker_potential: "L'anàlisi detecta possibles bloqueigs (no confirmats)",
   deadline_passed: "El termini de presentació ja ha passat",
@@ -614,6 +614,66 @@ export function analysisWarningLabel(code: string): string {
   return Object.hasOwn(ANALYSIS_WARNING_LABELS, code)
     ? ANALYSIS_WARNING_LABELS[code]
     : "Avís de l'anàlisi del plec";
+}
+
+/** L'absència d'anàlisi no és «un avís de l'anàlisi» (F11): es diu a part. */
+export const ANALYSIS_MISSING = "analysis_missing";
+
+export interface DecisionReasonCopy {
+  /** Cap anàlisi del plec vigent: el motiu es demana per això. */
+  missing: boolean;
+  /** Els avisos d'una anàlisi (o del termini), sense `analysis_missing`. */
+  warnings: string[];
+  /** «Motiu · obligatori si aproves: …» (sense el punt final). */
+  line: string;
+  /** Etiqueta del camp quan el motiu és obligatori. */
+  label: string;
+  /** Text d'ajuda del camp quan el motiu és obligatori. */
+  placeholder: string;
+  /** Capçalera del bloc del modal amb el que quedarà registrat. */
+  heading: string;
+}
+
+function warningsCount(count: number): string {
+  return `${count} ${count === 1 ? "avís" : "avisos"}`;
+}
+
+/**
+ * Per què el GO demana motiu, sense dir mai «N avisos de l'anàlisi» quan no hi
+ * ha cap anàlisi (F11): `analysis_missing` se separa dels avisos d'una anàlisi
+ * existent.
+ */
+export function decisionReasonCopy(codes: string[]): DecisionReasonCopy {
+  const missing = codes.includes(ANALYSIS_MISSING);
+  const warnings = codes.filter((code) => code !== ANALYSIS_MISSING);
+  if (missing && warnings.length === 0) {
+    return {
+      missing,
+      warnings,
+      line: "encara no hi ha cap anàlisi del plec",
+      label: "Motiu (obligatori: encara no hi ha cap anàlisi del plec)",
+      placeholder: "Per què es presenta l'empresa sense cap anàlisi del plec?",
+      heading: "Quedarà registrat que en signar no hi havia cap anàlisi del plec",
+    };
+  }
+  if (missing) {
+    return {
+      missing,
+      warnings,
+      line: `encara no hi ha cap anàlisi del plec, i el registre de la decisió inclou ${warningsCount(warnings.length)} més`,
+      label: "Motiu (obligatori: encara no hi ha cap anàlisi del plec i hi ha avisos)",
+      placeholder: "Per què es presenta l'empresa sense cap anàlisi del plec i malgrat els avisos?",
+      heading: "El que quedarà registrat amb la decisió",
+    };
+  }
+  return {
+    missing,
+    warnings,
+    line: `el registre de la decisió inclou ${warningsCount(warnings.length)} de l'anàlisi del plec`,
+    label: "Motiu (obligatori: hi ha avisos de l'anàlisi del plec)",
+    placeholder: "Per què es presenta l'empresa malgrat els avisos de l'anàlisi del plec?",
+    heading: "Avisos de l'anàlisi del plec que quedaran registrats",
+  };
 }
 
 export const OUTDATED_LABELS: Record<string, string> = {

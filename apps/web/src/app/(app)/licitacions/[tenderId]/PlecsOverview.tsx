@@ -8,7 +8,12 @@
  */
 
 import { StatusPill } from "@/components/ui";
-import type { TenderDocumentMeta, TenderPackage } from "@/lib/tenders";
+import {
+  PACKAGE_COVERAGE_TEXT,
+  packageCoverageState,
+  type TenderDocumentMeta,
+  type TenderPackage,
+} from "@/lib/tenders";
 
 import {
   PACKAGE_STATUS_LABELS,
@@ -93,26 +98,30 @@ export function PlecsReadingLine({ documents }: { documents: TenderDocumentMeta[
  */
 export function PackageNotice({ pkg, documents }: { pkg: TenderPackage | null; documents: TenderDocumentMeta[] }) {
   if (!pkg) return null;
-  if (pkg.status === "complete") {
+  // La mateixa semàntica que la quota (F10): `packageCoverageState`.
+  const state = packageCoverageState(pkg);
+  if (state === "complete") {
     return (
       <p role="status" className="text-[13px] text-muted">
-        <span className="font-heading font-semibold text-ink">{PACKAGE_STATUS_LABELS.complete}.</span> Segons la classificació
-        vigent no falta cap document del plec.
+        <span className="font-heading font-semibold text-ink">{PACKAGE_STATUS_LABELS.complete}.</span>{" "}
+        {PACKAGE_COVERAGE_TEXT.complete}
       </p>
     );
   }
-  if (pkg.status === "unknown") {
+  if (state === "unknown") {
     return (
       <div role="status" className="rounded-card border border-border bg-subtle px-4 py-3 text-[13px] text-muted">
-        <span className="font-heading font-semibold text-ink">{PACKAGE_STATUS_LABELS.unknown}.</span> Encara no s&apos;ha
-        comprovat si el paquet és complet: que no hi hagi cap avís no vol dir que no hi falti res.
+        <span className="font-heading font-semibold text-ink">{PACKAGE_STATUS_LABELS.unknown}.</span>{" "}
+        {PACKAGE_COVERAGE_TEXT.unknown} Que no hi hagi cap avís no vol dir que no hi falti res.
       </div>
     );
   }
   const names = new Map(documents.map((document) => [document.id, document.name]));
   return (
     <div role="status" className="rounded-card border border-warning/25 bg-warning-soft px-4 py-3 text-[13px]">
-      <p className="font-heading font-semibold text-warning">{PACKAGE_STATUS_LABELS.incomplete}: falten documents</p>
+      <p className="font-heading font-semibold text-warning">
+        {PACKAGE_STATUS_LABELS.incomplete}: {PACKAGE_COVERAGE_TEXT.incomplete}
+      </p>
       <ul className="mt-1.5 space-y-1 text-ink">
         {pkg.gaps.map((gap, index) => (
           <li key={`${gap.code}-${gap.key ?? index}`}>

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
+import { CpvLookup, CpvNotApplied } from "@/components/catalogue/CatalogueFilters";
 import { CatalogueTabs } from "@/components/catalogue/CatalogueTabs";
 import { CatalogueView } from "@/components/catalogue/CatalogueView";
 import { CpvMatchLine, DeadlineCell, TenderStatusPills } from "@/components/catalogue/CatalogueRow";
@@ -34,6 +35,7 @@ import { formatMoney } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
 import {
   MATCH_STATUS_HELP,
+  candidatesCause,
   MATCH_STATUS_LABELS,
   shortSummary,
   type MatchSummary,
@@ -43,7 +45,6 @@ import {
 import {
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
-  TENDER_STATUS_LABELS,
   labelOf,
   sourceLabel,
   type CataloguePage,
@@ -54,6 +55,7 @@ import type { DashboardSummary } from "@/lib/types";
 import {
   EMPTY_FILTERS,
   MODES,
+  ONLY_OPEN_LABEL,
   PAGE_SIZE,
   SORT_OPTIONS,
   activeMode,
@@ -61,6 +63,7 @@ import {
   feedQuery,
   modeFromParam,
   tabFromParams,
+  tenderStatusFilterOptions,
   type Filters,
 } from "./query";
 
@@ -109,6 +112,12 @@ function ReviewFeed() {
   const [offset, setOffset] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(urlQ !== "");
   const recalculation = useMutation();
+  // F16: el text del CPV que no s'ha resolt en cap codi, i el que s'ha intentat aplicar.
+  const [unresolvedCpv, setUnresolvedCpv] = useState<string | null>(null);
+  const [rejectedCpv, setRejectedCpv] = useState<string | null>(null);
+  useEffect(() => {
+    if (unresolvedCpv === null) setRejectedCpv(null);
+  }, [unresolvedCpv]);
 
   // La cerca global i «Avui» arriben per la URL. Si la URL canvia sense
   // remuntar la pàgina (una segona cerca), el filtre s'aplica igualment.
@@ -159,9 +168,14 @@ function ReviewFeed() {
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const appliedCount = countApplied(applied);
   const openCount = summary.data?.actionable ?? null;
+  // El Radar no s'ha calculat per a cap licitació visible (F1): els zeros per
+  // estat no són resultats, i l'empty state no pot dir «cap candidata».
+  const notEvaluated = summary.data ? summary.data.evaluated_count === 0 : false;
 
   function apply(event: React.FormEvent) {
     event.preventDefault();
+    // F16: una paraula al CPV que no és cap codi no s'aplica, i es diu.
+    setRejectedCpv(unresolvedCpv);
     setOffset(0);
     setApplied(filters);
   }
@@ -308,7 +322,33 @@ function ReviewFeed() {
     }
     if (mode === "candidate") {
       const openLabel = openCount ? `Mira les ${openCount} obertes` : "Mira totes les licitacions";
-      if (profile.data && profile.data.counts.cpv_preferences === 0) {
+      // Sense cap licitació avaluada el Radar no s'ha calculat (unknown ≠ no): no
+      // es diu «cap candidata» ni es culpa el perfil, sigui com sigui (F1).
+      if (notEvaluated) {
+        return (
+          <EmptyState
+            title="El Radar encara no s'ha calculat"
+            description={`El pre-fit encara no s'ha calculat per a cap de les ${summary.data?.total_tenders ?? ""} licitacions: no se sap quines encaixen amb el perfil fins que es calculi.`}
+            action={
+              <>
+                {recalculation.error && <p className="mb-2 text-[13px] text-danger">{recalculation.error}</p>}
+                <Button variant="primary" loading={recalculation.saving} onClick={() => void recalculate()}>
+                  Calcula el pre-fit
+                </Button>
+              </>
+            }
+            secondary={
+              <Button variant="secondary" onClick={showOpen}>
+                {openLabel}
+              </Button>
+            }
+          />
+        );
+      }
+      // La MATEIXA causa que Avui (`candidatesCause`, lib/matching): només es culpa
+      // el perfil si no té CPV, territoris NI preferències de contracte.
+      const cause = candidatesCause(summary.data, profile.data?.counts);
+      if (cause === "profile") {
         return (
           <EmptyState
             title="Encara no sabem què busqueu"
@@ -329,7 +369,11 @@ function ReviewFeed() {
       return (
         <EmptyState
           title="Cap candidata ara mateix"
-          description="Cap de les licitacions ingerides encaixa prou amb el perfil declarat. Zero candidates és una resposta legítima, no un error: podeu ampliar els CPV o els territoris al perfil, o revisar la vista «Encaix baix»."
+          description={
+            cause === "insufficient_data" && summary.data
+              ? `Les ${summary.data.evaluated_count} licitacions avaluades no tenen prou metadades per calcular-ne l'encaix. Zero candidates és una resposta legítima, no un error.`
+              : `Cap de les ${summary.data ? `${summary.data.evaluated_count} ` : ""}licitacions avaluades encaixa prou amb el perfil declarat. Zero candidates és una resposta legítima, no un error: podeu revisar la vista «Encaix baix».`
+          }
           action={
             <Button variant="primary" onClick={showOpen}>
               {openLabel}
@@ -401,7 +445,7 @@ function ReviewFeed() {
       <div className="mb-1 flex flex-wrap items-center gap-2" role="group" aria-label="Vistes">
         {MODES.filter((option) => option.value !== "all").map((option) => {
           const pressed = option.value === mode;
-          const count = summary.data ? summary.data[option.count] : null;
+          const count = summary.data && !notEvaluated ? summary.data[option.count] : null;
           return (
             <button
               key={option.value}
@@ -456,13 +500,12 @@ function ReviewFeed() {
                 onChange={(event) => setFilters({ ...filters, q: event.target.value })}
               />
             </Field>
-            <Field label="CPV">
-              <Input
-                value={filters.cpv}
-                placeholder="45314320"
-                onChange={(event) => setFilters({ ...filters, cpv: event.target.value })}
-              />
-            </Field>
+            {/* El mateix cercador de CPV que a «Totes» (F16): nom + codi, i el filtre pel codi triat. */}
+            <CpvLookup
+              value={filters.cpv}
+              onChange={(cpv) => setFilters((current) => ({ ...current, cpv }))}
+              onUnresolved={setUnresolvedCpv}
+            />
             <Field label="NUTS" hint="Prefix: ES51, ES5…">
               <Input
                 value={filters.nuts}
@@ -470,11 +513,11 @@ function ReviewFeed() {
                 onChange={(event) => setFilters({ ...filters, nuts: event.target.value })}
               />
             </Field>
-            <Field label="Estat de la licitació" hint="Segons la font, no el pre-fit">
+            <Field label="Estat de la licitació" hint="«En termini»: publicada i amb el termini encara obert (no el pre-fit)">
               <Select
                 value={filters.status}
                 placeholder="Tots"
-                options={options(facets.data?.statuses, TENDER_STATUS_LABELS)}
+                options={tenderStatusFilterOptions(facets.data?.statuses)}
                 onChange={(event) => setFilters({ ...filters, status: event.target.value })}
               />
             </Field>
@@ -544,17 +587,25 @@ function ReviewFeed() {
           </div>
 
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
-              <input
-                type="checkbox"
-                checked={filters.only_open}
-                onChange={(event) =>
-                  setFilters({ ...filters, only_open: event.target.checked })
-                }
-                className="h-4 w-4 border-border-strong accent-brand"
-              />
-              Només amb termini obert
-            </label>
+            {/* C3: conviu amb l'estat «En termini» (accionable); aquest només mira el
+                termini, no l'estat de la font, i l'ajuda ho diu. */}
+            <div className="flex flex-col gap-0.5">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+                <input
+                  type="checkbox"
+                  checked={filters.only_open}
+                  onChange={(event) =>
+                    setFilters({ ...filters, only_open: event.target.checked })
+                  }
+                  className="h-4 w-4 border-border-strong accent-brand"
+                />
+                {ONLY_OPEN_LABEL}
+              </label>
+              <span className="pl-6 text-caption text-muted">
+                Inclou les licitacions amb termini posterior a ara, sigui quin sigui l&apos;estat de la font. Per a
+                les publicades i encara obertes, tria «En termini» a l&apos;estat.
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               <Button type="button" variant="ghost" onClick={clear}>
                 Neteja
@@ -567,6 +618,7 @@ function ReviewFeed() {
         </form>
       </details>
 
+      <CpvNotApplied text={rejectedCpv} className="mb-4" />
       <FilterChips chips={feedFilterChips(applied, facets.data)} onRemove={removeFilter} className="mb-4" />
 
       <Card>
@@ -615,7 +667,12 @@ function ReviewFeed() {
           renderEmpty()
         ) : (
           <>
-          <PreFitUncalculatedNotice count={items.filter(({ match }) => !match).length} />
+          <PreFitUncalculatedNotice
+            count={items.filter(({ match }) => !match).length}
+            onCalculate={() => void recalculate()}
+            calculating={recalculation.saving}
+            error={recalculation.error}
+          />
           <DataTable<TenderMatchListItem>
             columns={columns}
             rows={items}

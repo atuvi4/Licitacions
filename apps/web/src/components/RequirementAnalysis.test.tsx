@@ -589,7 +589,7 @@ describe("RequirementAnalysisSection · 3B-2 (quota canònica, adopció, buits i
     force: false, input_fingerprint: "f", documents: [], skipped_documents: [], pages_total: 0, pages_in_plan: 0,
     pages_truncated: false, chunks: 3, chunks_to_send: 3, reusable_run_id: null, estimated_input_tokens: null,
     estimated_output_tokens: null, max_chunks: 40, allowed: false, blocking_reason: "package_incomplete",
-    prerequisites: { version: "v1", provider_basis: "real", failed: ["package_incomplete"], advisory: [], warnings: [], package: { status: "incomplete", issues: [], accepted: false } },
+    prerequisites: { version: "v1", provider_basis: "real", failed: ["package_incomplete"], advisory: [], warnings: [], package: { status: "incomplete", issues: [{ code: "package_gap", gap_code: "required_role_missing" }], accepted: false } },
     provider_basis: "real", warnings: [], estimated_cost_usd: 0.5, accept_incomplete_package: false, expires_at: "",
   };
 
@@ -623,7 +623,7 @@ describe("RequirementAnalysisSection · 3B-2 (quota canònica, adopció, buits i
   it("acceptar el paquet incomplet torna a demanar el volum amb l'acceptació explícita", async () => {
     previewAnalysis.mockResolvedValueOnce(openQuote).mockResolvedValueOnce({
       ...openQuote, id: "q2", allowed: true, blocking_reason: null, accept_incomplete_package: true,
-      prerequisites: { ...openQuote.prerequisites!, failed: [], accept_incomplete_package: true, package: { status: "incomplete", issues: [], accepted: true } },
+      prerequisites: { ...openQuote.prerequisites!, failed: [], accept_incomplete_package: true, package: { status: "incomplete", issues: [{ code: "package_gap", gap_code: "required_role_missing" }], accepted: true } },
     });
     renderSection(null);
     await flush();
