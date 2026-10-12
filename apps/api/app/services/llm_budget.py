@@ -145,13 +145,7 @@ class ModelPrice:
     output_per_million: Decimal
 
 
-def model_price(model: str, prices: Mapping[str, Any] | None = None) -> ModelPrice | None:
-    """El preu del model EXACTE (§13.5: pinat a un ID exacte). Cap prefix.
-
-    Un preu mal format (no numeric o negatiu) es tracta com absent: no es calcula
-    cap cost amb un preu que no es pot llegir.
-    """
-    raw = (settings.LLM_MODEL_PRICES if prices is None else prices).get(model)
+def _parse_price(raw: Any) -> ModelPrice | None:
     if not isinstance(raw, Mapping):
         return None
     try:
@@ -166,11 +160,50 @@ def model_price(model: str, prices: Mapping[str, Any] | None = None) -> ModelPri
     return price
 
 
+def long_context_price(model: str) -> tuple[int, ModelPrice] | None | bool:
+    """El tram de context llarg del model: `(llindar, preu)`; `None` si no en te; `False` si
+    n'hi ha un pero esta mal format (llavors el model es tracta com SENSE preu)."""
+    raw = settings.LLM_MODEL_LONG_CONTEXT_PRICES.get(model)
+    if raw is None:
+        return None
+    price = _parse_price(raw)
+    threshold = raw.get("above_input_tokens") if isinstance(raw, Mapping) else None
+    if (
+        price is None
+        or isinstance(threshold, bool)
+        or not isinstance(threshold, int)
+        or threshold <= 0
+    ):
+        return False
+    return threshold, price
+
+
+def model_price(
+    model: str, prices: Mapping[str, Any] | None = None, *, input_tokens: int | None = None
+) -> ModelPrice | None:
+    """El preu del model EXACTE (§13.5: pinat a un ID exacte). Cap prefix.
+
+    Un preu mal format (no numeric o negatiu) es tracta com absent: no es calcula
+    cap cost amb un preu que no es pot llegir. Si el model te tram de context llarg i
+    `input_tokens` (els d'UNA peticio, o la suma de diverses en una estimacio: aixi mai es
+    subestima) en supera el llindar, el preu es el del tram. Un tram mal format: sense preu.
+    """
+    price = _parse_price((settings.LLM_MODEL_PRICES if prices is None else prices).get(model))
+    if price is None or prices is not None:
+        return price
+    tier = long_context_price(model)
+    if tier is False:
+        return None
+    if tier is not None and input_tokens is not None and input_tokens > tier[0]:
+        return tier[1]
+    return price
+
+
 def chunk_cost(
     model: str, *, input_tokens: int | None, output_tokens: int | None
 ) -> Decimal | None:
-    """`Usage` x preus. `None` si el model no te preu."""
-    price = model_price(model)
+    """`Usage` x preus (amb el tram que toca per `input_tokens`). `None` si el model no te preu."""
+    price = model_price(model, input_tokens=input_tokens)
     if price is None:
         return None
     total = (

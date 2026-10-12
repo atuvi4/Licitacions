@@ -40,6 +40,13 @@ _TOOL_NAME = "record_extraction"
 #: error. 429, 408, 409 i 5xx NO hi son: son transitoris i els gestiona
 #: `LLM_MAX_RETRIES` com sempre.
 FATAL_HTTP_STATUSES = frozenset({400, 401, 403, 404})
+#: Motius de parada que deixen la sortida incompleta: mai es fa servir, encara que hi hagi
+#: una crida a la tool (un JSON tallat pot validar). `max_tokens`: el limit de sortida;
+#: `model_context_window_exceeded`: la finestra de context del model.
+TRUNCATION_STOP_REASONS = frozenset({"max_tokens", "model_context_window_exceeded"})
+#: El model ha refusat respondre: cap contingut, encara que n'hi hagi, es fa servir.
+REFUSAL_STOP_REASON = "refusal"
+
 #: Llargada maxima del missatge del proveidor que es desa.
 MAX_ERROR_MESSAGE_CHARS = 300
 _KEY_PATTERN = re.compile(r"sk-ant-[A-Za-z0-9_\-]+")
@@ -122,6 +129,39 @@ class AnthropicProvider:
         )
         return self._client
 
+    def request_params(
+        self,
+        *,
+        system: str,
+        user_content: str,
+        json_schema: dict[str, Any],
+        max_output_tokens: int,
+    ) -> dict[str, Any]:
+        """El cos de `messages.create`. Cap parametre de mostreig (`temperature`, `top_p`,
+        `top_k`): es fan servir els del model. `thinking` NOMES per als models de
+        `LLM_THINKING_DISABLED_MODELS`, i nomes per desactivar-lo (tool forcada)."""
+        params: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": max_output_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user_content}],
+            "tools": [
+                {
+                    "name": _TOOL_NAME,
+                    "description": (
+                        "Registra els requisits i criteris trobats al fragment. "
+                        "Utilitza NOMES informacio explicita del text proporcionat."
+                    ),
+                    "input_schema": json_schema,
+                }
+            ],
+            # Obliga el model a respondre per la tool: sense text lliure.
+            "tool_choice": {"type": "tool", "name": _TOOL_NAME},
+        }
+        if self._model in settings.LLM_THINKING_DISABLED_MODELS:
+            params["thinking"] = {"type": "disabled"}
+        return params
+
     async def extract_structured(
         self,
         *,
@@ -134,24 +174,12 @@ class AnthropicProvider:
         import anthropic
 
         try:
-            response = await client.messages.create(
-                model=self._model,
-                max_tokens=max_output_tokens,
+            response = await client.messages.create(**self.request_params(
                 system=system,
-                messages=[{"role": "user", "content": user_content}],
-                tools=[
-                    {
-                        "name": _TOOL_NAME,
-                        "description": (
-                            "Registra els requisits i criteris trobats al fragment. "
-                            "Utilitza NOMES informacio explicita del text proporcionat."
-                        ),
-                        "input_schema": json_schema,
-                    }
-                ],
-                # Obliga el model a respondre per la tool: sense text lliure.
-                tool_choice={"type": "tool", "name": _TOOL_NAME},
-            )
+                user_content=user_content,
+                json_schema=json_schema,
+                max_output_tokens=max_output_tokens,
+            ))
         except anthropic.APITimeoutError as exc:
             raise ProviderTimeoutError(str(exc)) from exc
         except anthropic.APIStatusError as exc:
@@ -175,12 +203,17 @@ class AnthropicProvider:
             stop_reason=getattr(response, "stop_reason", None),
         )
 
-        # Primer el limit de sortida: una resposta tallada es inservible encara
-        # que el tros que ha arribat sembli un JSON valid.
-        if usage.stop_reason == "max_tokens":
+        # Primer el limit de sortida (o de context): una resposta tallada es inservible
+        # encara que el tros que ha arribat sembli un JSON valid.
+        if usage.stop_reason in TRUNCATION_STOP_REASONS:
             raise OutputTruncatedError(
-                f"La resposta ha topat amb el limit de sortida ({max_output_tokens} tokens).",
+                f"La resposta s'ha tallat ({usage.stop_reason}; sortida maxima "
+                f"{max_output_tokens} tokens).",
                 usage=usage,
+            )
+        if usage.stop_reason == REFUSAL_STOP_REASON:
+            raise ProviderError(
+                "El model ha refusat respondre (stop_reason=refusal).", "refusal", usage=usage
             )
 
         payload: dict[str, Any] | None = None

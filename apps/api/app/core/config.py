@@ -180,6 +180,17 @@ class Settings(BaseSettings):
     # Per a un proveidor REAL de producte el preu es obligatori i es busca pel model
     # EXACTE (3B-2 §6.7): sense preu, la quota i el handler refusen (`price_unknown`).
     LLM_MODEL_PRICES: dict[str, dict[str, float]] = Field(default_factory=dict)
+    # Tram de context llarg, per model (opcional): per sobre de `above_input_tokens` tokens
+    # d'entrada A UNA PETICIO, el preu es aquest en lloc del de `LLM_MODEL_PRICES`.
+    #   LLM_MODEL_LONG_CONTEXT_PRICES={"<model>": {"above_input_tokens": 100000,
+    #                                              "input": <USD/1M>, "output": <USD/1M>}}
+    # Un tram mal format deixa el model SENSE preu (`price_unknown`): mai es calcula a la baixa.
+    LLM_MODEL_LONG_CONTEXT_PRICES: dict[str, dict[str, float]] = Field(default_factory=dict)
+    # Models als quals l'adaptador d'Anthropic demana EXPLICITAMENT `thinking: {"type":
+    # "disabled"}`. La sortida estructurada es una tool FORCADA (`tool_choice`), incompatible amb
+    # el thinking; per a un model que el pugui activar per defecte, el payload ho ha de dir.
+    # Buit per defecte: cap altre model (ni V1) no canvia de payload.
+    LLM_THINKING_DISABLED_MODELS: list[str] = Field(default_factory=list)
     # Caps de despesa en dolars (3B-2 §6.7, decisio 5). Valen fins que l'operador
     # registra una autoritzacio nova del mateix scope (`llm_budget_authorizations`).
     #   canary: una prova de pocs chunks (`only_chunks`);
