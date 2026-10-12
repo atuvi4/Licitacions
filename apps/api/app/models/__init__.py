@@ -74,6 +74,7 @@ from app.models.requirements import (
     Requirement,
     RequirementEvidence,
     RequirementExtractionRun,
+    RequirementUncertainty,
 )
 from app.models.resources import CompanyEquipment
 from app.models.review import (
@@ -218,6 +219,7 @@ __all__ = [
     "RequirementCapabilityNeedSourceRefLink",
     "RequirementTerritory",
     "RequirementEvidence",
+    "RequirementUncertainty",
     "RequirementExtractionRun",
     "ServiceCPV",
     "Source",

@@ -21,6 +21,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.ai.contract_v3 import parse_chunk_v3_result
+from app.ai.prompts.requirements_product_v2 import (
+    EXTRACTOR_VERSION_PRODUCT_V2,
+    PROMPT_VERSION_PRODUCT_V2,
+    SYSTEM_PROMPT_PRODUCT_V2,
+    build_user_message_product_v2,
+)
 from app.ai.prompts.requirements_v1 import (
     EXTRACTOR_VERSION,
     PROMPT_VERSION,
@@ -43,6 +49,12 @@ from app.ai.schemas import (
     SCHEMA_VERSION,
     ChunkExtractionOut,
     chunk_output_json_schema,
+)
+from app.ai.schemas_product_v2 import (
+    SCHEMA_VERSION_PRODUCT_V2,
+    ChunkExtractionOutProductV2,
+    chunk_output_json_schema_product_v2,
+    parse_chunk_product_v2,
 )
 from app.ai.schemas_v2 import (
     SCHEMA_VERSION_V2,
@@ -77,6 +89,9 @@ class ExtractorProfile:
     #: cita, candidats a criteri). La canonada hi entra per una branca propia i
     #: la de v1/v2 no es toca. Veure `app.ai.contract_v3`.
     claims_contract: bool = False
+    #: Cert si el perfil retorna incerteses MATERIALS i la canonada les persisteix a
+    #: `requirement_uncertainties` (0062). V1 i v2: fals (les descarten, com sempre).
+    material_uncertainties: bool = False
     #: Com es valida la resposta. `None` = `output_model.model_validate`, com
     #: sempre. La v3 valida element a element (`parse_chunk_v3_result`).
     parser: Callable[[Any], Any] | None = None
@@ -109,6 +124,32 @@ V2 = ExtractorProfile(
     json_schema=chunk_output_json_schema_v2,
     output_model=ChunkExtractionOutV2,
     structured_values=True,
+)
+
+#: **Perfil de producte v2** (`product-v2`). NO es la `v2` de sobre (valors
+#: estructurats, benchmark): es la V1 amb cites literals reforcades, atomicitat i
+#: incerteses materials persistides (0062). Mateix esquema de requisits i criteris que
+#: V1; versions propies d'extractor, prompt i esquema, de manera que la identitat, la
+#: reutilitzacio, la represa, l'historial de cost i el benchmark son separats de V1.
+#:
+#: **Experimental i intern: no es pot demanar per nom.** Com la v3, viu a
+#: `INTERNAL_PROFILES` i nomes s'executa si el codi el passa explicitament (canari,
+#: operador des del codi). Cap tenant, quota, job, endpoint ni
+#: `REQUIREMENTS_PRODUCT_PROFILE` no el resol. Promocionar-lo (passar-lo a `PROFILES`)
+#: es una decisio explicita, en un commit a part, despres de l'Attempt 3.
+PRODUCT_V2 = ExtractorProfile(
+    name="product-v2",
+    extractor_version=EXTRACTOR_VERSION_PRODUCT_V2,
+    prompt_version=PROMPT_VERSION_PRODUCT_V2,
+    schema_version=SCHEMA_VERSION_PRODUCT_V2,
+    system_prompt=SYSTEM_PROMPT_PRODUCT_V2,
+    build_user_message=build_user_message_product_v2,
+    json_schema=chunk_output_json_schema_product_v2,
+    output_model=ChunkExtractionOutProductV2,
+    structured_values=False,
+    material_uncertainties=True,
+    # Les incerteses, una a una: una de mal formada no fa perdre els requisits.
+    parser=parse_chunk_product_v2,
 )
 
 #: **Extraction Contract v3. Intern: no es pot demanar per nom.** Existeix
@@ -145,7 +186,14 @@ V3 = ExtractorProfile(
 #: Els perfils que es poden demanar per NOM (jobs, pressupostos, benchmark).
 PROFILES: dict[str, ExtractorProfile] = {profile.name: profile for profile in (V1, V2)}
 #: Perfils que existeixen pero nomes s'executen si el codi els passa directament.
-INTERNAL_PROFILES: dict[str, ExtractorProfile] = {V3.name: V3}
+INTERNAL_PROFILES: dict[str, ExtractorProfile] = {
+    profile.name: profile for profile in (V3, PRODUCT_V2)
+}
+#: Perfils interns EXPERIMENTALS (subconjunt d'`INTERNAL_PROFILES`). A mes de no ser
+#: demanables per nom: el seu run MAI es la base vigent de cap licitacio, i el seu
+#: historial es separat (un run seu no supera, per a la represa, el d'un altre perfil,
+#: ni a l'inreves). La v3 no hi es: conserva el comportament que ja tenia.
+EXPERIMENTAL_PROFILES: dict[str, ExtractorProfile] = {PRODUCT_V2.name: PRODUCT_V2}
 
 #: El perfil que s'executa si ningu no en demana cap altre.
 #:

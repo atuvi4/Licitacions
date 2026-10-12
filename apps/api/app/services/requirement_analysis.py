@@ -63,7 +63,7 @@ from app.ai.contract_v3 import (
 )
 from app.ai.normalize_v2 import alternative_group_key, derive_obligation, normalise_requirement
 from app.ai.output_normalization import normalise_output
-from app.ai.profiles import DEFAULT_PROFILE, ExtractorProfile
+from app.ai.profiles import DEFAULT_PROFILE, EXPERIMENTAL_PROFILES, ExtractorProfile
 from app.ai.provider import (
     OutputTruncatedError,
     ProviderError,
@@ -99,6 +99,7 @@ from app.models.enums import (
     RequirementRunBasis,
     RequirementScope,
     ReviewStatus,
+    UncertaintyQuoteStatus,
 )
 from app.models.jobs import ACTIVE_WORK_JOB_STATUSES, WorkJob
 from app.models.requirements import (
@@ -107,6 +108,7 @@ from app.models.requirements import (
     Requirement,
     RequirementEvidence,
     RequirementExtractionRun,
+    RequirementUncertainty,
 )
 from app.models.tender_documents import (
     TenderDocumentContent,
@@ -119,7 +121,11 @@ from app.models.tenders import Tender, TenderDocument, TenderLot
 from app.services import llm_budget
 from app.services.analysis_coverage import NOT_SELECTED, build_coverage
 from app.services.document_roles import effective_document_roles
-from app.services.evidence_validation import diagnose_missing_quote, locate_quote
+from app.services.evidence_validation import (
+    diagnose_missing_quote,
+    locate_quote,
+    normalize_quote,
+)
 from app.services.extraction_qa import QaStatus, combine_status
 from app.services.requirement_chunking import (
     DEFAULT_DOCUMENT_TYPES,
@@ -857,6 +863,18 @@ FINISHED_RUN_STATUSES = (
 )
 
 
+def experimental_profile_of(run: RequirementExtractionRun) -> ExtractorProfile | None:
+    """El perfil experimental (`EXPERIMENTAL_PROFILES`) amb que es va fer el run, si ho es.
+    Per les tres versions: son la identitat del perfil."""
+    versions = (run.extractor_version, run.prompt_version, run.schema_version)
+    for profile in EXPERIMENTAL_PROFILES.values():
+        if (profile.extractor_version, profile.prompt_version, profile.schema_version) == (
+            versions
+        ):
+            return profile
+    return None
+
+
 async def run_is_superseded(session: AsyncSession, run: RequirementExtractionRun) -> bool:
     """Cert si hi ha un run acabat MES NOU de la mateixa licitacio.
 
@@ -874,6 +892,19 @@ async def run_is_superseded(session: AsyncSession, run: RequirementExtractionRun
         RequirementExtractionRun.status.in_(FINISHED_RUN_STATUSES),
         RequirementExtractionRun.started_at > run.started_at,
     ]
+    # Historial separat dels perfils experimentals (product-v2): un parcial seu nomes el
+    # supera un run del MATEIX perfil, i un run seu no supera el parcial de cap altre.
+    if experimental_profile_of(run) is not None:
+        newer += [
+            RequirementExtractionRun.extractor_version == run.extractor_version,
+            RequirementExtractionRun.prompt_version == run.prompt_version,
+            RequirementExtractionRun.schema_version == run.schema_version,
+        ]
+    else:
+        newer += [
+            RequirementExtractionRun.extractor_version != profile.extractor_version
+            for profile in EXPERIMENTAL_PROFILES.values()
+        ]
     if run.run_basis in TRUSTED_RUN_BASES:
         newer.append(RequirementExtractionRun.run_basis.in_(TRUSTED_RUN_BASES))
     return bool(await session.scalar(sa.select(sa.exists().where(*newer))))
@@ -1086,6 +1117,8 @@ async def analyze_tender_requirements(
     # cites noves, no descartar-les.
     seen_requirements: dict[str, Requirement] = {}
     seen_awards: set[str] = set()
+    # Les incerteses materials del run (product-v2): dedup i millor procedencia.
+    uncertainty_ledger = UncertaintyLedger(session)
     last_error: str | None = None
     # Per index de chunk, el motiu pel qual no s'ha pogut fer servir. El
     # recompte ja hi era; el que faltava era saber QUINS, que es l'unic que
@@ -1115,6 +1148,7 @@ async def analyze_tender_requirements(
             tally=tally,
             seen_requirements=seen_requirements,
             seen_awards=seen_awards,
+            uncertainty_ledger=uncertainty_ledger,
         )
         run.chunks_completed += len(plan.reused)
 
@@ -1294,6 +1328,7 @@ async def analyze_tender_requirements(
             seen_awards=seen_awards,
             profile=profile,
             rejections=rejections,
+            uncertainty_ledger=uncertainty_ledger,
         )
         if rejections:
             chunk_rejections[chunk.index] = rejections[:MAX_CHUNK_REJECTIONS]
@@ -1560,8 +1595,10 @@ async def _copy_reused_results(
     tally: _ChunkTally,
     seen_requirements: dict[str, Requirement],
     seen_awards: set[str],
+    uncertainty_ledger: UncertaintyLedger | None = None,
 ) -> None:
-    """Copia al run nou els requisits i criteris del run d'origen, amb les cites.
+    """Copia al run nou els requisits i criteris del run d'origen, amb les cites, i
+    les incerteses materials (product-v2, 0062): mateixa provenance, sense duplicar.
 
     Tots venen de chunks bons (un chunk fallit no persisteix res). Es copien i
     no es mouen: el run d'origen es queda sencer. Les claus de deduplicacio
@@ -1615,6 +1652,21 @@ async def _copy_reused_results(
         # criteris: un candidat v3 no ho es. A v1/v2 sempre suma, com abans.
         if counts_as_award_criterion(copy.adjudication_basis_json):
             tally.award_criteria += 1
+
+    # Incerteses: totes venen de chunks bons, com els requisits. No sumen a cap
+    # comptador de requisits ni criteris (no ho son).
+    uncertainties = (
+        await session.scalars(
+            sa.select(RequirementUncertainty)
+            .where(RequirementUncertainty.run_id == source.id)
+            .order_by(RequirementUncertainty.source_chunk_index, RequirementUncertainty.created_at)
+        )
+    ).all()
+    # Passen pel mateix registre que les deteccions noves: els chunks que ara s'envien
+    # en tenen en compte la qualitat, i el resultat es el d'un run sencer.
+    ledger = uncertainty_ledger if uncertainty_ledger is not None else UncertaintyLedger(session)
+    for original in uncertainties:
+        ledger.offer(_copy_columns(original, RequirementUncertainty, run_id=run.id))
 
 
 #: Codi d'un chunk que no s'ha enviat perque un error fatal ha aturat el run.
@@ -2077,6 +2129,278 @@ ITEM_DUPLICATE_KEY = "duplicate_key"
 MAX_CHUNK_REJECTIONS = 50
 
 
+def uncertainty_identity(
+    tender_document_id: str,
+    page_number: int,
+    scope: str,
+    *,
+    note: str,
+    literal_quote: str | None,
+) -> tuple[str, str]:
+    """`(grup, clau)` d'una incertesa dins d'un run. Sense cap comparacio semantica.
+
+    * **Grup** = la mateixa incertesa real: document, pagina declarada, ambit i nota
+      normalitzada (`normalize_quote`: espais, cometes, guions i majuscules). La mateixa
+      nota en una altra pagina o en un altre document es un altre grup: mai es fusionen.
+    * **Clau** (`dedup_key`, unica per run) = grup + la cita literal normalitzada si n'hi
+      ha; si no, grup + `note`. Dins d'un grup, cada cita literal diferent es una
+      ocurrencia diferent; sense cita literal, el grup es una sola fila.
+    """
+    base = [tender_document_id, page_number, scope, normalize_quote(note)]
+
+    def digest(parts: list[Any]) -> str:
+        payload = json.dumps(parts, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    group = digest(base)
+    if literal_quote:
+        return group, digest([*base, "literal", normalize_quote(literal_quote)])
+    return group, digest([*base, "note"])
+
+
+def uncertainty_provenance_verified(diagnosis: str | None) -> bool:
+    """Cert si l'extraccio i la pagina declarades son les del chunk (es dedueix del codi
+    de `diagnosis`, que es l'unic lloc on queda escrit)."""
+    reason = (diagnosis or "").split(":", 1)[0]
+    return reason not in (EVIDENCE_EXTRACTION_MISMATCH, EVIDENCE_PAGE_NOT_IN_CHUNK)
+
+
+def uncertainty_rank(quote_status: str, diagnosis: str | None) -> int:
+    """Qualitat de la procedencia: `literal > rejected > not_provided`, i dins de cada
+    estat no literal, la procedencia verificada per davant de la que no ho es.
+
+    4 literal (sempre verificada) · 3 rejected verificada · 2 not_provided verificada ·
+    1 rejected no verificada · 0 not_provided no verificada.
+    """
+    if quote_status == UncertaintyQuoteStatus.LITERAL:
+        return 4
+    rejected = quote_status == UncertaintyQuoteStatus.REJECTED
+    if uncertainty_provenance_verified(diagnosis):
+        return 3 if rejected else 2
+    return 1 if rejected else 0
+
+
+def _uncertainty_order(row: RequirementUncertainty) -> tuple[Any, ...]:
+    """Ordre total de qualitat (el menor guanya): rang, i en empat el chunk mes baix del
+    pla i, a la fi, el contingut. Nomes camps desats: la tria no depen de l'ordre
+    d'arribada dels chunks ni de si una fila ve d'una represa."""
+    return (
+        -uncertainty_rank(str(row.quote_status), row.diagnosis),
+        row.source_chunk_index,
+        row.diagnosis or "",
+        row.note,
+        -1 if row.char_start is None else row.char_start,
+        row.quote or "",
+    )
+
+
+#: Camps que una millora de procedencia reescriu en una fila del MATEIX run en curs.
+_UNCERTAINTY_SUPERSEDABLE = (
+    "source_chunk_index",
+    "note",
+    "extraction_id",
+    "tender_document_id",
+    "page_number",
+    "page_id",
+    "quote",
+    "char_start",
+    "char_end",
+    "quote_status",
+    "diagnosis",
+    "dedup_key",
+)
+
+UNCERTAINTY_ADDED = "added"
+UNCERTAINTY_DUPLICATE = "duplicate"
+UNCERTAINTY_SUPERSEDED = "superseded"
+#: Motiu de cobertura quan una deteccio millor substitueix la d'un altre chunk.
+UNCERTAINTY_REPLACED_LOWER = "replaced_lower_provenance"
+
+
+@dataclass(slots=True)
+class _UncertaintySlot:
+    row: RequirementUncertainty
+    key: str
+    literal: bool
+    order: tuple[Any, ...]
+
+
+class UncertaintyLedger:
+    """Les incerteses d'UN run en construccio, amb la regla de millor procedencia.
+
+    Per a cada grup (`uncertainty_identity`), l'estat final es una funcio del conjunt de
+    deteccions, no de l'ordre en que arriben:
+
+    * si alguna deteccio del grup te cita literal: una fila per cita literal diferent (la
+      millor de cada una); les deteccions sense cita literal del grup s'hi absorbeixen;
+    * si no n'hi ha cap: una sola fila, la millor (`_uncertainty_order`).
+
+    Una deteccio millor que arriba despres REESCRIU la fila del mateix run (mateix `id`):
+    es l'unica escriptura sobre una fila desada, i nomes mentre el run es construeix.
+    Les files d'un altre run (l'origen d'una represa) no es toquen mai: es copien.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self._groups: dict[str, dict[str, _UncertaintySlot]] = {}
+
+    def offer(self, candidate: RequirementUncertainty) -> tuple[str, int | None]:
+        """Ofereix una deteccio (transitoria). Torna `(resultat, chunk substituit)`."""
+        group, key = uncertainty_identity(
+            str(candidate.tender_document_id),
+            candidate.page_number,
+            str(candidate.scope),
+            note=candidate.note,
+            literal_quote=candidate.quote,
+        )
+        candidate.dedup_key = key
+        literal = candidate.quote_status == UncertaintyQuoteStatus.LITERAL
+        order = _uncertainty_order(candidate)
+        slots = self._groups.setdefault(group, {})
+        if literal:
+            weaker = next((slot for slot in slots.values() if not slot.literal), None)
+            if weaker is not None:
+                # Cap literal al grup fins ara: la literal substitueix la fila sense cita.
+                del slots[weaker.key]
+                return self._supersede(slots, weaker, candidate, key, literal, order)
+            existing = slots.get(key)
+        else:
+            if any(slot.literal for slot in slots.values()):
+                return UNCERTAINTY_DUPLICATE, None
+            existing = next(iter(slots.values()), None)
+        if existing is None:
+            self._session.add(candidate)
+            slots[key] = _UncertaintySlot(candidate, key, literal, order)
+            return UNCERTAINTY_ADDED, None
+        if order < existing.order:
+            del slots[existing.key]
+            return self._supersede(slots, existing, candidate, key, literal, order)
+        return UNCERTAINTY_DUPLICATE, None
+
+    @staticmethod
+    def _supersede(
+        slots: dict[str, _UncertaintySlot],
+        old: _UncertaintySlot,
+        candidate: RequirementUncertainty,
+        key: str,
+        literal: bool,
+        order: tuple[Any, ...],
+    ) -> tuple[str, int | None]:
+        replaced_chunk = old.order[1]  # sense llegir la fila (pot estar expirada)
+        for field in _UNCERTAINTY_SUPERSEDABLE:
+            setattr(old.row, field, getattr(candidate, field))
+        slots[key] = _UncertaintySlot(old.row, key, literal, order)
+        return UNCERTAINTY_SUPERSEDED, replaced_chunk
+
+
+#: Etapa del rebuig d'una procedencia declarada (sense cita) que no es pot verificar.
+UNCERTAINTY_STAGE_PROVENANCE = "provenance"
+
+
+def _persist_uncertainties(
+    *,
+    session: AsyncSession,
+    run: RequirementExtractionRun,
+    tender: Tender,
+    chunk: Chunk,
+    parsed: Any,
+    ledger: UncertaintyLedger,
+    record: Callable[[dict[str, Any]], None],
+) -> None:
+    """Desa les incerteses materials del chunk (product-v2, 0062).
+
+    La incertesa es conserva sempre que l'esquema la valida. Sempre amb l'extraccio i
+    el document REALS del chunk (mai els que declara el model) i la pagina declarada:
+
+    * La procedencia es verifica SEMPRE, amb cita o sense: si l'extraccio declarada no
+      es la del chunk o la pagina no hi es, `diagnosis` ho diu i hi ha un rebuig a la
+      cobertura. Mai es desa una procedencia dubtosa en silenci.
+    * La cita, NOMES si es literal a la pagina declarada del chunk: llavors porta
+      `page_id`, el text exacte de la pagina i els offsets. Si no ho es, no es desa
+      (una parafrasi no es evidencia): `quote_status = rejected` amb el diagnostic de
+      codis, i a la cobertura el mateix rebuig que una cita de requisit.
+
+    Les incerteses que l'esquema ha descartat (`parse_chunk_product_v2`) arriben com a
+    rebutjos de codis. La deduplicacio i la tria de la millor procedencia son del
+    `UncertaintyLedger` del run. Mai incrementa cap comptador de requisits o criteris.
+    """
+    for entry in getattr(parsed, "uncertainty_rejections", ()) or ():
+        record(dict(entry))
+    items = list(getattr(parsed, "uncertainties", []) or [])
+    positions = list(getattr(parsed, "uncertainty_indexes", ()) or range(len(items)))
+    by_number = {page.page_number: page for page in chunk.pages}
+    texts = {page.page_number: page.text for page in chunk.pages}
+    max_quote = settings.REQUIREMENTS_MAX_QUOTE_CHARS
+    document_id = chunk.document.tender_document_id
+    for item, index in zip(items, positions, strict=True):
+        status = UncertaintyQuoteStatus.NOT_PROVIDED
+        page_id = quote = char_start = char_end = diagnosis = None
+        page = by_number.get(item.page_number)
+        if item.extraction_id != chunk.document.extraction_id:
+            provenance: str | None = EVIDENCE_EXTRACTION_MISMATCH
+        elif page is None:
+            provenance = EVIDENCE_PAGE_NOT_IN_CHUNK
+        else:
+            provenance = None
+        raw_quote = (item.quote or "").strip()
+        if raw_quote:
+            candidate = raw_quote[:max_quote]
+            match = None
+            if provenance == EVIDENCE_EXTRACTION_MISMATCH:
+                reason, detail = provenance, None
+            elif provenance == EVIDENCE_PAGE_NOT_IN_CHUNK:
+                reason = provenance
+                detail = diagnose_missing_quote(texts, item.page_number, candidate)
+            else:
+                match = locate_quote(page.text, candidate)
+                reason = EVIDENCE_QUOTE_NOT_FOUND
+                detail = (
+                    None if match else diagnose_missing_quote(texts, item.page_number, candidate)
+                )
+            if match is not None:
+                status = UncertaintyQuoteStatus.LITERAL
+                page_id = uuid.UUID(page.page_id)
+                quote, char_start, char_end = match.exact_text, match.char_start, match.char_end
+            else:
+                status = UncertaintyQuoteStatus.REJECTED
+                diagnosis = f"{reason}:{detail}" if detail else reason
+                entry = {"item": "uncertainty", "index": index, "stage": "evidence",
+                         "reason": reason, "cited_page": item.page_number}
+                if detail:
+                    entry["diagnosis"] = detail
+                record(entry)
+        elif provenance is not None:
+            diagnosis = provenance
+            record({"item": "uncertainty", "index": index,
+                    "stage": UNCERTAINTY_STAGE_PROVENANCE, "reason": provenance,
+                    "cited_page": item.page_number})
+
+        outcome, replaced_chunk = ledger.offer(
+            RequirementUncertainty(
+                run_id=run.id,
+                tender_id=tender.id,
+                source_chunk_index=chunk.index,
+                scope=item.scope,
+                note=item.note.strip(),
+                extraction_id=uuid.UUID(chunk.document.extraction_id),
+                tender_document_id=uuid.UUID(document_id),
+                page_number=item.page_number,
+                page_id=page_id,
+                quote=quote,
+                char_start=char_start,
+                char_end=char_end,
+                quote_status=status,
+                diagnosis=diagnosis[:80] if diagnosis else None,
+            )
+        )
+        if outcome == UNCERTAINTY_DUPLICATE:
+            record({"item": "uncertainty", "index": index, "stage": "dedup",
+                    "reason": ITEM_DUPLICATE_KEY})
+        elif outcome == UNCERTAINTY_SUPERSEDED:
+            record({"item": "uncertainty", "index": index, "stage": "dedup",
+                    "reason": UNCERTAINTY_REPLACED_LOWER, "replaced_chunk": replaced_chunk})
+
+
 def _persist_chunk(
     *,
     session: AsyncSession,
@@ -2090,6 +2414,7 @@ def _persist_chunk(
     seen_awards: set[str],
     profile: ExtractorProfile,
     rejections: list[dict[str, Any]] | None = None,
+    uncertainty_ledger: UncertaintyLedger | None = None,
 ) -> None:
     """Desa el que ha tornat un chunk. `rejections` rep que s'ha descartat i per que.
 
@@ -2255,6 +2580,23 @@ def _persist_chunk(
                 )
             )
         tally.award_criteria += 1
+
+    # Les incerteses, DESPRES dels requisits i criteris: els seus rebutjos no poden fer
+    # fora de la cobertura (limit per chunk) els diagnostics dels requisits.
+    if profile.material_uncertainties:
+        _persist_uncertainties(
+            session=session,
+            run=run,
+            tender=tender,
+            chunk=chunk,
+            parsed=parsed,
+            ledger=(
+                uncertainty_ledger
+                if uncertainty_ledger is not None
+                else UncertaintyLedger(session)
+            ),
+            record=record,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -2578,6 +2920,9 @@ INPUT_CHANGED = "input_changed"
 #: Codi d'un run real acabat que no es promou perque la seva seleccio de documents
 #: no es la canonica (3B-2 §6.4).
 SELECTION_NOT_CANONICAL = "selection_not_canonical"
+#: El run es d'un perfil experimental (product-v2): es conserva, pero mai es la base
+#: vigent.
+EXPERIMENTAL_PROFILE_NOT_CURRENT = "experimental_profile_not_current"
 
 
 async def _may_become_current(
@@ -2598,6 +2943,18 @@ async def _may_become_current(
     (`forced_not_canonical`); en una manual, com sempre.
     """
     if run.status != AnalysisRunStatus.COMPLETED or run.run_basis != RequirementRunBasis.REAL:
+        return False
+    if experimental_profile_of(run) is not None:
+        # Un perfil experimental no es mai la base vigent de ningu, en cap licitacio:
+        # el seu run nomes s'ha fet perque el codi el va passar (canari).
+        run.error_code = EXPERIMENTAL_PROFILE_NOT_CURRENT
+        run.error_message = (
+            "Run d'un perfil experimental: es conserva, pero mai no es la base vigent."
+        )
+        logger.warning(
+            "requirements.run.not_promoted",
+            extra={"run_id": str(run.id), "reason": run.error_code},
+        )
         return False
     own = await analysis_input(session, run.tender_id, document_ids=document_ids or None)
     owner = await session.scalar(

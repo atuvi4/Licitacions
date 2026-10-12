@@ -2110,8 +2110,8 @@ def test_0056_es_reversible_i_mai_esborra_l_extensio():
     assert "pg_trgm" not in sql
 
 
-def test_0061_es_l_unic_cap_i_penja_de_0060():
-    """0060 penjava de 0059; 0061 (base del run de requisits) es el nou cap unic."""
+def test_0062_es_l_unic_cap_i_penja_de_0061():
+    """0061 penjava de 0060; 0062 (incerteses de requisits) es el nou cap unic."""
     from app.db.revision import SCHEMA_REVISION
 
     result = subprocess.run(
@@ -2123,13 +2123,17 @@ def test_0061_es_l_unic_cap_i_penja_de_0060():
     )
     assert result.returncode == 0, result.stderr[-1000:]
     assert [line.split()[0] for line in result.stdout.splitlines() if line.strip()] == [
-        "0061_requirement_run_basis"
+        "0062_requirement_uncertainties"
     ]
-    assert SCHEMA_REVISION == "0061_requirement_run_basis"
+    assert SCHEMA_REVISION == "0062_requirement_uncertainties"
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(API_ROOT / "alembic.ini")))
+    assert (
+        script.get_revision("0062_requirement_uncertainties").down_revision
+        == "0061_requirement_run_basis"
+    )
     assert (
         script.get_revision("0061_requirement_run_basis").down_revision
         == "0060_structure_provenance"
@@ -3690,3 +3694,256 @@ async def test_0061_round_trip_real_a_postgres_amb_el_llibre(engine):
         assert await quote_columns(conn) == {
             "prerequisites", "accept_incomplete_package", "estimated_cost_usd"
         }
+
+
+# --------------------------------------------------------------------------- #
+# 0062: incerteses materials de l'extraccio de requisits (product-v2)         #
+# --------------------------------------------------------------------------- #
+
+_UNCERTAINTIES = "requirement_uncertainties"
+_UNCERTAINTY_UP = "0061_requirement_run_basis:0062_requirement_uncertainties"
+_UNCERTAINTY_DOWN = "0062_requirement_uncertainties:0061_requirement_run_basis"
+
+
+def test_0062_crea_la_taula_global_amb_les_restriccions():
+    sql = _offline_sql("upgrade", _UNCERTAINTY_UP)
+    create = sql[sql.index(f"CREATE TABLE {_UNCERTAINTIES}"):]
+    create = create[: create.index(";")]
+    assert "company_id" not in create  # global: cap tenant
+    for fragment in (
+        "run_id UUID NOT NULL",
+        "page_number INTEGER NOT NULL",
+        "quote TEXT",
+        "dedup_key VARCHAR(64) NOT NULL",
+        "UNIQUE (run_id, dedup_key)",
+        "CHECK (page_number >= 1)",
+        "(quote_status = 'literal') = (quote IS NOT NULL)",
+        "(quote_status = 'literal') = (page_id IS NOT NULL)",
+        "(quote_status = 'literal') = (char_start IS NOT NULL AND char_end IS NOT NULL)",
+        "scope IN ('admissibility', 'solvency', 'contract_obligation', 'scoring', 'sizing', "
+        "'cost', 'submission_documentation', 'deadline', 'liability')",
+        "quote_status IN ('literal', 'not_provided', 'rejected')",
+        "REFERENCES requirement_extraction_runs (id) ON DELETE CASCADE",
+        "REFERENCES tender_document_extractions (id) ON DELETE RESTRICT",
+        "REFERENCES tender_document_pages (id) ON DELETE RESTRICT",
+        "REFERENCES tender_documents (id) ON DELETE SET NULL",
+        "diagnosis VARCHAR(80)",
+        "(quote_status <> 'rejected' OR diagnosis IS NOT NULL) "
+        "AND (quote_status <> 'literal' OR diagnosis IS NULL)",
+        "char_start IS NULL OR (char_start >= 0 AND char_end > char_start)",
+        "length(trim(note)) > 0",
+        # Els mateixos noms de FK que el model (una base migrada = una de creada).
+        "CONSTRAINT fk_requirement_uncertainties_run_id FOREIGN KEY",
+        "CONSTRAINT fk_requirement_uncertainties_tender_id FOREIGN KEY",
+        "CONSTRAINT fk_requirement_uncertainties_extraction_id FOREIGN KEY",
+        "CONSTRAINT fk_requirement_uncertainties_tender_document_id FOREIGN KEY",
+        "CONSTRAINT fk_requirement_uncertainties_page_id FOREIGN KEY",
+    ):
+        assert fragment in create, fragment
+    # Additiva: cap altra taula no canvia.
+    assert "ALTER TABLE" not in sql.replace("alembic_version", "")
+
+
+def test_0062_downgrade_refusa_si_hi_ha_incerteses_abans_del_drop():
+    sql = _offline_sql("downgrade", _UNCERTAINTY_DOWN)
+    guard = sql.index("RAISE EXCEPTION")
+    assert f"SELECT 1 FROM {_UNCERTAINTIES}" in sql[sql.rindex("DO $$", 0, guard) : guard]
+    assert "0062" in sql[guard : guard + 200]
+    assert guard < sql.index(f"DROP TABLE {_UNCERTAINTIES}")
+
+
+def test_0062_a_sqlite_sense_raise():
+    up = _offline_sql_sqlite("upgrade", _UNCERTAINTY_UP).replace("alembic_version", "")
+    down = _offline_sql_sqlite("downgrade", _UNCERTAINTY_DOWN).replace("alembic_version", "")
+    assert "RAISE" not in up and "RAISE" not in down
+    assert f"CREATE TABLE {_UNCERTAINTIES}" in up and f"DROP TABLE {_UNCERTAINTIES}" in down
+
+
+def test_0062_al_model():
+    from app.models.requirements import RequirementUncertainty
+    from app.tenant_ops import PUBLIC_TABLES
+
+    table = RequirementUncertainty.__table__
+    assert "company_id" not in table.c
+    assert table.c.quote.nullable is True and table.c.page_id.nullable is True
+    assert table.c.note.nullable is False and table.c.scope.nullable is False
+    # Global, com el run de requisits: mai a les taules d'un tenant.
+    assert _UNCERTAINTIES in PUBLIC_TABLES and "requirement_extraction_runs" in PUBLIC_TABLES
+    # Noms de FK explicits i identics als de la migracio (cap nom derivat de la convencio).
+    assert {c.name for c in table.foreign_key_constraints} == {
+        f"fk_{_UNCERTAINTIES}_{column}"
+        for column in ("run_id", "tender_id", "extraction_id", "tender_document_id", "page_id")
+    }
+
+
+@pytest.mark.postgres
+async def test_0062_round_trip_real_a_postgres(engine):
+    """0062 -> 0061 -> 0062 sense dades; amb una incertesa, el downgrade refusa i no toca
+    res; les CHECK refusen una cita sense estat literal i un ambit fora del vocabulari."""
+    import importlib.util
+    import uuid as uuid_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import DBAPIError
+
+    path = API_ROOT / "alembic" / "versions" / "0062_requirement_uncertainties.py"
+    spec = importlib.util.spec_from_file_location("mig_0062_requirement_uncertainties", path)
+    m62 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m62)
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def has_table(conn) -> bool:
+        return bool(
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = current_schema() AND table_name = :t"
+                    ),
+                    {"t": _UNCERTAINTIES},
+                )
+            ).scalar_one()
+        )
+
+    async def columns(conn) -> list[tuple]:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT column_name, data_type, is_nullable, character_maximum_length "
+                "FROM information_schema.columns WHERE table_schema = current_schema() "
+                "AND table_name = :t ORDER BY column_name"
+            ),
+            {"t": _UNCERTAINTIES},
+        )
+        return [tuple(r) for r in rows]
+
+    async def constraints(conn) -> list[tuple]:
+        """Nom, tipus i definicio de cada restriccio, i cada index: tot el que una
+        migracio futura pot referenciar pel nom."""
+        rows = await conn.execute(
+            sa.text(
+                "SELECT conname, contype::text, pg_get_constraintdef(c.oid) "
+                "FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
+                "JOIN pg_namespace n ON n.oid = t.relnamespace "
+                "WHERE n.nspname = current_schema() AND t.relname = :t ORDER BY conname"
+            ),
+            {"t": _UNCERTAINTIES},
+        )
+        indexes = await conn.execute(
+            sa.text(
+                "SELECT indexname, 'index', indexdef FROM pg_indexes "
+                "WHERE schemaname = current_schema() AND tablename = :t ORDER BY indexname"
+            ),
+            {"t": _UNCERTAINTIES},
+        )
+        return [tuple(r) for r in rows] + [tuple(r) for r in indexes]
+
+    # L'esquema el crea el harness amb els models: el comparem amb el de la migracio.
+    async with engine.begin() as conn:
+        from_models = (await columns(conn), await constraints(conn))
+        await conn.run_sync(run, m62.downgrade)  # -> 0061, sense dades
+        assert not await has_table(conn)
+        await conn.run_sync(run, m62.upgrade)  # -> 0062
+        from_migration = (await columns(conn), await constraints(conn))
+        await conn.run_sync(run, m62.downgrade)  # -> 0061 de nou
+        await conn.run_sync(run, m62.upgrade)  # -> 0062 de nou
+        assert (await columns(conn), await constraints(conn)) == from_migration
+    # Columnes, restriccions (noms i definicions, FK incloses) i index: identics.
+    assert from_migration == from_models
+    assert {
+        "ck_requirement_uncertainties_scope_valid",
+        "ck_requirement_uncertainties_quote_if_literal",
+        "ck_requirement_uncertainties_quote_status_valid",
+        "ck_requirement_uncertainties_diagnosis_consistent",
+        "ck_requirement_uncertainties_offsets_valid",
+        "ck_requirement_uncertainties_note_not_blank",
+        "uq_requirement_uncertainties_run_key",
+        "fk_requirement_uncertainties_run_id",
+        "fk_requirement_uncertainties_page_id",
+    } <= {name for name, *_ in from_migration[1]}
+
+    # Una incertesa real (sense cita) sobre un run. El context, amb l'ORM.
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.models.enums import AnalysisRunStatus, ExtractionStatus, RequirementRunBasis
+    from app.models.requirements import RequirementExtractionRun
+    from app.models.sources import Source
+    from app.models.tender_documents import TenderDocumentContent, TenderDocumentExtraction
+    from app.models.tenders import Tender
+
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        source = Source(code=f"t62-{uuid_module.uuid4().hex[:6]}", name="Font 0062")
+        session.add(source)
+        await session.flush()
+        tender = Tender(source_id=source.id, external_id=f"t62-{uuid_module.uuid4().hex[:6]}",
+                        title="Expedient 0062")
+        content = TenderDocumentContent(
+            sha256=uuid_module.uuid4().hex * 2, storage_key="k", file_size=1,
+            mime_type="application/pdf", is_text_extractable=True,
+        )
+        session.add_all([tender, content])
+        await session.flush()
+        extraction = TenderDocumentExtraction(
+            content_id=content.id, parser_version="pypdf-v1", revision_number=1,
+            status=ExtractionStatus.EXTRACTED, page_count=1, extracted_page_count=1,
+            empty_page_count=0, text_char_count=1, ocr_candidate=False, is_current=True,
+        )
+        run_row = RequirementExtractionRun(
+            tender_id=tender.id, status=AnalysisRunStatus.COMPLETED, input_fingerprint="f" * 64,
+            extractor_version="v", prompt_version="v", schema_version="v", provider="fake",
+            model="m", run_basis=RequirementRunBasis.SIMULATION, is_current=False,
+        )
+        session.add_all([extraction, run_row])
+        await session.commit()
+        tender_id, run_id, extraction_id = tender.id, run_row.id, extraction.id
+
+    async with engine.begin() as conn:
+        insert = (
+            "INSERT INTO requirement_uncertainties (id, run_id, tender_id, source_chunk_index, "
+            "scope, note, extraction_id, page_number, quote, quote_status, diagnosis, "
+            "dedup_key, created_at) VALUES (gen_random_uuid(), :run, :tender, 0, :scope, :note, "
+            ":extraction, 5, :quote, :status, :diagnosis, :key, now())"
+        )
+        params = {"run": run_id, "tender": tender_id, "extraction": extraction_id}
+        ok = {"scope": "solvency", "note": "nota", "quote": None, "status": "not_provided",
+              "diagnosis": None}
+        await conn.execute(sa.text(insert), {**params, **ok, "key": "a" * 64})
+
+    # Les CHECK: cita sense estat literal, estat literal sense cita, ambit desconegut,
+    # cita rebutjada sense diagnostic, nota buida.
+    for bad in (
+        {"quote": "text"},
+        {"status": "literal"},
+        {"scope": "altres"},
+        {"status": "rejected"},
+        {"note": "   "},
+    ):
+        with pytest.raises(DBAPIError):
+            async with engine.begin() as conn:
+                await conn.execute(sa.text(insert), {**params, **ok, **bad, "key": "b" * 64})
+    # La unicitat (run, clau).
+    with pytest.raises(DBAPIError):
+        async with engine.begin() as conn:
+            await conn.execute(sa.text(insert), {**params, **ok, "scope": "cost", "key": "a" * 64})
+
+    # Amb dades, el downgrade refusa i no toca res.
+    with pytest.raises(DBAPIError) as caught:
+        async with engine.begin() as conn:
+            await conn.run_sync(run, m62.downgrade)
+    assert "0062" in str(caught.value)
+    async with engine.begin() as conn:
+        assert await has_table(conn)
+        count = sa.text(f"SELECT count(*) FROM {_UNCERTAINTIES}")
+        assert (await conn.execute(count)).scalar_one() == 1
+        # El run s'esborra en cascada amb les seves incerteses; llavors el downgrade passa.
+        await conn.execute(sa.text("DELETE FROM requirement_extraction_runs WHERE id = :id"),
+                           {"id": run_id})
+        assert (await conn.execute(count)).scalar_one() == 0
+        await conn.run_sync(run, m62.downgrade)
+        assert not await has_table(conn)
+        await conn.run_sync(run, m62.upgrade)
+        assert await has_table(conn)

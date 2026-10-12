@@ -116,6 +116,8 @@ PUBLIC_TABLES = frozenset(
         "award_criterion_evidence",
         "requirement_evidence",
         "requirement_extraction_runs",
+        # Incerteses materials de l'extraccio global (product-v2, 0062): cap tenant.
+        "requirement_uncertainties",
         "requirements",
         # Les cites d'un requisit pengen del requisit, que penja de la
         # licitacio. Cap empresa n'es propietaria i per tant no s'esborren en

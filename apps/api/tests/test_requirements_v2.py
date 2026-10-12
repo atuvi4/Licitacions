@@ -500,6 +500,7 @@ def test_an_old_run_is_still_interpretable():
     """§3: els runs antics s'han de poder llegir amb el contracte d'aleshores."""
     assert profile_for_run("tender-requirements-v1") is V1
     assert profile_for_run("tender-requirements-v2") is V2
+    assert profile_for_run("tender-requirements-product-v2").name == "product-v2"
     # Un run anterior a l'existencia dels perfils tambe cau a v1.
     assert profile_for_run("qualsevol-cosa-antiga") is V1
 

@@ -695,6 +695,36 @@ class EvidenceRole(StrEnum):
     SUPPORTING = "supporting"
 
 
+class UncertaintyScope(StrEnum):
+    """Per a que es material una incertesa del plec (perfil `product-v2`, 0062).
+
+    Vocabulari tancat: una clausula indeterminada que no toca cap d'aquests ambits
+    no es una incertesa material i no es registra.
+    """
+
+    ADMISSIBILITY = "admissibility"
+    SOLVENCY = "solvency"
+    CONTRACT_OBLIGATION = "contract_obligation"
+    SCORING = "scoring"
+    SIZING = "sizing"
+    COST = "cost"
+    SUBMISSION_DOCUMENTATION = "submission_documentation"
+    DEADLINE = "deadline"
+    LIABILITY = "liability"
+
+
+class UncertaintyQuoteStatus(StrEnum):
+    """Que se n'ha fet de la cita d'una incertesa.
+
+    Nomes una cita LITERAL a la pagina declarada es desa com a evidencia; la resta
+    no es desa mai (una parafrasi no es evidencia), pero la incertesa es conserva.
+    """
+
+    LITERAL = "literal"
+    NOT_PROVIDED = "not_provided"
+    REJECTED = "rejected"
+
+
 class AwardEvaluationType(StrEnum):
     """Com es puntua un criteri d'adjudicacio."""
 

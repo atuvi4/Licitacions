@@ -43,6 +43,7 @@ from app.core.errors import (
     NothingAnalyzableError,
     OperationBusyError,
     PublicTenderCanonicalOnlyError,
+    ValidationError,
 )
 from app.jobs.params import (
     AnalyzeParams,
@@ -216,6 +217,16 @@ async def _commit_or_retry(session: AsyncSession) -> bool:
     return True
 
 
+def _require_public_profile(profile: ExtractorProfile | None) -> None:
+    """Una feina porta el perfil pel NOM i el worker el resol a `PROFILES`: un perfil
+    intern (product-v2, v3) no s'hi pot encuar. Es refusa ara, no al worker."""
+    if profile is not None and PROFILES.get(profile.name) is not profile:
+        raise ValidationError(
+            f"Perfil d'extraccio no disponible: {profile.name!r}.",
+            details={"profiles": sorted(PROFILES)},
+        )
+
+
 async def submit_analysis_request(
     session: AsyncSession,
     *,
@@ -251,6 +262,7 @@ async def submit_analysis_request(
 
     `profile` per defecte: el de producte (`REQUIREMENTS_PRODUCT_PROFILE`).
     """
+    _require_public_profile(profile)
     tender = await _load_tender(session, tender_id, company_id)
     ids = sorted(set(document_ids or []), key=str)
     product = PROFILES[settings.REQUIREMENTS_PRODUCT_PROFILE]
@@ -422,6 +434,7 @@ async def submit_operator_analysis(
     que en surti mai no sera canonic (`forced_not_canonical`). La porta de despesa
     (§6.7) s'aplica igual quan el worker l'executi.
     """
+    _require_public_profile(profile)
     # Import diferit: el servei de documents publics importa la cua de feina.
     from app.services.public_document_intake import load_public_tender
 

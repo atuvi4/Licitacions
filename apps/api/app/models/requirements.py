@@ -45,6 +45,8 @@ from app.models.enums import (
     ReviewStatus,
     TerritoryCompleteness,
     TerritoryMatchMode,
+    UncertaintyQuoteStatus,
+    UncertaintyScope,
 )
 from app.models.review import in_values
 
@@ -243,6 +245,10 @@ class RequirementExtractionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="run", cascade="all, delete-orphan"
     )
     award_criteria: Mapped[list[AwardCriterion]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+    #: Incerteses materials del perfil `product-v2` (0062). Mai son requisits.
+    uncertainties: Mapped[list[RequirementUncertainty]] = relationship(
         back_populates="run", cascade="all, delete-orphan"
     )
 
@@ -675,3 +681,136 @@ class AwardCriterionEvidence(UUIDPrimaryKeyMixin, Base):
     )
 
     criterion: Mapped[AwardCriterion] = relationship(back_populates="evidence")
+
+
+class RequirementUncertainty(UUIDPrimaryKeyMixin, Base):
+    """Una incertesa MATERIAL del plec, detectada en l'extraccio global (0062).
+
+    El text es material (admissibilitat, solvencia, obligacio contractual, puntuacio,
+    dimensionament, cost, documentacio, termini, responsabilitat) pero no permet una
+    conclusio segura. **No es un requisit** ni un criteri, ni un bloquejador, ni un
+    forat del paquet ni cap resultat de compliment: no entra a cap d'aquests recomptes.
+
+    Global i independent del tenant (cap `company_id`), com el run de requisits. No te
+    vigencia propia: es vigent nomes en el sentit que pertany a un run que ho pot ser.
+    Immutable un cop el run s'ha construit: un run posterior en copia les del run d'origen
+    (represa) i no edita mai les d'un altre run. Mentre el SEU run es construeix, una
+    deteccio de la mateixa incertesa amb millor procedencia (`literal > rejected >
+    not_provided`) en reescriu la fila (`UncertaintyLedger`).
+
+    La provenance te la mateixa precisio que `requirement_evidence`: l'extraccio i el
+    document que el model ha vist, la pagina declarada i, nomes si la cita es literal a
+    aquella pagina, la `page_id`, la cita exacta i els offsets calculats pel backend.
+    Una cita no literal no es desa (`quote_status = rejected`, amb el diagnostic de
+    codis de `diagnose_missing_quote`); la incertesa, si. Una procedencia que no es pot
+    verificar (pagina fora del chunk, extraccio que no hi correspon) tambe es conserva,
+    sempre amb el codi a `diagnosis` i l'extraccio i el document REALS del chunk.
+    """
+
+    __tablename__ = "requirement_uncertainties"
+    __table_args__ = (
+        sa.UniqueConstraint("run_id", "dedup_key", name="uq_requirement_uncertainties_run_key"),
+        sa.Index("ix_requirement_uncertainties_tender_id", "tender_id"),
+        sa.CheckConstraint("page_number >= 1", name="page_one_based"),
+        sa.CheckConstraint(
+            "(quote_status = 'literal') = (quote IS NOT NULL) "
+            "AND (quote_status = 'literal') = (page_id IS NOT NULL) "
+            "AND (quote_status = 'literal') = (char_start IS NOT NULL AND char_end IS NOT NULL)",
+            name="quote_if_literal",
+        ),
+        sa.CheckConstraint(
+            "scope IN (" + ", ".join(f"'{s.value}'" for s in UncertaintyScope) + ")",
+            name="scope_valid",
+        ),
+        sa.CheckConstraint(
+            "quote_status IN (" + ", ".join(f"'{s.value}'" for s in UncertaintyQuoteStatus) + ")",
+            name="quote_status_valid",
+        ),
+        # Diagnostic: obligatori si la cita s'ha rebutjat; mai amb una cita literal.
+        sa.CheckConstraint(
+            "(quote_status <> 'rejected' OR diagnosis IS NOT NULL) "
+            "AND (quote_status <> 'literal' OR diagnosis IS NULL)",
+            name="diagnosis_consistent",
+        ),
+        sa.CheckConstraint(
+            "char_start IS NULL OR (char_start >= 0 AND char_end > char_start)",
+            name="offsets_valid",
+        ),
+        sa.CheckConstraint("length(trim(note)) > 0", name="note_not_blank"),
+    )
+
+    # Noms de FK explicits, els mateixos que la migracio 0062: una base creada des dels
+    # models i una de migrada no poden discrepar.
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "requirement_extraction_runs.id",
+            ondelete="CASCADE",
+            name="fk_requirement_uncertainties_run_id",
+        ),
+        nullable=False,
+    )
+    tender_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "tenders.id", ondelete="CASCADE", name="fk_requirement_uncertainties_tender_id"
+        ),
+        nullable=False,
+    )
+    #: El chunk que l'ha retornada (index del pla del run).
+    source_chunk_index: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    scope: Mapped[UncertaintyScope] = mapped_column(
+        enum_column(UncertaintyScope, "uncertainty_scope"), nullable=False
+    )
+    #: Que es indeterminat, en una frase. La redacta el model; no es cap cita.
+    note: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    #: L'extraccio i el document del chunk (els que el model ha vist).
+    extraction_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "tender_document_extractions.id",
+            ondelete="RESTRICT",
+            name="fk_requirement_uncertainties_extraction_id",
+        ),
+        nullable=False,
+    )
+    tender_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "tender_documents.id",
+            ondelete="SET NULL",
+            name="fk_requirement_uncertainties_tender_document_id",
+        ),
+    )
+    #: 1-based. La pagina que declara el model. Si no es del chunk (o l'extraccio no hi
+    #: correspon), `diagnosis` ho diu: mai es desa una procedencia dubtosa en silenci.
+    page_number: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    #: Nomes amb una cita literal a una pagina del chunk.
+    page_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True),
+        sa.ForeignKey(
+            "tender_document_pages.id",
+            ondelete="RESTRICT",
+            name="fk_requirement_uncertainties_page_id",
+        ),
+    )
+    quote: Mapped[str | None] = mapped_column(sa.Text)
+    char_start: Mapped[int | None] = mapped_column(sa.Integer)
+    char_end: Mapped[int | None] = mapped_column(sa.Integer)
+    quote_status: Mapped[UncertaintyQuoteStatus] = mapped_column(
+        enum_column(UncertaintyQuoteStatus, "uncertainty_quote_status"), nullable=False
+    )
+    #: Nomes codis, mai text. Amb cita rebutjada (obligatori): el motiu i el diagnostic
+    #: (`quote_not_found:accent_variant`, `page_not_in_chunk:on_other_page:3`...). Sense
+    #: cita: la procedencia declarada que no es pot verificar (`page_not_in_chunk`,
+    #: `extraction_mismatch`), o res. Amb cita literal: sempre nul.
+    diagnosis: Mapped[str | None] = mapped_column(sa.String(80))
+    #: Identitat dins del run (`uncertainty_identity`): document, pagina, ambit i nota
+    #: normalitzada, mes la cita literal normalitzada si n'hi ha. El solapament entre
+    #: chunks i una represa no la dupliquen.
+    dedup_key: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
+    run: Mapped[RequirementExtractionRun] = relationship(back_populates="uncertainties")

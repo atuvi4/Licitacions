@@ -37,6 +37,7 @@ TABLES = (
     "requirement_extraction_runs",
     "requirements",
     "requirement_evidence",
+    "requirement_uncertainties",
     "award_criteria",
     "tenders",
     "tender_documents",

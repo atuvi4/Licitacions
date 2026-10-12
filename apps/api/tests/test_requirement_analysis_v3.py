@@ -113,7 +113,8 @@ async def _run_v3_real(session, analyzable, response):
 def test_v3_no_es_el_per_defecte_ni_es_pot_demanar_per_nom():
     assert profiles.DEFAULT_PROFILE is profiles.V1
     assert "v3" not in profiles.PROFILES
-    assert profiles.INTERNAL_PROFILES == {"v3": V3}
+    # product-v2 (0062) tambe es intern fins que es promocioni.
+    assert profiles.INTERNAL_PROFILES == {"v3": V3, "product-v2": profiles.PRODUCT_V2}
     assert profiles.BENCHMARK_PROFILE is profiles.V2
 
 

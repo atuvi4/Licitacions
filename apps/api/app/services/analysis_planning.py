@@ -386,14 +386,23 @@ async def _quality(
 
 
 async def _previous_run_was_empty(
-    session: AsyncSession, tender_id: uuid.UUID, fingerprint: str
+    session: AsyncSession, tender_id: uuid.UUID, fingerprint: str, profile: ExtractorProfile
 ) -> bool:
+    """L'ultim run real del mateix corpus AMB EL MATEIX PERFIL va quedar buit.
+
+    El perfil es la seva identitat de versions (extractor, prompt, esquema), la mateixa
+    que separa la reutilitzacio i la represa: un run buit d'un perfil no diu res d'un
+    altre (V1 i product-v2 no es contaminen).
+    """
     latest = await session.scalar(
         sa.select(RequirementExtractionRun.status)
         .where(
             RequirementExtractionRun.tender_id == tender_id,
             RequirementExtractionRun.input_fingerprint == fingerprint,
             RequirementExtractionRun.run_basis == RequirementRunBasis.REAL,
+            RequirementExtractionRun.extractor_version == profile.extractor_version,
+            RequirementExtractionRun.prompt_version == profile.prompt_version,
+            RequirementExtractionRun.schema_version == profile.schema_version,
         )
         .order_by(
             RequirementExtractionRun.started_at.desc(),
@@ -475,7 +484,9 @@ async def _prerequisites(
     advisory = [] if spending else _by_priority(other)
     warnings = (
         [WARNING_PREVIOUS_EMPTY]
-        if await _previous_run_was_empty(session, preview.tender_id, current.fingerprint)
+        if await _previous_run_was_empty(
+            session, preview.tender_id, current.fingerprint, profile
+        )
         else []
     )
     preview.prerequisites = {
