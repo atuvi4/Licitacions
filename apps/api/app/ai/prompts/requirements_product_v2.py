@@ -13,6 +13,9 @@ canaris reals de 2026-10-11:
    material que no permet concloure res va a `uncertainties` (persistides a 0062),
    mai a requisit o criteri cert, i mai desapareix en silenci.
 
+v2.1: un bloc de VOCABULARIS TANCATS (les categories de requisit, generades de l'enum, i la
+separacio explicita amb els ambits de les incerteses).
+
 Dues linies de V1 contradeien aquests blocs ("si no pots citar, no ho incloguis" i
 "confianca baixa -> tambe a incerteses"): es substitueixen NOMES a la copia composta.
 
@@ -25,9 +28,10 @@ from __future__ import annotations
 
 from app.ai.prompts.requirements_v1 import SYSTEM_PROMPT as _V1_SYSTEM_PROMPT
 from app.ai.prompts.requirements_v1 import build_user_message as _v1_build_user_message
+from app.models.enums import RequirementCategory, UncertaintyScope
 
-#: Identifica aquest text. Diferent de qualsevol versio v1/v2/v3.
-PROMPT_VERSION_PRODUCT_V2 = "requirements-product-v2"
+#: Identifica aquest text. Diferent de qualsevol versio v1/v2/v3. v2.1: vocabularis tancats.
+PROMPT_VERSION_PRODUCT_V2 = "requirements-product-v2.1"
 #: Identifica tota la canonada d'extraccio del perfil (amb la persistencia de 0062).
 EXTRACTOR_VERSION_PRODUCT_V2 = "tender-requirements-product-v2"
 
@@ -97,6 +101,29 @@ _V1_OVERRIDES: tuple[tuple[str, str], ...] = (
 )
 
 
+def _vocabulary_rules() -> str:
+    """v2.1 (post-mortem de l'Attempt 3): el model va posar un AMBIT d'incertesa
+    (`submission_documentation`) com a `category` d'un requisit. El prompt V1 no enumera les
+    categories (nomes l'esquema) i el de product-v2 si que enumera els ambits: ara totes dues
+    llistes son explicites i separades. Generat de l'enum: no es pot desincronitzar."""
+    category_values = [category.value for category in RequirementCategory]
+    categories = ", ".join(f"`{value}`" for value in category_values)
+    # Els ambits que NO son categories (`deadline` es valid a tots dos vocabularis).
+    scope_only = ", ".join(
+        f"`{scope.value}`" for scope in UncertaintyScope if scope.value not in category_values
+    )
+    return (
+        "VOCABULARIS TANCATS\n\n"
+        f"La `category` d'un requisit es EXACTAMENT un d'aquests valors: {categories}.\n"
+        "Els ambits de les incerteses (`scope` de `uncertainties`) son un altre vocabulari.\n"
+        f"Aquests valors son NOMES ambits i MAI una `category`: {scope_only}.\n"
+        "La documentacio i la forma de presentacio de l'oferta (sobre, format electronic,\n"
+        "declaracions) son `administrative_documentation`; els terminis d'un requisit son\n"
+        "`deadline` (valid com a categoria i com a ambit). Si cap categoria no hi encaixa,\n"
+        "`other`.\n\n"
+    )
+
+
 def _compose_system_prompt() -> str:
     """El prompt V1, amb les dues linies que contradiuen product-v2 substituides i els
     blocs nous abans del de material no confiable."""
@@ -108,7 +135,7 @@ def _compose_system_prompt() -> str:
     head, separator, tail = text.partition(_V1_TAIL)
     if not separator:  # pragma: no cover - el V1 es immutable
         raise RuntimeError("El prompt V1 ha canviat: no es pot compondre product-v2.")
-    return head + _PRODUCT_V2_RULES + separator + tail
+    return head + _PRODUCT_V2_RULES + _vocabulary_rules() + separator + tail
 
 
 SYSTEM_PROMPT_PRODUCT_V2 = _compose_system_prompt()

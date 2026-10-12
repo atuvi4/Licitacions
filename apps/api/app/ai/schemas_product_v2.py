@@ -1,26 +1,39 @@
-"""Contracte de sortida del perfil `product-v2`.
+"""Contracte de sortida del perfil `product-v2` (revisio v2.1).
 
-Requisits, criteris i notes: EXACTAMENT els de V1 (`app.ai.schemas`). L'unic canvi es
-la incertesa: a V1 era `{note, page_number?}` i es descartava; a `product-v2` es una
-incertesa MATERIAL amb ambit, document, pagina i cita opcional, i es persisteix a
-`requirement_uncertainties` (0062). La cita la valida el backend amb la mateixa regla
-literal que l'evidencia; si no es literal, la incertesa es conserva sense cita.
+Requisits, criteris i notes: els MATEIXOS models que V1 (`app.ai.schemas`). L'unic canvi de
+contingut es la incertesa: a V1 era `{note, page_number?}` i es descartava; a `product-v2` es
+una incertesa MATERIAL amb ambit, document, pagina i cita opcional, i es persisteix a
+`requirement_uncertainties` (0062). La cita la valida el backend amb la mateixa regla literal
+que l'evidencia; si no es literal, la incertesa es conserva sense cita.
 
-Les incerteses es validen ELEMENT A ELEMENT (`parse_chunk_product_v2`): una incertesa
-mal formada es descarta amb un rebuig de codis i mai invalida el chunk ni els seus
-requisits. La resta del sobre es tan estricta com a V1.
+**Nomes product-v2.** V1 i v2 no tenen `parser`: continuen validant el chunk sencer amb
+`output_model.model_validate` (un element invalid fa `schema_invalid` el chunk), sense canvis.
+
+**Validacio element a element** (`parse_chunk_product_v2`). Requisits, criteris i incerteses
+es validen un a un: un element mal format es descarta SOL, amb un rebuig de codis, i mai fa
+perdre la resta del chunk. Res no es coacciona ni es reinterpreta: un valor fora del
+vocabulari tancat continua sent un rebuig. El rebuig diu el tipus d'element, el camp, la regla
+violada (`detail`), el tipus rebut i, nomes si es d'un vocabulari tancat, el valor rebut;
+l'obligacio i la categoria (o l'ambit) valids; i les pagines declarades. Nomes un sobre
+inservible (no es un objecte, o una de les llistes no es una llista) fa `schema_invalid` el
+chunk sencer, com a V1.
+
+v2.1 (post-mortem de l'Attempt 3, 2026-10-12): un requisit valid de la p7 amb
+`category = "submission_documentation"` (un AMBIT d'incertesa, no una categoria) va invalidar
+tot el chunk 1. Ara aquell requisit es rebutja sol, amb `field = category`,
+`value_vocabulary = uncertainty_scope`, l'obligacio i les pagines declarades.
 """
 
 from __future__ import annotations
 
 from typing import Annotated, Any
 
-from pydantic import Field, PrivateAttr, StringConstraints, ValidationError
+from pydantic import BaseModel, Field, PrivateAttr, StringConstraints, ValidationError
 
-from app.ai.schemas import ChunkExtractionOut, StrictModel
-from app.models.enums import UncertaintyScope
+from app.ai.schemas import AwardCriterionOut, ChunkExtractionOut, RequirementOut, StrictModel
+from app.models.enums import RequirementCategory, RequirementObligation, UncertaintyScope
 
-SCHEMA_VERSION_PRODUCT_V2 = "requirements-schema-product-v2"
+SCHEMA_VERSION_PRODUCT_V2 = "requirements-schema-product-v2.1"
 
 #: Una nota es una frase, no un paragraf ni una copia del plec.
 MAX_UNCERTAINTY_NOTE_CHARS = 500
@@ -53,14 +66,31 @@ class ChunkExtractionOutProductV2(ChunkExtractionOut):
 
     uncertainties: list[MaterialUncertaintyOut] = Field(default_factory=list)
 
-    #: Posicio ORIGINAL a la resposta de cada incertesa conservada.
+    #: Posicio ORIGINAL a la resposta de cada element conservat.
+    _requirement_indexes: tuple[int, ...] = PrivateAttr(default=())
+    _award_indexes: tuple[int, ...] = PrivateAttr(default=())
     _uncertainty_indexes: tuple[int, ...] = PrivateAttr(default=())
-    #: Incerteses descartades per esquema: `{item, index, stage, reason, detail, field}`.
+    #: Requisits i criteris descartats per esquema (rebutjos de codis).
+    _schema_rejections: tuple[dict[str, Any], ...] = PrivateAttr(default=())
+    #: Incerteses descartades per esquema: `{item, index, stage, reason, detail, field,
+    #: received_type, received_value, scope, cited_pages}` (nomes codis).
     _uncertainty_rejections: tuple[dict[str, Any], ...] = PrivateAttr(default=())
+
+    @property
+    def requirement_indexes(self) -> tuple[int, ...]:
+        return self._requirement_indexes or tuple(range(len(self.requirements)))
+
+    @property
+    def award_indexes(self) -> tuple[int, ...]:
+        return self._award_indexes or tuple(range(len(self.award_criteria)))
 
     @property
     def uncertainty_indexes(self) -> tuple[int, ...]:
         return self._uncertainty_indexes or tuple(range(len(self.uncertainties)))
+
+    @property
+    def schema_rejections(self) -> tuple[dict[str, Any], ...]:
+        return self._schema_rejections
 
     @property
     def uncertainty_rejections(self) -> tuple[dict[str, Any], ...]:
@@ -74,17 +104,21 @@ _SCHEMA_DETAILS: frozenset[str] = frozenset(
         "missing", "extra_forbidden", "enum", "value_error", "string_type",
         "string_too_long", "string_too_short", "int_type", "int_parsing",
         "int_from_float", "greater_than_equal", "less_than_equal", "list_type",
-        "dict_type", "model_type", "model_attributes_type",
+        "dict_type", "model_type", "model_attributes_type", "float_type", "float_parsing",
     }
 )  # fmt: skip
 
+_REQUIREMENT_CATEGORIES = frozenset(c.value for c in RequirementCategory)
+_OBLIGATIONS = frozenset(o.value for o in RequirementObligation)
+_SCOPES = frozenset(s.value for s in UncertaintyScope)
 
-def _uncertainty_schema_rejection(
-    index: int, detail: str, field_name: str | None
+
+def _schema_rejection(
+    item: str, index: int, detail: str, field_name: str | None, **codes: Any
 ) -> dict[str, Any]:
-    """Una entrada de rebuig: posicio i codis, mai el valor ni el nom d'una clau inventada."""
+    """Una entrada de rebuig: posicio i codis, mai text lliure ni una clau inventada."""
     entry: dict[str, Any] = {
-        "item": "uncertainty",
+        "item": item,
         "index": int(index),
         "stage": "schema",
         "reason": "schema_invalid",
@@ -92,53 +126,187 @@ def _uncertainty_schema_rejection(
     }
     if field_name is not None:
         entry["field"] = field_name
+    entry.update({k: v for k, v in codes.items() if v not in (None, [], ())})
     return entry
 
 
-def _from_validation_error(index: int, exc: ValidationError) -> dict[str, Any]:
-    errors = exc.errors(include_input=False, include_url=False, include_context=False)
+def _first_error(
+    exc: ValidationError, model: type[BaseModel]
+) -> tuple[str, str | None, Any, tuple[Any, ...]]:
+    """(tipus, camp de primer nivell conegut, valor de l'error, `loc` sencer)."""
+    errors = exc.errors(include_url=False, include_context=False)
     first = errors[0] if errors else {}
-    loc = first.get("loc") or ()
+    loc = tuple(first.get("loc") or ())
     field_name = (
-        loc[0]
-        if loc and isinstance(loc[0], str) and loc[0] in MaterialUncertaintyOut.model_fields
-        else None
+        loc[0] if loc and isinstance(loc[0], str) and loc[0] in model.model_fields else None
     )
-    return _uncertainty_schema_rejection(index, str(first.get("type", "other")), field_name)
+    return str(first.get("type", "other")), field_name, first.get("input"), loc
+
+
+def _closed(value: Any, vocabulary: frozenset[str]) -> str | None:
+    """El valor NOMES si es una cadena del vocabulari tancat (mai llista, dict ni text lliure)."""
+    return value if isinstance(value, str) and value in vocabulary else None
+
+
+#: Els valors que es poden escriure tal qual en un diagnostic: vocabularis tancats coneguts.
+_KNOWN_VALUES = _REQUIREMENT_CATEGORIES | _SCOPES | _OBLIGATIONS
+
+
+def _received_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    for kind, name in ((bool, "bool"), (int, "int"), (float, "float"), (str, "str"),
+                       (list, "list"), (dict, "object")):  # fmt: skip
+        if isinstance(value, kind):
+            return name
+    return "other"
+
+
+def _received(
+    value: Any, field_name: str | None, detail: str, loc: tuple[Any, ...]
+) -> dict[str, Any]:
+    """Que es va rebre, NOMES quan se sap de quin camp es:
+
+    * l'element sencer no es un objecte (`loc` buit): el tipus de l'element;
+    * error directament sobre un camp conegut: el tipus del valor (o `absent` si falta) i el valor
+      NOMES si es d'un vocabulari tancat conegut (mai text lliure del model);
+    * error niat (dins d'una evidencia...) o sobre una clau desconeguda: res (el `field` i el
+      `detail` ja ho diuen)."""
+    if not loc:
+        return {"received_type": _received_type(value)}
+    if field_name is None or len(loc) != 1:
+        return {}
+    if detail == "missing":
+        return {"received_type": "absent"}
+    return {"received_type": _received_type(value), "received_value": _closed(value, _KNOWN_VALUES)}
+
+
+def _valid_page(page: Any) -> bool:
+    return (
+        isinstance(page, int)
+        and not isinstance(page, bool)
+        and 1 <= page <= MAX_UNCERTAINTY_PAGE_NUMBER
+    )
+
+
+def _from_validation_error(index: int, raw: Any, exc: ValidationError) -> dict[str, Any]:
+    detail, field_name, value, loc = _first_error(exc, MaterialUncertaintyOut)
+    page = raw.get("page_number") if isinstance(raw, dict) else None
+    return _schema_rejection(
+        "uncertainty",
+        index,
+        detail,
+        field_name,
+        **_received(value, field_name, detail, loc),
+        scope=_closed(raw.get("scope") if isinstance(raw, dict) else None, _SCOPES),
+        cited_pages=[page] if _valid_page(page) else None,
+    )
+
+
+def _cited_pages(raw: Any) -> list[int]:
+    if not isinstance(raw, dict) or not isinstance(raw.get("evidence"), list):
+        return []
+    pages = [e.get("page_number") for e in raw["evidence"] if isinstance(e, dict)]
+    return sorted({p for p in pages if _valid_page(p)})
+
+
+def _item_rejection(item: str, index: int, raw: Any, exc: ValidationError, model) -> dict[str, Any]:
+    """Rebuig d'un requisit o criteri: el tipus d'error i el camp, l'obligacio i la categoria
+    NOMES si son valors del vocabulari tancat, les pagines declarades i, si el valor rebutjat es
+    un AMBIT d'incertesa (vocabulari que el model ha barrejat), `value_vocabulary`."""
+    detail, field_name, value, loc = _first_error(exc, model)
+    obligation = raw.get("obligation") if isinstance(raw, dict) else None
+    category = raw.get("category") if isinstance(raw, dict) else None
+    vocabulary = None
+    # Nomes si l'error es DIRECTAMENT sobre la `category` (no un element niat ni un altre camp).
+    if loc == ("category",) and _closed(value, _SCOPES) and value not in _REQUIREMENT_CATEGORIES:
+        vocabulary = "uncertainty_scope"
+    return _schema_rejection(
+        item,
+        index,
+        detail,
+        field_name,
+        **_received(value, field_name, detail, loc),
+        obligation=_closed(obligation, _OBLIGATIONS),
+        category=_closed(category, _REQUIREMENT_CATEGORIES),
+        cited_pages=_cited_pages(raw),
+        value_vocabulary=vocabulary,
+    )
+
+
+def _validate_items(raw: list[Any], model, item: str) -> tuple[list, list[int], list[dict]]:
+    kept, indexes, rejected = [], [], []
+    for index, candidate in enumerate(raw):
+        try:
+            kept.append(model.model_validate(candidate))
+        except ValidationError as exc:
+            if item == "uncertainty":
+                rejected.append(_from_validation_error(index, candidate, exc))
+            else:
+                rejected.append(_item_rejection(item, index, candidate, exc, model))
+            continue
+        indexes.append(index)
+    return kept, indexes, rejected
 
 
 def parse_chunk_product_v2(payload: Any) -> ChunkExtractionOutProductV2:
-    """Valida el sobre com V1 i les incerteses una a una.
+    """Valida el sobre i cada element per separat.
 
-    * Sobre (requisits, criteris, notes, claus d'arrel): estricte, com V1. Si falla,
-      `ValidationError` i el chunk sencer es `schema_invalid`.
-    * `uncertainties` que no es una llista: el camp sencer es descarta (un rebuig
-      amb `index = -1`) i el chunk segueix.
-    * Una incertesa invalida: es descarta NOMES aquella, amb un rebuig de codis (tipus
-      d'error i camp de primer nivell; mai el valor).
+    * Sobre: un objecte amb les claus conegudes. Si no es un objecte, si te claus d'arrel
+      desconegudes, o si `requirements`/`award_criteria`/`document_notes` no son llistes (un
+      `null` explicit tampoc ho es; nomes una clau absent val per buida), `ValidationError` i
+      el chunk sencer es `schema_invalid` (com a V1).
+    * `uncertainties` que no es una llista: el camp sencer es descarta (un rebuig amb
+      `index = -1`) i el chunk segueix.
+    * Un requisit, criteri o incertesa invalid: es descarta NOMES aquell, amb un rebuig de
+      codis. Mai es coacciona cap valor.
     """
-    if not isinstance(payload, dict) or "uncertainties" not in payload:
+    if not isinstance(payload, dict):
         return ChunkExtractionOutProductV2.model_validate(payload)
-    raw = payload["uncertainties"]
-    kept: list[MaterialUncertaintyOut] = []
-    indexes: list[int] = []
-    rejected: list[dict[str, Any]] = []
-    if raw is None:
-        raw = []
-    if not isinstance(raw, list):
-        rejected.append(_uncertainty_schema_rejection(-1, "list_type", "uncertainties"))
-        raw = []
-    for index, item in enumerate(raw):
-        try:
-            kept.append(MaterialUncertaintyOut.model_validate(item))
-        except ValidationError as exc:
-            rejected.append(_from_validation_error(index, exc))
-            continue
-        indexes.append(index)
-    parsed = ChunkExtractionOutProductV2.model_validate({**payload, "uncertainties": []})
-    parsed.uncertainties = kept
-    parsed._uncertainty_indexes = tuple(indexes)
-    parsed._uncertainty_rejections = tuple(rejected)
+    # Una clau ABSENT val per una llista buida (com el `default_factory` de V1); un `null` explicit
+    # NO: es un sobre invalid, com a V1, i el chunk es `schema_invalid` (i una represa el reenvia).
+    lists = {
+        key: payload[key] if key in payload else [] for key in ("requirements", "award_criteria")
+    }
+    if not all(isinstance(v, list) for v in lists.values()):
+        # Sobre inservible: el validador estricte dona l'error de sempre.
+        return ChunkExtractionOutProductV2.model_validate(payload)
+    raw_uncertainties = payload.get("uncertainties")
+    uncertainty_rejections: list[dict[str, Any]] = []
+    if raw_uncertainties is None:
+        raw_uncertainties = []
+    if not isinstance(raw_uncertainties, list):
+        uncertainty_rejections.append(
+            _schema_rejection(
+                "uncertainty",
+                -1,
+                "list_type",
+                "uncertainties",
+                received_type=_received_type(raw_uncertainties),
+            )
+        )
+        raw_uncertainties = []
+
+    requirements, requirement_indexes, requirement_rejections = _validate_items(
+        lists["requirements"], RequirementOut, "requirement"
+    )
+    awards, award_indexes, award_rejections = _validate_items(
+        lists["award_criteria"], AwardCriterionOut, "award_criterion"
+    )
+    uncertainties, uncertainty_indexes, item_rejections = _validate_items(
+        raw_uncertainties, MaterialUncertaintyOut, "uncertainty"
+    )
+    parsed = ChunkExtractionOutProductV2.model_validate(
+        {**payload, "requirements": [], "award_criteria": [], "uncertainties": []}
+    )
+    parsed.requirements = requirements
+    parsed.award_criteria = awards
+    parsed.uncertainties = uncertainties
+    parsed._requirement_indexes = tuple(requirement_indexes)
+    parsed._award_indexes = tuple(award_indexes)
+    parsed._uncertainty_indexes = tuple(uncertainty_indexes)
+    parsed._schema_rejections = tuple(requirement_rejections + award_rejections)
+    parsed._uncertainty_rejections = tuple(uncertainty_rejections + item_rejections)
     return parsed
 
 

@@ -1,0 +1,64 @@
+{
+ "source": "canary Attempt 3, chunk 1 (PCAP sintetic p6-7); evidencia completa a canary_llm/attempt3 (fora de git)",
+ "sanitized": "extraction_id substituit per __EXTRACTION_ID__; text del fixture sintetic (Vilasintetica), cap dada real",
+ "payload": {
+  "requirements": [
+   {
+    "category": "contract_condition",
+    "title": "Penalitat per retard en l'atenció d'avaries críticas",
+    "description": "S'imposarà una penalitat de 150 euros per cada hora de retard en l'atenció d'una avaria crítica, amb un màxim del 10% del preu del contracte.",
+    "obligation": "mandatory",
+    "scope": "tender",
+    "confidence": "high",
+    "evidence": [
+     {
+      "extraction_id": "__EXTRACTION_ID__",
+      "page_number": 6,
+      "quote": "Per cada hora de retard en l'atenció d'una avaria crítica, s'imposarà una penalitat de 150 euros, amb un màxim del 10 % del preu del contracte.",
+      "section": "Clàusula 9. Penalitats"
+     }
+    ]
+   },
+   {
+    "category": "submission_documentation",
+    "title": "Format electrònic de presentació d'ofertes",
+    "description": "Les ofertes s'han de presentar obligatòriament en format electrònic, en un únic sobre digital.",
+    "obligation": "mandatory",
+    "scope": "tender",
+    "confidence": "high",
+    "evidence": [
+     {
+      "extraction_id": "__EXTRACTION_ID__",
+      "page_number": 7,
+      "quote": "Les ofertes s'han de presentar obligatòriament en format electrònic, en un únic sobre digital",
+      "section": "Clàusula 10. Presentació d'ofertes"
+     }
+    ]
+   },
+   {
+    "category": "deadline",
+    "title": "Termini de presentació d'ofertes",
+    "description": "Les ofertes s'han de presentar abans de la data límit que fixi l'anunci de licitació.",
+    "obligation": "mandatory",
+    "scope": "tender",
+    "confidence": "high",
+    "evidence": [
+     {
+      "extraction_id": "__EXTRACTION_ID__",
+      "page_number": 7,
+      "quote": "abans de la data límit que fixi l'anunci de licitació",
+      "section": "Clàusula 10. Presentació d'ofertes"
+     }
+    ]
+   }
+  ],
+  "award_criteria": [],
+  "uncertainties": [],
+  "document_notes": [
+   {
+    "note": "El document conté text de farciment explícitament indicat com a no vinculant ('text de farciment del document sintètic i no conté cap obligació'). Aquest text no ha estat considerat en l'extracció.",
+    "page_number": 6
+   }
+  ]
+ }
+}

@@ -517,8 +517,8 @@ async def test_v1_i_product_v2_tenen_identitats_i_runs_separats(db, canary):
     assert pv2_run.input_fingerprint == v1_run.input_fingerprint  # mateixos documents
     assert (pv2_run.extractor_version, pv2_run.prompt_version, pv2_run.schema_version) == (
         "tender-requirements-product-v2",
-        "requirements-product-v2",
-        "requirements-schema-product-v2",
+        "requirements-product-v2.1",
+        "requirements-schema-product-v2.1",
     )
     assert pv2_run.analysis_identity == pv2_identity and v1_run.analysis_identity == v1_identity
     # El mateix perfil si que reaprofita el seu run (cap crida nova al proveidor).

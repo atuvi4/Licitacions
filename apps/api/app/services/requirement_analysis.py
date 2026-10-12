@@ -864,13 +864,14 @@ FINISHED_RUN_STATUSES = (
 
 
 def experimental_profile_of(run: RequirementExtractionRun) -> ExtractorProfile | None:
-    """El perfil experimental (`EXPERIMENTAL_PROFILES`) amb que es va fer el run, si ho es.
-    Per les tres versions: son la identitat del perfil."""
-    versions = (run.extractor_version, run.prompt_version, run.schema_version)
+    """El perfil experimental (`EXPERIMENTAL_PROFILES`) de la familia del run, si ho es.
+
+    Per `extractor_version`, que identifica la familia (la canonada): una revisio del prompt
+    o de l'esquema (product-v2 -> product-v2.1) continua sent experimental. Una run d'una
+    revisio anterior mai pot passar a vigent ni barrejar-se amb l'historial d'un altre perfil.
+    La identitat d'analisi (reutilitzacio, represa) continua sent les tres versions."""
     for profile in EXPERIMENTAL_PROFILES.values():
-        if (profile.extractor_version, profile.prompt_version, profile.schema_version) == (
-            versions
-        ):
+        if profile.extractor_version == run.extractor_version:
             return profile
     return None
 
@@ -2440,7 +2441,21 @@ def _persist_chunk(
 
     record = rejections.append if rejections is not None else (lambda _entry: None)
 
-    for index, item in enumerate(parsed.requirements):
+    # product-v2.1: requisits i criteris descartats SOLS per l'esquema (`parse_chunk_product_v2`).
+    # Compten com a rebutjats, i les posicions que es reporten son les ORIGINALS de la resposta.
+    # V1 i v2 no en tenen: cap canvi.
+    schema_rejections = list(getattr(parsed, "schema_rejections", ()) or ())
+    for entry in schema_rejections:
+        record(dict(entry))
+    tally.rejected += len(schema_rejections)
+    requirement_positions = list(
+        getattr(parsed, "requirement_indexes", ()) or range(len(parsed.requirements))
+    )
+    award_positions = list(
+        getattr(parsed, "award_indexes", ()) or range(len(parsed.award_criteria))
+    )
+
+    for item, index in zip(parsed.requirements, requirement_positions, strict=True):
         evidence, reasons = validate_evidence_detailed(item.evidence, chunk)
         tally.evidence_rejected += len(reasons)
         for detail in evidence_rejection_details(item.evidence, chunk) if reasons else []:
@@ -2520,7 +2535,7 @@ def _persist_chunk(
             )
         tally.requirements += 1
 
-    for index, item in enumerate(parsed.award_criteria):
+    for item, index in zip(parsed.award_criteria, award_positions, strict=True):
         evidence, reasons = validate_evidence_detailed(item.evidence, chunk)
         tally.evidence_rejected += len(reasons)
         for detail in evidence_rejection_details(item.evidence, chunk) if reasons else []:
