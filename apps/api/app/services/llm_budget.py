@@ -155,24 +155,49 @@ def _parse_price(raw: Any) -> ModelPrice | None:
         )
     except (KeyError, TypeError, ValueError, InvalidOperation):
         return None
+    # NaN i infinit no son preus (i NaN ni tan sols es pot comparar amb 0).
+    if not (price.input_per_million.is_finite() and price.output_per_million.is_finite()):
+        return None
     if price.input_per_million < 0 or price.output_per_million < 0:
         return None
     return price
 
 
+#: Rang admes del llindar d'un tram (tokens d'entrada d'UNA peticio).
+MAX_TIER_THRESHOLD_TOKENS = 10_000_000
+
+
+def _tier_threshold(raw: Any) -> int | None:
+    """El llindar com a enter, o `None` si no es valid. Accepta un `int` o un `float` finit i
+    enter (la configuracio tipa els valors com a float: de l'entorn, 100000 arriba com a
+    100000.0), dins de `1..MAX_TIER_THRESHOLD_TOKENS`. Res mes: ni cadenes, ni booleans, ni
+    fraccions, ni NaN o infinit."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, float):
+        if not math.isfinite(raw) or not raw.is_integer():
+            return None
+        raw = int(raw)
+    if not isinstance(raw, int) or not 1 <= raw <= MAX_TIER_THRESHOLD_TOKENS:
+        return None
+    return raw
+
+
 def long_context_price(model: str) -> tuple[int, ModelPrice] | None | bool:
     """El tram de context llarg del model: `(llindar, preu)`; `None` si no en te; `False` si
-    n'hi ha un pero esta mal format (llavors el model es tracta com SENSE preu)."""
+    n'hi ha un pero no es valid (llavors el model es tracta com SENSE preu): mal format, o
+    incoherent amb el preu base (un tram de context llarg mai es mes barat que el base)."""
     raw = settings.LLM_MODEL_LONG_CONTEXT_PRICES.get(model)
     if raw is None:
         return None
     price = _parse_price(raw)
-    threshold = raw.get("above_input_tokens") if isinstance(raw, Mapping) else None
-    if (
-        price is None
-        or isinstance(threshold, bool)
-        or not isinstance(threshold, int)
-        or threshold <= 0
+    threshold = _tier_threshold(raw.get("above_input_tokens")) if isinstance(raw, Mapping) else None
+    if price is None or threshold is None:
+        return False
+    base = _parse_price(settings.LLM_MODEL_PRICES.get(model))
+    if base is not None and (
+        price.input_per_million < base.input_per_million
+        or price.output_per_million < base.output_per_million
     ):
         return False
     return threshold, price
@@ -183,10 +208,10 @@ def model_price(
 ) -> ModelPrice | None:
     """El preu del model EXACTE (§13.5: pinat a un ID exacte). Cap prefix.
 
-    Un preu mal format (no numeric o negatiu) es tracta com absent: no es calcula
+    Un preu mal format (no numeric, no finit o negatiu) es tracta com absent: no es calcula
     cap cost amb un preu que no es pot llegir. Si el model te tram de context llarg i
-    `input_tokens` (els d'UNA peticio, o la suma de diverses en una estimacio: aixi mai es
-    subestima) en supera el llindar, el preu es el del tram. Un tram mal format: sense preu.
+    `input_tokens` (els d'UNA peticio, mai la suma de diverses) en supera el llindar, el preu
+    es el del tram. Un tram no valid: sense preu.
     """
     price = _parse_price((settings.LLM_MODEL_PRICES if prices is None else prices).get(model))
     if price is None or prices is not None:
@@ -202,15 +227,39 @@ def model_price(
 def chunk_cost(
     model: str, *, input_tokens: int | None, output_tokens: int | None
 ) -> Decimal | None:
-    """`Usage` x preus (amb el tram que toca per `input_tokens`). `None` si el model no te preu."""
+    """Cost d'UNA peticio: `Usage` x preus, amb el tram dels SEUS tokens d'entrada. `None` si
+    el model no te preu."""
     price = model_price(model, input_tokens=input_tokens)
     if price is None:
         return None
-    total = (
-        Decimal(input_tokens or 0) * price.input_per_million
-        + Decimal(output_tokens or 0) * price.output_per_million
+    return usd(_raw_cost(price, input_tokens, output_tokens))
+
+
+def _raw_cost(
+    price: ModelPrice, input_tokens: float | None, output_tokens: float | None
+) -> Decimal:
+    return (
+        Decimal(str(input_tokens or 0)) * price.input_per_million
+        + Decimal(str(output_tokens or 0)) * price.output_per_million
     ) / TOKENS_PER_MILLION
-    return usd(total)
+
+
+def estimate_cost(model: str, guess: TokenGuess) -> Decimal | None:
+    """Cost d'una estimacio de diverses peticions: cada peticio es tarifa pel tram dels SEUS
+    tokens d'entrada (mai la suma) i se sumen els costos, arrodonits un sol cop. Si totes van
+    al mateix tram (sempre, en un model sense trams) es el cost dels totals, com abans."""
+    if model_price(model) is None:
+        return None
+    prices = [model_price(model, input_tokens=i) for i, _o in guess.requests]
+    if not prices or all(price == prices[0] for price in prices):
+        price = prices[0] if prices else model_price(model)
+        return usd(_raw_cost(price, guess.input_tokens, guess.output_tokens))
+    return usd(
+        sum(
+            (_raw_cost(price, i, o) for price, (i, o) in zip(prices, guess.requests, strict=True)),
+            Decimal(0),
+        )
+    )
 
 
 def provider_failures(provider: ProviderIdentity) -> list[str]:
@@ -306,16 +355,29 @@ class TokenGuess:
     output_tokens: int
     #: `history` o `characters`.
     basis: str
+    #: `(entrada, sortida)` de cada peticio: el tram es decideix per peticio.
+    requests: tuple[tuple[float, float], ...] = ()
+
+
+def character_requests(chunks: Iterable[Chunk], profile: ExtractorProfile) -> list[tuple[int, int]]:
+    """Cota sense historic, per peticio: caracters del que s'enviaria / 3,3 i el sostre de
+    sortida."""
+    requests = []
+    for chunk in chunks:
+        chars = len(profile.system_prompt) + len(profile.build_user_message(render_chunk(chunk)))
+        requests.append(
+            (
+                math.ceil(Decimal(chars) / CHARS_PER_TOKEN),
+                settings.LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS,
+            )
+        )
+    return requests
 
 
 def character_tokens(chunks: Iterable[Chunk], profile: ExtractorProfile) -> tuple[int, int]:
     """Cota sense historic: caracters del que s'enviaria / 3,3 i el sostre de sortida."""
-    chunks = list(chunks)
-    input_tokens = 0
-    for chunk in chunks:
-        chars = len(profile.system_prompt) + len(profile.build_user_message(render_chunk(chunk)))
-        input_tokens += math.ceil(Decimal(chars) / CHARS_PER_TOKEN)
-    return input_tokens, settings.LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS * len(chunks)
+    requests = character_requests(chunks, profile)
+    return sum(i for i, _o in requests), sum(o for _i, o in requests)
 
 
 async def estimate_tokens(
@@ -334,9 +396,15 @@ async def estimate_tokens(
             input_tokens=round(history.input_per_request * len(chunks)),
             output_tokens=round(history.output_per_request * len(chunks)),
             basis=ESTIMATE_FROM_HISTORY,
+            requests=tuple((history.input_per_request, history.output_per_request) for _ in chunks),
         )
-    input_tokens, output_tokens = character_tokens(chunks, profile)
-    return TokenGuess(input_tokens, output_tokens, ESTIMATE_FROM_CHARACTERS)
+    requests = character_requests(chunks, profile)
+    return TokenGuess(
+        sum(i for i, _o in requests),
+        sum(o for _i, o in requests),
+        ESTIMATE_FROM_CHARACTERS,
+        requests=tuple(requests),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -613,9 +681,7 @@ async def provider_gate(
     if provider_basis(provider) is not RequirementRunBasis.REAL:
         return
     guess = await estimate_tokens(session, chunks=chunks, profile=profile, provider=provider)
-    estimate = chunk_cost(
-        provider.model, input_tokens=guess.input_tokens, output_tokens=guess.output_tokens
-    ) or usd(0)
+    estimate = estimate_cost(provider.model, guess) or usd(0)
     total_cap = await cap_usd(session, LlmBudgetScope.PILOT_TOTAL)
     total = await spent_usd(session, LlmBudgetScope.PILOT_TOTAL)
     if await budget_tripped(session) or total + estimate > total_cap.cap_usd:

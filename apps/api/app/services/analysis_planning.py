@@ -441,9 +441,7 @@ async def _prerequisites(
     )
     price = llm_budget.model_price(provider.model)
     if price is not None:
-        preview.estimated_cost_usd = llm_budget.chunk_cost(
-            provider.model, input_tokens=guess.input_tokens, output_tokens=guess.output_tokens
-        )
+        preview.estimated_cost_usd = llm_budget.estimate_cost(provider.model, guess)
     budget: dict[str, Any] = {
         "estimated_cost_usd": (
             float(preview.estimated_cost_usd) if preview.estimated_cost_usd is not None else None

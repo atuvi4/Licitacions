@@ -312,6 +312,57 @@ async def test_l_estimacio_fa_servir_l_historic_si_n_hi_ha(session, plec3):
     assert forced.estimated_cost_usd == CHUNK_COST * 3
 
 
+def _long_context(monkeypatch, threshold: int) -> None:
+    """Tram de context llarg per al model de prova: per sobre de `threshold`, 5 $/M."""
+    monkeypatch.setattr(
+        settings,
+        "LLM_MODEL_LONG_CONTEXT_PRICES",
+        {TEST_MODEL: {"above_input_tokens": threshold, "input": 5.0, "output": 0.0}},
+    )
+
+
+@pytest.mark.parametrize(
+    ("threshold", "expected"),
+    [(1_000_000, CHUNK_COST * 3), (500_000, Decimal("9.000000"))],
+)
+async def test_l_estimacio_decideix_el_tram_per_peticio_no_per_la_suma(
+    session, plec3, monkeypatch, threshold, expected
+):
+    await _analyze(session, plec3)
+    # Historic: 600.000 per peticio. La suma de 3 (1.800.000) supera tots dos llindars; nomes
+    # el de 500.000 el supera cada peticio.
+    _long_context(monkeypatch, threshold)
+
+    forced = await build_preview(
+        session, plec3["document"].tender_id, profile=V1, provider=RealNamedFake(), force=True
+    )
+
+    assert forced.prerequisites["budget"]["basis"] == "history"
+    assert forced.estimated_cost_usd == expected
+
+
+@pytest.mark.parametrize(("threshold", "allowed"), [(1_000_000, True), (500_000, False)])
+async def test_la_porta_tarifa_cada_peticio_pel_seu_tram(
+    session, plec3, monkeypatch, threshold, allowed
+):
+    await _analyze(session, plec3)
+    _long_context(monkeypatch, threshold)
+    monkeypatch.setattr(settings, "LLM_BUDGET_PILOT_TOTAL_USD", 100.0)  # nomes el cap de run
+    provider = RealNamedFake(responses=_responses(plec3))
+
+    if allowed:
+        # 3 x 0,6 $ = 1,8 $ <= cap de run (3 $). Amb el tram decidit per la suma: 9 $, refusat.
+        run = await _analyze(session, plec3, provider=provider, force=True)
+        assert run.status == AnalysisRunStatus.COMPLETED
+        assert provider.calls == 3
+    else:
+        # Cada peticio supera el llindar: 3 x 3 $ = 9 $ > cap de run.
+        with pytest.raises(AnalysisNotAllowedError) as caught:
+            await _analyze(session, plec3, provider=provider, force=True)
+        assert caught.value.code == "budget_exceeded"
+        assert provider.calls == 0
+
+
 # --------------------------------------------------------------------------- #
 # La porta unica, abans de cap crida                                           #
 # --------------------------------------------------------------------------- #
