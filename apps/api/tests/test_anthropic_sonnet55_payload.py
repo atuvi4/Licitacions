@@ -299,16 +299,62 @@ def test_la_configuracio_per_defecte_no_canvia_cap_model():
 # --------------------------------------------------------------------------- #
 
 
+#: Cada versio del transport fixa el seu esquema exacte: canviar-lo demana una versio nova (entra
+#: a la identitat de l'analisi). La v1 (`...-strict`) va rebre un 400 a l'Attempt 5 («The
+#: compiled grammar is too large»): no es pot tornar a enviar.
+STRICT_SCHEMA_SHA256 = {
+    "requirements-transport-product-v2.1-strict.2": (
+        "e28780bdb863a40de31a0f46223ed30f1a6a4077c232f8b000dee07ef8c37d70"
+    ),
+}
+STRICT_V1_SHA256 = "e46829bbbdc6d2850d9f2c591143c375e93d40fc7dcdee4c594dc36f5700514f"
+
+
+def _sha(schema: dict) -> str:
+    return hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest()
+
+
 def test_l_esquema_estricte_respecta_els_limits_i_el_del_perfil_no():
     strict = PRODUCT_V2.strict_json_schema()
     assert strict_schema_problems(strict) == []
-    # Comptats a ma: per definicio, 21 opcionals i 14 amb unio; per us (l'evidencia hi es dues
-    # vegades), 22 i 15. Limits: 24 i 16.
-    assert strict_schema_counts(strict) == {"per_definition": (21, 14), "per_usage": (22, 15)}
+    # Cap propietat opcional; unions: 13 per definicio, 14 per us (l'evidencia hi es dues
+    # vegades). Limits documentats: 24 i 16.
+    assert strict_schema_counts(strict) == {"per_definition": (0, 13), "per_usage": (0, 14)}
     problems = strict_schema_problems(PRODUCT_V2.json_schema())
     assert "parametres opcionals: 28" in problems
     assert any(p.endswith("value/anyOf/0: additionalProperties") for p in problems)
     assert PRODUCT_V2.strict_transport_version == TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT
+    assert (
+        TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT == "requirements-transport-product-v2.1-strict.2"
+    )
+
+
+def test_l_esquema_de_transport_esta_fixat_per_versio_i_no_es_el_refusat():
+    strict = PRODUCT_V2.strict_json_schema()
+    assert _sha(strict) == STRICT_SCHEMA_SHA256[TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT]
+    assert _sha(strict) != STRICT_V1_SHA256
+
+
+def test_cap_objecte_del_transport_te_propietats_opcionals():
+    def objects(node, mapping=False):
+        if isinstance(node, list):
+            for value in node:
+                yield from objects(value)
+        elif isinstance(node, dict):
+            if mapping:
+                for value in node.values():
+                    yield from objects(value)
+                return
+            if "properties" in node:
+                yield node
+            for key, value in node.items():
+                yield from objects(value, key in ("properties", "$defs"))
+
+    found = list(objects(PRODUCT_V2.strict_json_schema()))
+    assert len(found) == 7  # arrel, 5 definicions d'objecte i el `value`
+    for node in found:
+        assert node["required"] == list(node["properties"])
+        assert node["additionalProperties"] is False
 
 
 def test_el_comprovador_de_l_esquema_estricte_es_una_llista_blanca():
@@ -336,23 +382,87 @@ def test_el_comprovador_de_l_esquema_estricte_es_una_llista_blanca():
     ]
 
 
-def test_l_esquema_estricte_nomes_difereix_en_el_que_la_tool_estricta_no_admet():
+def _accepted(prop: dict, defs: dict) -> frozenset:
+    """Que admet una propietat, en termes de tipus JSON i valors d'enum (sense restriccions)."""
+    if "$ref" in prop:
+        return _accepted(defs[prop["$ref"].split("/")[-1]], defs)
+    if "anyOf" in prop:
+        return frozenset().union(*(_accepted(branch, defs) for branch in prop["anyOf"]))
+    if "enum" in prop:  # `null` dins d'un enum es el mateix que el tipus `null`
+        return frozenset(("type", "null") if v is None else ("enum", v) for v in prop["enum"])
+    kind = prop.get("type")
+    if kind == "array":
+        return frozenset({("array", _accepted(prop["items"], defs))})
+    return frozenset({("type", kind)})
+
+
+def test_el_transport_es_el_mateix_contracte_que_el_canonic():
     normal, strict = PRODUCT_V2.json_schema(), PRODUCT_V2.strict_json_schema()
-    assert set(strict["$defs"]) == set(normal["$defs"])
-    assert strict["required"] == sorted(normal["properties"])
-    assert strict["$defs"]["EvidenceOut"]["required"] == sorted(
-        [*normal["$defs"]["EvidenceOut"]["required"], "section"]
-    )
-    text = json.dumps(strict)
-    for keyword in ("minLength", "maxLength", "minimum", "maximum"):
-        assert f'"{keyword}"' not in text
-    for name, definition in normal["$defs"].items():  # mateixos enums i mateixos camps
-        if "enum" in definition:
-            assert strict["$defs"][name]["enum"] == definition["enum"]
-        if "properties" in definition:
-            assert set(strict["$defs"][name]["properties"]) == set(definition["properties"])
-    value = strict["$defs"]["RequirementOut"]["properties"]["value"]["anyOf"]
-    assert value[0]["additionalProperties"] is False and value[1] == {"type": "null"}
+    ndefs, sdefs = normal["$defs"], strict["$defs"]
+    assert set(sdefs) == set(ndefs) - {"RequirementOperator"}  # ara inline, com a enum
+    for owner_normal, owner_strict in [(normal, strict)] + [
+        (ndefs[name], sdefs[name]) for name in sdefs if "properties" in ndefs[name]
+    ]:
+        assert list(owner_strict["properties"]) == list(owner_normal["properties"])
+        for name, prop in owner_normal["properties"].items():
+            expected = _accepted(prop, ndefs)
+            got = _accepted(owner_strict["properties"][name], sdefs)
+            if name == "value":  # objecte lliure -> objecte de forma fixa: tots dos `object`
+                assert expected == got == {("type", "object"), ("type", "null")}
+            else:
+                assert got == expected, name
+    # Paraules clau (no noms de propietat: `title` es una propietat del requisit).
+    dropped = {"minLength", "maxLength", "minimum", "maximum", "default", "title"}
+    assert dropped & set(_keys(strict)) == set()
+    assert dropped & set(_keys(normal))  # el canonic si que les te
+
+
+def _keys(node, mapping=False):
+    if isinstance(node, list):
+        for value in node:
+            yield from _keys(value)
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            if not mapping:
+                yield key
+            yield from _keys(value, not mapping and key in ("properties", "$defs"))
+
+
+def test_valid_pel_transport_no_vol_dir_valid_pel_producte():
+    # Dins del transport (cap restriccio de llargada ni de rang), pero el parser ho rebutja:
+    # titol buit, pagina 0, cita buida i nota de mes de 500 caracters. Rebutjat element a
+    # element, com sempre; res no es coacciona.
+    evidence = {"extraction_id": "e1", "page_number": 0, "quote": "", "section": None,
+                "evidence_role": "primary"}  # fmt: skip
+    payload = {
+        **EMPTY,
+        "requirements": [
+            {"category": "insurance", "title": "", "obligation": "mandatory", "operator": None,
+             "scope": "unknown", "lot_labels": [], "description": None, "confidence": "high",
+             "value": None, "evidence": [evidence]},
+        ],
+        "uncertainties": [
+            {"scope": "solvency", "extraction_id": "e1", "page_number": 5, "quote": None,
+             "note": "x" * 501},
+        ],
+    }  # fmt: skip
+    parsed = parse_chunk_product_v2(payload)
+    assert parsed.requirements == [] and parsed.uncertainties == []
+    assert parsed._schema_rejections and parsed._uncertainty_rejections
+
+
+def test_els_nuls_explicits_del_transport_equivalen_als_valors_omesos():
+    evidence = {"extraction_id": "e1", "page_number": 3, "quote": "x"}
+    omitted = {"category": "insurance", "title": "RC", "evidence": [evidence]}
+    explicit = {
+        **omitted,
+        "obligation": "unknown", "operator": None, "scope": "unknown", "lot_labels": [],
+        "description": None, "value": None, "confidence": "low",
+        "evidence": [{**evidence, "section": None, "evidence_role": "primary"}],
+    }  # fmt: skip
+    one = parse_chunk_product_v2({**EMPTY, "requirements": [omitted]}).requirements
+    two = parse_chunk_product_v2({**EMPTY, "requirements": [explicit]}).requirements
+    assert [r.model_dump() for r in one] == [r.model_dump() for r in two]
 
 
 @pytest.mark.parametrize(

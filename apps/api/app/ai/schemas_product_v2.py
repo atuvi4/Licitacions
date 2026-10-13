@@ -27,6 +27,7 @@ tot el chunk 1. Ara aquell requisit es rebutja sol, amb `field = category`,
 from __future__ import annotations
 
 import copy
+import json
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, PrivateAttr, StringConstraints, ValidationError
@@ -318,9 +319,15 @@ def chunk_output_json_schema_product_v2() -> dict[str, Any]:
 #: Esquema de TRANSPORT per a una tool `strict: true` (models que no admeten la tool forcada,
 #: com Sonnet 5.5). No es un contracte nou: el contracte continua sent `SCHEMA_VERSION_PRODUCT_V2`
 #: i el parser (`parse_chunk_product_v2`) valida la resposta exactament igual.
-TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT = "requirements-transport-product-v2.1-strict"
-#: Restriccions que la tool estricta no admet (HTTP 400). No viatgen; el parser les aplica.
-_STRICT_DROPPED_KEYWORDS = ("minLength", "maxLength", "minimum", "maximum")
+#: v1 (`...-strict`, Attempt 5, 2026-10-13): Anthropic la va refusar ABANS de generar (HTTP 400,
+#: «The compiled grammar is too large»). Tenia 21 propietats opcionals (10 en un sol objecte) i
+#: cada propietat opcional multiplica els camins de la gramatica. v2: cap propietat opcional
+#: (tot viatja, `null` si no hi ha valor), l'operador com a enum amb `null` (sense unio), sense
+#: `title` ni `default`, i sense definicions que ja no es fan servir.
+TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT = "requirements-transport-product-v2.1-strict.2"
+#: Restriccions que la tool estricta no admet (HTTP 400) i anotacions sense efecte en una
+#: gramatica on tot es obligatori. No viatgen; el parser aplica les restriccions igual.
+_STRICT_DROPPED_KEYWORDS = ("minLength", "maxLength", "minimum", "maximum", "title", "default")
 #: `value` d'un requisit: la tool estricta no admet objectes lliures, aixi que viatja amb una
 #: forma fixa (o `null`). El parser l'accepta igual (`dict | None`).
 _STRICT_VALUE = {
@@ -337,8 +344,33 @@ _STRICT_VALUE = {
         },
         {"type": "null"},
     ],
-    "default": None,
 }
+
+
+def _all_required(node: Any, *, mapping: bool = False) -> None:
+    """Cada objecte: totes les propietats obligatories (cap camp opcional a la gramatica)."""
+    if isinstance(node, dict):
+        if not mapping and "properties" in node:
+            node["required"] = list(node["properties"])
+        for key, value in node.items():
+            _all_required(value, mapping=not mapping and key in ("properties", "$defs"))
+    elif isinstance(node, list):
+        for value in node:
+            _all_required(value)
+
+
+def _drop_unused_definitions(schema: dict[str, Any]) -> None:
+    text = json.dumps({k: v for k, v in schema.items() if k != "$defs"})
+    definitions = schema["$defs"]
+    used: set[str] = set()
+    pending = {name for name in definitions if f'"#/$defs/{name}"' in text}
+    while pending:
+        name = pending.pop()
+        used.add(name)
+        body = json.dumps(definitions[name])
+        pending |= {n for n in definitions if f'"#/$defs/{n}"' in body and n not in used}
+    for name in set(definitions) - used:
+        del definitions[name]
 
 
 def _drop_strict_keywords(node: Any, *, mapping: bool = False) -> None:
@@ -356,17 +388,17 @@ def _drop_strict_keywords(node: Any, *, mapping: bool = False) -> None:
 
 
 def chunk_output_json_schema_product_v2_strict() -> dict[str, Any]:
-    """L'esquema del perfil, apte per a una tool estricta: sense les restriccions no admeses,
-    amb `value` de forma fixa, les quatre llistes de l'arrel obligatories (buides si no hi ha
-    res) i `section` de l'evidencia obligatoria (`null` si no n'hi ha). Aixi queda dins dels
-    limits de la tool estricta (<= 24 parametres opcionals, <= 16 amb unio de tipus), comptats
-    per definicio i per us."""
+    """L'esquema del perfil, apte per a una tool estricta i amb la gramatica mes petita possible
+    SENSE perdre cap camp: les mateixes propietats, enums i tipus; sense les restriccions no
+    admeses (el parser les aplica); `value` de forma fixa; cap propietat opcional; l'operador
+    com a enum amb `null`. El parser del perfil continua sent el contracte: aquest esquema no
+    accepta res que el parser no validi despres."""
     schema = copy.deepcopy(chunk_output_json_schema_product_v2())
     _drop_strict_keywords(schema)
-    schema["$defs"]["RequirementOut"]["properties"]["value"] = copy.deepcopy(_STRICT_VALUE)
-    schema["required"] = sorted(schema["properties"])
-    # Marge sota el limit d'opcionals (comptats per us, l'evidencia apareix dues vegades):
-    # `section` viatja sempre, `null` si no n'hi ha.
-    evidence = schema["$defs"]["EvidenceOut"]
-    evidence["required"] = sorted({*evidence.get("required", ()), "section"})
+    requirement = schema["$defs"]["RequirementOut"]["properties"]
+    requirement["value"] = copy.deepcopy(_STRICT_VALUE)
+    operators = schema["$defs"]["RequirementOperator"]["enum"]
+    requirement["operator"] = {"enum": [*operators, None]}
+    _all_required(schema)
+    _drop_unused_definitions(schema)
     return schema
