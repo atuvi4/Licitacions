@@ -223,7 +223,7 @@ async def test_el_prompt_v2_1_separa_categories_i_ambits():
     for scope in UncertaintyScope:  # els ambits continuen enumerats al seu bloc
         assert f"`{scope.value}`" in prompt
     assert "VOCABULARIS TANCATS" not in V1_PROMPT and "VOCABULARIS TANCATS" not in V1.system_prompt
-    assert PRODUCT_V2.prompt_version == "requirements-product-v2.1"
+    assert PRODUCT_V2.prompt_version == "requirements-product-v2.2"
     assert PRODUCT_V2.schema_version == "requirements-schema-product-v2.1"
     assert PRODUCT_V2.extractor_version == "tender-requirements-product-v2"
 

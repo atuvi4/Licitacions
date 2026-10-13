@@ -1,7 +1,7 @@
 """Prompt d'extraccio de requisits del perfil `product-v2`.
 
-Es el prompt V1 (que NO es toca: `requirements_v1.py`) amb tres blocs nous, fruit dels
-canaris reals de 2026-10-11:
+Es el prompt V1 (que NO es toca: `requirements_v1.py`) amb blocs nous. Els tres primers, fruit
+dels canaris reals de 2026-10-11:
 
 1. **Cita literal (verbatim).** Dos requisits ben detectats es van perdre perque la
    cita no era literal i el backend (correctament) la va rebutjar. Ara el prompt diu
@@ -15,6 +15,11 @@ canaris reals de 2026-10-11:
 
 v2.1: un bloc de VOCABULARIS TANCATS (les categories de requisit, generades de l'enum, i la
 separacio explicita amb els ambits de les incerteses).
+
+v2.2 (post-mortem de l'Attempt 4): els nou ambits de les incerteses estaven enumerats pero no
+definits. Ara cada ambit te una definicio generica (`SCOPE_DEFINITIONS`, una per valor de
+l'enum) i hi ha una regla de desempat: es classifica per la naturalesa principal del que la
+clausula regula, no per la consequencia del seu incompliment. Cap referencia al fixture.
 
 Dues linies de V1 contradeien aquests blocs ("si no pots citar, no ho incloguis" i
 "confianca baixa -> tambe a incerteses"): es substitueixen NOMES a la copia composta.
@@ -31,7 +36,8 @@ from app.ai.prompts.requirements_v1 import build_user_message as _v1_build_user_
 from app.models.enums import RequirementCategory, UncertaintyScope
 
 #: Identifica aquest text. Diferent de qualsevol versio v1/v2/v3. v2.1: vocabularis tancats.
-PROMPT_VERSION_PRODUCT_V2 = "requirements-product-v2.1"
+#: v2.2: definicio de cada ambit d'incertesa i regla de desempat.
+PROMPT_VERSION_PRODUCT_V2 = "requirements-product-v2.2"
 #: Identifica tota la canonada d'extraccio del perfil (amb la persistencia de 0062).
 EXTRACTOR_VERSION_PRODUCT_V2 = "tender-requirements-product-v2"
 
@@ -101,6 +107,62 @@ _V1_OVERRIDES: tuple[tuple[str, str], ...] = (
 )
 
 
+#: Que regula cada ambit d'incertesa (definicions acordades amb el propietari, 2026-10-13).
+#: Una per valor de l'enum, en l'ordre en que es presenten al model.
+SCOPE_DEFINITIONS: dict[UncertaintyScope, str] = {
+    UncertaintyScope.SOLVENCY: (
+        "capacitat economica/financera, tecnica o professional del licitador i els mecanismes "
+        "d'acreditacio o qualificacio exigits per demostrar-la."
+    ),
+    UncertaintyScope.ADMISSIBILITY: (
+        "altres condicions formals o juridiques necessaries per poder participar o perque "
+        "l'oferta sigui admesa, quan no son propiament acreditacio de capacitat."
+    ),
+    UncertaintyScope.SUBMISSION_DOCUMENTATION: (
+        "forma, contingut o documentacio que s'ha de presentar amb l'oferta."
+    ),
+    UncertaintyScope.DEADLINE: (
+        "terminis per presentar l'oferta o complir una actuacio temporal quan el termini es "
+        "l'objecte principal de la clausula."
+    ),
+    UncertaintyScope.SCORING: "regles que determinen la puntuacio o valoracio de les ofertes.",
+    UncertaintyScope.CONTRACT_OBLIGATION: (
+        "prestacions o obligacions que haura de complir l'adjudicatari durant l'execucio."
+    ),
+    UncertaintyScope.LIABILITY: (
+        "responsabilitats, assegurances, indemnitzacions, garanties de responsabilitat o "
+        "assignacio de riscos."
+    ),
+    UncertaintyScope.COST: (
+        "imports, preus, costos o consequencies economiques quan aquest es el contingut principal."
+    ),
+    UncertaintyScope.SIZING: (
+        "quantitats, volums, capacitats, dimensions, cobertura o extensio de l'objecte o servei "
+        "a executar; mai la capacitat o qualificacio del licitador."
+    ),
+}
+
+_SCOPE_TIE_BREAK = (
+    "Regla de desempat: classifica pel que la clausula es, no pel que pot passar si no es\n"
+    "compleix. Per exemple, una exigencia destinada a acreditar la capacitat del licitador es\n"
+    "`solvency` encara que no complir-la pugui comportar exclusio.\n"
+    "No dupliquis una mateixa incertesa en diversos ambits.\n\n"
+)
+
+
+def _scope_rules() -> str:
+    """Definicio de cada ambit i regla de desempat (v2.2)."""
+    lines = "".join(
+        f"  - `{scope.value}`: {definition}\n" for scope, definition in SCOPE_DEFINITIONS.items()
+    )
+    return (
+        "AMBITS DE LES INCERTESES\n\n"
+        "Si una clausula encaixa en mes d'un ambit, tria UN unic `scope` segons la naturalesa\n"
+        "principal del que regula, no segons la consequencia secundaria del seu incompliment.\n"
+        f"{lines}" + _SCOPE_TIE_BREAK
+    )
+
+
 def _vocabulary_rules() -> str:
     """v2.1 (post-mortem de l'Attempt 3): el model va posar un AMBIT d'incertesa
     (`submission_documentation`) com a `category` d'un requisit. El prompt V1 no enumera les
@@ -135,7 +197,7 @@ def _compose_system_prompt() -> str:
     head, separator, tail = text.partition(_V1_TAIL)
     if not separator:  # pragma: no cover - el V1 es immutable
         raise RuntimeError("El prompt V1 ha canviat: no es pot compondre product-v2.")
-    return head + _PRODUCT_V2_RULES + _vocabulary_rules() + separator + tail
+    return head + _PRODUCT_V2_RULES + _vocabulary_rules() + _scope_rules() + separator + tail
 
 
 SYSTEM_PROMPT_PRODUCT_V2 = _compose_system_prompt()
