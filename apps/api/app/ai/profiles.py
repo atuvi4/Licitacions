@@ -53,6 +53,7 @@ from app.ai.schemas import (
 from app.ai.schemas_product_v2 import (
     SCHEMA_VERSION_PRODUCT_V2,
     TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT,
+    TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_TOOL,
     ChunkExtractionOutProductV2,
     chunk_output_json_schema_product_v2,
     chunk_output_json_schema_product_v2_strict,
@@ -72,7 +73,12 @@ from app.ai.schemas_v3 import (
 #: Codi de refus (porta) i d'error (canonada) quan un model de tool estricta es fa servir amb un
 #: perfil sense esquema de transport estricte.
 STRICT_SCHEMA_UNAVAILABLE = "strict_schema_unavailable"
-#: Model de tool estricta sense `thinking` `between_tools` (o alhora a `disabled`).
+#: Model `auto` sense `strict` amb un perfil sense revisio de transport de tool.
+TOOL_TRANSPORT_UNAVAILABLE = "tool_transport_unavailable"
+#: Clau de `provider_metadata` on el run desa el seu transport (`transport_identity`): la
+#: represa nomes reprén un run del MATEIX transport.
+TRANSPORT_METADATA_KEY = "transport"
+#: Model `auto` (estricte o no) sense `thinking` `between_tools` (o alhora a `disabled`).
 THINKING_UNCONFIGURED = "thinking_unconfigured"
 THINKING_MISCONFIGURED = "thinking_misconfigured"
 
@@ -104,11 +110,15 @@ class ExtractorProfile:
     #: Com es valida la resposta. `None` = `output_model.model_validate`, com
     #: sempre. La v3 valida element a element (`parse_chunk_v3_result`).
     parser: Callable[[Any], Any] | None = None
-    #: Esquema de TRANSPORT per a una tool `strict: true` (models de
-    #: `LLM_AUTO_TOOL_CHOICE_MODELS`) i la seva versio. `None`: el perfil no es pot fer servir
-    #: amb aquests models (la porta ho refusa abans de cap crida).
+    #: Esquema de TRANSPORT per a una tool `strict: true` (models de `LLM_STRICT_TOOL_MODELS`) i
+    #: la seva versio. `None`: el perfil no es pot fer servir amb aquests models (la porta ho
+    #: refusa abans de cap crida).
     strict_json_schema: Callable[[], dict[str, Any]] | None = None
     strict_transport_version: str | None = None
+    #: Revisio del transport de tool NO estricta (models `auto` sense `strict`): la tool rep
+    #: l'esquema canonic (`json_schema`) com a guia i el parser valida la resposta. `None`: el
+    #: perfil no es pot fer servir amb aquests models.
+    tool_transport_version: str | None = None
 
     def parse(self, payload: Any) -> Any:
         if self.parser is not None:
@@ -166,6 +176,7 @@ PRODUCT_V2 = ExtractorProfile(
     parser=parse_chunk_product_v2,
     strict_json_schema=chunk_output_json_schema_product_v2_strict,
     strict_transport_version=TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT,
+    tool_transport_version=TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_TOOL,
 )
 
 #: **Extraction Contract v3. Intern: no es pot demanar per nom.** Existeix
@@ -240,9 +251,9 @@ def profile_for_run(extractor_version: str) -> ExtractorProfile:
     return V1
 
 
-def requires_strict_tool(provider: Any) -> bool:
+def requires_auto_tool(provider: Any) -> bool:
     """El proveidor real d'Anthropic amb un model de `LLM_AUTO_TOOL_CHOICE_MODELS`: no admet la
-    tool forcada i ha de rebre l'esquema de transport estricte."""
+    tool forcada (`tool_choice` `auto`)."""
     # Dins de la funcio: `app.core.config` importa aquest modul en validar la configuracio.
     from app.core.config import settings
 
@@ -252,33 +263,52 @@ def requires_strict_tool(provider: Any) -> bool:
     )
 
 
-def transport_json_schema(profile: ExtractorProfile, provider: Any) -> dict[str, Any]:
-    """L'esquema que viatja a la tool: el del perfil o, per a una tool estricta, el seu esquema
-    de transport. Sense esquema estricte: error FATAL abans de cap peticio (la porta ja ho
-    refusa abans de reservar el run)."""
-    if not requires_strict_tool(provider):
-        return profile.json_schema()
-    if profile.strict_json_schema is None:
-        from app.ai.provider import ProviderError
-
-        raise ProviderError(
-            f"El perfil {profile.name} no te esquema de transport estricte: no s'envia.",
-            STRICT_SCHEMA_UNAVAILABLE,
-            fatal=True,
-        )
-    return profile.strict_json_schema()
-
-
-def strict_tool_refusal(profile: ExtractorProfile, provider: Any) -> str | None:
-    """Per a un model de tool estricta, el codi que la porta refusa abans de reservar el run (o
-    `None`): perfil sense esquema estricte, o `thinking` no configurat (sense `between_tools`,
-    el model pensaria abans de la tool dins del mateix `max_tokens`) o contradictori."""
+def requires_strict_tool(provider: Any) -> bool:
+    """Un model `auto` que, a mes, envia la tool amb `strict: true` (`LLM_STRICT_TOOL_MODELS`) i
+    ha de rebre l'esquema de transport estricte."""
     from app.core.config import settings
 
-    if not requires_strict_tool(provider):
+    return requires_auto_tool(provider) and provider.model in settings.LLM_STRICT_TOOL_MODELS
+
+
+def transport_json_schema(profile: ExtractorProfile, provider: Any) -> dict[str, Any]:
+    """L'esquema que viatja a la tool: el canonic del perfil (tool forcada o `auto` sense
+    `strict`, on nomes guia el model) o, per a una tool estricta, el seu esquema de transport.
+    Sense el transport que cal: error FATAL abans de cap peticio (la porta ja ho refusa abans de
+    reservar el run)."""
+    from app.ai.provider import ProviderError
+
+    if requires_strict_tool(provider):
+        if profile.strict_json_schema is None:
+            raise ProviderError(
+                f"El perfil {profile.name} no te esquema de transport estricte: no s'envia.",
+                STRICT_SCHEMA_UNAVAILABLE,
+                fatal=True,
+            )
+        return profile.strict_json_schema()
+    if requires_auto_tool(provider) and profile.tool_transport_version is None:
+        raise ProviderError(
+            f"El perfil {profile.name} no te transport de tool: no s'envia.",
+            TOOL_TRANSPORT_UNAVAILABLE,
+            fatal=True,
+        )
+    return profile.json_schema()
+
+
+def auto_tool_refusal(profile: ExtractorProfile, provider: Any) -> str | None:
+    """Per a un model `auto`, el codi que la porta refusa abans de reservar el run (o `None`):
+    perfil sense el transport que cal (estricte o de tool), o `thinking` no configurat (sense
+    `between_tools`, el model pensaria abans de la tool dins del mateix `max_tokens`) o
+    contradictori."""
+    from app.core.config import settings
+
+    if not requires_auto_tool(provider):
         return None
-    if profile.strict_json_schema is None:
-        return STRICT_SCHEMA_UNAVAILABLE
+    if requires_strict_tool(provider):
+        if profile.strict_json_schema is None:
+            return STRICT_SCHEMA_UNAVAILABLE
+    elif profile.tool_transport_version is None:
+        return TOOL_TRANSPORT_UNAVAILABLE
     model = provider.model
     if model not in settings.LLM_THINKING_BETWEEN_TOOLS_MODELS:
         return THINKING_UNCONFIGURED
@@ -288,19 +318,47 @@ def strict_tool_refusal(profile: ExtractorProfile, provider: Any) -> str | None:
 
 
 def transport_identity(profile: ExtractorProfile, provider: Any) -> dict[str, Any] | None:
-    """Que identifica el transport d'un model de tool estricta (entra a la identitat de
-    l'analisi): `tool_choice`, esquema de transport, instruccio de sortida i `thinking`. `None`
-    per a la resta: la seva identitat no canvia."""
-    if not requires_strict_tool(provider):
+    """Que identifica el transport d'un model `auto` (entra a la identitat de l'analisi i es
+    desa al run): `tool_choice` + instruccio de sortida, si la tool es estricta, la revisio de
+    l'esquema que viatja (estricte v1, estricte v2 o de tool) i `thinking`. `None` per a la
+    resta: la seva identitat no canvia."""
+    if not requires_auto_tool(provider):
         return None
     from app.ai.providers.anthropic import AUTO_TOOL_TRANSPORT_VERSION
     from app.core.config import settings
 
-    model = provider.model
+    strict = requires_strict_tool(provider)
     return {
         "transport": AUTO_TOOL_TRANSPORT_VERSION,
-        "strict_schema": profile.strict_transport_version,
+        "strict": strict,
+        "schema": profile.strict_transport_version if strict else profile.tool_transport_version,
         "thinking": (
-            "between_tools" if model in settings.LLM_THINKING_BETWEEN_TOOLS_MODELS else "default"
+            "between_tools"
+            if provider.model in settings.LLM_THINKING_BETWEEN_TOOLS_MODELS
+            else "default"
         ),
     }
+
+
+def auto_tool_envelope_problem(data: Any, profile: ExtractorProfile) -> str | None:
+    """Per a un model `auto`: `None` si l'envoltori es EXACTAMENT el canonic (un objecte amb
+    totes les llistes de l'arrel de l'esquema del perfil, i cap altra clau); si no, que falla.
+    Sense tool forcada ni gramatica estricta, un `{}` no pot passar per un chunk sense res."""
+    if not isinstance(data, dict):
+        return "no es un objecte"
+    expected = set(profile.json_schema().get("properties") or ())
+    missing, extra = sorted(expected - set(data)), sorted(set(data) - expected)
+    if missing:
+        return f"falten {', '.join(missing)}"
+    if extra:
+        # El missatge arriba a `run.error_message` (API): una clau inventada pel model pot ser
+        # text del plec, aixi que nomes es mostra si te forma d'identificador.
+        from app.ai.output_normalization import _safe_key
+
+        shown = [_safe_key(key) for key in extra[:5]]
+        more = f" (+{len(extra) - 5})" if len(extra) > 5 else ""
+        return f"claus inesperades {', '.join(shown)}{more}"
+    not_lists = sorted(key for key in expected if not isinstance(data[key], list))
+    if not_lists:
+        return f"no son llistes: {', '.join(not_lists)}"
+    return None

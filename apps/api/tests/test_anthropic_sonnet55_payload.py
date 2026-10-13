@@ -1,4 +1,8 @@
-"""Claude Sonnet 5.5: tool `auto` + `strict`, `thinking` `between_tools`. Cap socket, cap clau.
+"""Tool `auto` + `strict` (capacitat generica, `LLM_STRICT_TOOL_MODELS`). Cap socket, cap clau.
+
+Sonnet 5.5 ja NO fa servir aquest cami: el servidor va refusar la gramatica estricta v1 i v2
+(Attempts 5 i 6). Ara va per la tool no estricta (`test_anthropic_sonnet55_tool_transport.py`).
+Aquest fitxer protegeix el cami estricte tal com queda, configurat explicitament.
 
 Sonnet 5.5 refusa la tool forcada (`tool_choice` `tool` o `any`: 400) i `thinking: disabled`
 (400); pensa per defecte (adaptatiu). Que es protegeix:
@@ -83,8 +87,16 @@ EMPTY = {"requirements": [], "award_criteria": [], "document_notes": [], "uncert
 #: La instruccio de sortida, fixada amb la versio del transport: canviar-ne el text demana una
 #: `AUTO_TOOL_TRANSPORT_VERSION` nova (entra a la identitat de l'analisi).
 INSTRUCTION_SHA256 = {
-    "anthropic-auto-strict-v1": "c417765ab7339286e609b56914889b72ba5afd6155d19dfd34152a7900ec7cab",
+    "anthropic-auto-tool-v2": "c417765ab7339286e609b56914889b72ba5afd6155d19dfd34152a7900ec7cab",
 }
+
+
+@pytest.fixture(autouse=True)
+def _clean_fake():
+    """`fake.SENT_PAYLOADS` es global: cada prova comenca i acaba neta."""
+    fake.reset()
+    yield
+    fake.reset()
 
 
 def _message(stop_reason: str, *, content: list[dict] | None = None, model: str = SONNET_55):
@@ -117,6 +129,7 @@ def sonnet(monkeypatch):
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "clau-local-sense-xarxa")
     monkeypatch.setattr(anthropic, "AsyncAnthropic", local_client)
     monkeypatch.setattr(settings, "LLM_AUTO_TOOL_CHOICE_MODELS", [SONNET_55])
+    monkeypatch.setattr(settings, "LLM_STRICT_TOOL_MODELS", [SONNET_55])
     monkeypatch.setattr(settings, "LLM_THINKING_BETWEEN_TOOLS_MODELS", [SONNET_55])
     monkeypatch.setattr(settings, "LLM_THINKING_DISABLED_MODELS", [HAIKU_55])
 
@@ -498,6 +511,7 @@ def _provider(name: str, model: str):
 
 def test_l_esquema_que_viatja_depen_del_model(monkeypatch):
     monkeypatch.setattr(settings, "LLM_AUTO_TOOL_CHOICE_MODELS", [SONNET_55])
+    monkeypatch.setattr(settings, "LLM_STRICT_TOOL_MODELS", [SONNET_55])
     assert transport_json_schema(PRODUCT_V2, _provider("anthropic", SONNET_55)) == (
         PRODUCT_V2.strict_json_schema()
     )
@@ -515,11 +529,13 @@ def test_el_transport_entra_a_la_identitat_nomes_dels_models_de_tool_estricta(mo
         for model, provider in ((SONNET_55, sonnet), (HAIKU_55, haiku))
     }
     monkeypatch.setattr(settings, "LLM_AUTO_TOOL_CHOICE_MODELS", [SONNET_55])
+    monkeypatch.setattr(settings, "LLM_STRICT_TOOL_MODELS", [SONNET_55])
     monkeypatch.setattr(settings, "LLM_THINKING_BETWEEN_TOOLS_MODELS", [SONNET_55])
     assert transport_identity(PRODUCT_V2, haiku) is None
     assert transport_identity(PRODUCT_V2, sonnet) == {
         "transport": AUTO_TOOL_TRANSPORT_VERSION,
-        "strict_schema": TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT,
+        "strict": True,
+        "schema": TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT,
         "thinking": "between_tools",
     }
     assert analysis_identity([], profile=PRODUCT_V2, provider=haiku) == before[HAIKU_55]
@@ -529,6 +545,7 @@ def test_el_transport_entra_a_la_identitat_nomes_dels_models_de_tool_estricta(mo
 async def _sonnet_pipeline(monkeypatch, *, between_tools: list[str], disabled: list[str]):
     pin_real_model(monkeypatch, model=SONNET_55, input_per_million=2.0, output_per_million=10.0)
     monkeypatch.setattr(settings, "LLM_AUTO_TOOL_CHOICE_MODELS", [SONNET_55])
+    monkeypatch.setattr(settings, "LLM_STRICT_TOOL_MODELS", [SONNET_55])
     monkeypatch.setattr(settings, "LLM_THINKING_BETWEEN_TOOLS_MODELS", between_tools)
     monkeypatch.setattr(settings, "LLM_THINKING_DISABLED_MODELS", disabled)
     return RealNamedFake(model=SONNET_55)

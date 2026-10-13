@@ -325,6 +325,11 @@ def chunk_output_json_schema_product_v2() -> dict[str, Any]:
 #: (tot viatja, `null` si no hi ha valor), l'operador com a enum amb `null` (sense unio), sense
 #: `title` ni `default`, i sense definicions que ja no es fan servir.
 TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT = "requirements-transport-product-v2.1-strict.2"
+#: Transport de tool NO estricta (Sonnet 5.5 despres dels Attempts 5 i 6: el servidor va refusar
+#: la gramatica estricta v1 i v2). La tool rep l'esquema CANONIC com a guia, sense `strict`; el
+#: parser del perfil valida la resposta igual que sempre. Revisio propia: no es pot confondre
+#: (identitat, represa) amb cap dels transports estrictes.
+TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_TOOL = "requirements-transport-product-v2.1-tool"
 #: Restriccions que la tool estricta no admet (HTTP 400) i anotacions sense efecte en una
 #: gramatica on tot es obligatori. No viatgen; el parser aplica les restriccions igual.
 _STRICT_DROPPED_KEYWORDS = ("minLength", "maxLength", "minimum", "maximum", "title", "default")

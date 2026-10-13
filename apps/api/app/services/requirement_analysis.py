@@ -66,11 +66,15 @@ from app.ai.output_normalization import normalise_output
 from app.ai.profiles import (
     DEFAULT_PROFILE,
     EXPERIMENTAL_PROFILES,
+    TRANSPORT_METADATA_KEY,
     ExtractorProfile,
+    auto_tool_envelope_problem,
+    requires_auto_tool,
     transport_identity,
     transport_json_schema,
 )
 from app.ai.provider import (
+    IllegalEnvelopeError,
     OutputTruncatedError,
     ProviderError,
     SchemaInvalidError,
@@ -1103,6 +1107,9 @@ async def analyze_tender_requirements(
         run_scope=run_scope,
         prior_run_ids=prior_run_ids,
     )
+    # El transport (models `auto`) es fixa UN cop i neix amb el run: un run perdut abans de
+    # tancar-se (worker_lost, internal_error) tambe el porta, i la represa el pot comparar.
+    transport = transport_identity(profile, llm)
     run = await _claim_run(
         session,
         tender.id,
@@ -1114,6 +1121,7 @@ async def analyze_tender_requirements(
         profile,
         work_job_id=work_job_id,
         identity=analysis_identity(documents, profile=profile, provider=llm),
+        transport=transport,
     )
     if on_progress is not None:
         await on_progress(0, len(chunks))
@@ -1390,6 +1398,7 @@ async def analyze_tender_requirements(
         document_ids=document_ids,
         force=force,
         exceeded_scope=exceeded_scope,
+        transport=transport,
     )
     return AnalysisOutcome(run=run, reused=False)
 
@@ -1513,6 +1522,10 @@ def plan_resume(
         raise refuse("profile_mismatch", "El run es va fer amb un altre perfil d'extraccio.")
     if (source.provider, source.model) != (provider.name, provider.model):
         raise refuse("provider_mismatch", "El run es va fer amb un altre proveidor o model.")
+    metadata = source.provider_metadata if isinstance(source.provider_metadata, dict) else {}
+    if metadata.get(TRANSPORT_METADATA_KEY) != transport_identity(profile, provider):
+        # Mai es barregen chunks de transports diferents (estricte v1/v2, tool no estricta).
+        raise refuse("transport_mismatch", "El run es va fer amb un altre transport de la tool.")
 
     coverage = source.chunk_coverage if isinstance(source.chunk_coverage, dict) else {}
     entries = coverage.get("chunks")
@@ -1809,6 +1822,7 @@ async def _claim_run(
     *,
     work_job_id: uuid.UUID | None = None,
     identity: str | None = None,
+    transport: dict[str, Any] | None = None,
 ) -> RequirementExtractionRun:
     """Reserva l'analisi. L'index unic parcial impedeix el doble clic.
 
@@ -1835,6 +1849,7 @@ async def _claim_run(
         model=llm.model,
         run_basis=RequirementRunBasis.for_provider(llm.name),
         analysis_identity=identity,
+        provider_metadata={TRANSPORT_METADATA_KEY: transport} if transport is not None else None,
         started_at=datetime.now(UTC),
         documents_analyzed=len(documents),
         pages_analyzed=sum(d.page_count for d in documents),
@@ -2069,8 +2084,8 @@ async def _run_chunk(
     response = await llm.extract_structured(
         system=profile.system_prompt,
         user_content=profile.build_user_message(render_chunk(chunk)),
-        # El del perfil o, per a un model sense tool forcada, el seu esquema de transport
-        # estricte. El parser del perfil valida la resposta igual en tots dos casos.
+        # El canonic del perfil (tool forcada o `auto` sense `strict`, on nomes guia el model) o
+        # l'esquema de transport estricte. El parser del perfil valida la resposta igual.
         json_schema=transport_json_schema(profile, llm),
         max_output_tokens=settings.LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS,
     )
@@ -2081,10 +2096,29 @@ async def _run_chunk(
         raise OutputTruncatedError(
             "La resposta ha topat amb el limit de sortida.", usage=usage
         )
-    data, applied = normalise_output(
-        response.data,
-        profile.output_model,
-        context_extraction_ids={str(chunk.document.extraction_id)},
+    auto = requires_auto_tool(llm)
+    if auto:
+        # Sense tool forcada ni gramatica estricta, ningu no garanteix la forma de la resposta:
+        # l'envoltori ha de ser EXACTAMENT les llistes canoniques (cap `{}` buit acceptat com a
+        # chunk fet). Si no, FATAL. Els elements, un a un, com sempre.
+        envelope_problem = auto_tool_envelope_problem(response.data, profile)
+        if envelope_problem is not None:
+            error = IllegalEnvelopeError(
+                f"L'envoltori de la tool no es el canonic ({envelope_problem}).", usage=usage
+            )
+            error.fatal = True
+            raise error
+    # Cap normalitzacio indulgent per als models `auto` (ni a l'envoltori ni dins dels
+    # elements): cap JSON dins d'un text es descodifica; el parser decideix sobre el que ha
+    # arribat tal com ha arribat.
+    data, applied = (
+        (response.data, [])
+        if auto
+        else normalise_output(
+            response.data,
+            profile.output_model,
+            context_extraction_ids={str(chunk.document.extraction_id)},
+        )
     )
     if normalisations is not None:
         normalisations.extend(applied)
@@ -3031,6 +3065,7 @@ async def _finalise_run(
     document_ids: list[uuid.UUID] | None = None,
     force: bool = False,
     exceeded_scope: LlmBudgetScope | None = None,
+    transport: dict[str, Any] | None = None,
 ) -> None:
     """Tanca el run i decideix si passa a vigent.
 
@@ -3078,6 +3113,9 @@ async def _finalise_run(
     run.output_tokens = output_tokens or None
     run.duration_ms = int((time.monotonic() - started) * 1000)
     metadata: dict[str, Any] = {"request_ids": request_ids[:50]} if request_ids else {}
+    if transport is not None:
+        # El transport dels models `auto` (estricte v1/v2 o de tool): la represa el compara.
+        metadata[TRANSPORT_METADATA_KEY] = transport
     if resumed_from is not None:
         metadata[llm_budget.RESUMED_FROM_KEY] = str(resumed_from.source.id)
         metadata["reused_chunks"] = sorted(resumed_from.reused)

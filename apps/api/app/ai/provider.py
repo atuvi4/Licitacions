@@ -91,6 +91,31 @@ class MultipleToolCallsError(InvalidStructuredOutputError):
     code = "multiple_tool_calls"
 
 
+class UnexpectedToolCallError(InvalidStructuredOutputError):
+    """Sense tool forcada, el proveidor ha cridat una tool que no es la de sortida."""
+
+    code = "unexpected_tool_call"
+
+
+class MalformedToolArgumentsError(InvalidStructuredOutputError):
+    """La crida a la tool de sortida no porta un objecte d'arguments."""
+
+    code = "malformed_tool_arguments"
+
+
+class IllegalEnvelopeError(InvalidStructuredOutputError):
+    """Sense tool forcada, l'envoltori de la resposta no es exactament el canonic."""
+
+    code = "illegal_envelope"
+
+
+class ServedModelMismatchError(ProviderError):
+    """El proveidor ha servit un model diferent del demanat."""
+
+    def __init__(self, message: str, usage: Usage | None = None) -> None:
+        super().__init__(message, "served_model_mismatch", usage, fatal=True)
+
+
 class SchemaInvalidError(InvalidStructuredOutputError):
     """Hi ha crida a la tool, pero el contracte del perfil (Pydantic) la rebutja.
 

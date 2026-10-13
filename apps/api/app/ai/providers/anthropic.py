@@ -5,9 +5,10 @@ Decisions que val la pena explicitar:
 * El SDK s'importa dins del constructor. Aixi l'aplicacio arrenca encara que el
   paquet no estigui instal·lat o no hi hagi clau: nomes queda no disponible la
   funcio d'analisi, no tot el servei.
-* La sortida estructurada es demana amb una **tool** amb `input_schema`: es la
-  manera que te aquest proveidor de garantir JSON conforme. No es parseja text
-  lliure amb expressions regulars.
+* La sortida estructurada es demana amb una **tool** amb `input_schema`. Amb la
+  tool forcada (o `strict`) el proveidor en garanteix la forma; sense (`auto` no
+  estricte, Sonnet 5.5) nomes la guia, i la resposta es valida igual pel parser
+  del perfil. No es parseja mai text lliure (ni JSON dins del text).
 * El model NO es una constant de domini: ve de `settings.LLM_MODEL`.
 * No es loguega mai ni la clau ni el contingut dels plecs.
 """
@@ -19,13 +20,16 @@ import re
 from typing import Any
 
 from app.ai.provider import (
+    MalformedToolArgumentsError,
     MultipleToolCallsError,
     NoToolCallError,
     OutputTruncatedError,
     ProviderError,
     ProviderNotConfiguredError,
     ProviderTimeoutError,
+    ServedModelMismatchError,
     StructuredResult,
+    UnexpectedToolCallError,
     Usage,
 )
 from app.core.config import settings
@@ -57,9 +61,11 @@ AUTO_TOOL_INSTRUCTION = (
     "crida es descarta com a error. Si el fragment no conte res, crida igualment la tool amb\n"
     "les llistes buides.\n"
 )
-#: Identifica el transport `auto` + `strict` (instruccio, `tool_choice`, `strict`). Entra a la
-#: identitat de l'analisi dels models que el fan servir: canviar-lo es una analisi nova.
-AUTO_TOOL_TRANSPORT_VERSION = "anthropic-auto-strict-v1"
+#: Identifica el transport `auto` (instruccio de sortida, `tool_choice: auto` i les fallades
+#: FATALS: cap crida, diverses, una altra tool, arguments que no son objecte, motiu de parada,
+#: model servit). Si la tool porta `strict` i quin esquema viatja, ho diu `transport_identity`.
+#: Entra a la identitat de l'analisi dels models `auto`: canviar-lo es una analisi nova.
+AUTO_TOOL_TRANSPORT_VERSION = "anthropic-auto-tool-v2"
 #: Limits de la tool estricta (documentacio d'Anthropic, structured outputs). Un esquema que
 #: no hi cap rep un 400: es comprova abans, i no s'envia.
 STRICT_MAX_OPTIONAL_PARAMETERS = 24
@@ -312,7 +318,8 @@ class AnthropicProvider:
         * Per defecte: tool FORCADA (`tool_choice` de tipus `tool`). `thinking` NOMES per als
           models de `LLM_THINKING_DISABLED_MODELS`, i nomes per desactivar-lo.
         * Models de `LLM_AUTO_TOOL_CHOICE_MODELS` (no admeten la tool forcada): `tool_choice`
-          `auto`, la tool amb `strict: true` i `AUTO_TOOL_INSTRUCTION` al final del sistema.
+          `auto` i `AUTO_TOOL_INSTRUCTION` al final del sistema. La tool porta `strict: true`
+          NOMES si el model tambe es a `LLM_STRICT_TOOL_MODELS`.
         * Models de `LLM_THINKING_BETWEEN_TOOLS_MODELS`: `thinking` `between_tools` (sense
           pensament abans de la tool). Mai alhora amb `disabled`: no s'envia res.
         """
@@ -334,7 +341,7 @@ class AnthropicProvider:
             ),
             "input_schema": json_schema,
         }
-        if auto:
+        if self.strict_tool:
             tool["strict"] = True
         params: dict[str, Any] = {
             "model": self._model,
@@ -356,6 +363,11 @@ class AnthropicProvider:
     def auto_tool_choice(self) -> bool:
         return self._model in settings.LLM_AUTO_TOOL_CHOICE_MODELS
 
+    @property
+    def strict_tool(self) -> bool:
+        """`strict: true` nomes per als models `auto` que tambe son a `LLM_STRICT_TOOL_MODELS`."""
+        return self.auto_tool_choice and self._model in settings.LLM_STRICT_TOOL_MODELS
+
     async def extract_structured(
         self,
         *,
@@ -373,7 +385,7 @@ class AnthropicProvider:
             json_schema=json_schema,
             max_output_tokens=max_output_tokens,
         )
-        if self.auto_tool_choice:
+        if self.strict_tool:
             # Una tool estricta amb un esquema que no hi cap seria un 400: no s'envia.
             problems = strict_schema_problems(json_schema)
             if problems:
@@ -408,32 +420,63 @@ class AnthropicProvider:
             stop_reason=getattr(response, "stop_reason", None),
         )
 
-        # Primer el limit de sortida (o de context): una resposta tallada es inservible
-        # encara que el tros que ha arribat sembli un JSON valid.
+        # Sense tool forcada (`auto`), qualsevol resposta que no sigui EXACTAMENT una crida a la
+        # tool de sortida amb un objecte d'arguments es FATAL: es repetiria a cada chunk. Primer,
+        # el model servit; despres el limit de sortida (o de context): una resposta tallada es
+        # inservible encara que el tros que ha arribat sembli un JSON valid.
+        auto = self.auto_tool_choice
+        served = getattr(response, "model", None)
+        if auto and served != self._model:
+            raise ServedModelMismatchError(
+                f"El proveidor ha servit {served!r} en lloc de {self._model!r}.", usage=usage
+            )
         if usage.stop_reason in TRUNCATION_STOP_REASONS:
-            raise OutputTruncatedError(
+            error = OutputTruncatedError(
                 f"La resposta s'ha tallat ({usage.stop_reason}; sortida maxima "
                 f"{max_output_tokens} tokens).",
                 usage=usage,
             )
+            error.fatal = auto
+            raise error
         if usage.stop_reason == REFUSAL_STOP_REASON:
             raise ProviderError(
-                "El model ha refusat respondre (stop_reason=refusal).", "refusal", usage=usage
+                "El model ha refusat respondre (stop_reason=refusal).",
+                "refusal",
+                usage=usage,
+                fatal=auto,
             )
 
-        calls = [
-            block
-            for block in response.content
-            if getattr(block, "type", None) == "tool_use" and block.name == _TOOL_NAME
-        ]
-        if self.auto_tool_choice and len(calls) > 1:
-            # Sense tool forcada, el model pot repartir la resposta en diverses crides: no se'n
-            # tria cap (una sola seria una sortida incompleta). Fatal, com la resposta sense tool.
+        tool_uses = [b for b in response.content if getattr(b, "type", None) == "tool_use"]
+        calls = [block for block in tool_uses if block.name == _TOOL_NAME]
+        if auto and len(calls) != len(tool_uses):
+            error = UnexpectedToolCallError(
+                "El proveidor ha cridat una tool que no es la de sortida.", usage=usage
+            )
+            error.fatal = True
+            raise error
+        if auto and len(calls) > 1:
+            # El model pot repartir la resposta en diverses crides: no se'n tria cap (una sola
+            # seria una sortida incompleta).
             error = MultipleToolCallsError(
                 f"El proveidor ha cridat {len(calls)} vegades la tool de sortida.", usage=usage
             )
             error.fatal = True
             raise error
+        if auto and calls and not isinstance(calls[0].input, dict):
+            error = MalformedToolArgumentsError(
+                "Els arguments de la tool de sortida no son un objecte.", usage=usage
+            )
+            error.fatal = True
+            raise error
+        if auto and calls and usage.stop_reason != "tool_use":
+            # Una crida a la tool amb un motiu de parada que no es el de la tool (`end_turn`,
+            # `pause_turn`, cap): la resposta no es la que s'espera; no es fa servir.
+            raise ProviderError(
+                f"Motiu de parada inesperat amb la tool: {usage.stop_reason}.",
+                "unexpected_stop_reason",
+                usage=usage,
+                fatal=True,
+            )
         payload: dict[str, Any] | None = dict(calls[0].input) if calls else None
         if payload is None:
             error = NoToolCallError(

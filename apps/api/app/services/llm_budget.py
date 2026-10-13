@@ -46,7 +46,7 @@ from typing import Any, Protocol
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.profiles import ExtractorProfile, strict_tool_refusal
+from app.ai.profiles import ExtractorProfile, auto_tool_refusal
 from app.core.config import settings
 from app.core.errors import AnalysisNotAllowedError, AppError
 from app.models.enums import (
@@ -678,7 +678,7 @@ async def provider_gate(
             "El proveidor o el model no estan autoritzats per a aquesta analisi.",
             failed=failures,
         )
-    refusal = strict_tool_refusal(profile, provider)
+    refusal = auto_tool_refusal(profile, provider)
     if refusal is not None:
         raise _refuse(
             refusal,

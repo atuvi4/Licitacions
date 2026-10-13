@@ -192,11 +192,16 @@ class Settings(BaseSettings):
     # Buit per defecte: cap altre model (ni V1) no canvia de payload.
     LLM_THINKING_DISABLED_MODELS: list[str] = Field(default_factory=list)
     # Models que REFUSEN la tool forcada (`tool_choice` de tipus `tool` o `any`: HTTP 400), com
-    # `claude-sonnet-5-5`. Per a aquests: `tool_choice: {"type": "auto"}`, la tool amb
-    # `strict: true` i l'esquema de TRANSPORT estricte del perfil, una instruccio de sortida al
-    # sistema, i una resposta sense crida a la tool es una fallada FATAL (cap text lliure, cap
-    # JSON llegit del text, cap reintent). Buit per defecte: cap altre model no canvia de payload.
+    # `claude-sonnet-5-5`. Per a aquests: `tool_choice: {"type": "auto"}`, una instruccio de
+    # sortida al sistema, i qualsevol resposta que no sigui EXACTAMENT una crida a la tool de
+    # sortida amb arguments d'objecte (cap crida, diverses, una altra tool, refus, tall) es una
+    # fallada FATAL (cap text lliure, cap JSON llegit del text, cap reintent). Sense `strict`
+    # (vegeu `LLM_STRICT_TOOL_MODELS`), la tool rep l'esquema canonic del perfil com a guia i el
+    # parser del perfil valida la resposta. Buit per defecte: cap altre model no canvia.
     LLM_AUTO_TOOL_CHOICE_MODELS: list[str] = Field(default_factory=list)
+    # Dels anteriors, els que envien la tool amb `strict: true` i l'esquema de TRANSPORT estricte.
+    # Sonnet 5.5 NO hi es: el servidor va refusar la gramatica (Attempts 5 i 6). Buit per defecte.
+    LLM_STRICT_TOOL_MODELS: list[str] = Field(default_factory=list)
     # Models als quals es demana `thinking: {"type": "between_tools"}`: sense pensament abans de
     # la crida a la tool. Sonnet 5.5 pensa per defecte (adaptatiu) i refusa `disabled` (400). Un
     # model no pot ser alhora aqui i a `LLM_THINKING_DISABLED_MODELS` (no s'envia res).
@@ -304,6 +309,26 @@ class Settings(BaseSettings):
         if self.is_production and self.DOCUMENT_DOWNLOAD_ALLOW_PRIVATE_HOSTS:
             raise ValueError(
                 "DOCUMENT_DOWNLOAD_ALLOW_PRIVATE_HOSTS nomes es pot activar fora de produccio."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _tool_transport_lists_are_coherent(self) -> Settings:
+        """Un model `strict` que no fos `auto` tornaria a la tool forcada (Sonnet 5.5: 400); un
+        model amb `thinking` `disabled` i `between_tools` alhora no es pot enviar. Soroll, no
+        correccio silenciosa."""
+        orphan = sorted(set(self.LLM_STRICT_TOOL_MODELS) - set(self.LLM_AUTO_TOOL_CHOICE_MODELS))
+        if orphan:
+            raise ValueError(
+                f"LLM_STRICT_TOOL_MODELS ha de ser dins de LLM_AUTO_TOOL_CHOICE_MODELS: {orphan}."
+            )
+        both = sorted(
+            set(self.LLM_THINKING_BETWEEN_TOOLS_MODELS) & set(self.LLM_THINKING_DISABLED_MODELS)
+        )
+        if both:
+            raise ValueError(
+                "Un model no pot ser alhora a LLM_THINKING_BETWEEN_TOOLS_MODELS i a "
+                f"LLM_THINKING_DISABLED_MODELS: {both}."
             )
         return self
 
