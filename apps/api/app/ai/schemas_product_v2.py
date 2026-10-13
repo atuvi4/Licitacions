@@ -26,6 +26,7 @@ tot el chunk 1. Ara aquell requisit es rebutja sol, amb `field = category`,
 
 from __future__ import annotations
 
+import copy
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, PrivateAttr, StringConstraints, ValidationError
@@ -312,3 +313,60 @@ def parse_chunk_product_v2(payload: Any) -> ChunkExtractionOutProductV2:
 
 def chunk_output_json_schema_product_v2() -> dict[str, Any]:
     return ChunkExtractionOutProductV2.model_json_schema()
+
+
+#: Esquema de TRANSPORT per a una tool `strict: true` (models que no admeten la tool forcada,
+#: com Sonnet 5.5). No es un contracte nou: el contracte continua sent `SCHEMA_VERSION_PRODUCT_V2`
+#: i el parser (`parse_chunk_product_v2`) valida la resposta exactament igual.
+TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT = "requirements-transport-product-v2.1-strict"
+#: Restriccions que la tool estricta no admet (HTTP 400). No viatgen; el parser les aplica.
+_STRICT_DROPPED_KEYWORDS = ("minLength", "maxLength", "minimum", "maximum")
+#: `value` d'un requisit: la tool estricta no admet objectes lliures, aixi que viatja amb una
+#: forma fixa (o `null`). El parser l'accepta igual (`dict | None`).
+_STRICT_VALUE = {
+    "anyOf": [
+        {
+            "type": "object",
+            "properties": {
+                "amount": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+                "unit": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                "text": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            },
+            "required": ["amount", "unit", "text"],
+            "additionalProperties": False,
+        },
+        {"type": "null"},
+    ],
+    "default": None,
+}
+
+
+def _drop_strict_keywords(node: Any, *, mapping: bool = False) -> None:
+    """Treu les restriccions no admeses. `mapping`: un diccionari de noms (`properties`,
+    `$defs`), on les claus son noms i no paraules clau."""
+    if isinstance(node, dict):
+        if not mapping:
+            for keyword in _STRICT_DROPPED_KEYWORDS:
+                node.pop(keyword, None)
+        for key, value in node.items():
+            _drop_strict_keywords(value, mapping=not mapping and key in ("properties", "$defs"))
+    elif isinstance(node, list):
+        for value in node:
+            _drop_strict_keywords(value)
+
+
+def chunk_output_json_schema_product_v2_strict() -> dict[str, Any]:
+    """L'esquema del perfil, apte per a una tool estricta: sense les restriccions no admeses,
+    amb `value` de forma fixa, les quatre llistes de l'arrel obligatories (buides si no hi ha
+    res) i `section` de l'evidencia obligatoria (`null` si no n'hi ha). Aixi queda dins dels
+    limits de la tool estricta (<= 24 parametres opcionals, <= 16 amb unio de tipus), comptats
+    per definicio i per us."""
+    schema = copy.deepcopy(chunk_output_json_schema_product_v2())
+    _drop_strict_keywords(schema)
+    schema["$defs"]["RequirementOut"]["properties"]["value"] = copy.deepcopy(_STRICT_VALUE)
+    schema["required"] = sorted(schema["properties"])
+    # Marge sota el limit d'opcionals (comptats per us, l'evidencia apareix dues vegades):
+    # `section` viatja sempre, `null` si no n'hi ha.
+    evidence = schema["$defs"]["EvidenceOut"]
+    evidence["required"] = sorted({*evidence.get("required", ()), "section"})
+    return schema

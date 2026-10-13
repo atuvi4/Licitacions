@@ -85,6 +85,12 @@ class NoToolCallError(InvalidStructuredOutputError):
     code = "no_tool_call"
 
 
+class MultipleToolCallsError(InvalidStructuredOutputError):
+    """Sense tool forcada, el proveidor ha cridat mes d'un cop la tool de sortida."""
+
+    code = "multiple_tool_calls"
+
+
 class SchemaInvalidError(InvalidStructuredOutputError):
     """Hi ha crida a la tool, pero el contracte del perfil (Pydantic) la rebutja.
 

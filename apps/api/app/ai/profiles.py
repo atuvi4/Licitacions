@@ -52,8 +52,10 @@ from app.ai.schemas import (
 )
 from app.ai.schemas_product_v2 import (
     SCHEMA_VERSION_PRODUCT_V2,
+    TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT,
     ChunkExtractionOutProductV2,
     chunk_output_json_schema_product_v2,
+    chunk_output_json_schema_product_v2_strict,
     parse_chunk_product_v2,
 )
 from app.ai.schemas_v2 import (
@@ -66,6 +68,13 @@ from app.ai.schemas_v3 import (
     ChunkExtractionOutV3,
     chunk_output_json_schema_v3,
 )
+
+#: Codi de refus (porta) i d'error (canonada) quan un model de tool estricta es fa servir amb un
+#: perfil sense esquema de transport estricte.
+STRICT_SCHEMA_UNAVAILABLE = "strict_schema_unavailable"
+#: Model de tool estricta sense `thinking` `between_tools` (o alhora a `disabled`).
+THINKING_UNCONFIGURED = "thinking_unconfigured"
+THINKING_MISCONFIGURED = "thinking_misconfigured"
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +104,11 @@ class ExtractorProfile:
     #: Com es valida la resposta. `None` = `output_model.model_validate`, com
     #: sempre. La v3 valida element a element (`parse_chunk_v3_result`).
     parser: Callable[[Any], Any] | None = None
+    #: Esquema de TRANSPORT per a una tool `strict: true` (models de
+    #: `LLM_AUTO_TOOL_CHOICE_MODELS`) i la seva versio. `None`: el perfil no es pot fer servir
+    #: amb aquests models (la porta ho refusa abans de cap crida).
+    strict_json_schema: Callable[[], dict[str, Any]] | None = None
+    strict_transport_version: str | None = None
 
     def parse(self, payload: Any) -> Any:
         if self.parser is not None:
@@ -150,6 +164,8 @@ PRODUCT_V2 = ExtractorProfile(
     material_uncertainties=True,
     # Les incerteses, una a una: una de mal formada no fa perdre els requisits.
     parser=parse_chunk_product_v2,
+    strict_json_schema=chunk_output_json_schema_product_v2_strict,
+    strict_transport_version=TRANSPORT_SCHEMA_VERSION_PRODUCT_V2_STRICT,
 )
 
 #: **Extraction Contract v3. Intern: no es pot demanar per nom.** Existeix
@@ -222,3 +238,69 @@ def profile_for_run(extractor_version: str) -> ExtractorProfile:
         if profile.extractor_version == extractor_version:
             return profile
     return V1
+
+
+def requires_strict_tool(provider: Any) -> bool:
+    """El proveidor real d'Anthropic amb un model de `LLM_AUTO_TOOL_CHOICE_MODELS`: no admet la
+    tool forcada i ha de rebre l'esquema de transport estricte."""
+    # Dins de la funcio: `app.core.config` importa aquest modul en validar la configuracio.
+    from app.core.config import settings
+
+    return (
+        getattr(provider, "name", None) == "anthropic"
+        and getattr(provider, "model", None) in settings.LLM_AUTO_TOOL_CHOICE_MODELS
+    )
+
+
+def transport_json_schema(profile: ExtractorProfile, provider: Any) -> dict[str, Any]:
+    """L'esquema que viatja a la tool: el del perfil o, per a una tool estricta, el seu esquema
+    de transport. Sense esquema estricte: error FATAL abans de cap peticio (la porta ja ho
+    refusa abans de reservar el run)."""
+    if not requires_strict_tool(provider):
+        return profile.json_schema()
+    if profile.strict_json_schema is None:
+        from app.ai.provider import ProviderError
+
+        raise ProviderError(
+            f"El perfil {profile.name} no te esquema de transport estricte: no s'envia.",
+            STRICT_SCHEMA_UNAVAILABLE,
+            fatal=True,
+        )
+    return profile.strict_json_schema()
+
+
+def strict_tool_refusal(profile: ExtractorProfile, provider: Any) -> str | None:
+    """Per a un model de tool estricta, el codi que la porta refusa abans de reservar el run (o
+    `None`): perfil sense esquema estricte, o `thinking` no configurat (sense `between_tools`,
+    el model pensaria abans de la tool dins del mateix `max_tokens`) o contradictori."""
+    from app.core.config import settings
+
+    if not requires_strict_tool(provider):
+        return None
+    if profile.strict_json_schema is None:
+        return STRICT_SCHEMA_UNAVAILABLE
+    model = provider.model
+    if model not in settings.LLM_THINKING_BETWEEN_TOOLS_MODELS:
+        return THINKING_UNCONFIGURED
+    if model in settings.LLM_THINKING_DISABLED_MODELS:
+        return THINKING_MISCONFIGURED
+    return None
+
+
+def transport_identity(profile: ExtractorProfile, provider: Any) -> dict[str, Any] | None:
+    """Que identifica el transport d'un model de tool estricta (entra a la identitat de
+    l'analisi): `tool_choice`, esquema de transport, instruccio de sortida i `thinking`. `None`
+    per a la resta: la seva identitat no canvia."""
+    if not requires_strict_tool(provider):
+        return None
+    from app.ai.providers.anthropic import AUTO_TOOL_TRANSPORT_VERSION
+    from app.core.config import settings
+
+    model = provider.model
+    return {
+        "transport": AUTO_TOOL_TRANSPORT_VERSION,
+        "strict_schema": profile.strict_transport_version,
+        "thinking": (
+            "between_tools" if model in settings.LLM_THINKING_BETWEEN_TOOLS_MODELS else "default"
+        ),
+    }

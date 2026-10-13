@@ -191,6 +191,16 @@ class Settings(BaseSettings):
     # el thinking; per a un model que el pugui activar per defecte, el payload ho ha de dir.
     # Buit per defecte: cap altre model (ni V1) no canvia de payload.
     LLM_THINKING_DISABLED_MODELS: list[str] = Field(default_factory=list)
+    # Models que REFUSEN la tool forcada (`tool_choice` de tipus `tool` o `any`: HTTP 400), com
+    # `claude-sonnet-5-5`. Per a aquests: `tool_choice: {"type": "auto"}`, la tool amb
+    # `strict: true` i l'esquema de TRANSPORT estricte del perfil, una instruccio de sortida al
+    # sistema, i una resposta sense crida a la tool es una fallada FATAL (cap text lliure, cap
+    # JSON llegit del text, cap reintent). Buit per defecte: cap altre model no canvia de payload.
+    LLM_AUTO_TOOL_CHOICE_MODELS: list[str] = Field(default_factory=list)
+    # Models als quals es demana `thinking: {"type": "between_tools"}`: sense pensament abans de
+    # la crida a la tool. Sonnet 5.5 pensa per defecte (adaptatiu) i refusa `disabled` (400). Un
+    # model no pot ser alhora aqui i a `LLM_THINKING_DISABLED_MODELS` (no s'envia res).
+    LLM_THINKING_BETWEEN_TOOLS_MODELS: list[str] = Field(default_factory=list)
     # Caps de despesa en dolars (3B-2 §6.7, decisio 5). Valen fins que l'operador
     # registra una autoritzacio nova del mateix scope (`llm_budget_authorizations`).
     #   canary: una prova de pocs chunks (`only_chunks`);

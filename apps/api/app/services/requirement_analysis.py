@@ -63,7 +63,13 @@ from app.ai.contract_v3 import (
 )
 from app.ai.normalize_v2 import alternative_group_key, derive_obligation, normalise_requirement
 from app.ai.output_normalization import normalise_output
-from app.ai.profiles import DEFAULT_PROFILE, EXPERIMENTAL_PROFILES, ExtractorProfile
+from app.ai.profiles import (
+    DEFAULT_PROFILE,
+    EXPERIMENTAL_PROFILES,
+    ExtractorProfile,
+    transport_identity,
+    transport_json_schema,
+)
 from app.ai.provider import (
     OutputTruncatedError,
     ProviderError,
@@ -392,6 +398,11 @@ def analysis_identity(
         "provider": provider.name,
         "model": provider.model,
     }
+    # Nomes els models de tool estricta (Sonnet 5.5): el transport (instruccio, esquema estricte,
+    # `thinking`) no es part de les versions del perfil. La resta no canvia d'identitat.
+    transport = transport_identity(profile, provider)
+    if transport is not None:
+        payload["transport"] = transport
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -2058,7 +2069,9 @@ async def _run_chunk(
     response = await llm.extract_structured(
         system=profile.system_prompt,
         user_content=profile.build_user_message(render_chunk(chunk)),
-        json_schema=profile.json_schema(),
+        # El del perfil o, per a un model sense tool forcada, el seu esquema de transport
+        # estricte. El parser del perfil valida la resposta igual en tots dos casos.
+        json_schema=transport_json_schema(profile, llm),
         max_output_tokens=settings.LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS,
     )
     usage = response.usage or Usage()
