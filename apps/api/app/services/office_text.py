@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 from defusedxml import ElementTree
 
 from app.classification.ooxml_text import DOCX, XLSX
+from app.classification.xlsx_merged import MergedRangeTooLarge, merged_ranges
 from app.models.enums import ExtractionQuality, ExtractionStatus, PageExtractionStatus
 from app.services.pdf_text import ExtractedPage, ExtractionResult, _hash_text, normalize_page_text
 
@@ -79,7 +80,6 @@ _R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 _PR = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 
 _HEADING_NAME = re.compile(r"^(heading|titol|título|títol|titulo|titre|überschrift)\s*(\d)$", re.I)
-_CELL_REF = re.compile(r"^([A-Z]+)(\d+)$")
 
 
 class _Unreadable(Exception):
@@ -367,52 +367,12 @@ def _cell_value(cell, shared: list[str]) -> str | None:
     return raw
 
 
-def _column_number(letters: str) -> int:
-    number = 0
-    for char in letters:
-        number = number * 26 + (ord(char) - 64)
-    return number
-
-
-def _column_letters(number: int) -> str:
-    letters = ""
-    while number:
-        number, rest = divmod(number - 1, 26)
-        letters = chr(65 + rest) + letters
-    return letters
-
-
 def _merged_ranges(root) -> tuple[dict[str, str], dict[str, str]]:
-    """`({rang: cel·la ancora}, {cel·la interior: rang})` dels rangs combinats del full.
-
-    L'ancora es la cel·la de dalt a l'esquerra: l'unica que Excel mostra i fa servir. Un rang
-    mal format s'ignora (no es pot saber quina cel·la mostra). Les interiors es comptabilitzen
-    dins del limit de cel·les del llibre: un rang desmesurat no pot inflar la memoria.
-    """
-    anchors: dict[str, str] = {}
-    interior: dict[str, str] = {}
-    for merged in root.iter(f"{_S}mergeCell"):
-        ref = (merged.get("ref") or "").strip()
-        bounds = ref.split(":")
-        if len(bounds) != 2:
-            continue
-        start, end = _CELL_REF.match(bounds[0]), _CELL_REF.match(bounds[1])
-        if start is None or end is None:
-            continue
-        c1, r1 = _column_number(start.group(1)), int(start.group(2))
-        c2, r2 = _column_number(end.group(1)), int(end.group(2))
-        if c2 < c1 or r2 < r1:
-            continue
-        if len(interior) + (c2 - c1 + 1) * (r2 - r1 + 1) > _MAX_CELLS:
-            raise _Unreadable("rang combinat massa gran")
-        anchor = f"{_column_letters(c1)}{r1}"
-        anchors[ref] = anchor
-        for row in range(r1, r2 + 1):
-            for column in range(c1, c2 + 1):
-                cell = f"{_column_letters(column)}{row}"
-                if cell != anchor:
-                    interior[cell] = ref
-    return anchors, interior
+    """`({rang: ancora}, {interior: rang})` (`xlsx_merged`), dins del limit del llibre."""
+    try:
+        return merged_ranges(root, _MAX_CELLS)
+    except MergedRangeTooLarge as exc:
+        raise _Unreadable(str(exc)) from exc
 
 
 def _hidden_interior_counts(root, interior: dict[str, str]) -> dict[str, int]:

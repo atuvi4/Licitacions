@@ -18,12 +18,16 @@ import zipfile
 
 from defusedxml import ElementTree
 
+from app.classification.xlsx_merged import merged_ranges
+
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 #: Cap part XML d'un document de licitacio no s'hi acosta; una bomba si.
 _MAX_PART_BYTES = 20 * 1024 * 1024
 _MAX_SHEETS = 50
+#: Cel·les interiors de rangs combinats per full; un rang desmesurat fa el fitxer illegible.
+_MAX_MERGED_CELLS = 500_000
 #: El classificador nomes mira el principi. No cal mes.
 _MAX_CHARS = 200_000
 
@@ -55,7 +59,13 @@ def _docx_text(zf: zipfile.ZipFile) -> str:
 
 
 def _xlsx_text(zf: zipfile.ZipFile) -> str:
-    """Noms de full i textos de les cel·les, full per full i en ordre."""
+    """Noms de full i textos de les cel·les visibles, full per full i en ordre.
+
+    D'un rang combinat nomes es llegeix l'ancora, la cel·la que Excel mostra. Les interiors
+    poden conservar textos antics que ningu no veu (L'Escala: «— 35 punts» ocult sota el
+    «— 32 punts» visible); no arriben al classificador. El mateix criteri que `xlsx-v2`
+    (`app.classification.xlsx_merged`).
+    """
     shared: list[str] = []
     raw = _read_part(zf, "xl/sharedStrings.xml")
     if raw is not None:
@@ -75,9 +85,13 @@ def _xlsx_text(zf: zipfile.ZipFile) -> str:
         raw = _read_part(zf, f"xl/worksheets/sheet{index}.xml")
         if raw is None:
             continue
-        for row in ElementTree.fromstring(raw).iter(f"{_S}row"):
+        root = ElementTree.fromstring(raw)
+        _, interior = merged_ranges(root, _MAX_MERGED_CELLS)
+        for row in root.iter(f"{_S}row"):
             cells = []
             for cell in row.iter(f"{_S}c"):
+                if (cell.get("r") or "") in interior:
+                    continue
                 kind = cell.get("t")
                 if kind == "s":
                     value = cell.find(f"{_S}v")

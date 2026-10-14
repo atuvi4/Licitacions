@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from app.classification import xlsx_merged
 from app.models.enums import ExtractionStatus
 from app.services import office_text
 from tests.test_office_text import PKG_REL, R, S, _zip
@@ -197,9 +198,9 @@ def test_plantilla_oficial_de_l_escala():
 def _cells(ref: str) -> list[str]:
     start, end = ref.split(":")
     (c1, r1), (c2, r2) = (re.match(r"([A-Z]+)(\d+)", x).groups() for x in (start, end))
-    n1, n2 = office_text._column_number(c1), office_text._column_number(c2)
+    n1, n2 = xlsx_merged.column_number(c1), xlsx_merged.column_number(c2)
     return [
-        f"{office_text._column_letters(c)}{r}"
+        f"{xlsx_merged.column_letters(c)}{r}"
         for r in range(int(r1), int(r2) + 1)
         for c in range(n1, n2 + 1)
     ]

@@ -250,6 +250,46 @@ def test_una_oferta_completa_es_calcula_i_no_supera_100(escala):
     assert len(result.by_node) == len(escala.leaves())
 
 
+def test_3_nodes_agrupadors_i_28_subcriteris_puntuables(escala):
+    """31 nodes = 3 families (agrupen, no puntuen per si mateixes) + 28 subcriteris.
+
+    J6 es un subcriteri que es puntua per les seves 6 escenes (tercer nivell, 7 punts).
+    """
+    groups = escala.children(None)
+    assert {g.id: g.max_points for g in groups} == {"ECO": D(40), "AUT": D(32), "JV": D(28)}
+    subcriteria = [n for g in groups for n in escala.children(g.id)]
+    assert len(groups) + len(subcriteria) == 31
+    per_family = {g.id: len(escala.children(g.id)) for g in groups}
+    assert per_family == {"ECO": 4, "AUT": 15, "JV": 9}
+    for g in groups:
+        assert sum(n.max_points for n in escala.children(g.id)) == g.max_points
+    scenes = escala.children("JV.J6")
+    assert len(scenes) == 6
+    assert sum(s.max_points for s in scenes) == escala.node("JV.J6").max_points
+    assert len(escala.nodes) == 31 + 6
+    # Cap node agrupador no puntua directament: nomes les fulles entren al calcul.
+    leaves = {n.id for n in escala.leaves()}
+    assert not leaves & {"ECO", "AUT", "JV", "JV.J6"}
+    assert sum(n.max_points for n in escala.leaves()) == D(100)
+
+
+def test_la_millor_oferta_possible_suma_exactament_100_sense_doble_puntuacio(escala):
+    """Cada fulla al seu maxim i res mes: si un node es comptes dos cops, passaria de 100."""
+    best = _complete_offer()
+    for node_id, data in best["economic"].items():
+        pl = str(escala.node(node_id).params["PL"])
+        data.update(discount="0", lowest_admitted=pl)  # Ov = Om = PL -> Pv = P
+    best["judgment"] = {
+        node_id: str(max(escala.rule(escala.node(node_id).rules[0]).rubric))
+        for node_id in best["judgment"]
+    }
+    best["scenes"] = {node_id: "complete" for node_id in best["scenes"]}
+    result = score_offer(escala, best)
+    assert result.total == D(100)
+    assert set(result.by_node) == {n.id for n in escala.leaves()}
+    assert all(result.by_node[n.id] == n.max_points for n in escala.leaves())
+
+
 def _complete_offer() -> dict:
     return {
         "economic": {
