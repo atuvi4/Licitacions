@@ -11,19 +11,23 @@
  * d'aquí l'anomena així.
  */
 
+import Link from "next/link";
+
 import { Button, Card, EmptyState, LinkButton, StatusPill, cn } from "@/components/ui";
 import { MATCH_STATUS_LEVEL } from "@/lib/labels";
 import {
   DIMENSION_LABELS,
   DIMENSION_ORDER,
-  MATCH_STATUS_HELP,
   MATCH_STATUS_LABELS,
   PREFIT_DISCLAIMER,
   isUnknown,
   lotSummary,
+  profileGaps,
   reasonLabel,
   scoreTone,
   shortSummary,
+  sourceGaps,
+  statusHelp,
   type MatchFactor,
   type TenderMatch,
 } from "@/lib/matching";
@@ -204,13 +208,16 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
 
   const unknowns = ordered.filter(isUnknown);
   const coverage = Math.round(match.data_coverage * 100);
+  // Qui no té la dada: el perfil de l'empresa o la licitació (motius del motor).
+  const missingInProfile = profileGaps(match);
+  const missingInSource = sourceGaps(match);
 
   return (
     <Card>
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border px-5 py-4">
         <div>
           <h2 className="font-heading text-[17px] font-semibold text-ink">Pre-fit amb el vostre perfil</h2>
-          <p className="mt-0.5 text-caption text-muted">{MATCH_STATUS_HELP[match.status]}</p>
+          <p className="mt-0.5 text-caption text-muted">{statusHelp(match)}</p>
         </div>
         <div className="flex flex-col items-end gap-1.5">
           <ScoreValue score={match.score} size="lg" />
@@ -255,6 +262,21 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
             com a desencaix: senzillament no s&apos;ha pogut valorar. La puntuació surt del{" "}
             {coverage} % del pes que sí que s&apos;ha pogut avaluar.
           </p>
+          {missingInProfile.length > 0 && (
+            <p className="mt-1.5 text-caption text-ink" data-gap="profile">
+              Falta al perfil de l&apos;empresa:{" "}
+              {missingInProfile.map((dimension) => DIMENSION_LABELS[dimension]).join(", ")}.{" "}
+              <Link href="/empresa/radar" className="text-brand-strong underline hover:text-accent-800">
+                Completa el perfil
+              </Link>
+            </p>
+          )}
+          {missingInSource.length > 0 && (
+            <p className="mt-1 text-caption text-ink" data-gap="source">
+              La licitació no publica:{" "}
+              {missingInSource.map((dimension) => DIMENSION_LABELS[dimension]).join(", ")}.
+            </p>
+          )}
         </div>
       )}
 

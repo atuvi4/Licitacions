@@ -451,3 +451,40 @@ class TestExplainability:
             text = path.read_text(encoding="utf-8").lower()
             for term in forbidden:
                 assert term not in text, f"{path.name} conte '{term}'"
+
+
+class TestCausaDeLesDadesInsuficients:
+    """Contracte amb el web (auditoria UI P1-02): el pre-fit distingeix, pels motius dels
+    factors, «el perfil no té la dada» de «la licitació no la publica». El web en treu la
+    causa (`insufficientCause`); si aquests codis canvien, el web l'atribuiria malament."""
+
+    # Els factors es desen serialitzats: codis (constants de text) i resultats en text.
+    PROFILE_REASONS = {
+        ReasonCode.CPV_NO_COMPANY_PREFERENCES,
+        ReasonCode.TERRITORY_NO_COMPANY_DATA,
+        ReasonCode.AMOUNT_NO_COMPANY_PREFERENCES,
+    }
+    SOURCE_REASONS = {
+        ReasonCode.CPV_UNKNOWN,
+        ReasonCode.TERRITORY_UNKNOWN,
+        ReasonCode.AMOUNT_UNKNOWN,
+    }
+
+    def _unknown_reasons(self, outcome) -> set[str]:
+        return {
+            factor["reason_code"]
+            for factor in outcome.factors
+            if factor["result"] == DimensionResult.UNKNOWN.value
+        }
+
+    def test_perfil_buit_i_licitacio_completa_nomes_motius_de_perfil(self):
+        outcome = evaluate_default(make_profile())
+        assert outcome.status is MatchStatus.INSUFFICIENT_DATA
+        assert self._unknown_reasons(outcome) == self.PROFILE_REASONS
+
+    def test_perfil_complet_i_licitacio_sense_metadades_nomes_motius_de_font(self):
+        outcome = evaluate_default(
+            perfect_profile(), cpv_codes=[], nuts_code=None, place_name=None, amount=None
+        )
+        assert outcome.status is MatchStatus.INSUFFICIENT_DATA
+        assert self._unknown_reasons(outcome) == self.SOURCE_REASONS

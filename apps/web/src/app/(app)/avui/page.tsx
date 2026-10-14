@@ -234,7 +234,7 @@ export default function AvuiPage() {
       cause === "no_match"
         ? ": ara mateix cap licitació oberta avaluada encaixa amb el perfil"
         : cause === "insufficient_data"
-          ? ": les metadades de les licitacions avaluades no basten per opinar"
+          ? ": no hi ha prou dades (del perfil o de les licitacions avaluades) per opinar"
           : "";
     return (
       <>

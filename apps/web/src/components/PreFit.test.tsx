@@ -1,9 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { prefitProfileReady } from "@/lib/matching";
+import { prefitProfileReady, type MatchFactor, type TenderMatch } from "@/lib/matching";
 
-import { PreFitMissing } from "./PreFit";
+import { PreFitMissing, PreFitPanel } from "./PreFit";
 
 const counts = { cpv_preferences: 0, territories: 0, contract_preferences: 0 };
 
@@ -41,5 +41,94 @@ describe("pre-fit sense calcular (3B-2 §7.1.4)", () => {
     render(<PreFitMissing profileReady calculating={false} error="No s'ha pogut calcular." onCalculate={() => undefined} />);
     expect(screen.getByText("No s'ha pogut calcular.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Calcula'l ara" })).toBeTruthy();
+  });
+});
+
+/* ----- Causa de les dades insuficients (auditoria UI P1-02) ------------------ */
+
+function panelMatch(factors: Array<[string, string, string]>): TenderMatch {
+  return {
+    id: "m1",
+    tender_id: "t1",
+    score: null,
+    status: "insufficient_data",
+    exclusion_kind: null,
+    exclusion_reason_code: null,
+    cpv_score: null,
+    geographic_score: null,
+    economic_score: null,
+    timing_score: null,
+    data_coverage: 0.15,
+    factors: factors.map(([dimension, result, reason_code]) => ({
+      dimension: dimension as MatchFactor["dimension"],
+      result: result as MatchFactor["result"],
+      reason_code,
+      weight: 0.25,
+      score: result === "unknown" ? null : 15,
+      max_score: 25,
+      company_value: null,
+      source_value: null,
+      detail: {},
+    })),
+    rules_version: "test",
+    calculated_at: "2026-10-14T19:44:39Z",
+    best_lot_id: null,
+    candidate_lot_count: 0,
+    total_lot_count: 0,
+    is_stale: false,
+    lot_matches: [],
+  };
+}
+
+describe("PreFitPanel · de qui és la dada que falta", () => {
+  it("perfil sense dades i licitació completa: no culpa la font i porta al perfil", () => {
+    const { container } = render(
+      <PreFitPanel
+        match={panelMatch([
+          ["cpv", "unknown", "CPV_NO_COMPANY_PREFERENCES"],
+          ["geography", "unknown", "TERRITORY_NO_COMPANY_DATA"],
+          ["economic", "unknown", "AMOUNT_NO_COMPANY_PREFERENCES"],
+          ["timing", "match", "DEADLINE_ADEQUATE"],
+        ])}
+      />,
+    );
+    expect(container.textContent).not.toMatch(/La font no publica/);
+    expect(container.textContent).toMatch(/El perfil de l'empresa encara no té prou dades/);
+    const gap = container.querySelector("[data-gap='profile']");
+    expect(gap?.textContent).toMatch(/Activitat \(CPV\), Territori, Import/);
+    expect(screen.getByRole("link", { name: "Completa el perfil" }).getAttribute("href")).toBe("/empresa/radar");
+    expect(container.querySelector("[data-gap='source']")).toBeNull();
+  });
+
+  it("licitació sense metadades: ho atribueix a la font, sense enllaç al perfil", () => {
+    const { container } = render(
+      <PreFitPanel
+        match={panelMatch([
+          ["cpv", "unknown", "CPV_UNKNOWN"],
+          ["geography", "unknown", "TERRITORY_UNKNOWN"],
+          ["economic", "match", "AMOUNT_PREFERRED"],
+          ["timing", "unknown", "DEADLINE_UNKNOWN"],
+        ])}
+      />,
+    );
+    expect(container.textContent).toMatch(/La font no publica prou metadades/);
+    expect(container.querySelector("[data-gap='source']")?.textContent).toMatch(/Activitat \(CPV\), Territori, Termini/);
+    expect(container.querySelector("[data-gap='profile']")).toBeNull();
+  });
+
+  it("causes barrejades: les dues llistes, cadascuna amb el seu responsable", () => {
+    const { container } = render(
+      <PreFitPanel
+        match={panelMatch([
+          ["cpv", "unknown", "CPV_NO_COMPANY_PREFERENCES"],
+          ["geography", "match", "TERRITORY_HIGH_PRIORITY"],
+          ["economic", "unknown", "AMOUNT_UNKNOWN"],
+          ["timing", "match", "DEADLINE_ADEQUATE"],
+        ])}
+      />,
+    );
+    expect(container.querySelector("[data-gap='profile']")?.textContent).toMatch(/Activitat \(CPV\)/);
+    expect(container.querySelector("[data-gap='source']")?.textContent).toMatch(/Import/);
+    expect(container.textContent).toMatch(/Falten dades al perfil de l'empresa i la font/);
   });
 });

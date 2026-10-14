@@ -131,9 +131,88 @@ export const MATCH_STATUS_HELP: Record<MatchStatus, string> = {
   low_fit: "Les metadades no mostren prou encaix amb el que fa l'empresa.",
   excluded: "Queda fora per una preferència que heu configurat vosaltres, no per cap norma legal.",
   closed: "El termini ha passat o l'expedient ja no admet ofertes.",
+  // Genèric a propòsit: a nivell de llista no se sap si falta al perfil o a la font.
+  // Per a un pre-fit concret, `statusHelp` diu quina de les dues (auditoria UI P1-02).
   insufficient_data:
-    "La font no publica prou metadades per valorar-la. No vol dir que no encaixi.",
+    "No hi ha prou dades per valorar-la: falten al perfil de l'empresa, a les metadades publicades o a tots dos. No vol dir que no encaixi.",
 };
+
+/* -------------------------------------------------------------------------- */
+/* Causa d'unes dades insuficients (auditoria UI P1-02)                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Motius del motor que vol dir «el perfil de l'empresa no té la dada» (no «la
+ * licitació no la publica»). El motor ja els distingeix; aquí només es llegeixen.
+ */
+export const PROFILE_GAP_REASONS: ReadonlySet<string> = new Set([
+  "CPV_NO_COMPANY_PREFERENCES",
+  "TERRITORY_NO_COMPANY_DATA",
+  "AMOUNT_NO_COMPANY_PREFERENCES",
+]);
+
+/** Motius del motor que vol dir «la licitació (la font) no publica la dada». */
+export const SOURCE_GAP_REASONS: ReadonlySet<string> = new Set([
+  "CPV_UNKNOWN",
+  "TERRITORY_UNKNOWN",
+  "AMOUNT_UNKNOWN",
+  "DEADLINE_UNKNOWN",
+]);
+
+export type InsufficientCause = "profile" | "source" | "both" | "unknown";
+
+/** Dimensions sense valorar perquè el perfil no té la dada, en l'ordre de la fitxa. */
+export function profileGaps(match: Pick<MatchCommon, "factors">): DimensionName[] {
+  return DIMENSION_ORDER.filter((dimension) =>
+    match.factors.some(
+      (factor) => factor.dimension === dimension && isUnknown(factor) && PROFILE_GAP_REASONS.has(factor.reason_code),
+    ),
+  );
+}
+
+/** Dimensions sense valorar perquè la licitació no publica la dada. */
+export function sourceGaps(match: Pick<MatchCommon, "factors">): DimensionName[] {
+  return DIMENSION_ORDER.filter((dimension) =>
+    match.factors.some(
+      (factor) => factor.dimension === dimension && isUnknown(factor) && SOURCE_GAP_REASONS.has(factor.reason_code),
+    ),
+  );
+}
+
+/**
+ * Per què un pre-fit no té prou dades, a partir dels motius dels factors. No toca
+ * ni el resultat ni la puntuació del motor: només diu a qui li falta la dada.
+ * `unknown` si cap factor desconegut porta un motiu reconegut.
+ */
+export function insufficientCause(match: Pick<MatchCommon, "factors">): InsufficientCause {
+  const profile = profileGaps(match).length > 0;
+  const source = sourceGaps(match).length > 0;
+  if (profile && source) return "both";
+  if (profile) return "profile";
+  if (source) return "source";
+  return "unknown";
+}
+
+export const INSUFFICIENT_CAUSE_HELP: Record<InsufficientCause, string> = {
+  profile:
+    "El perfil de l'empresa encara no té prou dades per valorar-la. No és cap mancança de la licitació. No vol dir que no encaixi.",
+  source: "La font no publica prou metadades per valorar-la. No vol dir que no encaixi.",
+  both: "Falten dades al perfil de l'empresa i la font tampoc no publica totes les metadades. No vol dir que no encaixi.",
+  unknown: "No hi ha prou dades per valorar-la. No vol dir que no encaixi.",
+};
+
+const INSUFFICIENT_CAUSE_SHORT: Record<InsufficientCause, string> = {
+  profile: "Falta completar el perfil de l'empresa per valorar-la",
+  source: "No hi ha prou metadades publicades per valorar-la",
+  both: "Falten dades del perfil i de la font per valorar-la",
+  unknown: "No hi ha prou dades per valorar-la",
+};
+
+/** L'ajuda de l'estat d'un pre-fit concret: amb dades insuficients, diu de qui és la manca. */
+export function statusHelp(match: Pick<MatchCommon, "status" | "factors">): string {
+  if (match.status === "insufficient_data") return INSUFFICIENT_CAUSE_HELP[insufficientCause(match)];
+  return MATCH_STATUS_HELP[match.status];
+}
 
 export const DIMENSION_LABELS: Record<DimensionName, string> = {
   cpv: "Activitat (CPV)",
@@ -218,7 +297,7 @@ export function shortSummary(match: MatchCommon): string {
     return reasonLabel(match.exclusion_reason_code);
   }
   if (match.status === "insufficient_data") {
-    return "No hi ha prou metadades publicades per valorar-la";
+    return INSUFFICIENT_CAUSE_SHORT[insufficientCause(match)];
   }
   const cpv = match.factors.find((factor) => factor.dimension === "cpv");
   const weakest = [...match.factors]

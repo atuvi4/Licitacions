@@ -371,7 +371,7 @@ function ReviewFeed() {
           title="Cap candidata ara mateix"
           description={
             cause === "insufficient_data" && summary.data
-              ? `Les ${summary.data.evaluated_count} licitacions avaluades no tenen prou metadades per calcular-ne l'encaix. Zero candidates és una resposta legítima, no un error.`
+              ? `Les ${summary.data.evaluated_count} licitacions avaluades no tenen prou dades per calcular-ne l'encaix: en falten al perfil de l'empresa, a les metadades publicades o a tots dos (el detall de cada licitació diu quines). Zero candidates és una resposta legítima, no un error.`
               : `Cap de les ${summary.data ? `${summary.data.evaluated_count} ` : ""}licitacions avaluades encaixa prou amb el perfil declarat. Zero candidates és una resposta legítima, no un error: podeu revisar la vista «Encaix baix».`
           }
           action={
