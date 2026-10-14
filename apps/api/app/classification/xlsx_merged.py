@@ -15,11 +15,12 @@ from __future__ import annotations
 import re
 
 _S = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
-_CELL_REF = re.compile(r"^([A-Z]+)(\d+)$")
+#: `A1`, `$A$1` o `a1` (Excel escriu `A1`; altres generadors no sempre).
+_CELL_REF = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d{1,7})$")
 
 
 class MergedRangeTooLarge(ValueError):
-    """Els rangs combinats del full superen el limit de cel·les: el full no es llegeix."""
+    """Els rangs combinats superen el limit de cel·les: el llibre no es llegeix."""
 
 
 def column_number(letters: str) -> int:
@@ -37,30 +38,41 @@ def column_letters(number: int) -> str:
     return letters
 
 
+def _corner(text: str) -> tuple[int, int] | None:
+    match = _CELL_REF.match(text.strip())
+    if match is None or int(match.group(2)) < 1:
+        return None
+    return column_number(match.group(1).upper()), int(match.group(2))
+
+
 def merged_ranges(root, max_cells: int) -> tuple[dict[str, str], dict[str, str]]:
     """`({rang: cel·la ancora}, {cel·la interior: rang})` dels rangs combinats del full.
 
-    Un rang mal format s'ignora (no es pot saber quina cel·la mostra). Les interiors es
-    compten contra `max_cells`: un rang desmesurat no pot inflar la memoria i llenca
-    `MergedRangeTooLarge`.
+    El rang es normalitza (`$A$1:$F$1`, `a1:f1` o `F1:A1` son `A1:F1`). Un rang il·legible o
+    d'una sola cel·la s'ignora: no amaga res. `max_cells` es el que queda del pressupost de
+    cel·les interiors del LLIBRE (qui crida el va restant full a full): si se supera, llenca
+    `MergedRangeTooLarge` abans de construir res mes, i un fitxer petit amb rangs enormes no
+    pot inflar ni la memoria ni el temps.
     """
     anchors: dict[str, str] = {}
     interior: dict[str, str] = {}
     for merged in root.iter(f"{_S}mergeCell"):
-        ref = (merged.get("ref") or "").strip()
-        bounds = ref.split(":")
+        bounds = (merged.get("ref") or "").split(":")
         if len(bounds) != 2:
             continue
-        start, end = _CELL_REF.match(bounds[0]), _CELL_REF.match(bounds[1])
-        if start is None or end is None:
+        first, second = _corner(bounds[0]), _corner(bounds[1])
+        if first is None or second is None:
             continue
-        c1, r1 = column_number(start.group(1)), int(start.group(2))
-        c2, r2 = column_number(end.group(1)), int(end.group(2))
-        if c2 < c1 or r2 < r1:
+        c1, c2 = sorted((first[0], second[0]))
+        r1, r2 = sorted((first[1], second[1]))
+        if (c1, r1) == (c2, r2):
             continue
-        if len(interior) + (c2 - c1 + 1) * (r2 - r1 + 1) > max_cells:
-            raise MergedRangeTooLarge("rang combinat massa gran")
         anchor = f"{column_letters(c1)}{r1}"
+        ref = f"{anchor}:{column_letters(c2)}{r2}"
+        if ref in anchors:
+            continue
+        if len(interior) + (c2 - c1 + 1) * (r2 - r1 + 1) - 1 > max_cells:
+            raise MergedRangeTooLarge("rang combinat massa gran")
         anchors[ref] = anchor
         for row in range(r1, r2 + 1):
             for column in range(c1, c2 + 1):

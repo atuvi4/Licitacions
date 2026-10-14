@@ -19,6 +19,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from defusedxml import ElementTree
 
 from app.classification import xlsx_merged
 from app.models.enums import ExtractionStatus
@@ -134,13 +135,53 @@ def test_rang_combinat_mal_format_s_ignora_sense_perdre_cel_les():
     rows = '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>0</v></c></row>'
     text = (
         office_text.extract_xlsx(
-            _book([("F", rows, '<mergeCell ref="B1"/><mergeCell ref="Z9:A1"/>')], ["x"])
+            _book([("F", rows, '<mergeCell ref="B1"/><mergeCell ref="A1:B"/>')], ["x"])
         )
         .pages[0]
         .text
     )
     assert "Fila 1 | A1: x | B1: x" in text
     assert "Cel·les combinades" not in text
+
+
+def test_un_rang_combinat_amb_dolars_minuscules_o_cantonades_invertides_es_normalitza():
+    rows = (
+        '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c>'
+        '<c r="D1" t="s"><v>0</v></c><c r="E1" t="s"><v>1</v></c>'
+        '<c r="G1" t="s"><v>0</v></c><c r="H1" t="s"><v>1</v></c></row>'
+    )
+    merges = '<mergeCell ref="$A$1:$B$1"/><mergeCell ref="d1:e1"/><mergeCell ref="H1:G1"/>'
+    text = (
+        office_text.extract_xlsx(_book([("F", rows, merges)], ["Visible", "Ocult"])).pages[0].text
+    )
+    assert "Ocult" not in text
+    for ref in ("A1:B1", "D1:E1", "G1:H1"):
+        assert f"Cel·les combinades: {ref} (visible {ref[:2]}; 1 cel·les interiors" in text
+
+
+def test_la_mestra_d_una_formula_compartida_dins_d_un_rang_combinat_conserva_l_origen():
+    rows = (
+        '<row r="1"><c r="A1" t="s"><v>0</v></c>'
+        '<c r="B1"><f t="shared" ref="B1:B2" si="0">C1+1</f><v>3</v></c></row>'
+        '<row r="2"><c r="B2"><f t="shared" si="0"/><v>4</v></c></row>'
+    )
+    text = (
+        office_text.extract_xlsx(_book([("F", rows, '<mergeCell ref="A1:B1"/>')], ["T"]))
+        .pages[0]
+        .text
+    )
+    assert "C1+1" not in text  # la mestra es interior: no es llegeix
+    assert "B2: =⟨formula compartida de B1⟩ → 4" in text
+
+
+def test_el_limit_de_cel_les_combinades_es_de_tot_el_llibre_no_de_cada_full():
+    rows = '<row r="1"><c r="A1" t="s"><v>0</v></c></row>'
+    one = [("F1", rows, '<mergeCell ref="A1:A300000"/>')]
+    assert office_text.extract_xlsx(_book(one, ["x"])).status == ExtractionStatus.EXTRACTED
+    two = one + [("F2", rows, '<mergeCell ref="A1:A300000"/>')]
+    result = office_text.extract_xlsx(_book(two, ["x"]))
+    assert result.status == ExtractionStatus.FAILED
+    assert result.error_code == "xlsx_unreadable"
 
 
 def test_un_rang_combinat_desmesurat_falla_sense_llancar():
@@ -185,14 +226,23 @@ def test_plantilla_oficial_de_l_escala():
         sheet_xml = [
             zf.read(n).decode("utf-8") for n in zf.namelist() if n.startswith("xl/worksheets/sheet")
         ]
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
     visible_formulas = 0
     for xml in sheet_xml:
+        root = ElementTree.fromstring(xml)
         interior = set()
-        for ref in re.findall(r'<mergeCell ref="([A-Z]+\d+:[A-Z]+\d+)"', xml):
-            interior |= set(_cells(ref)[1:])
-        for ref in re.findall(r'<c r="([A-Z]+\d+)"[^>]*>(?:(?!</c>).)*<f', xml, re.S):
-            visible_formulas += ref not in interior
-    assert every.count("=") >= visible_formulas
+        for merged in root.iter(f"{ns}mergeCell"):
+            interior |= set(_cells(merged.get("ref"))[1:])
+        visible_formulas += sum(
+            1
+            for cell in root.iter(f"{ns}c")
+            if cell.find(f"{ns}f") is not None and cell.get("r") not in interior
+        )
+    # Cada formula visible surt com a `REF: =…` (o `REF [rang]: =…`); un text literal que
+    # comenca per «=» porta l'apostrof (`'=`) i no compta.
+    printed = re.findall(r"\b[A-Z]+\d+(?: \[[A-Z]+\d+:[A-Z]+\d+\])?: =", every)
+    assert visible_formulas > 0
+    assert len(printed) == visible_formulas
 
 
 def _cells(ref: str) -> list[str]:

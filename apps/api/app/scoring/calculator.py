@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from app.scoring.model import Evaluation, Node, Rule, RuleKind, ScoringSystem, Status
 
@@ -33,6 +33,19 @@ class ScoringInputMissing(Exception):
 
 class ScoringInputInvalid(ValueError):
     pass
+
+
+def number(value, what: str) -> Decimal:
+    """Un import o percentatge de l'oferta: decimal finit i no negatiu, o `ScoringInputInvalid`."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, Decimal)):
+        raise ScoringInputInvalid(f"{what}: cal un nombre, no {value!r}.")
+    try:
+        result = Decimal(str(value).strip())
+    except InvalidOperation as exc:
+        raise ScoringInputInvalid(f"{what}: {value!r} no es un nombre.") from exc
+    if not result.is_finite() or result < 0:
+        raise ScoringInputInvalid(f"{what}: cal un nombre finit i no negatiu, no {value!r}.")
+    return result
 
 
 def _rule(system: ScoringSystem, node: Node, kind: RuleKind) -> Rule | None:
@@ -66,8 +79,10 @@ def offered_amount(system: ScoringSystem, node_id: str, discount_pct: Decimal) -
     if amount_rule is None or amount_rule.status is not Status.VERIFIED:
         raise ScoringRuleMissing([f"{node_id}: regla de l'import ofert absent o no verificada"])
     decimals = int(amount_rule.params.get("max_discount_decimals", Decimal(0)))
-    if discount_pct < 0:
+    if not discount_pct.is_finite() or discount_pct < 0:
         raise ScoringInputInvalid("La baixa no pot ser negativa.")
+    if discount_pct > 100:
+        raise ScoringInputInvalid("La baixa no pot passar del 100%.")
     if discount_pct.as_tuple().exponent < -decimals:
         raise ScoringInputInvalid(f"La baixa admet com a molt {decimals} decimals.")
     return _round(node.params["PL"] * (1 - discount_pct / 100))
@@ -79,6 +94,8 @@ def economic_points(
     """Pv = [1 - ((Ov - Om)/PL) x (1/VP)] x P, arrodonida a 2 decimals i dins de [0, P]."""
     node = system.node(node_id)
     rule = _verified(system, node, RuleKind.FORMULA)
+    if not (offered.is_finite() and lowest_admitted.is_finite()) or lowest_admitted < 0:
+        raise ScoringInputInvalid("Ov i Om han de ser imports finits i no negatius.")
     if offered < lowest_admitted:
         raise ScoringInputInvalid("Ov no pot ser inferior a Om (el menor import admes).")
     pl, vp, p = node.params["PL"], rule.params["VP"], node.max_points
@@ -108,7 +125,7 @@ def automatic_points(system: ScoringSystem, node_id: str, answer: dict) -> Decim
         if len(selected) > 1:
             return Decimal(0)  # mes d'una opcio seleccionada: 0 punts (regla del plec)
         for level in rule.levels:
-            if level.value == Decimal(str(selected[0])):
+            if level.value == number(selected[0], f"{node_id}: opcio"):
                 return level.points
         raise ScoringInputInvalid(f"{node_id}: {selected[0]} no es cap dels nivells admesos.")
     raise ScoringInputInvalid(f"{node_id} no es un criteri automatic.")
@@ -167,13 +184,13 @@ def score_offer(system: ScoringSystem, offer: dict) -> OfferScore:
     for node in system.leaves():
         if node.evaluation is Evaluation.ECONOMIC_FORMULA:
             data = (offer.get("economic") or {}).get(node.id)
-            if not data:
+            if not data or data.get("discount") is None or data.get("lowest_admitted") is None:
                 missing_inputs.append(f"{node.id}: baixa i menor import admes")
                 continue
-            offered = offered_amount(system, node.id, Decimal(str(data["discount"])))
-            by_node[node.id] = economic_points(
-                system, node.id, offered, Decimal(str(data["lowest_admitted"]))
-            )
+            discount = number(data["discount"], f"{node.id}: baixa")
+            lowest = number(data["lowest_admitted"], f"{node.id}: menor import admes")
+            offered = offered_amount(system, node.id, discount)
+            by_node[node.id] = economic_points(system, node.id, offered, lowest)
         elif node.evaluation in (Evaluation.YES_NO, Evaluation.LEVELS):
             data = (offer.get("automatic") or {}).get(node.id)
             if data is None:
@@ -185,7 +202,9 @@ def score_offer(system: ScoringSystem, offer: dict) -> OfferScore:
             if value is None:
                 missing_inputs.append(f"{node.id}: puntuacio de la mesa (judici de valor)")
                 continue
-            by_node[node.id] = judgment_points(system, node.id, Decimal(str(value)))
+            by_node[node.id] = judgment_points(
+                system, node.id, number(value, f"{node.id}: puntuacio de la mesa")
+            )
         elif node.evaluation is Evaluation.SCENE:
             value = (offer.get("scenes") or {}).get(node.id)
             if value is None:

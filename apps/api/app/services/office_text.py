@@ -367,10 +367,10 @@ def _cell_value(cell, shared: list[str]) -> str | None:
     return raw
 
 
-def _merged_ranges(root) -> tuple[dict[str, str], dict[str, str]]:
-    """`({rang: ancora}, {interior: rang})` (`xlsx_merged`), dins del limit del llibre."""
+def _merged_ranges(root, budget: int) -> tuple[dict[str, str], dict[str, str]]:
+    """`({rang: ancora}, {interior: rang})` (`xlsx_merged`), amb el que queda del llibre."""
     try:
-        return merged_ranges(root, _MAX_CELLS)
+        return merged_ranges(root, budget)
     except MergedRangeTooLarge as exc:
         raise _Unreadable(str(exc)) from exc
 
@@ -420,6 +420,7 @@ def _read_xlsx(data: bytes) -> list[str]:
 
         pages: list[str] = []
         cells_read = 0
+        merged_budget = _MAX_CELLS  # cel·les interiors de rangs combinats, a tot el llibre
         for index, sheet in enumerate(sheets):
             name = names[index]
             path = rels.get(sheet.get(f"{_R}id") or "") or f"xl/worksheets/sheet{index + 1}.xml"
@@ -446,7 +447,8 @@ def _read_xlsx(data: bytes) -> list[str]:
             # ancora. Les interiors poden conservar valors antics que ningu no veu (L'Escala:
             # «32 punts» visible a A1 i «35 punts» ocult a B1:F1): no es llegeixen com a dades.
             # Es diu quantes n'hi ha, mai que contenen.
-            anchors, interior = _merged_ranges(root)
+            anchors, interior = _merged_ranges(root, merged_budget)
+            merged_budget -= len(interior)
             hidden_counts = _hidden_interior_counts(root, interior)
             range_of_anchor = {anchor: merged_ref for merged_ref, anchor in anchors.items()}
             for merged_ref, anchor in anchors.items():
@@ -462,10 +464,19 @@ def _read_xlsx(data: bytes) -> list[str]:
                     if cells_read > _MAX_CELLS:
                         raise _Unreadable("massa cel·les")
                     ref = cell.get("r") or ""
+                    formula = cell.find(f"{_S}f")
                     if ref in interior:
+                        # No es llegeix, pero si es la mestra d'una formula compartida les
+                        # dependents visibles han de poder dir d'on venen.
+                        if (
+                            formula is not None
+                            and formula.get("t") == "shared"
+                            and formula.get("si") is not None
+                            and (formula.text or "").strip()
+                        ):
+                            masters[formula.get("si")] = ref
                         continue
                     value = _cell_value(cell, shared)
-                    formula = cell.find(f"{_S}f")
                     text: str | None
                     if formula is not None:
                         expression = (formula.text or "").strip()

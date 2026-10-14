@@ -26,8 +26,10 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 #: Cap part XML d'un document de licitacio no s'hi acosta; una bomba si.
 _MAX_PART_BYTES = 20 * 1024 * 1024
 _MAX_SHEETS = 50
-#: Cel·les interiors de rangs combinats per full; un rang desmesurat fa el fitxer illegible.
-_MAX_MERGED_CELLS = 500_000
+#: Cel·les interiors de rangs combinats a tot el llibre. El classificador corre dins de la
+#: peticio: un fitxer petit amb rangs desmesurats no l'ha de poder alentir (el fitxer queda
+#: sense text, com un de malmes).
+_MAX_MERGED_CELLS = 100_000
 #: El classificador nomes mira el principi. No cal mes.
 _MAX_CHARS = 200_000
 
@@ -80,13 +82,15 @@ def _xlsx_text(zf: zipfile.ZipFile) -> str:
     # Els fulls es llegeixen com `sheetN.xml` en l'ordre del llibre. Per saber
     # que es un fitxer n'hi ha prou; per citar-ne una cel·la no ho seria.
     lines: list[str] = []
+    merged_budget = _MAX_MERGED_CELLS
     for index, name in enumerate(sheet_names[:_MAX_SHEETS], start=1):
         lines.append(f"# {name}")
         raw = _read_part(zf, f"xl/worksheets/sheet{index}.xml")
         if raw is None:
             continue
         root = ElementTree.fromstring(raw)
-        _, interior = merged_ranges(root, _MAX_MERGED_CELLS)
+        _, interior = merged_ranges(root, merged_budget)
+        merged_budget -= len(interior)
         for row in root.iter(f"{_S}row"):
             cells = []
             for cell in row.iter(f"{_S}c"):

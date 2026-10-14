@@ -135,9 +135,20 @@ def _decimal(value: Any, where: str) -> Decimal:
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         raise SpecError(f"{where}: cal un decimal en text o enter, no {type(value).__name__}")
     try:
-        return Decimal(str(value))
+        number = Decimal(str(value))
     except InvalidOperation as exc:
         raise SpecError(f"{where}: decimal no valid {value!r}") from exc
+    # Punts, parametres, nivells, rubriques i fraccions d'un plec: sempre finits i no negatius.
+    if not number.is_finite() or number < 0:
+        raise SpecError(f"{where}: cal un decimal finit i no negatiu, no {value!r}")
+    return number
+
+
+def _share(value: Any, where: str) -> Decimal:
+    share = _decimal(value, f"{where}.shares")
+    if share > 1:
+        raise SpecError(f"{where}.shares: una fraccio no pot passar de 1 ({value!r})")
+    return share
 
 
 def _only(data: dict, allowed: set[str], where: str) -> None:
@@ -165,7 +176,23 @@ def _sources(items: Any, where: str) -> tuple[SourceRef, ...]:
     return tuple(out)
 
 
+def _flag(value: Any, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise SpecError(f"{where}: cal true o false, no {value!r}")
+    return value
+
+
 def load_system(data: dict) -> ScoringSystem:
+    """Carrega estricta: qualsevol camp absent, desconegut o mal tipat es `SpecError`."""
+    try:
+        return _load_system(data)
+    except SpecError:
+        raise
+    except (KeyError, ValueError, TypeError, AttributeError) as exc:
+        raise SpecError(f"spec: camp obligatori absent o valor no valid ({exc!r})") from exc
+
+
+def _load_system(data: dict) -> ScoringSystem:
     _only(
         data,
         {"tender", "spec_version", "total_points", "documents", "nodes", "rules", "pending"},
@@ -210,7 +237,7 @@ def load_system(data: dict) -> ScoringSystem:
                     for lv in raw.get("levels") or []
                 ),
                 rubric=tuple(_decimal(v, where) for v in raw.get("rubric") or []),
-                shares={k: _decimal(v, where) for k, v in (raw.get("shares") or {}).items()},
+                shares={k: _share(v, where) for k, v in (raw.get("shares") or {}).items()},
                 notes=raw.get("notes"),
             )
         )
@@ -251,7 +278,9 @@ def load_system(data: dict) -> ScoringSystem:
                     k: _decimal(v, f"{where}.params.{k}")
                     for k, v in (raw.get("params") or {}).items()
                 },
-                requires_accreditation=bool(raw.get("requires_accreditation", False)),
+                requires_accreditation=_flag(
+                    raw.get("requires_accreditation", False), f"{where}.requires_accreditation"
+                ),
                 envelope=raw.get("envelope"),
                 notes=raw.get("notes"),
             )

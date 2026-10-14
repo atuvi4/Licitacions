@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from app.classification import ooxml_text, xlsx_merged
+from app.classification import ooxml_text
 from app.classification.roles import DocumentFacts, classify_documents
 from app.models.enums import DocumentRole, RoleConfidence
 from app.services import office_text
@@ -75,7 +75,7 @@ def test_a_malformed_range_is_ignored_and_a_vertical_one_hides_its_lower_cells()
         '<c r="B1" t="inlineStr"><is><t>Visible</t></is></c></row>'
         '<row r="2"><c r="A2" t="inlineStr"><is><t>Ocult</t></is></c></row></sheetData>'
         '<mergeCells count="3"><mergeCell ref="A1:A2"/><mergeCell ref="B1"/>'
-        '<mergeCell ref="C3:B1"/></mergeCells>'
+        '<mergeCell ref="C3:"/></mergeCells>'
     )
     assert ooxml_text.read_text(_xlsx(sheet), ooxml_text.XLSX) == "# Automatics\nBloc | Visible"
 
@@ -96,7 +96,33 @@ def test_both_readers_share_one_definition_of_an_interior_cell():
     assert "A1 [A1:F1]: Criteris automàtics — 32 punts" in page
     assert "35 punts" not in page
     assert "35 punts" not in ooxml_text.read_text(data, ooxml_text.XLSX)
-    assert office_text.merged_ranges is xlsx_merged.merged_ranges
+
+
+def test_refs_with_dollars_lowercase_or_swapped_corners_hide_the_same_cells_in_both_readers():
+    merges = '<mergeCells count="1"><mergeCell ref="$f$1:A1"/></mergeCells>'
+    data = _xlsx(HEADER + merges, SHARED)
+    assert "35 punts" not in ooxml_text.read_text(data, ooxml_text.XLSX)
+    page = office_text.extract_xlsx(data).pages[0].text
+    assert "35 punts" not in page and "A1 [A1:F1]: Criteris automàtics — 32 punts" in page
+
+
+def test_the_classifier_merge_budget_is_per_workbook():
+    def book(sheets: int) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            names = "".join(f'<sheet name="F{i}"/>' for i in range(1, sheets + 1))
+            zf.writestr("xl/workbook.xml", f"<workbook {S}><sheets>{names}</sheets></workbook>")
+            for i in range(1, sheets + 1):
+                zf.writestr(
+                    f"xl/worksheets/sheet{i}.xml",
+                    f'<worksheet {S}><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>T</t>'
+                    '</is></c></row></sheetData><mergeCells count="1">'
+                    '<mergeCell ref="A1:A60000"/></mergeCells></worksheet>',
+                )
+        return buffer.getvalue()
+
+    assert ooxml_text.read_text(book(1), ooxml_text.XLSX) == "# F1\nT"
+    assert ooxml_text.read_text(book(2), ooxml_text.XLSX) is None
 
 
 # --------------------------------------------------------------------------- #

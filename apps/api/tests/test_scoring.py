@@ -418,3 +418,94 @@ def _nodes(node: str) -> list[str]:
     «ECO+AUT» es una referencia procedimental a dues families, sense punts propis.
     """
     return [] if not node or node == "none" else node.split("+")
+
+
+# --------------------------------------------------------------------------- #
+# Robustesa (revisio del gate final)                                            #
+# --------------------------------------------------------------------------- #
+
+
+def _spec_with(path: list, value):
+    raw = copy.deepcopy(RAW)
+    target = raw
+    for key in path[:-1]:
+        target = (
+            next(x for x in target if x.get("id") == key)
+            if isinstance(target, list)
+            else target[key]
+        )
+    target[path[-1]] = value
+    return raw
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (["nodes", "AUT.C1", "requires_accreditation"], "false"),
+        (["nodes", "AUT.C1", "max_points"], "NaN"),
+        (["nodes", "AUT.C1", "max_points"], "-5"),
+        (["nodes", "ECO.B1", "params"], {"PL": "Infinity"}),
+        (["rules", "R.JV.J6.SCENES", "shares"], {"complete": "1.5"}),
+    ],
+)
+def test_l_especificacio_refusa_valors_mal_tipats_o_no_finits(path, value):
+    with pytest.raises(SpecError):
+        load_system(_spec_with(path, value))
+
+
+def test_un_camp_obligatori_absent_es_spec_error():
+    raw = copy.deepcopy(RAW)
+    del next(n for n in raw["nodes"] if n["id"] == "AUT.C1")["evaluation"]
+    with pytest.raises(SpecError):
+        load_system(raw)
+    raw = copy.deepcopy(RAW)
+    next(n for n in raw["nodes"] if n["id"] == "AUT.C1")["evaluation"] = "inventada"
+    with pytest.raises(SpecError):
+        load_system(raw)
+
+
+def test_la_validacio_exigeix_pl_i_una_regla_d_import_existent():
+    errors = validate_system(load_system(_spec_with(["nodes", "ECO.B1", "params"], {}))).errors
+    assert "ECO.B1: PL absent o no positiu" in errors
+    raw = _spec_with(["rules", "R.ECO.PV", "variables"], {"amount_rule": "R.INEXISTENT"})
+    assert (
+        "R.ECO.PV: amount_rule inexistent R.INEXISTENT" in validate_system(load_system(raw)).errors
+    )
+
+
+@pytest.mark.parametrize("discount", ["Infinity", "NaN", "abc", "-1", "150", True])
+def test_una_baixa_impossible_es_input_invalid(escala, discount):
+    offer = _complete_offer()
+    offer["economic"]["ECO.B1"]["discount"] = discount
+    with pytest.raises(ScoringInputInvalid):
+        score_offer(escala, offer)
+
+
+def test_un_menor_import_negatiu_o_absent(escala):
+    offer = _complete_offer()
+    offer["economic"]["ECO.B1"]["lowest_admitted"] = "-1"
+    with pytest.raises(ScoringInputInvalid):
+        score_offer(escala, offer)
+    offer = _complete_offer()
+    del offer["economic"]["ECO.B1"]["discount"]
+    with pytest.raises(ScoringInputMissing) as caught:
+        score_offer(escala, offer)
+    assert caught.value.missing == ["ECO.B1: baixa i menor import admes"]
+
+
+def test_l_arrodoniment_es_half_up_no_half_even(escala):
+    # (Ov - Om)/PL = 141,75/75.600 = 0,001875 -> Pv = 8 x 0,998125 = 7,985 exacte.
+    # HALF_UP -> 7,99 (el plec: «arrodonida a 2 decimals»); HALF_EVEN donaria 7,98.
+    assert economic_points(escala, "ECO.B1", D("71820.00"), D("71678.25")) == D("7.99")
+
+
+def test_un_registre_que_nomes_esmenta_un_node_no_el_cobreix(escala):
+    records = [{"id": "f", "points": None}, {"id": "p", "points": "cinc"}]
+    assignments = {
+        "f": {"role": "formula", "nodes": ["AUT.C1"]},
+        "p": {"role": "parameter", "nodes": ["AUT.C2a"]},
+    }
+    result = reconcile(escala, records, assignments)
+    assert "AUT.C1" in result.nodes_missing and "AUT.C2a" in result.nodes_missing
+    assert result.view["AUT.C1"]["canonical"] == [] and result.view["AUT.C1"]["references"] == ["f"]
+    assert "p: punts il·legibles 'cinc'" in result.problems

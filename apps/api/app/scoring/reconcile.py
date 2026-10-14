@@ -37,6 +37,9 @@ class Reconciliation:
     nodes_covered: list[str]
     nodes_missing: list[str]
     view: dict[str, dict[str, list[str]]]  # node -> {"canonical", "duplicates", "references"}
+    # "canonical": nomes registres `main`/`subcriterion` (els que defineixen el node i en
+    # porten els punts). "references": qualsevol altre rol (referencia, parametre, formula,
+    # llindar, penalitat, informatiu) que esmenta el node sense definir-lo: no el cobreix.
     raw_points_sum: Decimal
     canonical_points_sum: Decimal
     raw_points_by_node: dict[str, Decimal]
@@ -47,9 +50,10 @@ def _points(value) -> Decimal | None:
     if value in (None, ""):
         return None
     try:
-        return Decimal(str(value))
+        number = Decimal(str(value))
     except InvalidOperation:
         return None
+    return number if number.is_finite() else None
 
 
 def reconcile(
@@ -90,6 +94,8 @@ def reconcile(
             if node_id not in known:
                 problems.append(f"{record['id']}: node inexistent {node_id}")
         points = _points(record.get("points"))
+        if points is None and record.get("points") not in (None, ""):
+            problems.append(f"{record['id']}: punts il·legibles {record.get('points')!r}")
         if points is not None:
             raw_sum += points
             key = "+".join(nodes) if nodes else "(cap node)"
@@ -100,8 +106,14 @@ def reconcile(
                 problems.append(
                     f"{record['id']}: {points} punts, pero {'+'.join(nodes)} en val {expected}"
                 )
-            # Una referencia (sense punts propis) no es mai el registre canonic d'un node.
-            bucket = {"duplicate": "duplicates", "reference": "references"}.get(role, "canonical")
+            # Nomes un registre principal o de subcriteri pot ser el canonic d'un node: una
+            # referencia, un parametre, una formula o un llindar l'esmenten, no el cobreixen.
+            if role in ("main", "subcriterion"):
+                bucket = "canonical"
+            elif role == "duplicate":
+                bucket = "duplicates"
+            else:
+                bucket = "references"
             for node_id in nodes:
                 view[node_id][bucket].append(record["id"])
         elif role in ("main", "subcriterion", "duplicate"):

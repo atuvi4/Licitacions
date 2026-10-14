@@ -59,6 +59,13 @@ def validate_system(system: ScoringSystem) -> ValidationReport:
             errors.append(f"{rule.id}: regla sense procedencia documental")
         if rule.status is Status.VERIFIED and rule.kind is RuleKind.FORMULA and not rule.expression:
             errors.append(f"{rule.id}: formula verificada sense expressio")
+        amount_rule = rule.variables.get("amount_rule")
+        if amount_rule is not None and amount_rule not in known_rules:
+            errors.append(f"{rule.id}: amount_rule inexistent {amount_rule}")
+        expression = rule.expression or ""
+        if rule.kind is RuleKind.FORMULA and rule.status is Status.VERIFIED and "VP" in expression:
+            if rule.params.get("VP", Decimal(0)) <= 0:
+                errors.append(f"{rule.id}: VP absent o no positiu")
 
     # Sumes: arrel = total; cada grup = suma dels fills (si tots tenen maxim).
     roots = system.children(None)
@@ -89,6 +96,11 @@ def validate_system(system: ScoringSystem) -> ValidationReport:
         if not rules:
             report.not_computable.append(f"{node.id}: falta una regla {needed.value}")
             continue
+        if (
+            node.evaluation is Evaluation.ECONOMIC_FORMULA
+            and node.params.get("PL", Decimal(0)) <= 0
+        ):
+            errors.append(f"{node.id}: PL absent o no positiu")
         for rule in rules:
             if rule.status is not Status.VERIFIED:
                 report.not_computable.append(f"{node.id}: regla {rule.id} {rule.status.value}")
