@@ -96,7 +96,7 @@ describe("PreFitPanel · de qui és la dada que falta", () => {
     expect(container.textContent).toMatch(/El perfil de l'empresa encara no té prou dades/);
     const gap = container.querySelector("[data-gap='profile']");
     expect(gap?.textContent).toMatch(/Activitat \(CPV\), Territori, Import/);
-    expect(screen.getByRole("link", { name: "Completa el perfil" }).getAttribute("href")).toBe("/empresa/radar");
+    expect(screen.getByRole("link", { name: /Preferències del Radar/ }).getAttribute("href")).toBe("/empresa/radar");
     expect(container.querySelector("[data-gap='source']")).toBeNull();
   });
 

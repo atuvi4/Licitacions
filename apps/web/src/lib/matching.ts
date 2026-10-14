@@ -202,7 +202,7 @@ export const INSUFFICIENT_CAUSE_HELP: Record<InsufficientCause, string> = {
 };
 
 const INSUFFICIENT_CAUSE_SHORT: Record<InsufficientCause, string> = {
-  profile: "Falta completar el perfil de l'empresa per valorar-la",
+  profile: "El perfil de l'empresa no té prou dades per valorar-la",
   source: "No hi ha prou metadades publicades per valorar-la",
   both: "Falten dades del perfil i de la font per valorar-la",
   unknown: "No hi ha prou dades per valorar-la",

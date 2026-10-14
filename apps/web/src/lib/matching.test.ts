@@ -72,7 +72,7 @@ describe("causa de les dades insuficients del pre-fit (auditoria UI P1-02)", () 
     expect(sourceGaps(m)).toEqual([]);
     expect(statusHelp(m)).toBe(INSUFFICIENT_CAUSE_HELP.profile);
     expect(statusHelp(m)).not.toMatch(/La font no publica/);
-    expect(shortSummary(m)).toBe("Falta completar el perfil de l'empresa per valorar-la");
+    expect(shortSummary(m)).toBe("El perfil de l'empresa no té prou dades per valorar-la");
   });
 
   it("perfil complet i licitació sense metadades: la causa és la font", () => {

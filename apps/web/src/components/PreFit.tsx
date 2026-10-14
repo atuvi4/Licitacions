@@ -267,7 +267,7 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
               Falta al perfil de l&apos;empresa:{" "}
               {missingInProfile.map((dimension) => DIMENSION_LABELS[dimension]).join(", ")}.{" "}
               <Link href="/empresa/radar" className="text-brand-strong underline hover:text-accent-800">
-                Completa el perfil
+                Preferències del Radar →
               </Link>
             </p>
           )}
