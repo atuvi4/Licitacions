@@ -12,9 +12,11 @@ import {
   draftFromLine,
   durationOf,
   emptyDraft,
+  LIMIT_VERDICT_LABEL,
   formatAmount,
   formatPercent,
   isRevisionConflict,
+  limitVerdict,
   lineIsDirty,
   resolveEntity,
   sameDecimal,
@@ -258,5 +260,28 @@ describe("Permisos i conflicte", () => {
     expect(isRevisionConflict({ status: 500, code: "economic_offer_revision_conflict" })).toBe(false);
     expect(isRevisionConflict(new Error("res"))).toBe(false);
     expect(isRevisionConflict(null)).toBe(false);
+  });
+});
+
+describe("limitVerdict (auditoria UI P1-01)", () => {
+  it("desconegut quan l'API no sap si supera el màxim", () => {
+    expect(limitVerdict({ tender_max: "100.00", difference_to_maximum: null, exceeds_lot_max: null })).toBe("unknown");
+  });
+  it("desconegut sense màxim", () => {
+    expect(limitVerdict({ tender_max: null, difference_to_maximum: null, exceeds_lot_max: null })).toBe("unknown");
+  });
+  it("desconegut si l'API diu false però falta la diferència (mai favorable a mitges)", () => {
+    expect(limitVerdict({ tender_max: "100.00", difference_to_maximum: null, exceeds_lot_max: false })).toBe("unknown");
+  });
+  it("dins del màxim només amb false explícit i diferència calculada", () => {
+    expect(limitVerdict({ tender_max: "100.00", difference_to_maximum: "-10.00", exceeds_lot_max: false })).toBe("within");
+  });
+  it("supera el màxim", () => {
+    expect(limitVerdict({ tender_max: "100.00", difference_to_maximum: "10.00", exceeds_lot_max: true })).toBe("exceeds");
+  });
+  it("les etiquetes dels tres estats", () => {
+    expect(LIMIT_VERDICT_LABEL.unknown).toMatch(/Pendent de calcular/);
+    expect(LIMIT_VERDICT_LABEL.within).toBe("Sota el màxim");
+    expect(LIMIT_VERDICT_LABEL.exceeds).toBe("Supera el pressupost");
   });
 });

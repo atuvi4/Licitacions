@@ -58,6 +58,33 @@ export interface LotLimit {
   exceeds_lot_max: boolean | null;
 }
 
+/**
+ * Veredicte de l'oferta contra el màxim del lot, en tres estats.
+ *
+ * `unknown` quan no es pot dir: sense màxim, sense total (cap línia o imports no
+ * calculables) o sense diferència. Només `within` és favorable, i només amb un
+ * `false` explícit de l'API i una diferència calculada: desconegut no és «sota el màxim».
+ */
+export type LimitVerdict = "unknown" | "within" | "exceeds";
+
+export function limitVerdict(limit: LotLimit): LimitVerdict {
+  if (limit.exceeds_lot_max === true) return "exceeds";
+  if (
+    limit.exceeds_lot_max === false &&
+    limit.tender_max !== null &&
+    limit.difference_to_maximum !== null
+  ) {
+    return "within";
+  }
+  return "unknown";
+}
+
+export const LIMIT_VERDICT_LABEL: Record<LimitVerdict, string> = {
+  unknown: "Pendent de calcular: falten línies o imports",
+  within: "Sota el màxim",
+  exceeds: "Supera el pressupost",
+};
+
 export interface OfferLine {
   id: string;
   section_id: string;

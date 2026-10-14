@@ -251,6 +251,53 @@ describe("Oferta econòmica · lectura", () => {
   });
 });
 
+/* ----- Veredicte contra el màxim (auditoria UI P1-01) ----------------------- */
+
+describe("Oferta econòmica · veredicte contra el màxim en tres estats", () => {
+  const emptyLot = () =>
+    lotFixture({
+      totals: totalsFixture({ line_count: 0, total_revenue: null }),
+      limit: { tender_max: "204232.75", difference_to_maximum: null, exceeds_lot_max: null },
+      sections: [sectionFixture({ lines: [], totals: totalsFixture({ line_count: 0, total_revenue: null }) })],
+    });
+
+  it("una oferta sense línies no diu mai «Sota el màxim»: diu que està pendent", async () => {
+    offer = offerFixture({ totals: totalsFixture({ line_count: 0, total_revenue: null }), lots: [emptyLot()] });
+    await mount();
+    expect(document.body.textContent).not.toContain("Sota el màxim");
+    expect(document.body.textContent).toContain("Pendent de calcular: falten línies o imports");
+  });
+
+  it("amb el màxim conegut i un total calculat per sota, diu «Sota el màxim»", async () => {
+    await mount();
+    expect(document.body.textContent).toContain("Sota el màxim");
+    expect(document.body.textContent).not.toContain("Pendent de calcular");
+  });
+
+  it("per sobre del màxim, diu «Supera el pressupost» amb nivell de perill", async () => {
+    offer = offerFixture({
+      lots: [lotFixture({ limit: { tender_max: "1000.00", difference_to_maximum: "250.00", exceeds_lot_max: true } })],
+    });
+    await mount();
+    expect(screen.getByText("Supera el pressupost")).toBeTruthy();
+    expect(document.body.querySelector(".text-danger")).not.toBeNull();
+    expect(document.body.textContent).not.toContain("Sota el màxim");
+  });
+
+  it("amb diversos lots, un lot sense total queda pendent i no surt com a correcte", async () => {
+    offer = offerFixture({
+      lots: [lotFixture(), { ...emptyLot(), id: "lot2", tender_lot_id: "tl3", label: "Lot 3 · Veu", position: 1 }],
+    });
+    tenderLots = [
+      { id: "tl2", lot_number: 2, title: "Xarxa d'accés" },
+      { id: "tl3", lot_number: 3, title: "Veu" },
+    ];
+    await mount();
+    expect(document.body.textContent).toContain("Pendent de calcular: falten línies o imports");
+    expect(document.body.textContent).toContain("Sota el màxim");
+  });
+});
+
 /* ----- Permisos i redacció -------------------------------------------------- */
 
 describe("Oferta econòmica · permisos i redacció", () => {
