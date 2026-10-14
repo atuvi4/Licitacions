@@ -1,7 +1,7 @@
 """Quin parser toca a cada tipus de document, i el de text pla.
 
 La `parser_version` forma part de la identitat d'una extraccio: `pypdf-v1`,
-`plaintext-v1`, `docx-v1`, `xlsx-v1` i `xml-v1` (`office_text`) son maneres
+`plaintext-v1`, `docx-v1`, `xlsx-v2` i `xml-v1` (`office_text`) son maneres
 diferents de llegir, i una cita a una pagina ha
 de poder dir amb quina es va llegir. Per aixo aqui no hi ha una constant global
 de versio, sino una per parser i una funcio que diu quina toca.
@@ -50,7 +50,7 @@ def parser_version_for(mime_type: str) -> str:
     """
     if mime_type == PLAIN_TEXT_MIME:
         return PLAIN_TEXT_PARSER_VERSION
-    # DOCX, XLSX i XML (`docx-v1`, `xlsx-v1`, `xml-v1`): un parser propi cadascun.
+    # DOCX, XLSX i XML (`docx-v1`, `xlsx-v2`, `xml-v1`): un parser propi cadascun.
     # Una extraccio antiga `skipped_unsupported` d'aquests tipus porta la versio del
     # PDF i, per tant, ja no es al dia: el seguent processat la torna a llegir.
     if mime_type in office_text.PARSER_VERSIONS:

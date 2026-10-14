@@ -1,4 +1,4 @@
-"""Lectura determinista de DOCX, XLSX i XML per a l'analisi (`docx-v1`, `xlsx-v1`, `xml-v1`).
+"""Lectura determinista de DOCX, XLSX i XML per a l'analisi (`docx-v1`, `xlsx-v2`, `xml-v1`).
 
 Els fitxers es construeixen aqui mateix (OOXML minim): cap document real a git.
 """
@@ -186,7 +186,7 @@ def test_xlsx_fulls_celles_formules_i_valors_desats():
     result = office_text.extract_xlsx(data)
 
     assert result.status == ExtractionStatus.EXTRACTED
-    assert result.parser_version == "xlsx-v1"
+    assert result.parser_version == "xlsx-v2"
     assert result.page_count == 2
     assert result.pages[0].text.split("\n") == [
         "# Full: Dades",
@@ -311,7 +311,7 @@ def test_xml_malmes_falla_sense_llancar():
     ("mime", "version"),
     [
         (office_text.DOCX, "docx-v1"),
-        (office_text.XLSX, "xlsx-v1"),
+        (office_text.XLSX, "xlsx-v2"),
         ("application/xml", "xml-v1"),
         ("text/xml", "xml-v1"),
         ("application/pdf", "pypdf-v1"),

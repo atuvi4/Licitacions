@@ -39,7 +39,7 @@ VERSIONS = "/api/v1/companies/{company}/tenders/{tender}/documents/{document}/ve
 
 PDF = "application/pdf"
 #: Un full de calcul que NO sabem llegir: un .xls antic (OLE2). Un .xlsx ja es llegeix
-#: (`xlsx-v1`), i per aixo el cas «sense pagines» es un format sense parser.
+#: (`xlsx-v2`), i per aixo el cas «sense pagines» es un format sense parser.
 XLSX = "application/vnd.ms-excel"
 XLSX_V1 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x01" * 64
 XLSX_V2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x02" * 64

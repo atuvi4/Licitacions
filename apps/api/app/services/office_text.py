@@ -1,6 +1,6 @@
 """Lectura determinista de DOCX, XLSX i XML per a l'analisi de requisits.
 
-Tres parsers amb versio propia (`docx-v1`, `xlsx-v1`, `xml-v1`), germans de
+Tres parsers amb versio propia (`docx-v1`, `xlsx-v2`, `xml-v1`), germans de
 `pypdf-v1` i `plaintext-v1`: llegeixen els bytes desats, no els modifiquen mai
 (l'original i el seu SHA es conserven tal com van arribar) i retornen pagines amb
 text citable. Cap OCR, cap model, cap interpretacio: mateixos bytes, mateix text.
@@ -24,7 +24,13 @@ text citable. Cap OCR, cap model, cap interpretacio: mateixos bytes, mateix text
 * XLSX: noms dels fulls, cel·les no buides amb la seva referencia, formules tal com
   estan escrites i el valor desat quan n'hi ha; noms definits i taules amb el seu
   rang. Una formula compartida que no porta text diu de quina cel·la ve: no es
-  tradueix (aixo seria interpretar-la).
+  tradueix (aixo seria interpretar-la). Tres formes, sempre distingibles: valor
+  introduit (`A1: text`), formula amb el valor calculat que Excel va desar
+  (`B2: =A2*2 → 20`) i formula sense valor desat (`B3: =SUM(..) (sense valor desat)`:
+  no es calcula mai). Un valor introduit que comenca per «=» porta l'apostrof d'Excel.
+  `xlsx-v2`: dels rangs combinats nomes es llegeix la cel·la ancora (la visible), que
+  porta el rang (`A1 [A1:F1]: ...`); les interiors no es llegeixen (poden guardar valors
+  residuals ocults) i nomes se'n diu quantes tenen contingut.
 * XML: l'estructura (un element per linia, sagnat per profunditat), els atributs,
   el text i els espais de noms declarats.
 
@@ -50,7 +56,7 @@ from app.models.enums import ExtractionQuality, ExtractionStatus, PageExtraction
 from app.services.pdf_text import ExtractedPage, ExtractionResult, _hash_text, normalize_page_text
 
 DOCX_PARSER_VERSION = "docx-v1"
-XLSX_PARSER_VERSION = "xlsx-v1"
+XLSX_PARSER_VERSION = "xlsx-v2"
 XML_PARSER_VERSION = "xml-v1"
 
 XML_MIME_TYPES = frozenset({"application/xml", "text/xml"})
@@ -361,6 +367,75 @@ def _cell_value(cell, shared: list[str]) -> str | None:
     return raw
 
 
+def _column_number(letters: str) -> int:
+    number = 0
+    for char in letters:
+        number = number * 26 + (ord(char) - 64)
+    return number
+
+
+def _column_letters(number: int) -> str:
+    letters = ""
+    while number:
+        number, rest = divmod(number - 1, 26)
+        letters = chr(65 + rest) + letters
+    return letters
+
+
+def _merged_ranges(root) -> tuple[dict[str, str], dict[str, str]]:
+    """`({rang: cel·la ancora}, {cel·la interior: rang})` dels rangs combinats del full.
+
+    L'ancora es la cel·la de dalt a l'esquerra: l'unica que Excel mostra i fa servir. Un rang
+    mal format s'ignora (no es pot saber quina cel·la mostra). Les interiors es comptabilitzen
+    dins del limit de cel·les del llibre: un rang desmesurat no pot inflar la memoria.
+    """
+    anchors: dict[str, str] = {}
+    interior: dict[str, str] = {}
+    for merged in root.iter(f"{_S}mergeCell"):
+        ref = (merged.get("ref") or "").strip()
+        bounds = ref.split(":")
+        if len(bounds) != 2:
+            continue
+        start, end = _CELL_REF.match(bounds[0]), _CELL_REF.match(bounds[1])
+        if start is None or end is None:
+            continue
+        c1, r1 = _column_number(start.group(1)), int(start.group(2))
+        c2, r2 = _column_number(end.group(1)), int(end.group(2))
+        if c2 < c1 or r2 < r1:
+            continue
+        if len(interior) + (c2 - c1 + 1) * (r2 - r1 + 1) > _MAX_CELLS:
+            raise _Unreadable("rang combinat massa gran")
+        anchor = f"{_column_letters(c1)}{r1}"
+        anchors[ref] = anchor
+        for row in range(r1, r2 + 1):
+            for column in range(c1, c2 + 1):
+                cell = f"{_column_letters(column)}{row}"
+                if cell != anchor:
+                    interior[cell] = ref
+    return anchors, interior
+
+
+def _hidden_interior_counts(root, interior: dict[str, str]) -> dict[str, int]:
+    """Quantes cel·les interiors de cada rang combinat porten valor o formula.
+
+    No se'n llegeix el contingut: nomes es compten.
+    """
+    counts: dict[str, int] = {}
+    if not interior:
+        return counts
+    for cell in root.iter(f"{_S}c"):
+        merged = interior.get(cell.get("r") or "")
+        if merged is None:
+            continue
+        has_value = any(
+            node is not None and (node.text or "").strip()
+            for node in (cell.find(f"{_S}v"), cell.find(f"{_S}f"))
+        ) or cell.find(f"{_S}is") is not None
+        if has_value:
+            counts[merged] = counts.get(merged, 0) + 1
+    return counts
+
+
 def _read_xlsx(data: bytes) -> list[str]:
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         workbook = _xml(zf, "xl/workbook.xml")
@@ -407,8 +482,17 @@ def _read_xlsx(data: bytes) -> list[str]:
                 label = table.get("displayName") or table.get("name") or ""
                 suffix = f" (columnes: {', '.join(columns)})" if columns else ""
                 lines.append(f"Taula «{label}»: {table.get('ref') or ''}{suffix}")
-            for merged in root.iter(f"{_S}mergeCell"):
-                lines.append(f"Cel·les combinades: {merged.get('ref') or ''}")
+            # xlsx-v2: en un rang combinat Excel nomes mostra (i nomes fa servir) la cel·la
+            # ancora. Les interiors poden conservar valors antics que ningu no veu (L'Escala:
+            # «32 punts» visible a A1 i «35 punts» ocult a B1:F1): no es llegeixen com a dades.
+            # Es diu quantes n'hi ha, mai que contenen.
+            anchors, interior = _merged_ranges(root)
+            hidden_counts = _hidden_interior_counts(root, interior)
+            range_of_anchor = {anchor: merged_ref for merged_ref, anchor in anchors.items()}
+            for merged_ref, anchor in anchors.items():
+                count = hidden_counts.get(merged_ref, 0)
+                note = f"; {count} cel·les interiors amb contingut ocult no llegit" if count else ""
+                lines.append(f"Cel·les combinades: {merged_ref} (visible {anchor}{note})")
 
             masters: dict[str, str] = {}
             for row in root.iter(f"{_S}row"):
@@ -418,6 +502,8 @@ def _read_xlsx(data: bytes) -> list[str]:
                     if cells_read > _MAX_CELLS:
                         raise _Unreadable("massa cel·les")
                     ref = cell.get("r") or ""
+                    if ref in interior:
+                        continue
                     value = _cell_value(cell, shared)
                     formula = cell.find(f"{_S}f")
                     text: str | None
@@ -433,10 +519,16 @@ def _read_xlsx(data: bytes) -> list[str]:
                             f" → {value}" if value not in (None, "") else " (sense valor desat)"
                         )
                         text = f"={expression}{stored}"
+                    elif value is not None and value.lstrip().startswith("="):
+                        # Un valor introduit que comenca per «=» no es cap formula: l'apostrof
+                        # (convencio d'Excel) evita confondre'l amb una.
+                        text = f"'{value}"
                     else:
                         text = value
                     if text is not None and text.strip():
-                        parts.append(f"{ref}: {text.strip()}")
+                        # La cel·la ancora diu de quin rang combinat ve.
+                        label = f"{ref} [{range_of_anchor[ref]}]" if ref in range_of_anchor else ref
+                        parts.append(f"{label}: {text.strip()}")
                 if parts:
                     lines.append(f"Fila {row.get('r') or '?'} | " + " | ".join(parts))
             pages.append("\n".join(lines))

@@ -357,7 +357,7 @@ async def test_a_text_file_is_read_without_any_model(client_a, db, tenant_a):
     ],
 )
 async def test_an_office_file_is_stored_and_read(client_a, db, tenant_a, name, mime, data):
-    """DOCX i XLSX es llegeixen amb el seu parser (`docx-v1`, `xlsx-v1`)."""
+    """DOCX i XLSX es llegeixen amb el seu parser (`docx-v1`, `xlsx-v2`)."""
     _, company = tenant_a
     tender = await _tender(client_a, company)
 
@@ -367,7 +367,7 @@ async def test_an_office_file_is_stored_and_read(client_a, db, tenant_a, name, m
     assert body["file"]["text_extraction_supported"] is True
     assert body["file"]["analysis_status"] == "extracted"
     extraction = await db.get(TenderDocumentExtraction, uuid.UUID(body["file"]["extraction_id"]))
-    assert extraction.parser_version == ("docx-v1" if name.endswith(".docx") else "xlsx-v1")
+    assert extraction.parser_version == ("docx-v1" if name.endswith(".docx") else "xlsx-v2")
     pages = (
         await db.execute(
             sa.select(TenderDocumentPage).where(
