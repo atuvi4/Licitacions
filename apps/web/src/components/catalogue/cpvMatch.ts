@@ -5,7 +5,7 @@ import { cpvDescription, type TenderCPV } from "@/lib/tenders";
  *
  * El servei filtra per prefix de dígits (com a molt els 8 del codi, sense el
  * de control) sobre els CPV de la licitació o de qualsevol lot vigent
- * (`_cpv_clause` a `tender_filters.py`). La fila només ensenya el principal:
+ * (`_cpv_clause` a `tender_filters.py`). La fila només ensenya el primer CPV de la font:
  * si ha entrat per un secundari, o per un CPV d'un lot que la fila no porta,
  * s'ha de dir. Tot es calcula al client, amb els CPV que ja venen a la fila.
  */
@@ -40,5 +40,5 @@ export function cpvMatchText(match: CpvMatch): string {
   if (match.kind === "lot_only") return "Coincideix amb el filtre per un CPV d'un lot";
   const cpv = match.cpv!;
   const description = cpvDescription(cpv);
-  return `Coincideix amb el filtre pel CPV secundari ${cpv.cpv_code}${description ? ` · ${description}` : ""}`;
+  return `Coincideix amb el filtre per un altre CPV de la llista, ${cpv.cpv_code}${description ? ` · ${description}` : ""}`;
 }

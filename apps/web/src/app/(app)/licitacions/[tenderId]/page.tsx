@@ -41,6 +41,8 @@ import { publicationStatusLabel, type TenderHistoryRevision } from "@/lib/tender
 import {
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
+  SOURCE_FIRST_CPV_HELP,
+  SOURCE_FIRST_CPV_LABEL,
   TENDER_DOCUMENT_LABELS,
   cpvDescription,
   labelOf,
@@ -710,11 +712,20 @@ function TenderDetail() {
                       >
                         <span className="font-mono font-medium">{cpv.cpv_code}</span>
                         {description && <span className="text-muted">{description}</span>}
-                        {cpv.is_main && <span className={KICKER}>principal</span>}
+                        {cpv.is_main && (
+                          <span className={KICKER} title={SOURCE_FIRST_CPV_HELP}>
+                            {SOURCE_FIRST_CPV_LABEL}
+                          </span>
+                        )}
                       </span>
                     );
                   })}
                 </div>
+              )}
+              {mainCpvs.length > 0 && (
+                <p className="mt-3 text-caption text-muted" data-cpv-provenance>
+                  {SOURCE_FIRST_CPV_HELP}
+                </p>
               )}
             </div>
           </Card>

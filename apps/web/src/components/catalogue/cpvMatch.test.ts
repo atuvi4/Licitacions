@@ -39,8 +39,8 @@ describe("cpvMatch (C4): quin CPV de la fila ha fet coincidir el filtre", () => 
   });
 
   it("el text diu quin CPV ha coincidit, amb la descripció només si en té", () => {
-    expect(cpvMatchText({ kind: "secondary", cpv: cpvs[1] })).toBe("Coincideix amb el filtre pel CPV secundari 32000000 · Equip de ràdio");
-    expect(cpvMatchText({ kind: "secondary", cpv: cpvs[2] })).toBe("Coincideix amb el filtre pel CPV secundari 72000000");
+    expect(cpvMatchText({ kind: "secondary", cpv: cpvs[1] })).toBe("Coincideix amb el filtre per un altre CPV de la llista, 32000000 · Equip de ràdio");
+    expect(cpvMatchText({ kind: "secondary", cpv: cpvs[2] })).toBe("Coincideix amb el filtre per un altre CPV de la llista, 72000000");
     expect(cpvMatchText({ kind: "lot_only", cpv: null })).toBe("Coincideix amb el filtre per un CPV d'un lot");
     expect(cpvMatchText({ kind: "main", cpv: cpvs[0] })).toBe("Coincideix amb el filtre");
   });

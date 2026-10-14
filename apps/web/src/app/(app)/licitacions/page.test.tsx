@@ -234,7 +234,7 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     await flush();
     expect(lastQuery()).toBe("cpv=32&match_status=candidate&sort=score&limit=25&offset=0");
     const row = container.querySelector("tbody tr")!;
-    expect(row.querySelector("[data-cpv-match]")!.textContent).toContain("Coincideix amb el filtre pel CPV secundari 32000000 · Equip de ràdio");
+    expect(row.querySelector("[data-cpv-match]")!.textContent).toContain("Coincideix amb el filtre per un altre CPV de la llista, 32000000 · Equip de ràdio");
   });
 
   it("sense filtres el formulari queda plegat; aplicar i esborrar passa pel mateix formulari", async () => {
@@ -707,7 +707,7 @@ describe("Oportunitats · Totes (catàleg complet)", () => {
     expect(lastQuery()).toBe("mode=all&cpv=32&sort=published&limit=25&offset=0");
     const line = container.querySelector("[data-cpv-match]")!;
     expect(line.getAttribute("data-cpv-match")).toBe("secondary");
-    expect(line.textContent).toContain("Coincideix amb el filtre pel CPV secundari 32000000 · Equip de ràdio");
+    expect(line.textContent).toContain("Coincideix amb el filtre per un altre CPV de la llista, 32000000 · Equip de ràdio");
   });
 
   it("amb un filtre d'import, avisa de quantes no es mostren per no tenir import conegut", async () => {

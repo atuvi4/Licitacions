@@ -615,6 +615,48 @@ describe("Fitxa de licitació", () => {
     expect(container.textContent).not.toContain("CPV 32500000");
   });
 
+  it("auditoria UI P1-05: el primer CPV del feed no es diu «principal», i es conserven tots els CPV", async () => {
+    // El cas de L'Escala: la font publica 32562100 primer; el principal del PSCP i del DOC-03 és 64200000.
+    respondWith(base({
+      "/tenders/t1": {
+        ...detail,
+        cpvs: [
+          { cpv_code: "32562100", description: "Cables de fibra òptica", is_main: true },
+          { cpv_code: "64200000", description: "Serveis de telecomunicacions", is_main: false },
+          { cpv_code: "45314300", description: "Instal·lació d'infraestructures per a cables", is_main: false },
+        ],
+      },
+    }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await flush();
+    const card = screen.getByText("Classificació del contracte segons el vocabulari comú europeu.").closest("section")!;
+    // Cap etiqueta de CPV diu «principal»: el marcat diu el que és, el primer a la font.
+    const chips = [...card.querySelectorAll("span.font-mono")].map((el) => el.parentElement!);
+    const kickers = chips.map((chip) => chip.lastElementChild?.textContent ?? "");
+    expect(kickers).not.toContain("principal");
+    expect(chips[0].textContent).toContain("32562100");
+    expect(chips[0].textContent).toContain("primer a la font");
+    // Tots els CPV originals hi són; el primer de la font al davant.
+    const codes = chips.map((chip) => chip.querySelector("span.font-mono")!.textContent);
+    expect(codes[0]).toBe("32562100");
+    expect([...codes].sort()).toEqual(["32562100", "45314300", "64200000"]);
+    // I es diu per què: la font no indica quin és el principal.
+    expect(container.querySelector("[data-cpv-provenance]")?.textContent).toContain("no indica quin CPV és el principal");
+  });
+
+  it("auditoria UI P1-05: sense cap CPV marcat no s'afegeix la nota de procedència", async () => {
+    respondWith(base({
+      "/tenders/t1": { ...detail, cpvs: [{ cpv_code: "64200000", description: "Serveis de telecomunicacions", is_main: false }] },
+    }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByRole("heading", { level: 1 });
+    await flush();
+    expect(container.textContent).toContain("64200000");
+    expect(container.querySelector("[data-cpv-provenance]")).toBeNull();
+    expect(container.textContent).not.toContain("primer a la font");
+  });
+
   it("error de xarxa → E1 amb reintent", async () => {
     respondWith(base({ "/tenders/t1": new Error("503") }));
     render(<TenderDetailPage />);

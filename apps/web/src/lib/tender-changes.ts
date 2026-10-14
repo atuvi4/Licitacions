@@ -124,7 +124,7 @@ export const CHANGE_LABELS: Record<string, string> = {
   PLACE_CHANGED: "Lloc d'execució modificat",
   CPV_ADDED: "CPV afegit",
   CPV_REMOVED: "CPV retirat",
-  MAIN_CPV_CHANGED: "CPV principal modificat",
+  MAIN_CPV_CHANGED: "Primer CPV de la font modificat",
   LOT_ADDED: "Lot afegit",
   LOT_REMOVED: "Lot retirat de la licitació",
   LOT_RESTORED: "Lot restituït a la licitació",

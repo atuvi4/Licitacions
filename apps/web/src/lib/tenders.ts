@@ -94,9 +94,23 @@ export interface Buyer extends BuyerSummary {
 
 export interface TenderCPV {
   cpv_code: string;
+  /**
+   * El PRIMER CPV que publica la font, no un «principal» declarat: el feed PLACSP
+   * no marca cap CPV com a principal i la ingesta pren el primer de la llista
+   * (`placsp/normalizer.py`). El principal del plec o del PSCP pot ser un altre
+   * dels CPV de la llista (auditoria UI P1-05: L'Escala 2026/3964, 32562100 primer
+   * al feed i 64200000 principal al PSCP i al DOC-03). Tots compten igual al Radar.
+   */
   is_main: boolean;
   description: string | null;
 }
+
+/** Etiqueta del CPV `is_main`: el que és, no el que no sabem (auditoria UI P1-05). */
+export const SOURCE_FIRST_CPV_LABEL = "primer a la font";
+
+/** Per què no es diu «principal»: la font no ho indica. */
+export const SOURCE_FIRST_CPV_HELP =
+  "La font (feed PLACSP) no indica quin CPV és el principal: es marca el primer que publica. El CPV principal declarat al plec o al PSCP pot ser un altre dels d'aquesta llista. Al Radar, tots els CPV compten igual.";
 
 export interface TenderLot {
   id: string;

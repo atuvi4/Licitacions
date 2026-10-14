@@ -126,6 +126,24 @@ describe("CatalogueRow", () => {
     expect(container.textContent).toContain("32500000 · Equip de telecomunicacions");
   });
 
+  it("auditoria UI P1-05: la fila diu «Primer CPV de la font», no «CPV principal», i n'explica el perquè", () => {
+    const { container } = render(
+      <CatalogueRow
+        tender={tender({
+          cpvs: [
+            { cpv_code: "32562100", is_main: true, description: "Cables de fibra òptica" },
+            { cpv_code: "64200000", is_main: false, description: "Serveis de telecomunicacions" },
+          ],
+        })}
+        match={null}
+      />,
+    );
+    expect(container.textContent).toContain("Primer CPV de la font");
+    expect(container.textContent).not.toContain("CPV principal");
+    const value = [...container.querySelectorAll("[title]")].find((el) => el.textContent?.includes("32562100"));
+    expect(value?.getAttribute("title")).toMatch(/no indica quin CPV és el principal/);
+  });
+
   it("amb un filtre de CPV, diu quin CPV de la fila ha coincidit quan no és el principal (C4)", () => {
     const cpvs = [
       { cpv_code: "45314320", is_main: true, description: "Instal·lació de cables" },
@@ -134,7 +152,7 @@ describe("CatalogueRow", () => {
     const { container, rerender } = render(<CatalogueRow tender={tender({ cpvs })} match={null} cpvFilter="32" />);
     const line = container.querySelector("[data-cpv-match]")!;
     expect(line.getAttribute("data-cpv-match")).toBe("secondary");
-    expect(line.textContent).toContain("Coincideix amb el filtre pel CPV secundari 32000000 · Equip de ràdio");
+    expect(line.textContent).toContain("Coincideix amb el filtre per un altre CPV de la llista, 32000000 · Equip de ràdio");
 
     rerender(<CatalogueRow tender={tender({ cpvs })} match={null} cpvFilter="4531" />);
     expect(container.querySelector("[data-cpv-match]")!.getAttribute("data-cpv-match")).toBe("main");

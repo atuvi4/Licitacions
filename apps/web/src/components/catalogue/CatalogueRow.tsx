@@ -9,6 +9,7 @@ import type { TenderMatch } from "@/lib/matching";
 import {
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
+  SOURCE_FIRST_CPV_HELP,
   cpvDescription,
   labelOf,
   sourceLabel,
@@ -124,9 +125,9 @@ export function CatalogueRow({
               <span className="text-muted">Import no informat</span>
             )}
           </Fact>
-          <Fact label="CPV principal">
+          <Fact label="Primer CPV de la font">
             {mainCpv ? (
-              <span className="break-words">
+              <span className="break-words" title={SOURCE_FIRST_CPV_HELP}>
                 <span className="tabular-nums">{mainCpv.cpv_code}</span>
                 {mainDescription && <span className="text-muted"> · {mainDescription}</span>}
               </span>
