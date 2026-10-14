@@ -88,7 +88,10 @@ export function CatalogueRow({
   /** El filtre de CPV aplicat, si n'hi ha: la fila diu per quin CPV hi entra (C4). */
   cpvFilter?: string | null;
 }) {
-  const mainCpv = tender.cpvs.find((cpv) => cpv.is_main) ?? tender.cpvs[0] ?? null;
+  // `is_main` és el primer CPV que publica la font. Sense cap de marcat, el que es mostra és un
+  // qualsevol de la llista (l'API ordena la resta per codi): no es pot dir «primer de la font».
+  const markedCpv = tender.cpvs.find((cpv) => cpv.is_main) ?? null;
+  const mainCpv = markedCpv ?? tender.cpvs[0] ?? null;
   const mainDescription = mainCpv ? cpvDescription(mainCpv) : null;
   const matched = cpvMatch(tender.cpvs, cpvFilter);
   const source = sourceLabel(tender.source_code, sources);
@@ -125,9 +128,9 @@ export function CatalogueRow({
               <span className="text-muted">Import no informat</span>
             )}
           </Fact>
-          <Fact label="Primer CPV de la font">
+          <Fact label={markedCpv ? "Primer CPV de la font" : "CPV"}>
             {mainCpv ? (
-              <span className="break-words" title={SOURCE_FIRST_CPV_HELP}>
+              <span className="break-words" title={markedCpv ? SOURCE_FIRST_CPV_HELP : undefined}>
                 <span className="tabular-nums">{mainCpv.cpv_code}</span>
                 {mainDescription && <span className="text-muted"> · {mainDescription}</span>}
               </span>

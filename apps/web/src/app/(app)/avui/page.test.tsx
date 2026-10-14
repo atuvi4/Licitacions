@@ -320,6 +320,62 @@ describe("Avui", () => {
     expect(document.body.textContent).not.toContain("Cap pendent de preparació");
   });
 
+  it("revisió del patch: «Torna-ho a comptar» torna a llegir els pendents encara que les candidatures siguin les mateixes", async () => {
+    let fail = true;
+    respondWith({
+      "/companies/c1/workspaces": [workspace({ id: "w1", tender_title: "Fibra òptica municipal", analysis_state: "current" })],
+      "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
+      "/companies/c1/matches/summary": summary,
+      "/companies/c1/summary": profile,
+    });
+    const base = get.getMockImplementation()!;
+    get.mockImplementation((path: string) => {
+      if (path === "/companies/c1/workspaces/w1/final-readiness") {
+        return fail
+          ? Promise.reject(new Error("503"))
+          : Promise.resolve({ findings: [{ code: "economic_lot_empty", severity: "blocker", domain: "economic", entity_id: null, context: {} }] });
+      }
+      return base(path);
+    });
+    render(<AvuiPage />);
+    expect(await screen.findByText("Sense comptar")).toBeTruthy();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Torna-ho a comptar" }));
+    expect(await screen.findByText(/1 pendent de preparació/)).toBeTruthy();
+    expect(screen.queryByText("Sense comptar")).toBeNull();
+  });
+
+  it("revisió del patch: com a molt 3 lectures de final-readiness alhora", async () => {
+    const ids = ["a", "b", "c", "d", "e"];
+    respondWith({
+      "/companies/c1/workspaces": ids.map((id, index) => workspace({ id, tender_title: `Licitació ${id}`, analysis_state: "current", days_remaining: index + 1 })),
+      "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
+      "/companies/c1/matches/summary": summary,
+      "/companies/c1/summary": profile,
+    });
+    const base = get.getMockImplementation()!;
+    let inFlight = 0;
+    let peak = 0;
+    get.mockImplementation((path: string) => {
+      if (path.endsWith("/final-readiness")) {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        return new Promise((resolve) =>
+          setTimeout(() => {
+            inFlight -= 1;
+            resolve({ findings: [] });
+          }, 5),
+        );
+      }
+      return base(path);
+    });
+    render(<AvuiPage />);
+    expect(await screen.findByText("Cap pendent de preparació a les candidatures obertes.")).toBeTruthy();
+    expect(peak).toBeGreaterThan(0);
+    expect(peak).toBeLessThanOrEqual(3);
+    expect(get.mock.calls.filter(([path]) => String(path).endsWith("/final-readiness")).length).toBe(5);
+  });
+
   it("si la càrrega falla mostra l'error amb reintent, mai un zero", async () => {
     respondWith({ "/companies/c1/workspaces": new Error("503"), "/companies/c1/matches?": new Error("503"), "/companies/c1/matches/summary": new Error("503"), "/companies/c1/summary": new Error("503") });
     const { container } = render(<AvuiPage />);

@@ -17,6 +17,7 @@ import {
   formatPercent,
   isRevisionConflict,
   limitVerdict,
+  lotLimitVerdict,
   lineIsDirty,
   resolveEntity,
   sameDecimal,
@@ -283,5 +284,25 @@ describe("limitVerdict (auditoria UI P1-01)", () => {
     expect(LIMIT_VERDICT_LABEL.unknown).toMatch(/Pendent de calcular/);
     expect(LIMIT_VERDICT_LABEL.within).toBe("Sota el màxim");
     expect(LIMIT_VERDICT_LABEL.exceeds).toBe("Supera el pressupost");
+  });
+});
+
+describe("lotLimitVerdict (revisió del patch P1-01)", () => {
+  const within = { tender_max: "100.00", difference_to_maximum: "10.00", exceeds_lot_max: false };
+  it("dins del màxim si totes les seccions actives tenen línies", () => {
+    expect(lotLimitVerdict(lotFixture({ limit: within, sections: [sectionFixture()] }))).toBe("within");
+  });
+  it("pendent si alguna secció activa no té línies, encara que el total parcial quedi per sota", () => {
+    const empty = sectionFixture({ id: "buida", lines: [], totals: { ...sectionFixture().totals, line_count: 0, total_revenue: null } });
+    expect(lotLimitVerdict(lotFixture({ limit: within, sections: [sectionFixture(), empty] }))).toBe("unknown");
+  });
+  it("una secció arxivada i buida no compta", () => {
+    const archived = sectionFixture({ id: "arx", archived_at: "2026-10-01T00:00:00Z", lines: [], totals: { ...sectionFixture().totals, line_count: 0 } });
+    expect(lotLimitVerdict(lotFixture({ limit: within, sections: [sectionFixture(), archived] }))).toBe("within");
+  });
+  it("si ja el supera, ho diu encara que falti alguna secció", () => {
+    const empty = sectionFixture({ id: "buida", lines: [], totals: { ...sectionFixture().totals, line_count: 0 } });
+    const over = { tender_max: "100.00", difference_to_maximum: "-5.00", exceeds_lot_max: true };
+    expect(lotLimitVerdict(lotFixture({ limit: over, sections: [sectionFixture(), empty] }))).toBe("exceeds");
   });
 });

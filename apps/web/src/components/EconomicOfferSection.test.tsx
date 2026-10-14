@@ -276,7 +276,8 @@ describe("Oferta econòmica · veredicte contra el màxim en tres estats", () =>
 
   it("per sobre del màxim, diu «Supera el pressupost» amb nivell de perill", async () => {
     offer = offerFixture({
-      lots: [lotFixture({ limit: { tender_max: "1000.00", difference_to_maximum: "250.00", exceeds_lot_max: true } })],
+      // L'API envia màxim − total: negatiu quan el supera.
+      lots: [lotFixture({ limit: { tender_max: "1000.00", difference_to_maximum: "-250.00", exceeds_lot_max: true } })],
     });
     await mount();
     expect(screen.getByText("Supera el pressupost")).toBeTruthy();
@@ -293,8 +294,29 @@ describe("Oferta econòmica · veredicte contra el màxim en tres estats", () =>
       { id: "tl3", lot_number: 3, title: "Veu" },
     ];
     await mount();
+    // Cada lot amb el seu veredicte: el de línies, sota el màxim; el buit, pendent.
+    const lotLine = (amount: string) =>
+      [...document.querySelectorAll("p")].find((p) => p.textContent?.includes(`Pressupost del lot ${amount}`))!;
+    expect(lotLine("240.000,00").textContent).toContain("Sota el màxim");
+    expect(lotLine("204.232,75").textContent).toContain("Pendent de calcular: falten línies o imports");
+    expect(lotLine("204.232,75").textContent).not.toContain("Sota el màxim");
+  });
+
+  it("un lot amb una secció amb preu i una altra encara buida no diu «Sota el màxim» (revisió del patch)", async () => {
+    // L'API suma només les seccions amb línies: el total i `exceeds_lot_max: false` surten de la que té preu.
+    offer = offerFixture({
+      lots: [
+        lotFixture({
+          sections: [
+            sectionFixture(),
+            sectionFixture({ id: "s-buida", title: "Equipament pendent", lines: [], totals: totalsFixture({ line_count: 0, total_revenue: null }) }),
+          ],
+        }),
+      ],
+    });
+    await mount();
+    expect(document.body.textContent).not.toContain("Sota el màxim");
     expect(document.body.textContent).toContain("Pendent de calcular: falten línies o imports");
-    expect(document.body.textContent).toContain("Sota el màxim");
   });
 });
 

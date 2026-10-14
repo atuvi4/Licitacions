@@ -27,6 +27,10 @@ export function UserSummary({ user, role, logout }: UserSummaryProps) {
       >
         {initials(name)}
       </span>
+      {/* Per sota de xl el nom no hi cap al costat de la cerca (auditoria UI P1-03): es diu igualment als lectors de pantalla. */}
+      <span className="sr-only xl:hidden">
+        {name}, {roleLabel(role)}
+      </span>
       <span className="hidden min-w-0 xl:block">
         <span className="block max-w-44 truncate text-[13px] leading-tight font-medium text-ink" title={user.email}>
           {name}

@@ -42,38 +42,59 @@ import {
  * `final-readiness` (la mateixa lectura que Tancar). `null` mentre es compta; un
  * valor `null` per candidatura vol dir que no s'ha pogut saber, mai zero.
  */
-function usePreparationPending(base: string, ids: string[] | null): Record<string, number | null> | null {
-  const key = ids === null ? null : ids.join(",");
+function usePreparationPending(
+  base: string,
+  ids: string[] | null,
+  version: number,
+): Record<string, number | null> | null {
+  const idsKey = ids === null ? null : ids.join(",");
+  // La versió fa que «Torna-ho a provar» i «Torna-ho a comptar» tornin a llegir encara que els ids siguin els mateixos.
+  const key = idsKey === null ? null : `${base}|${version}|${idsKey}`;
   const [state, setState] = useState<{ key: string; counts: Record<string, number | null> } | null>(null);
   useEffect(() => {
-    if (key === null) return;
+    if (key === null || idsKey === null) return;
     let cancelled = false;
-    const list = key ? key.split(",") : [];
-    void Promise.all(
-      list.map(async (id): Promise<[string, number | null]> => {
-        try {
-          const readiness = await api.get<FinalReadiness>(`${base}/workspaces/${id}/final-readiness`);
-          return [id, Array.isArray(readiness?.findings) ? blockerCount(readiness.findings) : null];
-        } catch {
-          return [id, null];
-        }
-      }),
-    ).then((entries) => {
+    const list = idsKey ? idsKey.split(",") : [];
+    void mapLimited(list, READINESS_CONCURRENCY, async (id): Promise<[string, number | null]> => {
+      try {
+        const readiness = await api.get<FinalReadiness>(`${base}/workspaces/${id}/final-readiness`);
+        return [id, Array.isArray(readiness?.findings) ? blockerCount(readiness.findings) : null];
+      } catch {
+        return [id, null];
+      }
+    }).then((entries) => {
       if (!cancelled) setState({ key, counts: Object.fromEntries(entries) });
     });
     return () => {
       cancelled = true;
     };
-  }, [base, key]);
+  }, [base, key, idsKey]);
   if (key === null || !state || state.key !== key) return null;
   return state.counts;
 }
 
+/** Lectures de `final-readiness` simultànies com a molt: cada una és una lectura pesada del servidor. */
+const READINESS_CONCURRENCY = 3;
+
+/** Com `Promise.all(items.map(fn))`, però amb com a molt `limit` crides en curs; conserva l'ordre. */
+async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function SubHeading({ children }: { children: ReactNode }) {
   return (
-    <p className="border-b border-border bg-subtle px-3.5 py-1.5 text-caption font-medium uppercase tracking-wide text-muted">
+    <h3 className="border-b border-border bg-subtle px-3.5 py-1.5 text-caption font-medium uppercase tracking-wide text-muted">
       {children}
-    </p>
+    </h3>
   );
 }
 
@@ -207,13 +228,17 @@ export default function AvuiPage() {
   const radar = useResource<MatchSummary>(`${base}/matches/summary`);
 
   const recalculation = useMutation();
+  // Tornar a llegir els pendents de preparació (reintent o recàrrega), encara que les candidatures siguin les mateixes.
+  const [readinessVersion, setReadinessVersion] = useState(0);
+  const recountPreparation = useCallback(() => setReadinessVersion((version) => version + 1), []);
 
   const reloadAll = useCallback(() => {
     void workspaces.reload();
     void fresh.reload();
     void profile.reload();
     void radar.reload();
-  }, [workspaces, fresh, profile, radar]);
+    recountPreparation();
+  }, [workspaces, fresh, profile, radar, recountPreparation]);
 
   const calculate: RadarCalculation = {
     saving: recalculation.saving,
@@ -235,11 +260,16 @@ export default function AvuiPage() {
   const blockers = workspaces.data ? openBlockers(workspaces.data) : null;
   // Auditoria UI P1-04: «cap bloqueig» no pot amagar el que no s'ha avaluat ni el que falta preparar.
   const unevaluated = workspaces.data ? unevaluatedWorkspaces(workspaces.data) : null;
+  // Només les de l'empresa activa: en canviar d'empresa, la llista anterior no es demana amb la ruta nova.
+  const companyWorkspaces = workspaces.data
+    ? workspaces.data.filter((workspace) => workspace.company_id === companyId)
+    : null;
   const preparation = usePreparationPending(
     base,
-    workspaces.data ? preparationScope(workspaces.data).map((workspace) => workspace.id) : null,
+    companyWorkspaces ? preparationScope(companyWorkspaces).map((workspace) => workspace.id) : null,
+    readinessVersion,
   );
-  const preparationList = workspaces.data && preparation ? preparationRows(workspaces.data, preparation) : null;
+  const preparationList = companyWorkspaces && preparation ? preparationRows(companyWorkspaces, preparation) : null;
   const freshTotal = fresh.data ? fresh.data.total : undefined;
   // La causa del 0 surt del resum del Radar (avaluades), mai només del perfil (F1).
   const cause = candidatesCause(radar.data, profile.data?.counts);
@@ -411,7 +441,13 @@ export default function AvuiPage() {
           action={blockers ? <CountPill count={blockers.length} /> : undefined}
         />
         {workspaces.error ? (
-          <BlockError what="els avisos" onRetry={() => void workspaces.reload()} />
+          <BlockError
+            what="els avisos"
+            onRetry={() => {
+              void workspaces.reload();
+              recountPreparation();
+            }}
+          />
         ) : !blockers || !unevaluated ? (
           <GhostRows rows={2} />
         ) : (
@@ -473,9 +509,15 @@ export default function AvuiPage() {
                         : "El que encara impedeix tancar la candidatura"}
                     </p>
                   </div>
-                  <LinkButton href={`/candidatures/${workspace.id}?pas=tancar`} variant="secondary" size="md" className={ACTION_CLASS}>
-                    Mira els pendents
-                  </LinkButton>
+                  {pending === null ? (
+                    <Button variant="secondary" size="md" className={ACTION_CLASS} onClick={recountPreparation}>
+                      Torna-ho a comptar
+                    </Button>
+                  ) : (
+                    <LinkButton href={`/candidatures/${workspace.id}?pas=tancar`} variant="secondary" size="md" className={ACTION_CLASS}>
+                      Mira els pendents
+                    </LinkButton>
+                  )}
                 </Row>
               ))
             )}

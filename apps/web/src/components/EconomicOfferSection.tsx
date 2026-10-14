@@ -43,7 +43,7 @@ import {
   formatPercent,
   formatQuantity,
   isRevisionConflict,
-  limitVerdict,
+  lotLimitVerdict,
   lineIsDirty,
   resolveEntity,
   unitSuffix,
@@ -796,8 +796,8 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
               <Summary
                 label="Diferència"
                 value={formatAmount(singleLot.limit.difference_to_maximum, currency)}
-                hint={LIMIT_VERDICT_LABEL[limitVerdict(singleLot.limit)]}
-                level={limitVerdict(singleLot.limit) === "exceeds" ? "danger" : undefined}
+                hint={LIMIT_VERDICT_LABEL[lotLimitVerdict(singleLot)]}
+                level={lotLimitVerdict(singleLot) === "exceeds" ? "danger" : undefined}
               />
             </>
           )}
@@ -973,9 +973,9 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
             {!singleLot && lot.limit.tender_max !== null && (
               <p className="border-b border-border px-3.5 py-1.5 text-caption text-muted">
                 Pressupost del lot {formatAmount(lot.limit.tender_max, currency)} · diferència{" "}
-                <span className={cn(limitVerdict(lot.limit) === "exceeds" && "text-danger")}>{formatAmount(lot.limit.difference_to_maximum, currency)}</span>
+                <span className={cn(lotLimitVerdict(lot) === "exceeds" && "text-danger")}>{formatAmount(lot.limit.difference_to_maximum, currency)}</span>
                 {" · "}
-                {LIMIT_VERDICT_LABEL[limitVerdict(lot.limit)]}
+                {LIMIT_VERDICT_LABEL[lotLimitVerdict(lot)]}
               </p>
             )}
 

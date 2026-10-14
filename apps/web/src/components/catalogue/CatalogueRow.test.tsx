@@ -144,6 +144,14 @@ describe("CatalogueRow", () => {
     expect(value?.getAttribute("title")).toMatch(/no indica quin CPV és el principal/);
   });
 
+  it("revisió del patch: sense cap CPV marcat, la fila no diu «Primer CPV de la font»", () => {
+    const { container } = render(
+      <CatalogueRow tender={tender({ cpvs: [{ cpv_code: "64200000", is_main: false, description: "Serveis de telecomunicacions" }] })} match={null} />,
+    );
+    expect(container.textContent).toContain("64200000");
+    expect(container.textContent).not.toContain("Primer CPV de la font");
+  });
+
   it("amb un filtre de CPV, diu quin CPV de la fila ha coincidit quan no és el principal (C4)", () => {
     const cpvs = [
       { cpv_code: "45314320", is_main: true, description: "Instal·lació de cables" },
@@ -156,7 +164,7 @@ describe("CatalogueRow", () => {
 
     rerender(<CatalogueRow tender={tender({ cpvs })} match={null} cpvFilter="4531" />);
     expect(container.querySelector("[data-cpv-match]")!.getAttribute("data-cpv-match")).toBe("main");
-    expect(container.textContent).not.toContain("CPV secundari");
+    expect(container.textContent).not.toContain("per un altre CPV de la llista");
 
     rerender(<CatalogueRow tender={tender({ cpvs })} match={null} cpvFilter="50" />);
     expect(container.querySelector("[data-cpv-match]")!.textContent).toContain("per un CPV d'un lot");

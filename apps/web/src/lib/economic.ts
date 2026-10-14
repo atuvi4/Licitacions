@@ -79,6 +79,20 @@ export function limitVerdict(limit: LotLimit): LimitVerdict {
   return "unknown";
 }
 
+/**
+ * El veredicte d'un lot sencer. L'API suma només les seccions amb línies (una secció
+ * buida «no hi contribueix gens»), de manera que el total pot quedar per sota del
+ * màxim mentre falten seccions per preparar. Amb alguna secció activa sense línies,
+ * el veredicte és `unknown`: mai «sota el màxim» amb línies que falten. Una de
+ * superada continua sent «exceeds»: ja se sap que no hi cap.
+ */
+export function lotLimitVerdict(lot: Pick<OfferLot, "limit" | "sections">): LimitVerdict {
+  const verdict = limitVerdict(lot.limit);
+  if (verdict === "exceeds") return verdict;
+  const emptySection = lot.sections.some((section) => section.archived_at === null && section.totals.line_count === 0);
+  return emptySection ? "unknown" : verdict;
+}
+
 export const LIMIT_VERDICT_LABEL: Record<LimitVerdict, string> = {
   unknown: "Pendent de calcular: falten línies o imports",
   within: "Sota el màxim",
