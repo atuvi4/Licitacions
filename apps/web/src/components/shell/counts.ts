@@ -14,6 +14,11 @@ import type { WorkspaceStatus, WorkspaceSummary } from "@/lib/workspace";
 
 const CLOSED: ReadonlySet<WorkspaceStatus> = new Set<WorkspaceStatus>(["submitted", "withdrawn", "no_go_approved"]);
 
+/** Candidatura encara oberta: ni presentada, ni retirada, ni amb un NO-GO aprovat. */
+export function isOpenWorkspace(workspace: WorkspaceSummary): boolean {
+  return !CLOSED.has(workspace.status);
+}
+
 /** Decisió pendent (regla d'«Avui», handoff L5.6): sense decisió o ajornada, i encara oberta. */
 export function isPendingDecision(workspace: WorkspaceSummary): boolean {
   return (

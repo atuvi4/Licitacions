@@ -9,7 +9,10 @@ import {
   candidatesEmptyLine,
   candidatesLine,
   openBlockers,
+  isUnevaluated,
   pendingDecisions,
+  preparationRows,
+  unevaluatedWorkspaces,
   todayLine,
 } from "./queue";
 
@@ -84,10 +87,10 @@ describe("todayLine", () => {
 
   it("porta el dia, els recomptes i les candidates sobre el total de licitacions (A17)", () => {
     expect(todayLine(date, { decisions: 3, warnings: 5, candidates: 12, totalTenders: 17336 })).toBe(
-      "Dimecres 16 de setembre · 3 decisions pendents, 5 avisos, 12 candidates de 17.336 licitacions",
+      "Dimecres 16 de setembre · 3 decisions pendents, 5 bloquejos detectats, 12 candidates de 17.336 licitacions",
     );
     expect(todayLine(date, { decisions: 1, warnings: 1, candidates: 1, totalTenders: 1 })).toBe(
-      "Dimecres 16 de setembre · 1 decisió pendent, 1 avís, 1 candidata de 1 licitació",
+      "Dimecres 16 de setembre · 1 decisió pendent, 1 bloqueig detectat, 1 candidata de 1 licitació",
     );
     expect(todayLine(date, { decisions: 0, warnings: 0, candidates: 0, totalTenders: 17336 })).toContain(
       "0 candidates de 17.336 licitacions",
@@ -156,10 +159,58 @@ describe("candidates del Radar (A17: prioritzades pel Radar, no licitacions inge
   it("la línia del dia no compta candidates mentre el Radar no s'ha calculat", () => {
     const date = new Date(2026, 8, 16, 10, 0, 0);
     expect(todayLine(date, { decisions: 0, warnings: 0, candidates: 0, totalTenders: 46, evaluated: 0 })).toBe(
-      "Dimecres 16 de setembre · 0 decisions pendents, 0 avisos, Radar encara no calculat (46 licitacions)",
+      "Dimecres 16 de setembre · 0 decisions pendents, 0 bloquejos detectats, Radar encara no calculat (46 licitacions)",
     );
     expect(todayLine(date, { decisions: 0, warnings: 0, candidates: 0, totalTenders: 46, evaluated: 46 })).toContain(
       "0 candidates de 46 licitacions",
     );
+  });
+});
+
+describe("bloquejos, sense avaluar i pendents de preparació (auditoria UI P1-04)", () => {
+  const unanalysed = workspace({ id: "lescala", status: "analysis", analysis_state: "absent", eligibility: null, human_decision: null });
+
+  it("una candidatura sense anàlisi no és cap bloqueig detectat, però sí «sense avaluar»", () => {
+    expect(openBlockers([unanalysed])).toEqual([]);
+    expect(isUnevaluated(unanalysed)).toBe(true);
+    expect(unevaluatedWorkspaces([unanalysed]).map((w) => w.id)).toEqual(["lescala"]);
+  });
+
+  it("un NO-GO (no elegible) amb anàlisi és un bloqueig i no es barreja amb «sense avaluar»", () => {
+    const noGo = workspace({ id: "nogo", eligibility: "no_go", analysis_state: "current" });
+    expect(openBlockers([noGo]).map((w) => w.id)).toEqual(["nogo"]);
+    expect(isUnevaluated(noGo)).toBe(false);
+  });
+
+  it("les tancades i les fora de termini no compten com a sense avaluar", () => {
+    expect(isUnevaluated({ ...unanalysed, status: "submitted" })).toBe(false);
+    expect(isUnevaluated({ ...unanalysed, status: "no_go_approved" })).toBe(false);
+    expect(isUnevaluated({ ...unanalysed, deadline_passed: true })).toBe(false);
+    // Sense el camp (API antiga), no s'afirma res.
+    expect(isUnevaluated({ ...unanalysed, analysis_state: undefined })).toBe(false);
+  });
+
+  it("pendents de preparació: les que en tenen, i les que no s'han pogut comptar; mai un zero inventat", () => {
+    const a = workspace({ id: "a", days_remaining: 3 });
+    const b = workspace({ id: "b", days_remaining: 9 });
+    const c = workspace({ id: "c", days_remaining: 12 });
+    const rows = preparationRows([a, b, c], { a: 4, b: 0 });
+    expect(rows.map((row) => [row.workspace.id, row.pending])).toEqual([
+      ["a", 4],
+      ["c", null],
+    ]);
+  });
+
+  it("la línia del dia diu les sense avaluar a part, i no les compta com a bloquejos", () => {
+    const line = todayLine(new Date(2026, 8, 16), {
+      decisions: 1,
+      warnings: 0,
+      unevaluated: 1,
+      candidates: 0,
+      totalTenders: 17336,
+      evaluated: 17336,
+    });
+    expect(line).toContain("0 bloquejos detectats, 1 candidatura sense avaluar");
+    expect(line).not.toMatch(/avisos/);
   });
 });

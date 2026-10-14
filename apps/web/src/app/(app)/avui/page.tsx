@@ -2,7 +2,7 @@
 
 import { Search } from "lucide-react";
 import Link from "next/link";
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { ScoreValue } from "@/components/PreFit";
 import { useSession } from "@/components/SessionProvider";
@@ -17,6 +17,7 @@ import {
   shortSummary,
 } from "@/lib/labels";
 import type { MatchSummary, RecalculationResult, TenderMatchListItem } from "@/lib/matching";
+import { blockerCount, blockerCountLabel, type FinalReadiness } from "@/lib/readiness";
 import { buildQuery, type Page } from "@/lib/tenders";
 import type { DashboardSummary } from "@/lib/types";
 import type { WorkspaceSummary } from "@/lib/workspace";
@@ -29,9 +30,52 @@ import {
   candidatesLine,
   openBlockers,
   pendingDecisions,
+  preparationRows,
+  preparationScope,
   todayLine,
+  unevaluatedWorkspaces,
   type CandidatesCause,
 } from "./queue";
+
+/**
+ * Pendents de preparació de cada candidatura oberta: els bloquejos de
+ * `final-readiness` (la mateixa lectura que Tancar). `null` mentre es compta; un
+ * valor `null` per candidatura vol dir que no s'ha pogut saber, mai zero.
+ */
+function usePreparationPending(base: string, ids: string[] | null): Record<string, number | null> | null {
+  const key = ids === null ? null : ids.join(",");
+  const [state, setState] = useState<{ key: string; counts: Record<string, number | null> } | null>(null);
+  useEffect(() => {
+    if (key === null) return;
+    let cancelled = false;
+    const list = key ? key.split(",") : [];
+    void Promise.all(
+      list.map(async (id): Promise<[string, number | null]> => {
+        try {
+          const readiness = await api.get<FinalReadiness>(`${base}/workspaces/${id}/final-readiness`);
+          return [id, Array.isArray(readiness?.findings) ? blockerCount(readiness.findings) : null];
+        } catch {
+          return [id, null];
+        }
+      }),
+    ).then((entries) => {
+      if (!cancelled) setState({ key, counts: Object.fromEntries(entries) });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [base, key]);
+  if (key === null || !state || state.key !== key) return null;
+  return state.counts;
+}
+
+function SubHeading({ children }: { children: ReactNode }) {
+  return (
+    <p className="border-b border-border bg-subtle px-3.5 py-1.5 text-caption font-medium uppercase tracking-wide text-muted">
+      {children}
+    </p>
+  );
+}
 
 /**
  * Avui: la cua de treball (handoff L5, mockup 02). Tres blocs composts al
@@ -189,12 +233,20 @@ export default function AvuiPage() {
 
   const decisions = workspaces.data ? pendingDecisions(workspaces.data) : null;
   const blockers = workspaces.data ? openBlockers(workspaces.data) : null;
+  // Auditoria UI P1-04: «cap bloqueig» no pot amagar el que no s'ha avaluat ni el que falta preparar.
+  const unevaluated = workspaces.data ? unevaluatedWorkspaces(workspaces.data) : null;
+  const preparation = usePreparationPending(
+    base,
+    workspaces.data ? preparationScope(workspaces.data).map((workspace) => workspace.id) : null,
+  );
+  const preparationList = workspaces.data && preparation ? preparationRows(workspaces.data, preparation) : null;
   const freshTotal = fresh.data ? fresh.data.total : undefined;
   // La causa del 0 surt del resum del Radar (avaluades), mai només del perfil (F1).
   const cause = candidatesCause(radar.data, profile.data?.counts);
   const subtitle = todayLine(new Date(), {
     decisions: decisions?.length,
     warnings: blockers?.length,
+    unevaluated: unevaluated?.length,
     candidates: radar.data?.candidates,
     totalTenders: radar.data?.total_tenders,
     evaluated: radar.data?.evaluated_count,
@@ -354,42 +406,80 @@ export default function AvuiPage() {
 
       <Card>
         <CardHeader
-          title="Bloquejos i avisos"
-          description="Cada un amb on es resol"
+          title="Bloquejos i pendents"
+          description="Separats: el que s'ha detectat, el que encara no s'ha avaluat i el que falta preparar"
           action={blockers ? <CountPill count={blockers.length} /> : undefined}
         />
         {workspaces.error ? (
           <BlockError what="els avisos" onRetry={() => void workspaces.reload()} />
-        ) : !blockers ? (
+        ) : !blockers || !unevaluated ? (
           <GhostRows rows={2} />
-        ) : blockers.length === 0 ? (
-          <Nothing>Cap bloqueig obert.</Nothing>
         ) : (
-          blockers.map((workspace, index) => {
-            const reasons = blockerReasons(workspace);
-            const first = reasons[0];
-            return (
-              <Row key={workspace.id}>
-                <StatusPill level={first.level} className="shrink-0 self-start sm:self-center">
-                  {first.label}
-                </StatusPill>
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-ink">{workspace.tender_title ?? workspace.expediente_number ?? "Licitació"}</p>
-                  <p className="text-[13px] text-muted">
-                    {[workspace.buyer_name, ...reasons.map((reason) => reason.detail)].filter(Boolean).join(" · ")}
-                  </p>
-                </div>
-                <LinkButton
-                  href={`/candidatures/${workspace.id}`}
-                  variant={index === 0 ? "primary" : "secondary"}
-                  size="md"
-                  className={ACTION_CLASS}
-                >
-                  Obre la candidatura
-                </LinkButton>
-              </Row>
-            );
-          })
+          <>
+            <SubHeading>Bloquejos detectats</SubHeading>
+            {blockers.length === 0 ? (
+              <Nothing>
+                Cap bloqueig detectat.
+                {unevaluated.length > 0 &&
+                  ` Això no vol dir que no n'hi hagi: ${unevaluated.length === 1 ? "1 candidatura encara no s'ha avaluat" : `${unevaluated.length} candidatures encara no s'han avaluat`}.`}
+              </Nothing>
+            ) : (
+              <BlockerRows blockers={blockers} />
+            )}
+
+            {unevaluated.length > 0 && (
+              <>
+                <SubHeading>Sense avaluar</SubHeading>
+                {unevaluated.map((workspace) => (
+                  <Row key={workspace.id}>
+                    <StatusPill level="attention" className="shrink-0 self-start sm:self-center">
+                      Sense anàlisi del plec
+                    </StatusPill>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-ink">{workspace.tender_title ?? workspace.expediente_number ?? "Licitació"}</p>
+                      <p className="text-[13px] text-muted">
+                        {[
+                          workspace.buyer_name,
+                          "No s'ha avaluat cap requisit del plec: «cap bloqueig» aquí vol dir que no s'ha mirat, no que no n'hi hagi",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    </div>
+                    <LinkButton href={`/candidatures/${workspace.id}`} variant="secondary" size="md" className={ACTION_CLASS}>
+                      Obre la candidatura
+                    </LinkButton>
+                  </Row>
+                ))}
+              </>
+            )}
+
+            <SubHeading>Pendents de preparació</SubHeading>
+            {!preparationList ? (
+              <GhostRows rows={1} />
+            ) : preparationList.length === 0 ? (
+              <Nothing>Cap pendent de preparació a les candidatures obertes.</Nothing>
+            ) : (
+              preparationList.map(({ workspace, pending }) => (
+                <Row key={workspace.id}>
+                  <StatusPill level={pending === null ? "neutral" : "attention"} className="shrink-0 self-start sm:self-center">
+                    {pending === null ? "Sense comptar" : blockerCountLabel(pending)}
+                  </StatusPill>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-ink">{workspace.tender_title ?? workspace.expediente_number ?? "Licitació"}</p>
+                    <p className="text-[13px] text-muted">
+                      {pending === null
+                        ? "No s'han pogut comptar els pendents d'aquesta candidatura"
+                        : "El que encara impedeix tancar la candidatura"}
+                    </p>
+                  </div>
+                  <LinkButton href={`/candidatures/${workspace.id}?pas=tancar`} variant="secondary" size="md" className={ACTION_CLASS}>
+                    Mira els pendents
+                  </LinkButton>
+                </Row>
+              ))
+            )}
+          </>
         )}
       </Card>
 
@@ -450,5 +540,38 @@ export default function AvuiPage() {
         )}
       </Card>
     </div>
+  );
+}
+
+/** Bloquejos detectats: cada un amb el motiu i on es resol (el que ja feia «Avui»). */
+function BlockerRows({ blockers }: { blockers: WorkspaceSummary[] }) {
+  return (
+    <>
+      {blockers.map((workspace, index) => {
+        const reasons = blockerReasons(workspace);
+        const first = reasons[0];
+        return (
+          <Row key={workspace.id}>
+            <StatusPill level={first.level} className="shrink-0 self-start sm:self-center">
+              {first.label}
+            </StatusPill>
+            <div className="min-w-0 flex-1">
+              <p className="font-medium text-ink">{workspace.tender_title ?? workspace.expediente_number ?? "Licitació"}</p>
+              <p className="text-[13px] text-muted">
+                {[workspace.buyer_name, ...reasons.map((reason) => reason.detail)].filter(Boolean).join(" · ")}
+              </p>
+            </div>
+            <LinkButton
+              href={`/candidatures/${workspace.id}`}
+              variant={index === 0 ? "primary" : "secondary"}
+              size="md"
+              className={ACTION_CLASS}
+            >
+              Obre la candidatura
+            </LinkButton>
+          </Row>
+        );
+      })}
+    </>
   );
 }

@@ -151,7 +151,7 @@ describe("Avui", () => {
     expect(decisionsCard.textContent).toContain("Resultat de l'anàlisi: Candidata");
     expect(decisionsCard.textContent).not.toMatch(/Recomanaci/);
     expect(decisionsCard.querySelector("button, a[role='button']")?.textContent ?? "").not.toContain("Candidata");
-    const blockers = screen.getByText("Bloquejos i avisos").closest("section")!;
+    const blockers = screen.getByText("Bloquejos i pendents").closest("section")!;
     expect(blockers.textContent).toContain("Energia elèctrica");
     expect(blockers.textContent).toContain("No elegible");
     expect(blockers.textContent).not.toContain("NO-GO");
@@ -160,7 +160,7 @@ describe("Avui", () => {
     expect(fresh.querySelector("a[href='/licitacions/t9']")).not.toBeNull();
     // A17: candidates prioritzades pel Radar sobre el total de licitacions, mai «oportunitats noves».
     expect(fresh.textContent).toContain("prioritzades pel Radar, no licitacions ingerides");
-    expect(screen.getByText(/2 decisions pendents, 1 avís, 12 candidates de 148 licitacions/)).toBeTruthy();
+    expect(screen.getByText(/2 decisions pendents, 1 bloqueig detectat, 12 candidates de 148 licitacions/)).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/oportunitats noves|Noves per revisar/);
     expect(screen.getByRole("link", { name: /Veure les 12 a Oportunitats/ }).getAttribute("href")).toBe("/licitacions?match_status=candidate");
   });
@@ -243,7 +243,81 @@ describe("Avui", () => {
     const radar = screen.getByText("Candidates del Radar").closest("section")!;
     expect(radar.textContent).toContain("0 candidates de 17.336 licitacions: el perfil no té CPV/territoris");
     expect(radar.querySelector("a[href='/empresa/radar']")).not.toBeNull();
-    expect(screen.getByText(/1 decisió pendent, 0 avisos, 0 candidates de 17\.336 licitacions/)).toBeTruthy();
+    expect(screen.getByText(/1 decisió pendent, 0 bloquejos detectats, 0 candidates de 17\.336 licitacions/)).toBeTruthy();
+  });
+
+  it("auditoria UI P1-04: sense anàlisi no és «cap bloqueig»; es diu «sense avaluar» i els pendents de preparació", async () => {
+    const blocker = (code: string) => ({ code, severity: "blocker", domain: "workspace", entity_id: null, context: {} });
+    respondWith({
+      "/companies/c1/workspaces/lescala/final-readiness": {
+        findings: [
+          blocker("technical_scope_unreviewed"),
+          blocker("economic_lot_empty"),
+          blocker("decision_not_go"),
+          blocker("analysis_missing"),
+        ],
+      },
+      "/companies/c1/workspaces": [
+        workspace({
+          id: "lescala",
+          tender_title: "Telecomunicacions 2027",
+          status: "analysis",
+          eligibility: null,
+          recommendation: null,
+          human_decision: null,
+          analysis_state: "absent",
+          days_remaining: 6,
+        }),
+      ],
+      "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
+      "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336, evaluated_count: 17336 },
+      "/companies/c1/summary": profile,
+    });
+    render(<AvuiPage />);
+    const section = (await screen.findByText("Bloquejos i pendents")).closest("section")!;
+    await screen.findByText(/4 pendents de preparació/);
+    expect(section.textContent).not.toContain("Cap bloqueig obert");
+    expect(section.textContent).toContain(
+      "Cap bloqueig detectat. Això no vol dir que no n'hi hagi: 1 candidatura encara no s'ha avaluat.",
+    );
+    expect(section.textContent).toContain("Sense avaluar");
+    expect(section.textContent).toContain("Sense anàlisi del plec");
+    expect(section.textContent).toContain("4 pendents de preparació (totes les àrees)");
+    expect(section.querySelector("a[href='/candidatures/lescala?pas=tancar']")).not.toBeNull();
+    // La línia del dia: zero bloquejos detectats, però la candidatura sense avaluar es diu a part.
+    expect(screen.getByText(/1 decisió pendent, 0 bloquejos detectats, 1 candidatura sense avaluar/)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/0 avisos/);
+  });
+
+  it("auditoria UI P1-04: un NO-GO amb anàlisi és un bloqueig i no surt com a «sense avaluar»", async () => {
+    respondWith({
+      "/companies/c1/workspaces/nogo/final-readiness": { findings: [] },
+      "/companies/c1/workspaces": [
+        workspace({ id: "nogo", tender_title: "Energia elèctrica", eligibility: "no_go", analysis_state: "current", days_remaining: 20 }),
+      ],
+      "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
+      "/companies/c1/matches/summary": summary,
+      "/companies/c1/summary": profile,
+    });
+    render(<AvuiPage />);
+    const section = (await screen.findByText("Bloquejos i pendents")).closest("section")!;
+    await screen.findByText("Cap pendent de preparació a les candidatures obertes.");
+    expect(section.textContent).toContain("No elegible");
+    expect(section.textContent).not.toContain("Sense avaluar");
+    expect(section.textContent).not.toContain("Cap bloqueig detectat");
+  });
+
+  it("auditoria UI P1-04: si no es poden comptar els pendents, no s'afirma cap zero", async () => {
+    respondWith({
+      "/companies/c1/workspaces/w1/final-readiness": new Error("503"),
+      "/companies/c1/workspaces": [workspace({ id: "w1", tender_title: "Fibra òptica municipal", analysis_state: "current" })],
+      "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
+      "/companies/c1/matches/summary": summary,
+      "/companies/c1/summary": profile,
+    });
+    render(<AvuiPage />);
+    expect(await screen.findByText("Sense comptar")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("Cap pendent de preparació");
   });
 
   it("si la càrrega falla mostra l'error amb reintent, mai un zero", async () => {

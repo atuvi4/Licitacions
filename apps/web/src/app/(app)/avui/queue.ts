@@ -1,4 +1,4 @@
-import { isPendingDecision } from "@/components/shell/counts";
+import { isOpenWorkspace, isPendingDecision } from "@/components/shell/counts";
 import { ELIGIBILITY_HINTS, ELIGIBILITY_LABELS, WARNING_LABELS, type Level } from "@/lib/labels";
 import { candidatesCause, type CandidatesCause } from "@/lib/matching";
 import type { WorkspaceSummary } from "@/lib/workspace";
@@ -49,6 +49,50 @@ export function blockerReasons(workspace: WorkspaceSummary): BlockerReason[] {
     reasons.push({ level: "attention", label: "Anàlisi endarrerida", detail: WARNING_LABELS.outdated_analysis });
   }
   return reasons;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Sense avaluar i pendents de preparació (auditoria UI P1-04)                */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Tres coses diferents que «Avui» no pot barrejar:
+ * - **bloquejos detectats** (`isOpenBlocker`): algú ho ha mirat i hi ha un problema
+ *   (no elegible, anàlisi endarrerida, fora de termini);
+ * - **sense avaluar**: cap anàlisi del plec. Zero bloquejos aquí no vol dir que no
+ *   n'hi hagi: vol dir que no s'ha mirat. No és cap NO-GO;
+ * - **pendents de preparació**: el que encara impedeix tancar la candidatura (els
+ *   mateixos «pendents de preparació» de Tancar, comptats per `final-readiness`).
+ */
+export function isUnevaluated(workspace: WorkspaceSummary): boolean {
+  return workspace.analysis_state === "absent" && !workspace.deadline_passed && isOpenWorkspace(workspace);
+}
+
+export function unevaluatedWorkspaces(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
+  return workspaces.filter(isUnevaluated).sort(byDeadline);
+}
+
+/** Les candidatures on té sentit comptar què falta preparar: obertes i dins de termini. */
+export function preparationScope(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
+  return workspaces.filter((workspace) => isOpenWorkspace(workspace) && !workspace.deadline_passed).sort(byDeadline);
+}
+
+/**
+ * Pendents de preparació per candidatura. `counts[id]` és el nombre de bloquejos de
+ * `final-readiness`, o `null` si no s'ha pogut saber: aleshores no s'afirma cap zero.
+ */
+export interface PreparationRow {
+  workspace: WorkspaceSummary;
+  pending: number | null;
+}
+
+export function preparationRows(
+  workspaces: WorkspaceSummary[],
+  counts: Record<string, number | null>,
+): PreparationRow[] {
+  return preparationScope(workspaces)
+    .map((workspace) => ({ workspace, pending: counts[workspace.id] ?? null }))
+    .filter((row) => row.pending === null || row.pending > 0);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -109,7 +153,10 @@ export function candidatesEmptyLine(totalTenders: number, evaluated: number, cau
 
 export interface QueueCounts {
   decisions?: number;
+  /** Bloquejos detectats (`isOpenBlocker`). */
   warnings?: number;
+  /** Candidatures obertes sense cap anàlisi del plec: es diuen a part, mai com a «0 bloquejos». */
+  unevaluated?: number;
   candidates?: number;
   totalTenders?: number;
   /** Licitacions amb pre-fit calculat; amb 0 la línia no compta candidates. */
@@ -133,5 +180,8 @@ export function todayLine(date: Date, counts: QueueCounts): string {
     counts.evaluated === 0
       ? `Radar encara no calculat (${plural(counts.totalTenders, "licitació", "licitacions")})`
       : candidatesLine(counts.candidates, counts.totalTenders);
-  return `${day} · ${plural(counts.decisions, "decisió pendent", "decisions pendents")}, ${plural(counts.warnings, "avís", "avisos")}, ${radar}`;
+  const unevaluated = counts.unevaluated
+    ? `, ${plural(counts.unevaluated, "candidatura sense avaluar", "candidatures sense avaluar")}`
+    : "";
+  return `${day} · ${plural(counts.decisions, "decisió pendent", "decisions pendents")}, ${plural(counts.warnings, "bloqueig detectat", "bloquejos detectats")}${unevaluated}, ${radar}`;
 }
