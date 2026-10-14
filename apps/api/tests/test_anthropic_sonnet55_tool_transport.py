@@ -475,7 +475,6 @@ async def test_una_crida_valida_amb_un_motiu_de_parada_que_no_es_la_tool_es_fata
         ({**EMPTY, "requirements": "[]"}, "no son llistes"),
         ({**EMPTY, "requirements": None}, "no son llistes"),
         ({**EMPTY, "extraction_id": "e1"}, "claus inesperades"),
-        ({k: v for k, v in EMPTY.items() if k != "document_notes"}, "falten"),
         ([], "no es un objecte"),
     ],
 )

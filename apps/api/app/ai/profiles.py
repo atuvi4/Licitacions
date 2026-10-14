@@ -340,16 +340,52 @@ def transport_identity(profile: ExtractorProfile, provider: Any) -> dict[str, An
     }
 
 
-def auto_tool_envelope_problem(data: Any, profile: ExtractorProfile) -> str | None:
-    """Per a un model `auto`: `None` si l'envoltori es EXACTAMENT el canonic (un objecte amb
-    totes les llistes de l'arrel de l'esquema del perfil, i cap altra clau); si no, que falla.
-    Sense tool forcada ni gramatica estricta, un `{}` no pot passar per un chunk sense res."""
+#: Regla que es registra a la cobertura del chunk (`normalised`) per cada llista OPCIONAL de
+#: l'esquema enviat que el model no ha retornat: `absent_optional_list:<nom>`. Absent no es
+#: buida: una llista d'incerteses absent no diu que el model hagi comprovat que no n'hi ha.
+ABSENT_OPTIONAL_LIST = "absent_optional_list"
+
+
+@dataclass(frozen=True, slots=True)
+class EnvelopeCheck:
+    """Resultat de validar l'envoltori d'un model `auto`."""
+
+    #: Per que es fatal, o `None` si l'envoltori es valid.
+    problem: str | None
+    #: Llistes opcionals de l'esquema enviat que la resposta no porta (ordenades).
+    absent_optional: tuple[str, ...] = ()
+
+    @property
+    def rules(self) -> list[str]:
+        return [f"{ABSENT_OPTIONAL_LIST}:{name}" for name in self.absent_optional]
+
+
+def auto_tool_envelope_check(
+    data: Any, profile: ExtractorProfile, *, schema: dict[str, Any] | None = None
+) -> EnvelopeCheck:
+    """Per a un model `auto`, l'envoltori contra l'esquema QUE S'HA ENVIAT (`schema`; per
+    defecte el canonic del perfil, que es el que viatja sense tool estricta).
+
+    * Nomes son obligatories les claus del `required` de l'arrel d'aquest esquema: el validador
+      no exigeix res que la tool no hagi demanat (primer run real de L'Escala, 2026-10-14).
+    * Com a minim una llista de l'esquema: `{}` (o nomes claus inventades) no pot passar per un
+      chunk sense res. Fatal.
+    * Cap clau fora de les `properties`, i les presents han de ser llistes. Fatal.
+    * Les llistes opcionals absents s'accepten i es tornen a `absent_optional`: el parser hi
+      aplica el seu `default_factory` (cap dada inventada) i la canonada registra l'absencia.
+    """
     if not isinstance(data, dict):
-        return "no es un objecte"
-    expected = set(profile.json_schema().get("properties") or ())
-    missing, extra = sorted(expected - set(data)), sorted(set(data) - expected)
-    if missing:
-        return f"falten {', '.join(missing)}"
+        return EnvelopeCheck("no es un objecte")
+    schema = profile.json_schema() if schema is None else schema
+    known = set(schema.get("properties") or ())
+    required = set(schema.get("required") or ())
+    present = set(data)
+    missing_required = sorted(required - present)
+    if missing_required:
+        return EnvelopeCheck(f"falten {', '.join(missing_required)}")
+    if not present & known:
+        return EnvelopeCheck(f"falten totes les llistes ({', '.join(sorted(known))})")
+    extra = sorted(present - known)
     if extra:
         # El missatge arriba a `run.error_message` (API): una clau inventada pel model pot ser
         # text del plec, aixi que nomes es mostra si te forma d'identificador.
@@ -357,8 +393,15 @@ def auto_tool_envelope_problem(data: Any, profile: ExtractorProfile) -> str | No
 
         shown = [_safe_key(key) for key in extra[:5]]
         more = f" (+{len(extra) - 5})" if len(extra) > 5 else ""
-        return f"claus inesperades {', '.join(shown)}{more}"
-    not_lists = sorted(key for key in expected if not isinstance(data[key], list))
+        return EnvelopeCheck(f"claus inesperades {', '.join(shown)}{more}")
+    not_lists = sorted(key for key in present & known if not isinstance(data[key], list))
     if not_lists:
-        return f"no son llistes: {', '.join(not_lists)}"
-    return None
+        return EnvelopeCheck(f"no son llistes: {', '.join(not_lists)}")
+    return EnvelopeCheck(None, tuple(sorted(known - present)))
+
+
+def auto_tool_envelope_problem(
+    data: Any, profile: ExtractorProfile, *, schema: dict[str, Any] | None = None
+) -> str | None:
+    """`auto_tool_envelope_check(...).problem`: `None` si l'envoltori es valid."""
+    return auto_tool_envelope_check(data, profile, schema=schema).problem

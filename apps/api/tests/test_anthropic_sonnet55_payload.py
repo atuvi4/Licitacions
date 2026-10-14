@@ -88,6 +88,8 @@ EMPTY = {"requirements": [], "award_criteria": [], "document_notes": [], "uncert
 #: `AUTO_TOOL_TRANSPORT_VERSION` nova (entra a la identitat de l'analisi).
 INSTRUCTION_SHA256 = {
     "anthropic-auto-tool-v2": "c417765ab7339286e609b56914889b72ba5afd6155d19dfd34152a7900ec7cab",
+    # v3 nomes canvia la validacio de l'envoltori (llistes opcionals absents): mateixa instruccio.
+    "anthropic-auto-tool-v3": "c417765ab7339286e609b56914889b72ba5afd6155d19dfd34152a7900ec7cab",
 }
 
 

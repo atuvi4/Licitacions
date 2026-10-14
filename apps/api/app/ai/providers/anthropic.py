@@ -65,7 +65,9 @@ AUTO_TOOL_INSTRUCTION = (
 #: FATALS: cap crida, diverses, una altra tool, arguments que no son objecte, motiu de parada,
 #: model servit). Si la tool porta `strict` i quin esquema viatja, ho diu `transport_identity`.
 #: Entra a la identitat de l'analisi dels models `auto`: canviar-lo es una analisi nova.
-AUTO_TOOL_TRANSPORT_VERSION = "anthropic-auto-tool-v2"
+#: v3 (2026-10-14): l'envoltori nomes exigeix el `required` de l'esquema enviat; les llistes
+#: opcionals absents s'accepten i es registren. Cap canvi en el que s'envia al proveidor.
+AUTO_TOOL_TRANSPORT_VERSION = "anthropic-auto-tool-v3"
 #: Limits de la tool estricta (documentacio d'Anthropic, structured outputs). Un esquema que
 #: no hi cap rep un 400: es comprova abans, i no s'envia.
 STRICT_MAX_OPTIONAL_PARAMETERS = 24

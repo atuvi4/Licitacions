@@ -68,7 +68,7 @@ from app.ai.profiles import (
     EXPERIMENTAL_PROFILES,
     TRANSPORT_METADATA_KEY,
     ExtractorProfile,
-    auto_tool_envelope_problem,
+    auto_tool_envelope_check,
     requires_auto_tool,
     transport_identity,
     transport_json_schema,
@@ -2081,12 +2081,14 @@ async def _run_chunk(
     quan el de dins porta tots els camps obligatoris. Les regles aplicades
     s'afegeixen a `normalisations`, tambe quan despres l'esquema falla.
     """
+    # El canonic del perfil (tool forcada o `auto` sense `strict`, on nomes guia el model) o
+    # l'esquema de transport estricte. El parser del perfil valida la resposta igual, i
+    # l'envoltori es valida contra AQUEST esquema (el que s'envia).
+    sent_schema = transport_json_schema(profile, llm)
     response = await llm.extract_structured(
         system=profile.system_prompt,
         user_content=profile.build_user_message(render_chunk(chunk)),
-        # El canonic del perfil (tool forcada o `auto` sense `strict`, on nomes guia el model) o
-        # l'esquema de transport estricte. El parser del perfil valida la resposta igual.
-        json_schema=transport_json_schema(profile, llm),
+        json_schema=sent_schema,
         max_output_tokens=settings.LLM_REQUIREMENTS_MAX_OUTPUT_TOKENS,
     )
     usage = response.usage or Usage()
@@ -2097,22 +2099,26 @@ async def _run_chunk(
             "La resposta ha topat amb el limit de sortida.", usage=usage
         )
     auto = requires_auto_tool(llm)
+    absent_rules: list[str] = []
     if auto:
         # Sense tool forcada ni gramatica estricta, ningu no garanteix la forma de la resposta:
-        # l'envoltori ha de ser EXACTAMENT les llistes canoniques (cap `{}` buit acceptat com a
-        # chunk fet). Si no, FATAL. Els elements, un a un, com sempre.
-        envelope_problem = auto_tool_envelope_problem(response.data, profile)
-        if envelope_problem is not None:
+        # obligatoris de l'esquema enviat, almenys una llista (cap `{}` acceptat com a chunk
+        # fet), cap clau inventada i nomes llistes. Si no, FATAL. Una llista OPCIONAL absent
+        # s'accepta (el parser hi posa el seu valor per defecte) i queda registrada a la
+        # cobertura: absent no vol dir buida. Els elements, un a un, com sempre.
+        envelope = auto_tool_envelope_check(response.data, profile, schema=sent_schema)
+        if envelope.problem is not None:
             error = IllegalEnvelopeError(
-                f"L'envoltori de la tool no es el canonic ({envelope_problem}).", usage=usage
+                f"L'envoltori de la tool no es el canonic ({envelope.problem}).", usage=usage
             )
             error.fatal = True
             raise error
+        absent_rules = envelope.rules
     # Cap normalitzacio indulgent per als models `auto` (ni a l'envoltori ni dins dels
     # elements): cap JSON dins d'un text es descodifica; el parser decideix sobre el que ha
     # arribat tal com ha arribat.
     data, applied = (
-        (response.data, [])
+        (response.data, absent_rules)
         if auto
         else normalise_output(
             response.data,
