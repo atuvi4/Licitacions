@@ -9,7 +9,7 @@ interface CompanySwitcherProps {
   selectCompany: (companyId: string) => void;
 }
 
-const BOX = "flex h-9 min-w-0 items-center gap-2 border border-neutral-400 px-2.5 text-[13.5px] font-medium text-ink";
+const BOX = "flex h-9 min-w-0 max-w-[16rem] items-center gap-2 border border-neutral-400 px-2.5 text-[13.5px] font-medium text-ink";
 
 /**
  * Empresa activa, sempre visible (handoff L4.10). Amb una sola empresa és text

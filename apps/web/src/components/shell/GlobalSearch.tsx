@@ -74,10 +74,10 @@ export function GlobalSearch({
         placeholder={placeholder}
         aria-label="Cerca"
         autoFocus={autoFocus}
-        className="min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-muted"
+        className="min-w-[8rem] flex-1 bg-transparent text-ink outline-none placeholder:text-muted"
       />
-      {counter && <span className="hidden shrink-0 text-[12px] text-muted md:inline">{counter}</span>}
-      <kbd className="hidden shrink-0 border border-neutral-400 px-1.5 font-sans text-[11.5px] text-muted lg:inline">
+      {counter && <span className="hidden shrink-0 text-[12px] text-muted xl:inline">{counter}</span>}
+      <kbd className="hidden shrink-0 border border-neutral-400 px-1.5 font-sans text-[11.5px] text-muted xl:inline">
         {shortcut}
       </kbd>
     </form>

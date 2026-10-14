@@ -20,14 +20,14 @@ function initials(name: string): string {
 export function UserSummary({ user, role, logout }: UserSummaryProps) {
   const name = user.full_name ?? user.email;
   return (
-    <div className="flex items-center gap-2.5">
+    <div className="flex items-center gap-2.5" title={name}>
       <span
         aria-hidden
         className="grid h-[30px] w-[30px] shrink-0 place-items-center border border-brand bg-brand-soft font-heading text-[12px] font-semibold text-accent-800"
       >
         {initials(name)}
       </span>
-      <span className="hidden min-w-0 sm:block">
+      <span className="hidden min-w-0 xl:block">
         <span className="block max-w-44 truncate text-[13px] leading-tight font-medium text-ink" title={user.email}>
           {name}
         </span>

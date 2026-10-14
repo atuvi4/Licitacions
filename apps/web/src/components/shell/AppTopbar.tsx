@@ -38,7 +38,7 @@ export function AppTopbar({ mobileOpen, onToggleMenu, companySwitcher, search, w
         {search && (
           <div
             className={cn(
-              "min-w-0 flex-1 md:flex md:max-w-[420px]",
+              "min-w-0 flex-1 md:flex md:min-w-[12rem] md:max-w-[420px]",
               searchOpen ? "absolute inset-x-0 top-full flex border-b border-border bg-surface px-4 py-2 md:static md:border-0 md:p-0" : "hidden",
             )}
           >
