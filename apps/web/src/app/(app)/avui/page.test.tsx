@@ -340,7 +340,7 @@ describe("Avui", () => {
     render(<AvuiPage />);
     expect(await screen.findByText("Sense comptar")).toBeTruthy();
     fail = false;
-    fireEvent.click(screen.getByRole("button", { name: "Torna-ho a comptar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Torna-ho a comptar: Fibra òptica municipal" }));
     expect(await screen.findByText(/1 pendent de preparació/)).toBeTruthy();
     expect(screen.queryByText("Sense comptar")).toBeNull();
   });
@@ -374,6 +374,24 @@ describe("Avui", () => {
     expect(peak).toBeGreaterThan(0);
     expect(peak).toBeLessThanOrEqual(3);
     expect(get.mock.calls.filter(([path]) => String(path).endsWith("/final-readiness")).length).toBe(5);
+  });
+
+  it("revisió final: una candidatura d'una altra empresa no surt a «Sense avaluar» ni a la línia del dia", async () => {
+    respondWith({
+      "/companies/c1/workspaces/mine/final-readiness": { findings: [] },
+      "/companies/c1/workspaces": [
+        workspace({ id: "mine", tender_title: "La meva", analysis_state: "current" }),
+        workspace({ id: "other", company_id: "c2", tender_title: "D'una altra empresa", analysis_state: "absent" }),
+      ],
+      "/companies/c1/matches?": { items: [], total: 0, limit: 5, offset: 0 },
+      "/companies/c1/matches/summary": summary,
+      "/companies/c1/summary": profile,
+    });
+    render(<AvuiPage />);
+    const section = (await screen.findByText("Bloquejos i pendents")).closest("section")!;
+    await screen.findByText("Cap pendent de preparació a les candidatures obertes.");
+    expect(section.textContent).not.toContain("Sense avaluar");
+    expect(document.body.textContent).not.toMatch(/sense avaluar,/);
   });
 
   it("si la càrrega falla mostra l'error amb reintent, mai un zero", async () => {

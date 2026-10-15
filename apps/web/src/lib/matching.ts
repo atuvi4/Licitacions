@@ -195,7 +195,7 @@ export function insufficientCause(match: Pick<MatchCommon, "factors">): Insuffic
 
 export const INSUFFICIENT_CAUSE_HELP: Record<InsufficientCause, string> = {
   profile:
-    "El perfil de l'empresa encara no té prou dades per valorar-la. No és cap mancança de la licitació. No vol dir que no encaixi.",
+    "El perfil de l'empresa encara no té prou dades per valorar-la. No vol dir que no encaixi.",
   source: "La font no publica prou metadades per valorar-la. No vol dir que no encaixi.",
   both: "Falten dades al perfil de l'empresa i la font tampoc no publica totes les metadades. No vol dir que no encaixi.",
   unknown: "No hi ha prou dades per valorar-la. No vol dir que no encaixi.",

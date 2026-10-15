@@ -72,6 +72,8 @@ describe("causa de les dades insuficients del pre-fit (auditoria UI P1-02)", () 
     expect(sourceGaps(m)).toEqual([]);
     expect(statusHelp(m)).toBe(INSUFFICIENT_CAUSE_HELP.profile);
     expect(statusHelp(m)).not.toMatch(/La font no publica/);
+    // Amb el perfil buit el motor no arriba a mirar la licitació: no es pot afirmar que no li falti res.
+    expect(statusHelp(m)).not.toMatch(/mancança de la licitació/);
     expect(shortSummary(m)).toBe("El perfil de l'empresa no té prou dades per valorar-la");
   });
 

@@ -258,12 +258,12 @@ export default function AvuiPage() {
 
   const decisions = workspaces.data ? pendingDecisions(workspaces.data) : null;
   const blockers = workspaces.data ? openBlockers(workspaces.data) : null;
-  // Auditoria UI P1-04: «cap bloqueig» no pot amagar el que no s'ha avaluat ni el que falta preparar.
-  const unevaluated = workspaces.data ? unevaluatedWorkspaces(workspaces.data) : null;
-  // Només les de l'empresa activa: en canviar d'empresa, la llista anterior no es demana amb la ruta nova.
+  // Només les de l'empresa activa: en canviar d'empresa, la llista anterior no es compta ni es demana amb la ruta nova.
   const companyWorkspaces = workspaces.data
     ? workspaces.data.filter((workspace) => workspace.company_id === companyId)
     : null;
+  // Auditoria UI P1-04: «cap bloqueig» no pot amagar el que no s'ha avaluat ni el que falta preparar.
+  const unevaluated = companyWorkspaces ? unevaluatedWorkspaces(companyWorkspaces) : null;
   const preparation = usePreparationPending(
     base,
     companyWorkspaces ? preparationScope(companyWorkspaces).map((workspace) => workspace.id) : null,
@@ -510,7 +510,13 @@ export default function AvuiPage() {
                     </p>
                   </div>
                   {pending === null ? (
-                    <Button variant="secondary" size="md" className={ACTION_CLASS} onClick={recountPreparation}>
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      className={ACTION_CLASS}
+                      onClick={recountPreparation}
+                      aria-label={`Torna-ho a comptar: ${workspace.tender_title ?? workspace.expediente_number ?? "Licitació"}`}
+                    >
                       Torna-ho a comptar
                     </Button>
                   ) : (
