@@ -138,7 +138,7 @@ export function CatalogueRow({
             ) : (
               <span className="text-muted">Sense CPV</span>
             )}
-            {mainCpv && markedCpv && (
+            {markedCpv && (
               // Visible, no només al `title` (P2-04): un mòbil o el teclat no hi arriben.
               <p className="mt-0.5 text-caption text-muted" data-cpv-provenance>
                 {SOURCE_FIRST_CPV_SHORT_HELP}

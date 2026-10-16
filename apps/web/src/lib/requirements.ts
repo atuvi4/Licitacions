@@ -272,18 +272,36 @@ export const COMPLETED_EMPTY_TEXT = "Anàlisi acabada sense resultats: cal revis
 /** Una simulació (`fake`) mai és vigent (3B-2 §6.3). */
 export const SIMULATION_NOT_CURRENT_TEXT = "Anàlisi de simulació: no és vigent";
 
-/** Quantes passades de l'historial es demanen per explicar-lo (P2-01); és el màxim per defecte de l'API. */
+/** Quantes passades de l'historial es demanen per explicar-lo (P2-01): el valor per defecte de l'API (màxim 100). */
 export const RUN_HISTORY_LIMIT = 20;
+
+/**
+ * Si l'última run no vigent ja té el seu avís propi (simulació o acabada sense
+ * resultats, 3B-2 §6.3): llavors l'historial no la torna a comptar.
+ */
+export function hasOwnNotCurrentBanner(item: ExtractionRun): boolean {
+  return item.status === "completed_empty" || (item.run_basis !== "real" && item.run_basis !== "gold");
+}
 
 /**
  * Les anàlisis d'aquests plecs que existeixen però no són la vigent (P2-01): es
  * poden consultar com a historial, però mai es promouen ni es barregen amb el
- * conjunt efectiu. Les que encara corren no hi són: d'aquestes en parla la feina.
+ * conjunt efectiu. Les que encara corren no hi són (d'aquestes en parla la feina),
+ * ni la que ja té el seu avís (`exceptId`).
  */
-export function historicRuns(runs: ExtractionRun[] | null | undefined, effectiveRunId: string | null): ExtractionRun[] {
+export function historicRuns(
+  runs: ExtractionRun[] | null | undefined,
+  effectiveRunId: string | null,
+  exceptId: string | null = null,
+): ExtractionRun[] {
   if (!Array.isArray(runs)) return [];
   return runs.filter(
-    (item) => item.id !== effectiveRunId && !item.is_current && item.status !== "pending" && item.status !== "running",
+    (item) =>
+      item.id !== effectiveRunId &&
+      item.id !== exceptId &&
+      !item.is_current &&
+      item.status !== "pending" &&
+      item.status !== "running",
   );
 }
 
@@ -293,7 +311,15 @@ export function notCurrentReason(item: ExtractionRun): string {
   if (item.error_code === "experimental_profile_not_current")
     return "Perfil experimental: es conserva com a historial, però mai no pot ser la base vigent.";
   if (item.error_code === "forced_not_canonical") return "Anàlisi forçada per l'operador: mai no és la vigent.";
-  if (item.status === "failed") return "Ha fallat: cap part del plec s'ha pogut analitzar.";
+  if (item.error_code === "selection_not_canonical")
+    return "Feta amb una selecció de documents que no és la canònica: no pot ser la vigent.";
+  if (item.error_code === "input_changed" || item.error_code === "stale") return "Els plecs han canviat des d'aquesta anàlisi.";
+  if (item.error_code === "budget_exceeded") return "Aturada pel límit de consum: no es va completar.";
+  if (item.error_code === "chunks_not_selected") return "No va llegir tots els fragments del plec.";
+  if (item.status === "failed")
+    return item.chunks_completed > 0
+      ? "Ha fallat abans d'acabar la lectura del plec."
+      : "Ha fallat: cap part del plec s'ha pogut analitzar.";
   if (item.status === "partial") return "Lectura parcial: alguns fragments del plec han fallat.";
   if (item.status === "completed_empty") return "Acabada sense cap requisit ni criteri: ho ha de mirar una persona.";
   return "No és la vigent: n'hi ha una de posterior o els plecs han canviat.";

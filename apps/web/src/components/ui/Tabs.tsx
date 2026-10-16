@@ -13,7 +13,8 @@ export interface TabItem {
   countLevel?: Level;
   /**
    * Què compta el número, si sol no ho diu (P2-02): p. ex. «2 pendents». Es mostra
-   * en lloc del número i forma part del nom accessible de la pestanya.
+   * en lloc del número i forma part del nom accessible de la pestanya. Només té
+   * efecte amb `count`: sense recompte no s'ensenya res.
    */
   countLabel?: string;
 }
