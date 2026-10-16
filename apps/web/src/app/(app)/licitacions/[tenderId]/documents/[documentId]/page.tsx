@@ -134,11 +134,12 @@ function DocumentText() {
   const files = useResource<FileRead[]>(
     `/companies/${companyId}/tenders/${params.tenderId}/documents/${params.documentId}/files`,
   );
-  const [pageNumber, setPageNumber] = useState(urlPage ?? 1);
-  // Enrere, Endavant o un enllaç nou canvien l'URL: la pàgina la segueix.
-  useEffect(() => {
-    if (urlPage !== null) setPageNumber(urlPage);
-  }, [urlPage]);
+  // La pàgina surt de l'URL: Enrere, Endavant o un enllaç nou la canvien, i un enllaç sense
+  // `?page=` (p. ex. a una altra revisió, que pot tenir unes altres pàgines) obre la 1. La
+  // tria local només val mentre l'URL no canvia, i cobreix el moment fins que `replace` hi arriba.
+  const urlKey = `${citedExtraction ?? ""}|${rawPage ?? ""}`;
+  const [picked, setPicked] = useState<{ key: string; page: number } | null>(null);
+  const pageNumber = picked && picked.key === urlKey ? picked.page : (urlPage ?? 1);
 
   // El títol ha de ser el NOM del document («Plec de prescripcions tècniques»),
   // no el tros final de la seva URL: `original_filename` surt de l'adreça i a
@@ -156,14 +157,18 @@ function DocumentText() {
   const total = extraction?.page_count ?? 0;
   // Mai es demana una pàgina que no existeix: fora de rang, la més propera, i es diu.
   const shownPage = total > 0 ? Math.min(Math.max(pageNumber, 1), total) : pageNumber;
-  const rangeNotice =
-    rawPage !== null && urlPage === null
-      ? `L'enllaç demanava una pàgina que no és vàlida («${rawPage}»): es mostra la pàgina ${shownPage}.`
-      : total > 0 && pageNumber > total
-        ? `La pàgina ${pageNumber} no existeix: aquest document en té ${total}. Es mostra la ${shownPage}.`
-        : null;
   const spreadsheet = isSpreadsheetParser(extraction?.parser_version);
   const unit = spreadsheet ? "Full" : "Pàgina";
+  const rangeNotice =
+    rawPage !== null && urlPage === null
+      ? spreadsheet
+        ? `L'enllaç demanava un full que no és vàlid («${rawPage}»): es mostra el full ${shownPage}.`
+        : `L'enllaç demanava una pàgina que no és vàlida («${rawPage}»): es mostra la pàgina ${shownPage}.`
+      : total > 0 && pageNumber > total
+        ? spreadsheet
+          ? `El full ${pageNumber} no existeix: aquest document en té ${total}. Es mostra el ${shownPage}.`
+          : `La pàgina ${pageNumber} no existeix: aquest document en té ${total}. Es mostra la ${shownPage}.`
+        : null;
   const [view, setView] = useState<"table" | "text">("table");
   const [draft, setDraft] = useState(String(shownPage));
   useEffect(() => setDraft(String(shownPage)), [shownPage]);
@@ -177,19 +182,20 @@ function DocumentText() {
 
   function goTo(number: number) {
     if (total > 0 && (number < 1 || number > total)) return;
-    setPageNumber(number);
+    setPicked({ key: urlKey, page: number });
     setCopyNotice(null);
     router.replace(pageHref(number), { scroll: false });
   }
 
   function commitDraft() {
     const value = parsePageParam(draft.trim());
-    if (value !== null && value >= 1 && value <= total) goTo(value);
+    if (value !== null && value !== shownPage && value >= 1 && value <= total) goTo(value);
     else setDraft(String(shownPage));
   }
 
   async function copyLink() {
     const href = `${window.location.origin}${pageHref(shownPage)}`;
+    setCopyNotice(null);
     try {
       await navigator.clipboard.writeText(href);
       setCopyNotice("Enllaç copiat.");
@@ -199,7 +205,7 @@ function DocumentText() {
   }
 
   const page = useResource<PageRead>(
-    extraction
+    extraction && total > 0
       ? `/companies/${companyId}/tender-document-extractions/${extraction.id}/pages/${shownPage}`
       : null,
   );
@@ -384,20 +390,18 @@ function DocumentText() {
                   <Button variant="ghost" size="sm" onClick={() => void copyLink()}>
                     Copia l&apos;enllaç {spreadsheet ? "a aquest full" : "a aquesta pàgina"}
                   </Button>
-                  {copyNotice && (
-                    <span role="status" className="text-[13px] break-all text-muted">
-                      {copyNotice}
-                    </span>
-                  )}
+                  <span aria-live="polite" className="text-[13px] break-all text-muted">
+                    {copyNotice}
+                  </span>
                 </div>
                 {spreadsheet && (
-                  // Al full de càlcul, la taula per defecte i el text desat a un clic: mai se n'amaga cap.
+                  // Al full de càlcul, la taula per defecte i el text extret desat a un clic: mai se n'amaga cap.
                   <div role="group" aria-label="Vista del full" className="flex gap-2 border-b border-border px-4 py-2">
                     <Button variant={view === "table" ? "secondary" : "ghost"} size="sm" aria-pressed={view === "table"} onClick={() => setView("table")}>
                       Taula
                     </Button>
                     <Button variant={view === "text" ? "secondary" : "ghost"} size="sm" aria-pressed={view === "text"} onClick={() => setView("text")}>
-                      Text original
+                      Text extret
                     </Button>
                   </div>
                 )}
@@ -428,7 +432,7 @@ function DocumentText() {
                 Versió {current.version_number} de {files.data.length}
               </Fact>
               <Fact label="Mida">{formatBytes(current.content?.file_size ?? null)}</Fact>
-              <Fact label="Pàgines">{total || "—"}</Fact>
+              <Fact label={spreadsheet ? "Fulls" : "Pàgines"}>{total || "—"}</Fact>
               <Fact label="Qualitat de l'extracció">
                 {extraction?.qa_status ? (
                   <StatusPill level={QA_LEVEL[extraction.qa_status]} size="sm">

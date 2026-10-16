@@ -3,18 +3,18 @@
 /**
  * Un full de càlcul extret, com a taula (P2-07): una fila per cel·la amb el valor tal
  * com és desat. Només un decimal amb un error evident de coma flotant es mostra net
- * («38.326,08»), i al costat sempre el valor sense format, intacte. Res més es formata:
- * ni enters, ni codis, ni dates, ni textos.
+ * («38326.08», en la mateixa notació), i al costat sempre el valor sense format, intacte.
+ * Res més es formata: ni enters, ni codis, ni dates, ni textos.
  */
 
-import { floatArtifactClean, formatCleanNumber, parseSheetPage } from "@/lib/sheetText";
+import { floatArtifactClean, parseSheetPage } from "@/lib/sheetText";
 
 function CellValue({ value }: { value: string }) {
   const clean = floatArtifactClean(value);
-  if (!clean) return <span className="break-words">{value}</span>;
+  if (!clean) return <span className="break-words whitespace-pre-wrap">{value}</span>;
   return (
     <span className="flex flex-col">
-      <span className="tabular-nums">{formatCleanNumber(clean)}</span>
+      <span className="tabular-nums">{clean}</span>
       <span className="font-mono text-[11px] text-muted" data-raw-value>
         sense format: {value}
       </span>
@@ -29,6 +29,16 @@ export function SheetPageView({ text }: { text: string }) {
   }
   return (
     <div className="max-h-[60vh] overflow-auto px-5 py-4">
+      {page.name !== null && (
+        <p className="mb-2 flex flex-wrap items-center gap-2 text-[13px] font-semibold text-ink" data-sheet-name>
+          Full «{page.name}»
+          {page.hidden && (
+            <span className="rounded border border-border bg-subtle px-1.5 py-0.5 text-caption font-semibold text-ink">
+              Ocult a l&apos;original
+            </span>
+          )}
+        </p>
+      )}
       {page.notes.length > 0 && (
         <ul className="mb-3 space-y-0.5 font-mono text-[12px] text-muted">
           {page.notes.map((note, index) => (
@@ -38,7 +48,10 @@ export function SheetPageView({ text }: { text: string }) {
       )}
       {page.rows.length > 0 && (
         <table className="w-full border-collapse text-[13px]">
-          <caption className="sr-only">Cel·les del full{page.name ? ` ${page.name}` : ""}</caption>
+          <caption className="sr-only">
+            Cel·les del full{page.name ? ` ${page.name}` : ""}
+            {page.hidden ? " (ocult a l'original)" : ""}
+          </caption>
           <thead>
             <tr className="border-b border-border text-left text-caption text-muted">
               <th scope="col" className="py-1.5 pr-3 font-semibold">Fila</th>
@@ -51,7 +64,11 @@ export function SheetPageView({ text }: { text: string }) {
             {page.rows.flatMap((row) =>
               row.cells.map((cell, index) => (
                 <tr key={`${row.row}-${cell.ref}`} className="border-b border-border align-top">
-                  <td className="py-1.5 pr-3 text-muted tabular-nums">{index === 0 ? row.row : ""}</td>
+                  {index === 0 && (
+                    <th scope="row" rowSpan={row.cells.length} className="py-1.5 pr-3 text-left font-normal text-muted tabular-nums">
+                      {row.row}
+                    </th>
+                  )}
                   <td className="py-1.5 pr-3 font-mono text-[12px] whitespace-nowrap">
                     {cell.ref}
                     {cell.range && <span className="text-muted"> [{cell.range}]</span>}

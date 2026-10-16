@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const get = vi.fn();
 const replace = vi.fn();
@@ -83,6 +83,13 @@ describe("Text extret d'un plec", () => {
     replace.mockReset();
     search = "";
     companyId = "c1";
+  });
+
+  // El porta-retalls és global: cada prova que el canvia el torna a deixar com era.
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  afterEach(() => {
+    if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+    else delete (navigator as { clipboard?: unknown }).clipboard;
   });
 
   it("context de la licitació, nom del document, estat i versions reals; avisos de lectura com a bàner", async () => {
@@ -210,21 +217,81 @@ describe("Text extret d'un plec", () => {
       "/companies/c1/tenders/t1/documents/d3/files": sheet,
       "/companies/c1/tender-document-extractions/e2/pages/1": {
         page_number: 1,
-        text: "# Full: Inputs\nFila 9 | A9: PL2 | B9: Bloc 2 | C9: =48*798.46 → 38326.080000000002 | D9: 64200000",
+        text: "# Full: Inputs (ocult)\nFila 9 | A9: PL2 | B9: Bloc 2 | C9: =48*798.46 → 38326.080000000002 | D9: 64200000",
         char_count: 90,
         status: "extracted",
       },
     });
     const { container } = render(<DocumentTextPage />);
-    expect(await screen.findByText("38.326,08")).toBeTruthy();
+    // El valor net en la mateixa notació que la resta (punt decimal), i el desat al costat.
+    expect(await screen.findByText("38326.08")).toBeTruthy();
+    expect(screen.queryByText("38.326,08")).toBeNull();
+    expect(container.querySelector("[data-sheet-name]")?.textContent).toBe("Full «Inputs»Ocult a l'original");
     expect(screen.getByText("Full 1 de 2")).toBeTruthy();
     expect(container.querySelector("[data-raw-value]")?.textContent).toBe("sense format: 38326.080000000002");
     // Els codis i els enters no es toquen.
     expect(screen.getByText("64200000")).toBeTruthy();
     expect(screen.queryByText("64.200.000")).toBeNull();
     expect(screen.getByRole("button", { name: "Copia l'enllaç a aquest full" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Text original" }));
+    expect(screen.queryByRole("button", { name: "Text original" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Text extret" }));
     expect(container.querySelector("pre")?.textContent).toContain("C9: =48*798.46 → 38326.080000000002");
+  });
+
+  it("Enrere/Endavant: si l'URL canvia amb el visor obert, la pàgina la segueix", async () => {
+    search = "page=2";
+    respondWith({ ...base(), "/companies/c1/tender-document-extractions/e2/pages/3": { page_number: 3, text: "Text de la pàgina 3", char_count: 19, status: "extracted" } });
+    const { rerender } = render(<DocumentTextPage />);
+    expect(await screen.findByText("Pàgina 2 de 3")).toBeTruthy();
+    search = "page=3";
+    rerender(<DocumentTextPage />);
+    expect(await screen.findByText("Text de la pàgina 3")).toBeTruthy();
+    expect(screen.getByText("Pàgina 3 de 3")).toBeTruthy();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("obrir una altra revisió (enllaç sense ?page=) torna a la pàgina 1 d'aquella revisió", async () => {
+    search = "page=2";
+    respondWith(base());
+    const { rerender } = render(<DocumentTextPage />);
+    expect(await screen.findByText("Pàgina 2 de 3")).toBeTruthy();
+    search = "extraction=e1";
+    rerender(<DocumentTextPage />);
+    expect(await screen.findByText("Text antic de la revisió 1")).toBeTruthy();
+    expect(get).toHaveBeenCalledWith("/companies/c1/tender-document-extractions/e1/pages/1");
+    expect(get).not.toHaveBeenCalledWith("/companies/c1/tender-document-extractions/e1/pages/2");
+  });
+
+  it("sortir del camp de pàgina sense canviar-lo no toca l'URL", async () => {
+    search = "page=2";
+    respondWith(base());
+    render(<DocumentTextPage />);
+    await screen.findByText("Pàgina 2 de 3");
+    fireEvent.blur(screen.getByRole("spinbutton", { name: "Número de pàgina" }));
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("sense porta-retalls (HTTP sense context segur), l'enllaç es mostra per copiar-lo a mà", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    respondWith(base());
+    render(<DocumentTextPage />);
+    await screen.findByText("Text de la pàgina 1");
+    fireEvent.click(screen.getByRole("button", { name: "Copia l'enllaç a aquesta pàgina" }));
+    await flush();
+    expect(screen.getByText(`No s'ha pogut copiar: ${window.location.origin}/licitacions/t1/documents/d3?page=1`)).toBeTruthy();
+  });
+
+  it("un full de càlcul fora de rang ho diu en fulls", async () => {
+    const sheet = [{ ...files[0], content: { ...files[0].content, mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, extraction: { ...files[0].extraction, parser_version: "xlsx-v1", page_count: 2, ocr_candidate: false, qa_issues: [] } }];
+    search = "page=9";
+    respondWith({
+      ...base(),
+      "/companies/c1/tenders/t1/documents/d3/files": sheet,
+      "/companies/c1/tender-document-extractions/e2/pages/2": { page_number: 2, text: "# Full: Preus\nFila 1 | A1: x", char_count: 30, status: "extracted" },
+    });
+    render(<DocumentTextPage />);
+    expect(await screen.findByText("El full 9 no existeix: aquest document en té 2. Es mostra el 2.")).toBeTruthy();
+    expect(screen.getByText("Fulls")).toBeTruthy();
   });
 
   it("sense cap fitxer → buit amb tornada a la pestanya Plecs", async () => {
