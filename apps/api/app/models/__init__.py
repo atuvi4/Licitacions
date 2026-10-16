@@ -93,6 +93,7 @@ from app.models.submission import (
     SubmissionPackageApproval,
     SubmissionPackageItem,
 )
+from app.models.tender_amounts import TenderAmountObservation
 from app.models.tender_analysis import (
     AnalysisFinding,
     AnalysisQuestion,
@@ -153,6 +154,7 @@ __all__ = [
     "CriterionAssessment",
     "DeliveryCandidate",
     "TenderAnalysisRun",
+    "TenderAmountObservation",
     "TenderFitAssessment",
     "CapabilityDefinitionRow",
     "CertificationStandardRow",

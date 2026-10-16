@@ -2110,8 +2110,8 @@ def test_0056_es_reversible_i_mai_esborra_l_extensio():
     assert "pg_trgm" not in sql
 
 
-def test_0062_es_l_unic_cap_i_penja_de_0061():
-    """0061 penjava de 0060; 0062 (incerteses de requisits) es el nou cap unic."""
+def test_0063_es_l_unic_cap_i_penja_de_0062():
+    """0062 penjava de 0061; 0063 (imports d'una font externa, F-06a) es el nou cap unic."""
     from app.db.revision import SCHEMA_REVISION
 
     result = subprocess.run(
@@ -2123,13 +2123,17 @@ def test_0062_es_l_unic_cap_i_penja_de_0061():
     )
     assert result.returncode == 0, result.stderr[-1000:]
     assert [line.split()[0] for line in result.stdout.splitlines() if line.strip()] == [
-        "0062_requirement_uncertainties"
+        "0063_tender_amount_observations"
     ]
-    assert SCHEMA_REVISION == "0062_requirement_uncertainties"
+    assert SCHEMA_REVISION == "0063_tender_amount_observations"
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(API_ROOT / "alembic.ini")))
+    assert (
+        script.get_revision("0063_tender_amount_observations").down_revision
+        == "0062_requirement_uncertainties"
+    )
     assert (
         script.get_revision("0062_requirement_uncertainties").down_revision
         == "0061_requirement_run_basis"
@@ -3947,3 +3951,286 @@ async def test_0062_round_trip_real_a_postgres(engine):
         assert not await has_table(conn)
         await conn.run_sync(run, m62.upgrade)
         assert await has_table(conn)
+
+
+
+# --------------------------------------------------------------------------- #
+# 0063: imports d'un expedient segons una font externa acreditada (F-06a)      #
+# --------------------------------------------------------------------------- #
+
+_AMOUNTS = "tender_amount_observations"
+_AMOUNTS_UP = "0062_requirement_uncertainties:0063_tender_amount_observations"
+_AMOUNTS_DOWN = "0063_tender_amount_observations:0062_requirement_uncertainties"
+_AMOUNTS_OPT_IN = "drop_amount_observations=yes"
+
+
+def test_0063_crea_la_taula_global_amb_les_restriccions():
+    sql = _offline_sql("upgrade", _AMOUNTS_UP)
+    create = sql[sql.index(f"CREATE TABLE {_AMOUNTS}"):]
+    create = create[: create.index(";")]
+    assert "company_id" not in create  # global: cap tenant
+    for fragment in (
+        "tender_id UUID NOT NULL",
+        "tender_lot_id UUID,",
+        "amount_kind VARCHAR(15) NOT NULL",
+        "amount NUMERIC(18, 2) NOT NULL",
+        "currency VARCHAR(3) DEFAULT 'EUR' NOT NULL",
+        "source_code VARCHAR(60) NOT NULL",
+        "source_entity_key VARCHAR(200) NOT NULL",
+        "source_row_id VARCHAR(200) NOT NULL",
+        "source_phase VARCHAR(80),",
+        "source_dataset_updated_at TIMESTAMP WITH TIME ZONE,",
+        "retrieved_at TIMESTAMP WITH TIME ZONE NOT NULL",
+        "evidence_url TEXT NOT NULL",
+        "evidence_sha256 VARCHAR(64) NOT NULL",
+        "raw_storage_key VARCHAR(512),",
+        "validation_status VARCHAR(8) NOT NULL",
+        "validation JSONB DEFAULT '{}' NOT NULL",
+        "valid_from TIMESTAMP WITH TIME ZONE NOT NULL",
+        "valid_to TIMESTAMP WITH TIME ZONE,",
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL",
+        "amount_kind IN ('pbl_with_tax', 'pbl_without_tax', 'estimated_value')",
+        "validation_status IN ('accepted', 'conflict')",
+        "CHECK (amount >= 0)",
+        "CHECK (valid_to IS NULL OR valid_to >= valid_from)",
+        "CHECK (length(evidence_sha256) = 64)",
+        "CONSTRAINT fk_tender_amount_observations_tender_id FOREIGN KEY",
+        "CONSTRAINT fk_tender_amount_observations_tender_lot_id FOREIGN KEY",
+        "REFERENCES tenders (id) ON DELETE CASCADE",
+        "REFERENCES tender_lots (id) ON DELETE CASCADE",
+    ):
+        assert fragment in create, fragment
+    assert (
+        f"CREATE UNIQUE INDEX uq_{_AMOUNTS}_current ON {_AMOUNTS} (tender_id, "
+        "coalesce(tender_lot_id, '00000000-0000-0000-0000-000000000000'), amount_kind, "
+        "source_code) WHERE valid_to IS NULL AND validation_status = 'accepted'"
+    ) in sql
+    assert f"CREATE INDEX ix_{_AMOUNTS}_tender_id ON {_AMOUNTS} (tender_id)" in sql
+    # Nomes d'afegir: el trigger refusa UPDATE (excepte tancar) i DELETE directe.
+    assert "BEFORE UPDATE OR DELETE ON tender_amount_observations" in sql
+    assert "pg_trigger_depth() < 2" in sql
+    assert "(to_jsonb(NEW) - 'valid_to') = (to_jsonb(OLD) - 'valid_to')" in sql
+    # Additiva: cap altra taula no canvia (ni `tenders.base_budget`).
+    assert "ALTER TABLE" not in sql.replace("alembic_version", "")
+    assert "UPDATE tenders" not in sql and "INSERT INTO tenders" not in sql
+
+
+def test_0063_downgrade_refusa_si_hi_ha_observacions_abans_del_drop():
+    sql = _offline_sql("downgrade", _AMOUNTS_DOWN)
+    guard = sql.index("RAISE EXCEPTION '0063")
+    assert f"SELECT 1 FROM {_AMOUNTS}" in sql[sql.rindex("DO $$", 0, guard) : guard]
+    assert "drop_amount_observations=yes" in sql[guard : guard + 300]
+    assert guard < sql.index("DROP TRIGGER IF EXISTS tender_amount_observations_append_only")
+    assert guard < sql.index(f"DROP TABLE {_AMOUNTS}")
+    assert "DROP FUNCTION IF EXISTS tender_amount_observations_append_only()" in sql
+
+
+def test_0063_downgrade_amb_la_marca_explicita_no_refusa():
+    sql = _offline_sql("-x", _AMOUNTS_OPT_IN, "downgrade", _AMOUNTS_DOWN)
+    assert "RAISE EXCEPTION '0063" not in sql
+    assert f"DROP TABLE {_AMOUNTS}" in sql
+    # Qualsevol altre valor no es la marca.
+    sql = _offline_sql("-x", "drop_amount_observations=1", "downgrade", _AMOUNTS_DOWN)
+    assert "RAISE EXCEPTION '0063" in sql
+
+
+def test_0063_a_sqlite_sense_raise_ni_trigger():
+    up = _offline_sql_sqlite("upgrade", _AMOUNTS_UP).replace("alembic_version", "")
+    down = _offline_sql_sqlite("downgrade", _AMOUNTS_DOWN).replace("alembic_version", "")
+    assert "RAISE" not in up and "RAISE" not in down
+    assert "TRIGGER" not in up and "TRIGGER" not in down
+    assert f"CREATE TABLE {_AMOUNTS}" in up and f"DROP TABLE {_AMOUNTS}" in down
+
+
+def test_0063_al_model():
+    from app.models.tender_amounts import (
+        APPEND_ONLY_FUNCTION,
+        APPEND_ONLY_TRIGGER,
+        TenderAmountObservation,
+    )
+    from app.tenant_ops import PUBLIC_TABLES
+
+    table = TenderAmountObservation.__table__
+    assert "company_id" not in table.c
+    assert _AMOUNTS in PUBLIC_TABLES
+    assert {c.name for c in table.foreign_key_constraints} == {
+        f"fk_{_AMOUNTS}_tender_id",
+        f"fk_{_AMOUNTS}_tender_lot_id",
+    }
+    # El trigger del model (create_all) i el de la migracio son el mateix text.
+    path = API_ROOT / "alembic" / "versions" / "0063_tender_amount_observations.py"
+    source = path.read_text(encoding="utf-8")
+    assert APPEND_ONLY_FUNCTION in source
+    assert APPEND_ONLY_TRIGGER in source
+
+
+@pytest.mark.postgres
+async def test_0063_round_trip_real_a_postgres(engine):
+    """0063 -> 0062 -> 0063 sense dades, esquema identic al dels models (trigger i funcio
+    inclosos); amb una observacio, el downgrade refusa i no toca res; amb la marca
+    explicita, baixa; i torna a pujar igual."""
+    import importlib.util
+    import uuid as uuid_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import DBAPIError
+
+    path = API_ROOT / "alembic" / "versions" / "0063_tender_amount_observations.py"
+    spec = importlib.util.spec_from_file_location("mig_0063_tender_amount_observations", path)
+    m63 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m63)
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    def drop_anyway() -> None:
+        m63.apply_downgrade(drop_rows=True)
+
+    async def has_table(conn) -> bool:
+        return bool(
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = current_schema() AND table_name = :t"
+                    ),
+                    {"t": _AMOUNTS},
+                )
+            ).scalar_one()
+        )
+
+    async def functions(conn) -> list[tuple]:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT p.proname, p.prosrc FROM pg_proc p "
+                "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                "WHERE n.nspname = current_schema() "
+                "AND p.proname = 'tender_amount_observations_append_only'"
+            )
+        )
+        return [tuple(r) for r in rows]
+
+    async def schema(conn) -> tuple:
+        """Columnes, restriccions, index, trigger i funcio: tot el que la migracio crea."""
+        columns = await conn.execute(
+            sa.text(
+                "SELECT column_name, data_type, is_nullable, character_maximum_length, "
+                "numeric_precision, numeric_scale, column_default "
+                "FROM information_schema.columns WHERE table_schema = current_schema() "
+                "AND table_name = :t ORDER BY column_name"
+            ),
+            {"t": _AMOUNTS},
+        )
+        constraints = await conn.execute(
+            sa.text(
+                "SELECT conname, contype::text, pg_get_constraintdef(c.oid) "
+                "FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
+                "JOIN pg_namespace n ON n.oid = t.relnamespace "
+                "WHERE n.nspname = current_schema() AND t.relname = :t ORDER BY conname"
+            ),
+            {"t": _AMOUNTS},
+        )
+        indexes = await conn.execute(
+            sa.text(
+                "SELECT indexname, indexdef FROM pg_indexes "
+                "WHERE schemaname = current_schema() AND tablename = :t ORDER BY indexname"
+            ),
+            {"t": _AMOUNTS},
+        )
+        triggers = await conn.execute(
+            sa.text(
+                "SELECT tg.tgname, pg_get_triggerdef(tg.oid) FROM pg_trigger tg "
+                "JOIN pg_class t ON t.oid = tg.tgrelid "
+                "JOIN pg_namespace n ON n.oid = t.relnamespace "
+                "WHERE n.nspname = current_schema() AND t.relname = :t "
+                "AND NOT tg.tgisinternal ORDER BY tg.tgname"
+            ),
+            {"t": _AMOUNTS},
+        )
+        return (
+            [tuple(r) for r in columns],
+            [tuple(r) for r in constraints],
+            [tuple(r) for r in indexes],
+            [tuple(r) for r in triggers],
+            await functions(conn),
+        )
+
+    # L'esquema el crea el harness amb els models: el comparem amb el de la migracio.
+    async with engine.begin() as conn:
+        from_models = await schema(conn)
+        await conn.run_sync(run, m63.downgrade)  # -> 0062, sense dades
+        assert not await has_table(conn)
+        assert await functions(conn) == []
+        await conn.run_sync(run, m63.upgrade)  # -> 0063
+        from_migration = await schema(conn)
+        await conn.run_sync(run, m63.downgrade)  # -> 0062 de nou
+        await conn.run_sync(run, m63.upgrade)  # -> 0063 de nou
+        assert await schema(conn) == from_migration
+    # Columnes, restriccions, index, trigger i funcio: identics.
+    assert from_migration == from_models
+    assert {
+        f"ck_{_AMOUNTS}_amount_kind_valid",
+        f"ck_{_AMOUNTS}_validation_status_valid",
+        f"ck_{_AMOUNTS}_amount_non_negative",
+        f"ck_{_AMOUNTS}_validity_ordered",
+        f"ck_{_AMOUNTS}_evidence_sha256_length",
+        f"fk_{_AMOUNTS}_tender_id",
+        f"fk_{_AMOUNTS}_tender_lot_id",
+        f"pk_{_AMOUNTS}",
+    } <= {name for name, *_ in from_migration[1]}
+    assert {name for name, _ in from_migration[2]} == {
+        f"pk_{_AMOUNTS}",
+        f"ix_{_AMOUNTS}_tender_id",
+        f"uq_{_AMOUNTS}_current",
+    }
+    assert [name for name, _ in from_migration[3]] == ["tender_amount_observations_append_only"]
+
+    # Una observacio real sobre una licitacio. El context, amb l'ORM.
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.models.sources import Source
+    from app.models.tenders import Tender
+
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        source = Source(code=f"m63-{uuid_module.uuid4().hex[:8]}", name="Font")
+        session.add(source)
+        await session.flush()
+        tender = Tender(source_id=source.id, external_id="m63", title="T")
+        session.add(tender)
+        await session.commit()
+        tender_id = tender.id
+
+    count = sa.text(f"SELECT count(*) FROM {_AMOUNTS}")
+    async with engine.begin() as conn:
+        await conn.execute(
+            sa.text(
+                f"INSERT INTO {_AMOUNTS} (id, tender_id, amount_kind, amount, source_code, "
+                "source_entity_key, source_row_id, retrieved_at, evidence_url, evidence_sha256, "
+                "validation_status, valid_from) VALUES (gen_random_uuid(), :tender, "
+                "'pbl_with_tax', 247121.63, 'pscp_open_data:ybgg-dgi6', 'k', 'r', now(), "
+                "'https://x', :sha, 'accepted', now())"
+            ),
+            {"tender": tender_id, "sha": "a" * 64},
+        )
+
+    # Amb dades, el downgrade refusa i no toca res: ni la taula, ni el trigger, ni la fila.
+    with pytest.raises(DBAPIError) as caught:
+        async with engine.begin() as conn:
+            await conn.run_sync(run, m63.downgrade)
+    assert "0063 downgrade refusat" in str(caught.value)
+    async with engine.begin() as conn:
+        assert await has_table(conn)
+        assert (await conn.execute(count)).scalar_one() == 1
+        assert await schema(conn) == from_migration
+
+    # Amb la marca explicita, baixa encara que hi hagi files; i torna a pujar igual.
+    async with engine.begin() as conn:
+        await conn.run_sync(run, drop_anyway)
+        assert not await has_table(conn)
+        assert await functions(conn) == []
+        await conn.run_sync(run, m63.upgrade)
+        assert await schema(conn) == from_migration
+        assert (await conn.execute(count)).scalar_one() == 0

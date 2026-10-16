@@ -181,6 +181,9 @@ PUBLIC_TABLES = frozenset(
         # aixo tampoc no s'ha d'esborrar en destruir un tenant: la font que
         # senyala segueix sent la mateixa per a qui la pugui veure.
         "tender_source_refs",
+        # Imports d'un expedient o d'un lot segons una font externa acreditada
+        # (0063, F-06a): procedencia de la licitacio, cap empresa n'es propietaria.
+        "tender_amount_observations",
         "tender_lot_cpvs",
         "tender_lots",
         "tenders",

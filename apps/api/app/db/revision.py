@@ -10,4 +10,4 @@ falla: un error determinista (dades, integritat, parseig) nomes es torna a
 provar si la revisio o el `parser_version` han canviat.
 """
 
-SCHEMA_REVISION = "0062_requirement_uncertainties"
+SCHEMA_REVISION = "0063_tender_amount_observations"

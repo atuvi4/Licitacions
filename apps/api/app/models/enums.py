@@ -1936,3 +1936,26 @@ class StructureProposalStatus(StrEnum):
     PROPOSED = "proposed"
     PROMOTED = "promoted"
     REJECTED = "rejected"
+
+
+class TenderAmountKind(StrEnum):
+    """Quin import d'un expedient (o d'un lot) recull una observacio de font externa (0063).
+
+    Es desen tots tres: el PBL amb IVA es la dada que falta; el PBL sense IVA i el VEC
+    serveixen per comprovar que la fila de la font es la mateixa licitacio.
+    """
+
+    PBL_WITH_TAX = "pbl_with_tax"
+    PBL_WITHOUT_TAX = "pbl_without_tax"
+    ESTIMATED_VALUE = "estimated_value"
+
+
+class AmountObservationStatus(StrEnum):
+    """Resultat de les guardes d'una observacio d'import (0063).
+
+    Nomes una `accepted` vigent es pot mostrar; una `conflict` es desa amb el detall de
+    la guarda que ha fallat i no es mostra mai com a vigent.
+    """
+
+    ACCEPTED = "accepted"
+    CONFLICT = "conflict"

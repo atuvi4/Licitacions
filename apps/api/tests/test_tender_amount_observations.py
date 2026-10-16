@@ -1,0 +1,408 @@
+"""Observacions d'imports d'una font externa acreditada (F-06a, 0063).
+
+El que es prova aqui es el CONTRACTE del model i de la base: valors per defecte,
+unicitat parcial d'una sola observacio `accepted` vigent per (expedient, lot o
+expedient, tipus, font), CHECK, cascades i, a PostgreSQL, el trigger que nomes deixa
+TANCAR una observacio (`valid_to` de NULL a un valor) i refusa un DELETE directe.
+
+Cap adaptador ni cap dada real: nomes la taula. La migracio (round trip 0062 <-> 0063)
+es prova a `test_migrations.py`.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+import pytest
+import sqlalchemy as sa
+from sqlalchemy.exc import DBAPIError, IntegrityError
+
+from app.models.enums import AmountObservationStatus, TenderAmountKind
+from app.models.sources import Source
+from app.models.tender_amounts import TenderAmountObservation
+from app.models.tenders import Tender, TenderLot
+from app.tenant_ops import PUBLIC_TABLES
+
+NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
+SOURCE = "pscp_open_data:ybgg-dgi6"
+SHA = "a" * 64
+TABLE = "tender_amount_observations"
+
+
+async def _tender(session, lots: int = 0) -> tuple[Tender, list[TenderLot]]:
+    source = Source(code=f"am-{uuid.uuid4().hex[:8]}", name="Font de prova")
+    session.add(source)
+    await session.flush()
+    tender = Tender(source_id=source.id, external_id=f"exp-{uuid.uuid4().hex[:8]}", title="T")
+    session.add(tender)
+    await session.flush()
+    created = [
+        TenderLot(tender_id=tender.id, external_lot_id=str(n), lot_number=n)
+        for n in range(1, lots + 1)
+    ]
+    session.add_all(created)
+    await session.flush()
+    return tender, created
+
+
+def _observation(tender: Tender | uuid.UUID, **kwargs) -> TenderAmountObservation:
+    # Un id tambe: despres d'un rollback l'objecte caduca i no es pot llegir sense IO.
+    values = {
+        "tender_id": tender if isinstance(tender, uuid.UUID) else tender.id,
+        "amount_kind": TenderAmountKind.PBL_WITH_TAX,
+        "amount": Decimal("247121.63"),
+        "source_code": SOURCE,
+        "source_entity_key": "exp-1",
+        "source_row_id": "exp-1",
+        "retrieved_at": NOW,
+        "evidence_url": "https://analisi.transparenciacatalunya.cat/resource/ybgg-dgi6.json",
+        "evidence_sha256": SHA,
+        "validation_status": AmountObservationStatus.ACCEPTED,
+        "valid_from": NOW,
+    }
+    values.update(kwargs)
+    return TenderAmountObservation(**values)
+
+
+async def _count(session, tender_id: uuid.UUID) -> int:
+    return (
+        await session.execute(
+            sa.select(sa.func.count())
+            .select_from(TenderAmountObservation)
+            .where(TenderAmountObservation.tender_id == tender_id)
+        )
+    ).scalar_one()
+
+
+def test_els_valors_dels_enums_son_els_de_l_especificacio():
+    assert {m.value for m in TenderAmountKind} == {
+        "pbl_with_tax",
+        "pbl_without_tax",
+        "estimated_value",
+    }
+    assert {m.value for m in AmountObservationStatus} == {"accepted", "conflict"}
+
+
+def test_la_taula_es_global_i_no_toca_la_licitacio():
+    table = TenderAmountObservation.__table__
+    assert "company_id" not in table.c
+    assert TABLE in PUBLIC_TABLES
+    assert table.c.tender_lot_id.nullable is True
+    assert table.c.valid_to.nullable is True
+    # Noms de FK explicits, els mateixos que la migracio.
+    assert {c.name for c in table.foreign_key_constraints} == {
+        f"fk_{TABLE}_tender_id",
+        f"fk_{TABLE}_tender_lot_id",
+    }
+    assert {fk.ondelete for fk in table.foreign_key_constraints} == {"CASCADE"}
+
+
+async def test_expedient_i_lot_amb_els_valors_per_defecte(db):
+    tender, (lot,) = await _tender(db, lots=1)
+    whole = _observation(tender)
+    per_lot = _observation(
+        tender,
+        tender_lot_id=lot.id,
+        amount=Decimal("1000.00"),
+        source_entity_key="exp-1#lot=1",
+        source_row_id="exp-1_1",
+        source_phase="Adjudicacio",
+        source_dataset_updated_at=NOW - timedelta(days=1),
+        raw_storage_key="pscp/exp-1.json",
+    )
+    db.add_all([whole, per_lot])
+    await db.commit()
+    await db.refresh(whole)
+    await db.refresh(per_lot)
+
+    assert whole.tender_lot_id is None and per_lot.tender_lot_id == lot.id
+    assert whole.currency == "EUR" and per_lot.currency == "EUR"
+    assert whole.validation == {} and per_lot.validation == {}
+    assert whole.valid_to is None
+    assert whole.created_at is not None
+    assert whole.amount == Decimal("247121.63")
+    assert per_lot.raw_storage_key == "pscp/exp-1.json"
+
+
+async def test_els_defectes_de_la_base_sense_l_orm(db):
+    """Un INSERT que no passa per l'ORM tambe rep `EUR`, `{}` i `created_at`."""
+    tender, _ = await _tender(db)
+    await db.commit()
+    await db.execute(
+        sa.text(
+            f"INSERT INTO {TABLE} (id, tender_id, amount_kind, amount, source_code, "
+            "source_entity_key, source_row_id, retrieved_at, evidence_url, evidence_sha256, "
+            "validation_status, valid_from) VALUES (:id, :tender, 'estimated_value', 10, "
+            ":source, 'k', 'r', CURRENT_TIMESTAMP, 'https://x', :sha, 'conflict', "
+            "CURRENT_TIMESTAMP)"
+        ),
+        # `.hex`: SQLite guarda els UUID sense guions, i PostgreSQL els accepta igual.
+        {"id": uuid.uuid4().hex, "tender": tender.id.hex, "source": SOURCE, "sha": SHA},
+    )
+    await db.commit()
+    row = (
+        await db.execute(
+            sa.select(TenderAmountObservation).where(TenderAmountObservation.tender_id == tender.id)
+        )
+    ).scalar_one()
+    assert row.currency == "EUR"
+    assert row.validation == {}
+    assert row.created_at is not None
+    assert row.validation_status == AmountObservationStatus.CONFLICT
+
+
+async def test_una_sola_observacio_acceptada_vigent_per_base_i_font(db):
+    created, (lot,) = await _tender(db, lots=1)
+    tender, lot_id = created.id, lot.id
+    db.add(_observation(tender))
+    db.add(_observation(tender, tender_lot_id=lot_id))
+    await db.commit()
+
+    # La mateixa base (expedient), tipus i font, acceptada i vigent: no hi cap.
+    db.add(_observation(tender, amount=Decimal("1.00")))
+    with pytest.raises(IntegrityError):
+        await db.flush()
+    await db.rollback()
+    # El mateix per al lot.
+    db.add(_observation(tender, tender_lot_id=lot_id, amount=Decimal("1.00")))
+    with pytest.raises(IntegrityError):
+        await db.flush()
+    await db.rollback()
+
+    # Una `conflict`, una de tancada, un altre tipus o una altra font: si.
+    db.add_all(
+        [
+            _observation(
+                tender,
+                amount=Decimal("2.00"),
+                validation_status=AmountObservationStatus.CONFLICT,
+                validation={"organ": "mismatch"},
+            ),
+            _observation(tender, amount=Decimal("3.00"), valid_to=NOW + timedelta(hours=1)),
+            _observation(tender, amount_kind=TenderAmountKind.PBL_WITHOUT_TAX),
+            _observation(tender, source_code="una_altra_font"),
+            _observation(
+                tender,
+                tender_lot_id=lot_id,
+                validation_status=AmountObservationStatus.CONFLICT,
+            ),
+        ]
+    )
+    await db.commit()
+    assert await _count(db, tender) == 7
+
+
+async def test_l_expedient_i_els_lots_no_comparteixen_unicitat(db):
+    tender, (first, second) = await _tender(db, lots=2)
+    db.add_all(
+        [
+            _observation(tender),
+            _observation(tender, tender_lot_id=first.id),
+            _observation(tender, tender_lot_id=second.id),
+        ]
+    )
+    await db.commit()
+    assert await _count(db, tender.id) == 3
+
+
+@pytest.mark.parametrize(
+    ("override", "why"),
+    [
+        ({"amount": Decimal("-0.01")}, "import negatiu"),
+        ({"evidence_sha256": "a" * 63}, "sha massa curt"),
+        ({"evidence_sha256": "a" * 64 + "b"}, "sha massa llarg"),
+        ({"valid_to": NOW - timedelta(seconds=1)}, "tancada abans de comencar"),
+    ],
+)
+async def test_els_check_refusen_el_que_no_te_sentit(db, override, why):
+    tender, _ = await _tender(db)
+    await db.commit()
+    db.add(_observation(tender, **override))
+    with pytest.raises((IntegrityError, DBAPIError)):
+        await db.flush()
+    await db.rollback()
+
+
+async def test_import_zero_i_tancament_al_mateix_moment_son_valids(db):
+    """IVA 0 % o un import 0 es una dada; `valid_to = valid_from` tambe."""
+    tender, _ = await _tender(db)
+    db.add(_observation(tender, amount=Decimal("0.00"), valid_to=NOW))
+    await db.commit()
+    assert await _count(db, tender.id) == 1
+
+
+async def test_esborrar_la_licitacio_s_emporta_les_observacions(db):
+    tender, (lot,) = await _tender(db, lots=1)
+    keep, _ = await _tender(db)
+    db.add_all(
+        [
+            _observation(tender),
+            _observation(tender, tender_lot_id=lot.id),
+            _observation(keep),
+        ]
+    )
+    await db.commit()
+
+    await db.execute(sa.delete(Tender).where(Tender.id == tender.id))
+    await db.commit()
+    assert await _count(db, tender.id) == 0
+    assert await _count(db, keep.id) == 1
+
+
+async def test_esborrar_un_lot_s_emporta_nomes_les_seves(db):
+    tender, (lot,) = await _tender(db, lots=1)
+    db.add_all([_observation(tender), _observation(tender, tender_lot_id=lot.id)])
+    await db.commit()
+
+    await db.execute(sa.delete(TenderLot).where(TenderLot.id == lot.id))
+    await db.commit()
+    rows = (
+        (
+            await db.execute(
+                sa.select(TenderAmountObservation.tender_lot_id).where(
+                    TenderAmountObservation.tender_id == tender.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows == [None]
+
+
+# --------------------------------------------------------------------------- #
+# Nomes d'afegir (trigger de PostgreSQL)                                        #
+# --------------------------------------------------------------------------- #
+
+
+async def _one(db) -> tuple[uuid.UUID, uuid.UUID]:
+    """Ids, no objectes: cada refus fa rollback i els objectes caduquen."""
+    tender, _ = await _tender(db)
+    observation = _observation(tender)
+    db.add(observation)
+    await db.commit()
+    return tender.id, observation.id
+
+
+async def _refused(db, statement) -> None:
+    with pytest.raises(DBAPIError) as caught:
+        await db.execute(statement)
+    await db.rollback()
+    assert "tender_amount_observations" in str(caught.value)
+
+
+def _update(observation_id: uuid.UUID, **values):
+    return (
+        sa.update(TenderAmountObservation)
+        .where(TenderAmountObservation.id == observation_id)
+        .values(**values)
+    )
+
+
+@pytest.mark.postgres
+async def test_cap_columna_no_es_pot_canviar_excepte_tancar_valid_to(db):
+    tender_id, obs_id = await _one(db)
+
+    for values in (
+        {"amount": Decimal("1.00")},
+        {"source_code": "una_altra_font"},
+        {"validation_status": AmountObservationStatus.CONFLICT},
+        {"validation": {"organ": "ok"}},
+        {"evidence_sha256": "b" * 64},
+        {"valid_from": NOW - timedelta(days=1)},
+        # Tancar i alhora canviar una altra cosa: tampoc.
+        {"valid_to": NOW + timedelta(days=1), "amount": Decimal("1.00")},
+        # Una actualitzacio que no canvia res tampoc no es un tancament.
+        {"valid_to": None},
+    ):
+        await _refused(db, _update(obs_id, **values))
+
+    # Tancar-la (NULL -> valor) si.
+    closed_at = NOW + timedelta(days=1)
+    await db.execute(_update(obs_id, valid_to=closed_at))
+    await db.commit()
+
+    # Un cop tancada: ni reobrir-la ni moure el tancament.
+    await _refused(db, _update(obs_id, valid_to=None))
+    await _refused(db, _update(obs_id, valid_to=closed_at + timedelta(days=1)))
+
+    row = (
+        await db.execute(
+            sa.select(TenderAmountObservation).where(TenderAmountObservation.id == obs_id)
+        )
+    ).scalar_one()
+    await db.refresh(row)
+    assert row.valid_to == closed_at
+    assert row.amount == Decimal("247121.63")
+    assert row.validation_status == AmountObservationStatus.ACCEPTED
+    assert row.tender_id == tender_id
+
+
+@pytest.mark.postgres
+async def test_tancar_l_anterior_allibera_la_unicitat_per_a_una_de_nova(db):
+    tender_id, obs_id = await _one(db)
+    await db.execute(_update(obs_id, valid_to=NOW + timedelta(days=1)))
+    db.add(_observation(tender_id, amount=Decimal("1.00"), valid_from=NOW + timedelta(days=1)))
+    await db.commit()
+    assert await _count(db, tender_id) == 2
+
+
+@pytest.mark.postgres
+async def test_un_delete_directe_es_refusa_i_la_cascada_passa(db):
+    tender_id, obs_id = await _one(db)
+    await _refused(
+        db, sa.delete(TenderAmountObservation).where(TenderAmountObservation.id == obs_id)
+    )
+    assert await _count(db, tender_id) == 1
+    # Per cascada (la licitacio), si.
+    await db.execute(sa.delete(Tender).where(Tender.id == tender_id))
+    await db.commit()
+    assert await _count(db, tender_id) == 0
+
+
+@pytest.mark.postgres
+async def test_els_enums_tenen_check_a_la_base(db):
+    """Un INSERT que no passa per l'ORM no hi pot escriure un valor fora de l'enum."""
+    names = {
+        name
+        for (name,) in (
+            await db.execute(
+                sa.text(
+                    "SELECT conname FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
+                    "JOIN pg_namespace n ON n.oid = t.relnamespace "
+                    "WHERE n.nspname = current_schema() AND t.relname = :t AND c.contype = 'c'"
+                ),
+                {"t": TABLE},
+            )
+        ).all()
+    }
+    assert {
+        f"ck_{TABLE}_amount_kind_valid",
+        f"ck_{TABLE}_validation_status_valid",
+        f"ck_{TABLE}_amount_non_negative",
+        f"ck_{TABLE}_validity_ordered",
+        f"ck_{TABLE}_evidence_sha256_length",
+    } <= names
+
+    tender, _ = await _tender(db)
+    tender_id = tender.id
+    await db.commit()
+    insert = sa.text(
+        f"INSERT INTO {TABLE} (id, tender_id, amount_kind, amount, source_code, "
+        "source_entity_key, source_row_id, retrieved_at, evidence_url, evidence_sha256, "
+        "validation_status, valid_from) VALUES (gen_random_uuid(), :tender, :kind, 10, "
+        ":source, 'k', 'r', now(), 'https://x', :sha, :status, now())"
+    )
+    ok = {"tender": tender_id, "source": SOURCE, "sha": SHA}
+    for bad in (
+        {"kind": "pbl", "status": "accepted"},
+        {"kind": "pbl_with_tax", "status": "pending"},
+    ):
+        with pytest.raises(IntegrityError):
+            await db.execute(insert, {**ok, **bad})
+        await db.rollback()
+    await db.execute(insert, {**ok, "kind": "pbl_with_tax", "status": "accepted"})
+    await db.commit()
+    assert await _count(db, tender_id) == 1
