@@ -919,6 +919,15 @@ describe("Oferta econòmica · durada del lot", () => {
     expect(row.textContent).not.toContain("0 mesos");
   });
 
+  it("al resum, una durada sense definir és de l'oferta, no «No consta» del plec (P2-03)", async () => {
+    offer = offerFixture({ lots: [lotFixture({ duration_months: null })] });
+    await mount();
+    const summary = screen.getByText("Durada del contracte").parentElement as HTMLElement;
+    expect(summary.textContent).toContain("No definida en aquesta oferta");
+    expect(summary.textContent).not.toContain("No consta");
+    expect(summary.textContent).toContain("Les línies temporals no es poden calcular");
+  });
+
   it("un rol autoritzat la pot editar", async () => {
     await mount();
     expect(within(durationRow()).getByRole("button", { name: "Edita la durada" })).toBeTruthy();

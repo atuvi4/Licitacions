@@ -780,7 +780,8 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
           {singleLot && (
             <Summary
               label="Durada del contracte"
-              value={singleLot.duration_months === null ? "No consta" : `${singleLot.duration_months} mesos`}
+              // «No consta» diria que el plec no la fixa; el que falta és la durada d'aquesta oferta (P2-03).
+              value={singleLot.duration_months === null ? "No definida en aquesta oferta" : `${singleLot.duration_months} mesos`}
               hint={singleLot.duration_months === null ? "Les línies temporals no es poden calcular" : "del lot"}
             />
           )}
