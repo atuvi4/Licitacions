@@ -125,11 +125,10 @@ describe("F-06b (regles v2): base de l'import al factor econòmic", () => {
 
   it("sense VEC, el PBL es diu i es marca com a mínim", () => {
     expect(factorSourceValue(economic({ amount_basis: "pbl_net", lower_bound: true }))).toBe(
-      "67.500 € (PBL sense IVA, sense VEC publicat: com a mínim)",
+      "67.500 € (PBL sense IVA, sense VEC vàlid: com a mínim)",
     );
-    expect(factorSourceValue(economic({ amount_basis: "pbl_gross" }))).toBe(
-      "67.500 € (PBL amb IVA, sense VEC publicat: com a mínim)",
-    );
+    // Amb IVA no és cap cota del VEC: no diu «com a mínim».
+    expect(factorSourceValue(economic({ amount_basis: "pbl_gross" }))).toBe("67.500 € (PBL amb IVA, sense VEC vàlid)");
   });
 
   it("amb VEC, es diu que és el VEC; un factor de v1 (sense base) es mostra com era", () => {
@@ -140,7 +139,7 @@ describe("F-06b (regles v2): base de l'import al factor econòmic", () => {
   });
 
   it("els motius nous tenen text i compten com a dada de la font, no del perfil", () => {
-    for (const code of ["AMOUNT_BUDGET_LOWER_BOUND", "AMOUNT_INCOHERENT"]) {
+    for (const code of ["AMOUNT_BUDGET_LOWER_BOUND", "AMOUNT_INCOHERENT", "AMOUNT_BUDGET_WITH_TAX_ONLY"]) {
       expect(reasonLabel(code)).not.toBe(code);
       const m = match([factor("economic", "unknown", code), factor("cpv", "match", "CPV_EXACT_HIGH_PRIORITY")]);
       expect(sourceGaps(m)).toEqual(["economic"]);

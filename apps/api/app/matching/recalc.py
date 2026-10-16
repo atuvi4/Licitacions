@@ -35,7 +35,7 @@ import json
 import sys
 import uuid
 from collections import Counter
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -267,6 +267,11 @@ async def recalculate(
     )
     after = await snapshot(session, company_id)
     changes, summary = diff(before, after)
+    # El registre es escrit ABANS de confirmar: si el commit falla, se sap que s'intentava.
+    with (out_dir / "changes.jsonl").open("w", encoding="utf-8") as handle:
+        for change in changes:
+            handle.write(json.dumps(change, ensure_ascii=False, sort_keys=True) + "\n")
+    _write_json(out_dir / "after.json", after)
 
     if dry_run:
         await session.rollback()
@@ -275,10 +280,6 @@ async def recalculate(
         await session.commit()
         persisted = digest(await snapshot(session, company_id)) == digest(after)
 
-    with (out_dir / "changes.jsonl").open("w", encoding="utf-8") as handle:
-        for change in changes:
-            handle.write(json.dumps(change, ensure_ascii=False, sort_keys=True) + "\n")
-    _write_json(out_dir / "after.json", after)
     result = {
         "company_id": str(company_id),
         "mode": "dry-run" if dry_run else "applied",
@@ -308,6 +309,12 @@ async def restore(
             raise SystemExit(f"{name}: l'exportacio conte files d'una altra empresa")
 
     current = await snapshot(session, company_id)
+    # Abans de substituir res, l'estat actual queda exportat al costat (mai trepitjat).
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    replaced_dir = source_dir / f"restore_{stamp}"
+    replaced_dir.mkdir(exist_ok=False)
+    _write_json(replaced_dir / "replaced.json", current)
+    (replaced_dir / "replaced.sha256").write_text(digest(current) + "\n", encoding="utf-8")
     # Els lots primer (apunten als matches); despres els matches; i a l'inreves en inserir.
     for name in ("company_tender_lot_matches", "company_tender_matches"):
         table = TABLES[name]
@@ -350,6 +357,7 @@ async def restore(
         "mode": "dry-run" if dry_run else ("applied" if identical else "refused"),
         "restored_equals_export": identical,
         "export_sha256": expected,
+        "replaced_export": str(replaced_dir),
         "tables": summary,
     }
 
@@ -368,6 +376,8 @@ async def _main(args: argparse.Namespace) -> int:
             result = await restore(session, company_id, Path(args.restore), dry_run=args.dry_run)
         else:
             now = datetime.fromisoformat(args.now) if args.now else None
+            if now is not None and now.tzinfo is None:
+                raise SystemExit("--now ha de portar zona horaria (p. ex. ...T12:00:00+00:00)")
             result = await recalculate(
                 session, company_id, Path(args.out), dry_run=args.dry_run, now=now
             )

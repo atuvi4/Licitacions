@@ -168,6 +168,8 @@ class ReasonCode:
     AMOUNT_BUDGET_LOWER_BOUND = "AMOUNT_BUDGET_LOWER_BOUND"
     # v2: el VEC publicat es inferior al PBL sense IVA, que no pot ser.
     AMOUNT_INCOHERENT = "AMOUNT_INCOHERENT"
+    # v2: nomes hi ha el PBL AMB IVA. No es cota del VEC (que es sense IVA): cap conclusio.
+    AMOUNT_BUDGET_WITH_TAX_ONLY = "AMOUNT_BUDGET_WITH_TAX_ONLY"
 
     DEADLINE_COMFORTABLE = "DEADLINE_COMFORTABLE"
     DEADLINE_ADEQUATE = "DEADLINE_ADEQUATE"

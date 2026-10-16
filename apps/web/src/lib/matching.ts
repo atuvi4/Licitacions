@@ -158,19 +158,22 @@ export const SOURCE_GAP_REASONS: ReadonlySet<string> = new Set([
   "AMOUNT_UNKNOWN",
   "AMOUNT_BUDGET_LOWER_BOUND",
   "AMOUNT_INCOHERENT",
+  "AMOUNT_BUDGET_WITH_TAX_ONLY",
   "DEADLINE_UNKNOWN",
 ]);
 
 /**
- * El valor de la licitació d'un factor, amb la base de l'import quan no és el VEC
- * (F-06b, regles v2). Un import del PBL sense VEC és una cota inferior: es diu.
+ * El valor de la licitació d'un factor, amb la base de l'import (F-06b, regles v2).
+ * El PBL sense IVA, sense VEC, és una cota inferior: es diu. El PBL amb IVA no ho és.
  */
 export function factorSourceValue(factor: Pick<MatchFactor, "dimension" | "source_value" | "detail">): string | null {
   if (!factor.source_value) return null;
   if (factor.dimension !== "economic") return factor.source_value;
   const basis = factor.detail?.amount_basis;
-  if (basis === "pbl_net") return `${factor.source_value} € (PBL sense IVA, sense VEC publicat: com a mínim)`;
-  if (basis === "pbl_gross") return `${factor.source_value} € (PBL amb IVA, sense VEC publicat: com a mínim)`;
+  // «Sense VEC vàlid»: també quan la font el publica a zero.
+  if (basis === "pbl_net") return `${factor.source_value} € (PBL sense IVA, sense VEC vàlid: com a mínim)`;
+  // Amb IVA no és cap cota del VEC (que és sense IVA): no es diu «com a mínim».
+  if (basis === "pbl_gross") return `${factor.source_value} € (PBL amb IVA, sense VEC vàlid)`;
   if (basis === "vec") return `${factor.source_value} € (VEC)`;
   return factor.source_value;
 }
@@ -280,9 +283,11 @@ export const REASON_LABELS: Record<string, string> = {
   AMOUNT_NO_COMPANY_PREFERENCES: "L'empresa encara no ha configurat la capacitat de contractació",
   // F-06b (regles v2): el PBL sense VEC només és una cota inferior.
   AMOUNT_BUDGET_LOWER_BOUND:
-    "Només es coneix el pressupost base sense IVA i no supera cap llindar: el valor estimat pot ser més alt",
+    "Només es coneix el pressupost base sense IVA i no supera cap màxim configurat: el valor estimat pot ser més alt",
   AMOUNT_INCOHERENT:
     "Els imports de la font no quadren (el valor estimat és inferior al pressupost base): no se'n treu cap conclusió",
+  AMOUNT_BUDGET_WITH_TAX_ONLY:
+    "Només es coneix el pressupost base amb IVA, que no es pot comparar amb el valor estimat (sense IVA): no se'n treu cap conclusió",
 
   // Termini
   DEADLINE_COMFORTABLE: "Queda temps de sobres per preparar l'oferta",

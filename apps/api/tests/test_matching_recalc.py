@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
@@ -198,3 +199,14 @@ class TestRecalc:
         assert await raw_texts() != before
         await recalc.restore(db, company_id, tmp_path / "run", dry_run=False)
         assert await raw_texts() == before == [odd] * 3
+
+    async def test_restaurar_exporta_abans_lestat_que_substitueix(self, db, tenant_a, tmp_path):
+        company_id = tenant_a[1].id
+        await _prepare(db, company_id)
+        await recalc.recalculate(db, company_id, tmp_path / "run", dry_run=False)
+        current = await recalc.snapshot(db, company_id)
+
+        result = await recalc.restore(db, company_id, tmp_path / "run", dry_run=True)
+
+        replaced = json.loads((Path(result["replaced_export"]) / "replaced.json").read_text())
+        assert replaced == current

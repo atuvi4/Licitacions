@@ -15,11 +15,16 @@ El VEC (art. 101 LCSP: pròrrogues i modificacions incloses, sense IVA) i el PBL
 sense IVA, pero, mai pot superar el VEC: n'es una **cota inferior**. Per aixo:
 
 - amb VEC (> 0), mana el VEC, com a v1;
-- sense VEC, el PBL nomes serveix per dir que el contracte SUPERA un llindar
-  (si el PBL ja el supera, el VEC tambe); per sota d'un llindar no se'n treu res,
-  i la dimensio queda desconeguda (`AMOUNT_BUDGET_LOWER_BOUND`);
-- si la font publica un VEC inferior al PBL, les dades son incoherents i no se'n
-  treu cap conclusio (`AMOUNT_INCOHERENT`);
+- sense VEC, el PBL sense IVA nomes serveix per dir que el contracte SUPERA un
+  llindar (si el PBL ja el supera, el VEC tambe); per sota d'un llindar no se'n
+  treu res, i la dimensio queda desconeguda (`AMOUNT_BUDGET_LOWER_BOUND`). Els
+  punts d'un tram superat son un maxim: amb el VEC real nomes podrien baixar;
+- el PBL AMB IVA no es cota de res: el VEC es sense IVA i pot ser inferior al PBL
+  amb IVA (fins al tipus d'IVA). Si es l'unic import, la dimensio queda desconeguda
+  (`AMOUNT_BUDGET_WITH_TAX_ONLY`), amb la base identificada;
+- si la font publica un VEC inferior al PBL sense IVA (per mes d'un centim, que
+  es un arrodoniment), les dades son incoherents i no se'n treu cap conclusio
+  (`AMOUNT_INCOHERENT`);
 - la base es desa sempre al factor (`detail.amount_basis`). Mai es dedueix un
   import d'un altre ni es calcula cap IVA. Un zero continua sent absent.
 """
@@ -57,6 +62,10 @@ class AmountReference:
     incoherent_budget: Decimal | None = None
 
 
+#: Una diferencia d'un centim entre VEC i PBL es un arrodoniment de la font, no una incoherencia.
+INCOHERENCE_TOLERANCE = Decimal("0.01")
+
+
 def _positive(value: Decimal | None) -> Decimal | None:
     # Un zero (acords marc, contractes centralitzats) no es un import util: absent.
     return value if value is not None and value > 0 else None
@@ -75,7 +84,7 @@ def reference_amount(
     net = _positive(base_budget_without_tax)
     gross = _positive(base_budget)
     if vec is not None:
-        incoherent = net if net is not None and net > vec else None
+        incoherent = net if net is not None and net - vec > INCOHERENCE_TOLERANCE else None
         return AmountReference(vec, AmountBasis.VEC, incoherent_budget=incoherent)
     if net is not None:
         return AmountReference(net, AmountBasis.PBL_NET)
@@ -84,8 +93,8 @@ def reference_amount(
     return AmountReference(None, None)
 
 
-#: Els trams que una cota inferior pot demostrar: si el PBL ja supera el llindar,
-#: el VEC tambe. Els altres (dins la franja, per sobre del minim, per sota del minim)
+#: Els trams que una cota inferior (el PBL SENSE IVA) pot demostrar: si ja supera el
+#: llindar, el VEC tambe. Els altres (dins la franja, per sobre del minim, per sota del minim)
 #: dependrien del VEC real, que pot ser mes alt.
 _LOWER_BOUND_REASONS = frozenset(
     {
@@ -152,6 +161,21 @@ def evaluate(
                     "estimated_value": str(value),
                     "base_budget_without_tax": str(reference.incoherent_budget),
                 },
+            )
+        )
+
+    if basis is AmountBasis.PBL_GROSS:
+        # Amb IVA no es cota del VEC (sense IVA): ni exclusio ni tram.
+        return DimensionOutcome(
+            Factor(
+                dimension="economic",
+                result=DimensionResult.UNKNOWN,
+                reason_code=ReasonCode.AMOUNT_BUDGET_WITH_TAX_ONLY,
+                weight=WEIGHT_ECONOMIC,
+                score=None,
+                company_value=_capacity_summary(profile),
+                source_value=formatted,
+                detail=dict(detail_basis),
             )
         )
 

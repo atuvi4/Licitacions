@@ -126,11 +126,27 @@ class TestEconomicV2:
         assert outcome.factor.reason_code == ReasonCode.AMOUNT_BUDGET_LOWER_BOUND
         assert outcome.factor.detail == {"amount_basis": "pbl_net", "lower_bound": True}
 
-    def test_pbl_amb_iva_te_el_mateix_tractament(self):
-        assert _economic(reference_amount(None, None, D("2000000"))).excluded is True
-        unknown = _economic(reference_amount(None, None, D("300000")))
-        assert unknown.factor.reason_code == ReasonCode.AMOUNT_BUDGET_LOWER_BOUND
-        assert unknown.factor.detail["amount_basis"] == "pbl_gross"
+    @pytest.mark.parametrize("value", ["2000000", "1300000", "300000", "10000"])
+    def test_pbl_amb_iva_no_es_cota_de_res(self, value):
+        # El VEC es sense IVA: un PBL amb IVA de 1.300.000 pot ser un VEC de 1.074.380,
+        # per sota del maxim assumible (1.200.000). Ni exclusio ni tram, mai.
+        outcome = _economic(reference_amount(None, None, D(value)))
+        assert outcome.is_unknown
+        assert outcome.excluded is False
+        assert outcome.factor.reason_code == ReasonCode.AMOUNT_BUDGET_WITH_TAX_ONLY
+        assert outcome.factor.detail == {"amount_basis": "pbl_gross"}
+
+    def test_un_centim_de_diferencia_es_arrodoniment_no_incoherencia(self):
+        assert reference_amount(D("166300.99"), D("166301.00"), None).incoherent_budget is None
+        assert reference_amount(D("166300.99"), D("166301.01"), None).incoherent_budget == D(
+            "166301.01"
+        )
+
+    @pytest.mark.parametrize("values", [(D("-5"), D("300000"), None), (None, D("-300000"), None)])
+    def test_els_imports_negatius_son_absents(self, values):
+        ref = reference_amount(*values)
+        assert ref.basis in (AmountBasis.PBL_NET, None)
+        assert ref.value is None or ref.value > 0
 
     @pytest.mark.parametrize("vec", ["3719.07", "2000000"])
     def test_imports_incoherents_no_donen_cap_conclusio(self, vec):
@@ -241,3 +257,11 @@ class TestEvaluateTender:
         assert first["detail"]["amount_basis"] == "pbl_net"
         # Un lot sense imports no hereta el VEC de l'expedient (5.000.000, que l'exclouria).
         assert second["reason_code"] == ReasonCode.AMOUNT_UNKNOWN
+
+    def test_un_lot_incoherent_no_exclou_ni_hereta(self):
+        # Lot amb VEC < PBL: desconegut al lot, sense mirar els imports de l'expedient.
+        tender = _tender(vec=D("100000"), lots=[_lot(vec=D("1000"), net=D("5000000"))])
+        _, lots = evaluate_tender(perfect_profile(), tender, NOW)
+        ((_, outcome),) = lots
+        assert outcome.status is not MatchStatus.EXCLUDED
+        assert _economic_factor(outcome)["reason_code"] == ReasonCode.AMOUNT_INCOHERENT
