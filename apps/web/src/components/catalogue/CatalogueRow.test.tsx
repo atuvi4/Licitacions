@@ -142,6 +142,8 @@ describe("CatalogueRow", () => {
     expect(container.textContent).not.toContain("CPV principal");
     const value = [...container.querySelectorAll("[title]")].find((el) => el.textContent?.includes("32562100"));
     expect(value?.getAttribute("title")).toMatch(/no indica quin CPV és el principal/);
+    // P2-04: l'explicació també és visible, sense passar-hi el ratolí.
+    expect(container.querySelector("[data-cpv-provenance]")?.textContent).toBe("La font no indica el principal: és el primer que publica.");
   });
 
   it("revisió del patch: sense cap CPV marcat, la fila no diu «Primer CPV de la font»", () => {
@@ -150,6 +152,7 @@ describe("CatalogueRow", () => {
     );
     expect(container.textContent).toContain("64200000");
     expect(container.textContent).not.toContain("Primer CPV de la font");
+    expect(container.querySelector("[data-cpv-provenance]")).toBeNull();
   });
 
   it("amb un filtre de CPV, diu quin CPV de la fila ha coincidit quan no és el principal (C4)", () => {

@@ -10,6 +10,7 @@ import {
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
   SOURCE_FIRST_CPV_HELP,
+  SOURCE_FIRST_CPV_SHORT_HELP,
   cpvDescription,
   labelOf,
   sourceLabel,
@@ -136,6 +137,12 @@ export function CatalogueRow({
               </span>
             ) : (
               <span className="text-muted">Sense CPV</span>
+            )}
+            {mainCpv && markedCpv && (
+              // Visible, no només al `title` (P2-04): un mòbil o el teclat no hi arriben.
+              <p className="mt-0.5 text-caption text-muted" data-cpv-provenance>
+                {SOURCE_FIRST_CPV_SHORT_HELP}
+              </p>
             )}
             {matched && <CpvMatchLine match={matched} />}
           </Fact>

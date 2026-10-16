@@ -108,6 +108,9 @@ export interface TenderCPV {
 /** Etiqueta del CPV `is_main`: el que és, no el que no sabem (auditoria UI P1-05). */
 export const SOURCE_FIRST_CPV_LABEL = "primer a la font";
 
+/** La versió curta i sempre visible a la fila del catàleg (P2-04): sense passar-hi el ratolí. */
+export const SOURCE_FIRST_CPV_SHORT_HELP = "La font no indica el principal: és el primer que publica.";
+
 /** Per què no es diu «principal»: la font no ho indica. */
 export const SOURCE_FIRST_CPV_HELP =
   "La font (feed PLACSP) no indica quin CPV és el principal: es marca el primer que publica. El CPV principal declarat al plec o al PSCP pot ser un altre dels d'aquesta llista. Al Radar, tots els CPV compten igual.";
