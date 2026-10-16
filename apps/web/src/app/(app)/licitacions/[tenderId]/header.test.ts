@@ -134,10 +134,32 @@ describe("termini, import i candidatura", () => {
     expect(deadlineMeta("2026-10-06T10:00:00Z", now)).toMatchObject({ level: "neutral", text: "Fora de termini" });
   });
 
-  it("import: valor estimat, si no pressupost base, si no «—» sense inferir", () => {
-    expect(amountMeta({ estimated_value: "240000", base_budget: "200000", currency: "EUR" })).toEqual({ text: formatMoney("240000", "EUR"), note: "valor estimat" });
-    expect(amountMeta({ estimated_value: null, base_budget: "200000", currency: "EUR" })).toEqual({ text: formatMoney("200000", "EUR"), note: "pressupost base" });
-    expect(amountMeta({ estimated_value: null, base_budget: null, currency: "EUR" })).toEqual({ text: "—", note: null });
+  it("import (P2-06): VEC, si no PBL sense IVA, si no PBL amb IVA, sempre amb la base; «—» sense inferir res", () => {
+    expect(amountMeta({ estimated_value: "240000", base_budget: null, base_budget_without_tax: "240000", currency: "EUR" })).toEqual({
+      text: formatMoney("240000", "EUR"),
+      note: "valor estimat del contracte (VEC)",
+      budget: null,
+    });
+    // El cas de les 79: només hi ha PBL sense IVA. Abans sortia «—».
+    expect(amountMeta({ estimated_value: null, base_budget: null, base_budget_without_tax: "204232.75", currency: "EUR" })).toEqual({
+      text: formatMoney("204232.75", "EUR"),
+      note: "pressupost base de licitació sense IVA",
+      budget: null,
+    });
+    expect(amountMeta({ estimated_value: null, base_budget: "200000", currency: "EUR" })).toEqual({
+      text: formatMoney("200000", "EUR"),
+      note: "pressupost base de licitació amb IVA",
+      budget: null,
+    });
+    expect(amountMeta({ estimated_value: null, base_budget: null, currency: "EUR" })).toEqual({ text: "—", note: null, budget: null });
+  });
+
+  it("import (P2-06): amb VEC i PBL diferents, la capçalera també dona el PBL sense IVA (L'Escala)", () => {
+    expect(amountMeta({ estimated_value: "245079.30", base_budget: null, base_budget_without_tax: "204232.75", currency: "EUR" })).toEqual({
+      text: formatMoney("245079.30", "EUR"),
+      note: "valor estimat del contracte (VEC)",
+      budget: { text: formatMoney("204232.75", "EUR"), note: "pressupost base de licitació sense IVA" },
+    });
   });
 
   it("candidatura només si existeix; la decisió humana només si és real", () => {

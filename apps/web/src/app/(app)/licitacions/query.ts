@@ -74,7 +74,7 @@ export const SORT_OPTIONS = [
   { value: "recent", label: "Vistes més recentment" },
   { value: "published", label: "Publicació més recent" },
   { value: "deadline", label: "Termini més proper" },
-  { value: "amount", label: "Import més alt" },
+  { value: "amount", label: "Import més alt (valor estimat)" },
 ];
 
 export const EMPTY_FILTERS = {
@@ -164,7 +164,7 @@ export const CATALOGUE_SORT_OPTIONS = [
   { value: "published", label: "Publicació més recent" },
   { value: "first_seen", label: "Vistes més recentment" },
   { value: "deadline", label: "Termini més proper" },
-  { value: "amount", label: "Import més alt" },
+  { value: "amount", label: "Import més alt (valor estimat)" },
   { value: "relevance", label: "Rellevància del text" },
 ];
 

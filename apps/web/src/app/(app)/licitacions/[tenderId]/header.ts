@@ -1,6 +1,7 @@
 import type { TabItem } from "@/components/ui/Tabs";
 import type { Compliance } from "@/lib/compliance";
 import { formatMoney } from "@/lib/format";
+import { tenderAmounts, type AmountBasis } from "@/lib/tenders";
 import {
   ANALYSIS_STATUS_TEXT,
   DECISION_LABELS,
@@ -86,14 +87,30 @@ export function deadlineMeta(deadlineAt: string | null, now: Date = new Date()):
   return { level: countdown.level, text: countdown.text, date: formatDateTime(deadlineAt) };
 }
 
+/** Nota de la capçalera per base (P2-06): curta, però diu exactament què és la xifra. */
+const AMOUNT_NOTE: Record<AmountBasis, string> = {
+  vec: "valor estimat del contracte (VEC)",
+  pbl_net: "pressupost base de licitació sense IVA",
+  pbl_gross: "pressupost base de licitació amb IVA",
+};
+
 export function amountMeta(tender: {
   estimated_value: string | null;
   base_budget: string | null;
+  base_budget_without_tax?: string | null;
   currency: string;
-}): { text: string; note: string | null } {
-  if (tender.estimated_value) return { text: formatMoney(tender.estimated_value, tender.currency), note: "valor estimat" };
-  if (tender.base_budget) return { text: formatMoney(tender.base_budget, tender.currency), note: "pressupost base" };
-  return { text: "—", note: null };
+}): { text: string; note: string | null; budget: { text: string; note: string } | null } {
+  // La mateixa ordre que el filtre i l'ordenació; abans s'ignorava el PBL sense IVA i
+  // les licitacions que només el tenien mostraven «—».
+  const amounts = tenderAmounts(tender);
+  if (!amounts.primary) return { text: "—", note: null, budget: null };
+  return {
+    text: formatMoney(amounts.primary.value, tender.currency),
+    note: AMOUNT_NOTE[amounts.primary.basis],
+    budget: amounts.budget
+      ? { text: formatMoney(amounts.budget.value, tender.currency), note: AMOUNT_NOTE[amounts.budget.basis] }
+      : null,
+  };
 }
 
 export interface Pill {

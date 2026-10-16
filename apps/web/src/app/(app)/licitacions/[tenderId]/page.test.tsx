@@ -691,4 +691,17 @@ describe("Fitxa de licitació", () => {
     expect(screen.queryByLabelText("Resum de la revisió")).toBeNull();
     expect(screen.queryByRole("heading", { name: "Revisió de la licitació" })).toBeNull();
   });
+  it("P2-06: els fets d'import diuen la seva base i, si la font no la publica, ho diuen", async () => {
+    respondWith(base({ "/tenders/t1": { ...detail, estimated_value: "245079.30", base_budget: null, base_budget_without_tax: "204232.75" } }));
+    render(<TenderDetailPage />);
+    await flush();
+    const facts = document.body.textContent ?? "";
+    expect(facts).toContain("Valor estimat del contracte (VEC)");
+    expect(facts).toContain("Pressupost base de licitació sense IVA (PBL)");
+    expect(facts).toContain("Pressupost base de licitació amb IVA");
+    expect(facts).toContain("No publicat a la font");
+    expect(facts).not.toContain("Base sense impostos");
+    expect(facts).toContain("valor estimat del contracte (VEC)");
+    expect(document.querySelector("[data-amount-budget]")?.textContent).toContain("pressupost base de licitació sense IVA");
+  });
 });

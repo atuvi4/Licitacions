@@ -43,10 +43,14 @@ import {
   type TenderMatchListItem,
 } from "@/lib/matching";
 import {
+  AMOUNT_BASIS_LABEL,
+  AMOUNT_BASIS_SHORT,
+  AMOUNT_FILTER_HINT,
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
   labelOf,
   sourceLabel,
+  tenderAmounts,
   type CataloguePage,
   type TenderFacets,
 } from "@/lib/tenders";
@@ -73,6 +77,25 @@ import {
  * plegats, i cinc columnes responen «val la pena obrir-la?». El pre-fit no
  * amaga cap licitació ni és cap probabilitat de guanyar.
  */
+
+/** Import de la taula (P2-06): la xifra amb la seva base, i el PBL a sota si és diferent del VEC. */
+function AmountCell({ tender }: { tender: Parameters<typeof tenderAmounts>[0] & { currency: string } }) {
+  const amounts = tenderAmounts(tender);
+  if (!amounts.primary) return <span className="text-muted">—</span>;
+  return (
+    <span className="inline-flex flex-col items-end">
+      <span className="whitespace-nowrap tabular-nums" aria-label={`${AMOUNT_BASIS_LABEL[amounts.primary.basis]}: ${formatMoney(amounts.primary.value, tender.currency)}`}>
+        {formatMoney(amounts.primary.value, tender.currency)}{" "}
+        <span className="text-caption text-muted">{AMOUNT_BASIS_SHORT[amounts.primary.basis]}</span>
+      </span>
+      {amounts.budget && (
+        <span className="whitespace-nowrap text-caption text-muted tabular-nums">
+          {AMOUNT_BASIS_SHORT[amounts.budget.basis]} {formatMoney(amounts.budget.value, tender.currency)}
+        </span>
+      )}
+    </span>
+  );
+}
 
 const COLUMN_HEADERS = ["Encaix", "Licitació", "Termini", "Import", "Estat"];
 const INGEST_COMMAND = "python -m app.ingestion.sync --source placsp_agregadas --max-pages 2";
@@ -259,11 +282,7 @@ function ReviewFeed() {
       header: "Import",
       width: "12%",
       align: "right",
-      cell: ({ tender }) => (
-        <span className="whitespace-nowrap tabular-nums">
-          {formatMoney(tender.estimated_value ?? tender.base_budget_without_tax ?? tender.base_budget, tender.currency)}
-        </span>
-      ),
+      cell: ({ tender }) => <AmountCell tender={tender} />,
     },
     {
       key: "status",
@@ -552,7 +571,7 @@ function ReviewFeed() {
                 onChange={(event) => setFilters({ ...filters, has_lots: event.target.value })}
               />
             </Field>
-            <Field label="Import mínim">
+            <Field label="Import mínim" hint={AMOUNT_FILTER_HINT}>
               <Input
                 type="number"
                 min={0}

@@ -39,6 +39,10 @@ import { requirementAnalysisState, type RequirementAnalysis } from "@/lib/requir
 import type { DashboardSummary } from "@/lib/types";
 import { publicationStatusLabel, type TenderHistoryRevision } from "@/lib/tender-changes";
 import {
+  AMOUNT_BASIS_LABEL,
+  AMOUNT_BASIS_SHORT,
+  AMOUNT_HELP,
+  AMOUNT_NOT_PUBLISHED,
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
   SOURCE_FIRST_CPV_HELP,
@@ -48,6 +52,7 @@ import {
   labelOf,
   formatBytes,
   formatDateTime,
+  tenderAmounts,
   type TenderDetail,
   type TenderDocumentMeta,
   type TenderLot,
@@ -77,6 +82,27 @@ import {
  */
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
+
+/** Un import d'una base concreta: el valor, o que la font no el publica (P2-06). */
+function AmountValue({ value, currency }: { value: string | null; currency: string }) {
+  return value ? (
+    <span className="tabular-nums">{formatMoney(value, currency)}</span>
+  ) : (
+    <span className="text-muted">{AMOUNT_NOT_PUBLISHED}</span>
+  );
+}
+
+/** Import d'un lot amb la seva base (P2-06); abans barrejava PBL i VEC sense dir-ho. */
+function LotAmount({ lot }: { lot: TenderLot }) {
+  const amounts = tenderAmounts(lot);
+  if (!amounts.primary) return <span className="text-muted">{AMOUNT_NOT_PUBLISHED}</span>;
+  return (
+    <span className="whitespace-nowrap tabular-nums" aria-label={`${AMOUNT_BASIS_LABEL[amounts.primary.basis]}: ${formatMoney(amounts.primary.value, lot.currency)}`}>
+      {formatMoney(amounts.primary.value, lot.currency)}{" "}
+      <span className="text-caption text-muted">{AMOUNT_BASIS_SHORT[amounts.primary.basis]}</span>
+    </span>
+  );
+}
 
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -542,6 +568,11 @@ function TenderDetail() {
             <Meta label="Import">
               <span className="tabular-nums">{amount.text}</span>
               {amount.note && <span className="text-[13px] font-normal text-muted">· {amount.note}</span>}
+              {amount.budget && (
+                <span className="block text-[13px] font-normal text-muted" data-amount-budget>
+                  <span className="tabular-nums">{amount.budget.text}</span> · {amount.budget.note}
+                </span>
+              )}
             </Meta>
             <Meta label="Candidatura">
               {candidatureInfo ? (
@@ -604,15 +635,17 @@ function TenderDetail() {
               <Fact label="Tipus de contracte">{labelOf(CONTRACT_TYPE_LABELS, data.contract_type, "Tipus desconegut")}</Fact>
               <Fact label="Procediment">{labelOf(PROCEDURE_TYPE_LABELS, data.procedure_type, "Tipus desconegut")}</Fact>
 
-              <Fact label="Valor estimat">
-                <span className="tabular-nums">{formatMoney(data.estimated_value, data.currency)}</span>
+              {/* P2-06: cada fet diu la seva base; si la font no la publica, es diu, no «—». */}
+              <Fact label={AMOUNT_BASIS_LABEL.vec}>
+                <AmountValue value={data.estimated_value} currency={data.currency} />
               </Fact>
-              <Fact label="Pressupost base">
-                <span className="tabular-nums">{formatMoney(data.base_budget, data.currency)}</span>
+              <Fact label={AMOUNT_BASIS_LABEL.pbl_net}>
+                <AmountValue value={data.base_budget_without_tax} currency={data.currency} />
               </Fact>
-              <Fact label="Base sense impostos">
-                <span className="tabular-nums">{formatMoney(data.base_budget_without_tax, data.currency)}</span>
+              <Fact label={AMOUNT_BASIS_LABEL.pbl_gross}>
+                <AmountValue value={data.base_budget} currency={data.currency} />
               </Fact>
+              <p className="text-caption text-muted sm:col-span-3">{AMOUNT_HELP}</p>
 
               <Fact label="Publicació">{formatDate(data.publication_date)}</Fact>
               <Fact label="Termini de presentació">
@@ -747,7 +780,7 @@ function TenderDetail() {
                     header: "Import",
                     align: "right",
                     width: "14%",
-                    cell: (lot) => <span className="whitespace-nowrap tabular-nums">{formatMoney(lot.base_budget ?? lot.estimated_value, lot.currency)}</span>,
+                    cell: (lot) => <LotAmount lot={lot} />,
                   },
                   {
                     key: "cpv",

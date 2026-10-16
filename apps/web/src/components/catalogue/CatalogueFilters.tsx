@@ -11,6 +11,7 @@ import {
 import { Button, Field, Input, Select } from "@/components/ui";
 import { api } from "@/lib/api";
 import {
+  AMOUNT_FILTER_HINT,
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
   buildQuery,
@@ -264,7 +265,7 @@ export function CatalogueFilters({
             >
               <Input value={filters.place_q} onChange={(event) => set({ place_q: event.target.value })} />
             </Field>
-            <Field label="Import mínim">
+            <Field label="Import mínim" hint={AMOUNT_FILTER_HINT}>
               <Input type="number" min={0} value={filters.min_amount} onChange={(event) => set({ min_amount: event.target.value })} />
             </Field>
             <Field label="Import màxim">

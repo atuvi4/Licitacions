@@ -115,6 +115,83 @@ export const SOURCE_FIRST_CPV_SHORT_HELP = "La font no indica el principal: és 
 export const SOURCE_FIRST_CPV_HELP =
   "La font (feed PLACSP) no indica quin CPV és el principal: es marca el primer que publica. El CPV principal declarat al plec o al PSCP pot ser un altre dels d'aquesta llista. Al Radar, tots els CPV compten igual.";
 
+/* ----- Imports (P2-06): quina xifra és cada una ------------------------- */
+
+/**
+ * Les tres bases d'import que publica la font, tal com es desen:
+ * - `vec`: valor estimat del contracte (sense IVA; inclou pròrrogues i modificacions previstes);
+ * - `pbl_net`: pressupost base de licitació sense IVA (l'import màxim de l'oferta);
+ * - `pbl_gross`: pressupost base de licitació amb IVA.
+ * Mai se'n calcula cap a partir d'una altra (p. ex. l'IVA): si no consta, no hi és.
+ */
+export type AmountBasis = "vec" | "pbl_net" | "pbl_gross";
+
+/** Etiqueta completa: diu exactament què representa la xifra. */
+export const AMOUNT_BASIS_LABEL: Record<AmountBasis, string> = {
+  vec: "Valor estimat del contracte (VEC)",
+  pbl_net: "Pressupost base de licitació sense IVA (PBL)",
+  pbl_gross: "Pressupost base de licitació amb IVA",
+};
+
+/** Etiqueta curta, per a files i taules. */
+export const AMOUNT_BASIS_SHORT: Record<AmountBasis, string> = {
+  vec: "VEC",
+  pbl_net: "PBL sense IVA",
+  pbl_gross: "PBL amb IVA",
+};
+
+export const AMOUNT_HELP =
+  "El valor estimat (VEC) inclou les pròrrogues i les modificacions previstes; el pressupost base de licitació (PBL) és l'import màxim de l'oferta.";
+
+/** El filtre i l'ordenació per import (API `amount_expression`): el VEC, i si no n'hi ha, el pressupost base. */
+export const AMOUNT_FILTER_HINT =
+  "S'aplica al valor estimat del contracte (VEC). Si una licitació no en té, s'aplica al pressupost base de licitació.";
+
+export interface AmountFigure {
+  value: string;
+  basis: AmountBasis;
+}
+
+export interface TenderAmountsView {
+  /** La xifra principal, en el mateix ordre que el filtre i l'ordenació: VEC → PBL sense IVA → PBL amb IVA. */
+  primary: AmountFigure | null;
+  /** El pressupost base, quan la principal és el VEC i el pressupost hi és i és diferent. */
+  budget: AmountFigure | null;
+}
+
+function differs(a: string, b: string): boolean {
+  const left = Number(a);
+  const right = Number(b);
+  return Number.isFinite(left) && Number.isFinite(right) ? left !== right : a !== b;
+}
+
+/** Les xifres d'import d'una licitació o d'un lot, sempre amb la seva base (P2-06). */
+export function tenderAmounts(item: {
+  estimated_value: string | null;
+  base_budget_without_tax?: string | null;
+  base_budget: string | null;
+}): TenderAmountsView {
+  const vec = item.estimated_value || null;
+  const net = item.base_budget_without_tax || null;
+  const gross = item.base_budget || null;
+  if (vec) {
+    const budget: AmountFigure | null = net
+      ? differs(vec, net)
+        ? { value: net, basis: "pbl_net" }
+        : null
+      : gross && differs(vec, gross)
+        ? { value: gross, basis: "pbl_gross" }
+        : null;
+    return { primary: { value: vec, basis: "vec" }, budget };
+  }
+  if (net) return { primary: { value: net, basis: "pbl_net" }, budget: null };
+  if (gross) return { primary: { value: gross, basis: "pbl_gross" }, budget: null };
+  return { primary: null, budget: null };
+}
+
+/** Quan la font no publica un import, es diu així (no «—», que sembla zero o error). */
+export const AMOUNT_NOT_PUBLISHED = "No publicat a la font";
+
 export interface TenderLot {
   id: string;
   external_lot_id: string;

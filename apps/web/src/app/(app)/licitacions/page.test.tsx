@@ -714,7 +714,9 @@ describe("Oportunitats · Totes (catàleg complet)", () => {
     respondWith(base([item("t1")], 1, { "/companies/c1/matches?": { ...page([item("t1")], 1), excluded_without_amount: 7 } }));
     render(<TendersFeedPage />);
     await screen.findByText("Licitació t1");
-    fireEvent.change(screen.getByLabelText("Import mínim"), { target: { value: "100000" } });
+    fireEvent.change(screen.getByLabelText(/^Import mínim/), { target: { value: "100000" } });
+    // P2-06: el filtre diu sobre quina xifra s'aplica.
+    expect(screen.getByText(/S'aplica al valor estimat del contracte \(VEC\)/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Aplica els filtres" }));
     await flush();
     expect(lastQuery()).toBe("mode=all&min_amount=100000&sort=published&limit=25&offset=0");

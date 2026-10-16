@@ -196,6 +196,24 @@ describe("CatalogueRow", () => {
     expect(container.textContent).toContain("77.777");
   });
 
+  it("P2-06: cada import diu la seva base, i el PBL surt quan és diferent del VEC (L'Escala)", () => {
+    const { container, rerender } = render(
+      <CatalogueRow tender={tender({ estimated_value: "245079.30", base_budget_without_tax: "204232.75", base_budget: null })} match={null} />,
+    );
+    expect(container.textContent).toContain("Valor estimat (VEC)");
+    // La fila arrodoneix a l'euro, com abans (formatMoney): la base és el que canvia.
+    expect(container.textContent).toContain("245.079");
+    expect(container.querySelector("[data-amount-budget]")?.textContent).toMatch(/^PBL sense IVA: 204\.233/);
+    // Només PBL sense IVA (les 79): l'etiqueta és la del PBL, no «Valor estimat».
+    rerender(<CatalogueRow tender={tender({ estimated_value: null, base_budget_without_tax: "12345", base_budget: null })} match={null} />);
+    expect(container.textContent).toContain("PBL sense IVA");
+    expect(container.textContent).not.toContain("Valor estimat (VEC)");
+    expect(container.querySelector("[data-amount-budget]")).toBeNull();
+    // VEC i PBL iguals: no es repeteix.
+    rerender(<CatalogueRow tender={tender({ estimated_value: "1000", base_budget_without_tax: "1000.00", base_budget: null })} match={null} />);
+    expect(container.querySelector("[data-amount-budget]")).toBeNull();
+  });
+
   it("és una targeta que s'apila: columna al mòbil, graella a partir de md", () => {
     const { container } = render(<CatalogueRow tender={tender()} match={null} />);
     const card = container.querySelector("article")!;

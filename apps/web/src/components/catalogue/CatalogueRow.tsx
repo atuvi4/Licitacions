@@ -7,6 +7,9 @@ import { formatDate, formatMoney } from "@/lib/format";
 import { deadlineCountdownView, tenderStatusView } from "@/lib/labels";
 import type { TenderMatch } from "@/lib/matching";
 import {
+  AMOUNT_BASIS_LABEL,
+  AMOUNT_BASIS_SHORT,
+  AMOUNT_HELP,
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
   SOURCE_FIRST_CPV_HELP,
@@ -14,6 +17,7 @@ import {
   cpvDescription,
   labelOf,
   sourceLabel,
+  tenderAmounts,
   type SourceFacet,
   type TenderListItem,
 } from "@/lib/tenders";
@@ -96,7 +100,8 @@ export function CatalogueRow({
   const mainDescription = mainCpv ? cpvDescription(mainCpv) : null;
   const matched = cpvMatch(tender.cpvs, cpvFilter);
   const source = sourceLabel(tender.source_code, sources);
-  const amount = tender.estimated_value ?? tender.base_budget_without_tax ?? tender.base_budget;
+  // P2-06: la xifra principal és la mateixa que filtra i ordena (VEC → PBL), sempre amb la seva base.
+  const amounts = tenderAmounts(tender);
   const detail = `/licitacions/${tender.id}`;
   return (
     <article
@@ -122,11 +127,19 @@ export function CatalogueRow({
           <Fact label="Termini">
             <DeadlineCell value={tender.deadline_at} />
           </Fact>
-          <Fact label="Import">
-            {amount ? (
-              <span className="whitespace-nowrap tabular-nums">{formatMoney(amount, tender.currency)}</span>
+          <Fact label={amounts.primary ? (amounts.primary.basis === "vec" ? "Valor estimat (VEC)" : AMOUNT_BASIS_SHORT[amounts.primary.basis]) : "Import"}>
+            {amounts.primary ? (
+              <span className="whitespace-nowrap tabular-nums" title={`${AMOUNT_BASIS_LABEL[amounts.primary.basis]}. ${AMOUNT_HELP}`}>
+                {formatMoney(amounts.primary.value, tender.currency)}
+              </span>
             ) : (
               <span className="text-muted">Import no informat</span>
+            )}
+            {amounts.budget && (
+              <p className="mt-0.5 text-caption text-muted" data-amount-budget>
+                {AMOUNT_BASIS_SHORT[amounts.budget.basis]}:{" "}
+                <span className="whitespace-nowrap tabular-nums">{formatMoney(amounts.budget.value, tender.currency)}</span>
+              </p>
             )}
           </Fact>
           <Fact label={markedCpv ? "Primer CPV de la font" : "CPV"}>
