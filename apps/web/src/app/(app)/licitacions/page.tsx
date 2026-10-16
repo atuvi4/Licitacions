@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { CpvLookup, CpvNotApplied } from "@/components/catalogue/CatalogueFilters";
+import { AmountStack } from "@/components/AmountStack";
 import { CatalogueTabs } from "@/components/catalogue/CatalogueTabs";
 import { CatalogueView } from "@/components/catalogue/CatalogueView";
 import { CpvMatchLine, DeadlineCell, TenderStatusPills } from "@/components/catalogue/CatalogueRow";
@@ -31,7 +32,6 @@ import {
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { api } from "@/lib/api";
-import { formatMoney } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
 import {
   MATCH_STATUS_HELP,
@@ -43,14 +43,11 @@ import {
   type TenderMatchListItem,
 } from "@/lib/matching";
 import {
-  AMOUNT_BASIS_LABEL,
-  AMOUNT_BASIS_SHORT,
   AMOUNT_FILTER_HINT,
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
   labelOf,
   sourceLabel,
-  tenderAmounts,
   type CataloguePage,
   type TenderFacets,
 } from "@/lib/tenders";
@@ -78,24 +75,6 @@ import {
  * amaga cap licitació ni és cap probabilitat de guanyar.
  */
 
-/** Import de la taula (P2-06): la xifra amb la seva base, i el PBL a sota si és diferent del VEC. */
-function AmountCell({ tender }: { tender: Parameters<typeof tenderAmounts>[0] & { currency: string } }) {
-  const amounts = tenderAmounts(tender);
-  if (!amounts.primary) return <span className="text-muted">—</span>;
-  return (
-    <span className="inline-flex flex-col items-end">
-      <span className="whitespace-nowrap tabular-nums" aria-label={`${AMOUNT_BASIS_LABEL[amounts.primary.basis]}: ${formatMoney(amounts.primary.value, tender.currency)}`}>
-        {formatMoney(amounts.primary.value, tender.currency)}{" "}
-        <span className="text-caption text-muted">{AMOUNT_BASIS_SHORT[amounts.primary.basis]}</span>
-      </span>
-      {amounts.budget && (
-        <span className="whitespace-nowrap text-caption text-muted tabular-nums">
-          {AMOUNT_BASIS_SHORT[amounts.budget.basis]} {formatMoney(amounts.budget.value, tender.currency)}
-        </span>
-      )}
-    </span>
-  );
-}
 
 const COLUMN_HEADERS = ["Encaix", "Licitació", "Termini", "Import", "Estat"];
 const INGEST_COMMAND = "python -m app.ingestion.sync --source placsp_agregadas --max-pages 2";
@@ -282,7 +261,7 @@ function ReviewFeed() {
       header: "Import",
       width: "12%",
       align: "right",
-      cell: ({ tender }) => <AmountCell tender={tender} />,
+      cell: ({ tender }) => <AmountStack item={tender} currency={tender.currency} />,
     },
     {
       key: "status",

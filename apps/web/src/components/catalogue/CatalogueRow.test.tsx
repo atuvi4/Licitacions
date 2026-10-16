@@ -180,7 +180,7 @@ describe("CatalogueRow", () => {
     const { container } = render(
       <CatalogueRow tender={tender({ estimated_value: null, base_budget: null, cpvs: [], source_code: null })} match={null} />,
     );
-    expect(container.textContent).toContain("Import no informat");
+    expect(container.textContent).toContain("No consta a les dades de la font");
     expect(container.textContent).toContain("Sense CPV");
     expect(container.textContent).toContain("Sense font");
   });
@@ -201,9 +201,11 @@ describe("CatalogueRow", () => {
       <CatalogueRow tender={tender({ estimated_value: "245079.30", base_budget_without_tax: "204232.75", base_budget: null })} match={null} />,
     );
     expect(container.textContent).toContain("Valor estimat (VEC)");
-    // La fila arrodoneix a l'euro, com abans (formatMoney): la base és el que canvia.
-    expect(container.textContent).toContain("245.079");
-    expect(container.querySelector("[data-amount-budget]")?.textContent).toMatch(/^PBL sense IVA: 204\.233/);
+    // Amb cèntims: el PBL és l'import màxim de l'oferta, i 204.233 € el superaria.
+    // Intl posa un espai no separable davant de «€».
+    const text = (node: Element | null | undefined) => node?.textContent?.replace(/\u00a0/g, " ");
+    expect(text(container)).toContain("245.079,30 €");
+    expect(text(container.querySelector("[data-amount-budget]"))).toBe("PBL sense IVA: 204.232,75 €");
     // Només PBL sense IVA (les 79): l'etiqueta és la del PBL, no «Valor estimat».
     rerender(<CatalogueRow tender={tender({ estimated_value: null, base_budget_without_tax: "12345", base_budget: null })} match={null} />);
     expect(container.textContent).toContain("PBL sense IVA");

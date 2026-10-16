@@ -696,12 +696,30 @@ describe("Fitxa de licitació", () => {
     render(<TenderDetailPage />);
     await flush();
     const facts = document.body.textContent ?? "";
-    expect(facts).toContain("Valor estimat del contracte (VEC)");
-    expect(facts).toContain("Pressupost base de licitació sense IVA (PBL)");
-    expect(facts).toContain("Pressupost base de licitació amb IVA");
-    expect(facts).toContain("No publicat a la font");
+    // Cada etiqueta, amb el seu valor exacte (amb cèntims).
+    // Intl posa un espai no separable davant de «€».
+    const fact = (label: string) => screen.getByText(label, { selector: "p, dt" }).parentElement?.textContent?.replace(/\u00a0/g, " ");
+    expect(fact("Valor estimat del contracte (VEC)")).toBe("Valor estimat del contracte (VEC)245.079,30 €");
+    expect(fact("Pressupost base de licitació sense IVA (PBL)")).toBe("Pressupost base de licitació sense IVA (PBL)204.232,75 €");
+    expect(fact("Pressupost base de licitació amb IVA")).toBe("Pressupost base de licitació amb IVANo consta a les dades de la font");
     expect(facts).not.toContain("Base sense impostos");
     expect(facts).toContain("valor estimat del contracte (VEC)");
     expect(document.querySelector("[data-amount-budget]")?.textContent).toContain("pressupost base de licitació sense IVA");
+  });
+  it("P2-06: un lot amb VEC i PBL diferents mostra totes dues xifres, cadascuna amb la seva base", async () => {
+    const lot = {
+      id: "l1", external_lot_id: "1", lot_number: 1, title: "Lot de connectivitat", description: null,
+      estimated_value: "23456.50", base_budget: null, base_budget_without_tax: "19876.25", currency: "EUR",
+      place_of_execution: null, nuts_code: null, deadline_at: null, cpvs: [],
+    };
+    respondWith(base({ "/tenders/t1": { ...detail, lot_count: 1, lots: [lot] } }));
+    render(<TenderDetailPage />);
+    await flush();
+    const row = screen.getByText("Lot de connectivitat").closest("tr");
+    const text = (node: Element | null | undefined) => node?.textContent?.replace(/\u00a0/g, " ");
+    expect(text(row)).toContain("23.456,50 € VEC");
+    // L'abreviatura visible i, per als lectors de pantalla, el nom sencer.
+    expect(text(row?.querySelector("[data-amount-budget]"))).toBe("PBL sense IVAPressupost base de licitació sense IVA (PBL) 19.876,25 €");
+    expect(row?.querySelector("abbr")?.getAttribute("title")).toBe("Valor estimat del contracte (VEC)");
   });
 });

@@ -3,13 +3,15 @@ import Link from "next/link";
 import { cpvMatch, cpvMatchText, type CpvMatch } from "@/components/catalogue/cpvMatch";
 import { PreFitSummary } from "@/components/catalogue/PreFitSummary";
 import { LinkButton, StatusPill } from "@/components/ui";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatAmount, formatDate } from "@/lib/format";
 import { deadlineCountdownView, tenderStatusView } from "@/lib/labels";
 import type { TenderMatch } from "@/lib/matching";
 import {
   AMOUNT_BASIS_LABEL,
   AMOUNT_BASIS_SHORT,
   AMOUNT_HELP,
+  AMOUNT_NOT_PUBLISHED,
+  AMOUNT_VEC_FACT_LABEL,
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
   SOURCE_FIRST_CPV_HELP,
@@ -127,18 +129,18 @@ export function CatalogueRow({
           <Fact label="Termini">
             <DeadlineCell value={tender.deadline_at} />
           </Fact>
-          <Fact label={amounts.primary ? (amounts.primary.basis === "vec" ? "Valor estimat (VEC)" : AMOUNT_BASIS_SHORT[amounts.primary.basis]) : "Import"}>
+          <Fact label={amounts.primary ? (amounts.primary.basis === "vec" ? AMOUNT_VEC_FACT_LABEL : AMOUNT_BASIS_SHORT[amounts.primary.basis]) : "Import"}>
             {amounts.primary ? (
               <span className="whitespace-nowrap tabular-nums" title={`${AMOUNT_BASIS_LABEL[amounts.primary.basis]}. ${AMOUNT_HELP}`}>
-                {formatMoney(amounts.primary.value, tender.currency)}
+                {formatAmount(amounts.primary.value, tender.currency)}
               </span>
             ) : (
-              <span className="text-muted">Import no informat</span>
+              <span className="text-muted">{AMOUNT_NOT_PUBLISHED}</span>
             )}
             {amounts.budget && (
               <p className="mt-0.5 text-caption text-muted" data-amount-budget>
                 {AMOUNT_BASIS_SHORT[amounts.budget.basis]}:{" "}
-                <span className="whitespace-nowrap tabular-nums">{formatMoney(amounts.budget.value, tender.currency)}</span>
+                <span className="whitespace-nowrap tabular-nums">{formatAmount(amounts.budget.value, tender.currency)}</span>
               </p>
             )}
           </Fact>

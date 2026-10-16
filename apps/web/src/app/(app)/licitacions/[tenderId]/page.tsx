@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
+import { AmountStack } from "@/components/AmountStack";
 import { ComplianceSection } from "@/components/ComplianceSection";
 import { PreFitMissing, PreFitPanel, ScoreValue } from "@/components/PreFit";
 import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
@@ -30,7 +31,7 @@ import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ApiError, api } from "@/lib/api";
 import type { Compliance } from "@/lib/compliance";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatAmount, formatDate } from "@/lib/format";
 import { useMutation, useResource } from "@/lib/hooks";
 import { type AnalysisLimits, jobErrorMessage, requestProcessing, useJobRequest } from "@/lib/jobs";
 import { jobErrorAction, shortSummary, tenderStatusView } from "@/lib/labels";
@@ -40,7 +41,6 @@ import type { DashboardSummary } from "@/lib/types";
 import { publicationStatusLabel, type TenderHistoryRevision } from "@/lib/tender-changes";
 import {
   AMOUNT_BASIS_LABEL,
-  AMOUNT_BASIS_SHORT,
   AMOUNT_HELP,
   AMOUNT_NOT_PUBLISHED,
   CONTRACT_TYPE_LABELS,
@@ -52,7 +52,6 @@ import {
   labelOf,
   formatBytes,
   formatDateTime,
-  tenderAmounts,
   type TenderDetail,
   type TenderDocumentMeta,
   type TenderLot,
@@ -83,24 +82,12 @@ import {
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
-/** Un import d'una base concreta: el valor, o que la font no el publica (P2-06). */
+/** Un import d'una base concreta (P2-06): el valor exacte, amb cèntims, o que no consta. */
 function AmountValue({ value, currency }: { value: string | null; currency: string }) {
-  return value ? (
-    <span className="tabular-nums">{formatMoney(value, currency)}</span>
+  return value !== null && value !== "" ? (
+    <span className="tabular-nums">{formatAmount(value, currency)}</span>
   ) : (
     <span className="text-muted">{AMOUNT_NOT_PUBLISHED}</span>
-  );
-}
-
-/** Import d'un lot amb la seva base (P2-06); abans barrejava PBL i VEC sense dir-ho. */
-function LotAmount({ lot }: { lot: TenderLot }) {
-  const amounts = tenderAmounts(lot);
-  if (!amounts.primary) return <span className="text-muted">{AMOUNT_NOT_PUBLISHED}</span>;
-  return (
-    <span className="whitespace-nowrap tabular-nums" aria-label={`${AMOUNT_BASIS_LABEL[amounts.primary.basis]}: ${formatMoney(amounts.primary.value, lot.currency)}`}>
-      {formatMoney(amounts.primary.value, lot.currency)}{" "}
-      <span className="text-caption text-muted">{AMOUNT_BASIS_SHORT[amounts.primary.basis]}</span>
-    </span>
   );
 }
 
@@ -780,7 +767,8 @@ function TenderDetail() {
                     header: "Import",
                     align: "right",
                     width: "14%",
-                    cell: (lot) => <LotAmount lot={lot} />,
+                    // P2-06: abans barrejava PBL i VEC sense dir-ho; ara, com a la taula d'oportunitats.
+                    cell: (lot) => <AmountStack item={lot} currency={lot.currency} />,
                   },
                   {
                     key: "cpv",

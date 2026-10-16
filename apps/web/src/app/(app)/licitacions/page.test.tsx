@@ -166,7 +166,7 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     expect(rows[1].textContent).toContain("Sense termini");
     expect(rows[1].textContent).toContain("Publicada 3 cops");
     expect(rows[1].textContent).toContain("2 lots");
-    expect(rows[1].textContent).toContain("—");
+    expect(rows[1].textContent).toContain("No consta a les dades de la font");
     expect(rows[0].textContent).not.toMatch(/probabilitat/i);
     expect(container.textContent).toContain("no és una probabilitat de guanyar");
 
@@ -662,7 +662,7 @@ describe("Oportunitats · Totes (catàleg complet)", () => {
 
     expect(second.textContent).toContain("Anul·lada");
     expect(second.textContent).toContain("Ja no disponible a la font");
-    expect(second.textContent).toContain("Import no informat");
+    expect(second.textContent).toContain("No consta a les dades de la font");
     // Sense pre-fit: la fila no en diu res (A9); l'avís és un de sol, a la capçalera de la llista.
     expect(second.textContent).not.toContain("Sense calcular");
     expect(second.textContent).not.toContain("Pre-fit 0");

@@ -171,9 +171,10 @@ export function tenderAmounts(item: {
   base_budget_without_tax?: string | null;
   base_budget: string | null;
 }): TenderAmountsView {
-  const vec = item.estimated_value || null;
-  const net = item.base_budget_without_tax || null;
-  const gross = item.base_budget || null;
+  const present = (value: string | null | undefined) => (value === "" || value === undefined ? null : value);
+  const vec = present(item.estimated_value);
+  const net = present(item.base_budget_without_tax);
+  const gross = present(item.base_budget);
   if (vec) {
     const budget: AmountFigure | null = net
       ? differs(vec, net)
@@ -189,8 +190,14 @@ export function tenderAmounts(item: {
   return { primary: null, budget: null };
 }
 
-/** Quan la font no publica un import, es diu així (no «—», que sembla zero o error). */
-export const AMOUNT_NOT_PUBLISHED = "No publicat a la font";
+/**
+ * Quan no hi ha un import, es diu així (no «—», que sembla zero o error). No s'afirma que la
+ * font no el publiqui: només que no consta a les dades que se n'han rebut.
+ */
+export const AMOUNT_NOT_PUBLISHED = "No consta a les dades de la font";
+
+/** L'etiqueta curta de la xifra principal quan és el VEC. */
+export const AMOUNT_VEC_FACT_LABEL = "Valor estimat (VEC)";
 
 export interface TenderLot {
   id: string;

@@ -1,7 +1,7 @@
 import type { TabItem } from "@/components/ui/Tabs";
 import type { Compliance } from "@/lib/compliance";
-import { formatMoney } from "@/lib/format";
-import { tenderAmounts, type AmountBasis } from "@/lib/tenders";
+import { formatAmount } from "@/lib/format";
+import { AMOUNT_NOT_PUBLISHED, tenderAmounts, type AmountBasis } from "@/lib/tenders";
 import {
   ANALYSIS_STATUS_TEXT,
   DECISION_LABELS,
@@ -103,12 +103,13 @@ export function amountMeta(tender: {
   // La mateixa ordre que el filtre i l'ordenació; abans s'ignorava el PBL sense IVA i
   // les licitacions que només el tenien mostraven «—».
   const amounts = tenderAmounts(tender);
-  if (!amounts.primary) return { text: "—", note: null, budget: null };
+  if (!amounts.primary) return { text: AMOUNT_NOT_PUBLISHED, note: null, budget: null };
+  // Amb cèntims: el PBL és l'import màxim de l'oferta, i arrodonir-lo en canviaria el sentit.
   return {
-    text: formatMoney(amounts.primary.value, tender.currency),
+    text: formatAmount(amounts.primary.value, tender.currency),
     note: AMOUNT_NOTE[amounts.primary.basis],
     budget: amounts.budget
-      ? { text: formatMoney(amounts.budget.value, tender.currency), note: AMOUNT_NOTE[amounts.budget.basis] }
+      ? { text: formatAmount(amounts.budget.value, tender.currency), note: AMOUNT_NOTE[amounts.budget.basis] }
       : null,
   };
 }
