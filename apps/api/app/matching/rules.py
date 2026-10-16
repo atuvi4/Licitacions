@@ -18,7 +18,11 @@ from app.models.enums import DimensionResult
 
 # Puja aquesta versio sempre que canvii una regla, un pes o un llindar.
 # Permet respondre "amb quines regles es va calcular aquest 82?".
-RULES_VERSION = "metadata-match-v1"
+#
+# v2 (F-06b): sense VEC, el pressupost base sense IVA (PBL) entra com a COTA
+# INFERIOR del VEC, identificat; uns imports incoherents (VEC < PBL) no donen
+# cap conclusio. Amb VEC coherent, el resultat es el mateix que a v1.
+RULES_VERSION = "metadata-match-v2"
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +164,10 @@ class ReasonCode:
     AMOUNT_ABOVE_MAXIMUM = "AMOUNT_ABOVE_MAXIMUM"
     AMOUNT_UNKNOWN = "AMOUNT_UNKNOWN"
     AMOUNT_NO_COMPANY_PREFERENCES = "AMOUNT_NO_COMPANY_PREFERENCES"
+    # v2: nomes hi ha el PBL i no supera cap llindar; el VEC podria ser mes alt.
+    AMOUNT_BUDGET_LOWER_BOUND = "AMOUNT_BUDGET_LOWER_BOUND"
+    # v2: el VEC publicat es inferior al PBL sense IVA, que no pot ser.
+    AMOUNT_INCOHERENT = "AMOUNT_INCOHERENT"
 
     DEADLINE_COMFORTABLE = "DEADLINE_COMFORTABLE"
     DEADLINE_ADEQUATE = "DEADLINE_ADEQUATE"

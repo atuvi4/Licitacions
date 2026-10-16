@@ -15,12 +15,12 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload, selectinload
 
+from app.matching.economic import reference_amount
 from app.matching.engine import MatchOutcome, aggregate_lots, evaluate
 from app.matching.profile import CompanyMatchProfile, load_profile
 from app.matching.rules import RULES_VERSION
@@ -60,25 +60,15 @@ class RecalculationSummary:
         }
 
 
-def _amount(estimated: Decimal | None, base: Decimal | None) -> Decimal | None:
-    """Valor de referencia: primer el valor estimat, despres el pressupost base.
-
-    Alguns expedients publiquen `TotalAmount = 0` (acords marc, contractes
-    centralitzats); un zero no es un import util per puntuar, aixi que es
-    tracta com a absent.
-    """
-    for value in (estimated, base):
-        if value is not None and value > 0:
-            return value
-    return None
-
-
 def evaluate_tender(
     profile: CompanyMatchProfile, tender: Tender, now: datetime | None = None
 ) -> tuple[MatchOutcome, list[tuple[TenderLot, MatchOutcome]]]:
     """Puntua un expedient i, si en te, cadascun dels seus lots."""
     tender_cpvs = [item.cpv_code for item in tender.cpvs]
-    tender_amount = _amount(tender.estimated_value, tender.base_budget)
+    # v2 (F-06b): VEC → PBL sense IVA → PBL amb IVA, amb la base identificada.
+    tender_amount = reference_amount(
+        tender.estimated_value, tender.base_budget_without_tax, tender.base_budget
+    )
     status = tender.status.value
     # Els lots que han desaparegut del feed es queden a la base de dades perque
     # una candidatura hi pot apuntar, pero no son candidats a res: puntuar-los
@@ -108,7 +98,9 @@ def evaluate_tender(
         lot_place = lot.place_of_execution or tender.place_of_execution
         # Import: NOMES el del lot. No es reparteix ni s'hereta el total de
         # l'expedient, que donaria una xifra falsa per a cada lot.
-        lot_amount = _amount(lot.estimated_value, lot.base_budget)
+        lot_amount = reference_amount(
+            lot.estimated_value, lot.base_budget_without_tax, lot.base_budget
+        )
         lot_results.append(
             (
                 lot,
@@ -132,6 +124,7 @@ def evaluate_tender(
 class MatchingService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+        self._preserve_unchanged = False
 
     async def _tenders(
         self, tender_ids: list[uuid.UUID] | None, *, company_id: uuid.UUID
@@ -195,8 +188,17 @@ class MatchingService:
         *,
         tender_ids: list[uuid.UUID] | None = None,
         now: datetime | None = None,
+        commit: bool = True,
+        preserve_unchanged: bool = False,
     ) -> RecalculationSummary:
-        """Recalcula el pre-fit d'una empresa. Actualitza, no acumula."""
+        """Recalcula el pre-fit d'una empresa. Actualitza, no acumula.
+
+        `commit=False` deixa els canvis a la sessio sense confirmar (el recalcul
+        controlat els compara i decideix). `preserve_unchanged=True` no toca cap
+        fila el resultat de la qual no canvia, ni tan sols `calculated_at`: aixi
+        tornar a executar el mateix recalcul no escriu res (idempotent).
+        """
+        self._preserve_unchanged = preserve_unchanged
         started = time.monotonic()
         moment = now or datetime.now(UTC)
         summary = RecalculationSummary(company_id=company_id)
@@ -256,7 +258,10 @@ class MatchingService:
                 match, lot_results, moment, profile, tender, revisions.get(tender.id)
             )
 
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
+        else:
+            await self.session.flush()
         summary.duration_ms = int((time.monotonic() - started) * 1000)
         logger.info("matching.recalculated", extra=summary.as_log())
         return summary
@@ -270,22 +275,33 @@ class MatchingService:
         tender: Tender,
         revision_id: uuid.UUID | None = None,
     ) -> None:
-        match.score = outcome.score
-        match.status = outcome.status
-        match.exclusion_kind = outcome.exclusion_kind
-        match.exclusion_reason_code = outcome.exclusion_reason_code
-        match.cpv_score = outcome.cpv_score
-        match.geographic_score = outcome.geographic_score
-        match.economic_score = outcome.economic_score
-        match.timing_score = outcome.timing_score
-        match.data_coverage = outcome.data_coverage
-        match.factors = outcome.factors
-        match.rules_version = outcome.rules_version
+        values = {
+            "score": outcome.score,
+            "status": outcome.status,
+            "exclusion_kind": outcome.exclusion_kind,
+            "exclusion_reason_code": outcome.exclusion_reason_code,
+            "cpv_score": outcome.cpv_score,
+            "geographic_score": outcome.geographic_score,
+            "economic_score": outcome.economic_score,
+            "timing_score": outcome.timing_score,
+            "data_coverage": outcome.data_coverage,
+            "factors": outcome.factors,
+            "rules_version": outcome.rules_version,
+            # Instantanies per saber despres si el resultat ha quedat obsolet.
+            "company_profile_changed_at": profile.profile_changed_at,
+            "tender_changed_at": tender.last_changed_at,
+            "tender_revision_id": revision_id,
+        }
+        if (
+            self._preserve_unchanged
+            and match.id is not None
+            and match.calculated_at is not None
+            and all(getattr(match, key) == value for key, value in values.items())
+        ):
+            return
+        for key, value in values.items():
+            setattr(match, key, value)
         match.calculated_at = moment
-        # Instantanies per saber despres si el resultat ha quedat obsolet.
-        match.company_profile_changed_at = profile.profile_changed_at
-        match.tender_changed_at = tender.last_changed_at
-        match.tender_revision_id = revision_id
 
     async def _sync_lot_matches(
         self,

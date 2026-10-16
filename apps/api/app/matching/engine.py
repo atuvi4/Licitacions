@@ -31,6 +31,7 @@ from app.matching import cpv as cpv_dimension
 from app.matching import economic as economic_dimension
 from app.matching import geography as geography_dimension
 from app.matching import timing as timing_dimension
+from app.matching.economic import AmountReference
 from app.matching.profile import CompanyMatchProfile
 from app.matching.rules import (
     CANDIDATE_THRESHOLD,
@@ -70,7 +71,7 @@ def evaluate(
     cpv_codes: list[str],
     nuts_code: str | None,
     place_name: str | None,
-    amount: Decimal | None,
+    amount: AmountReference | Decimal | None,
     tender_status: str,
     deadline: datetime | None,
     now: datetime | None = None,
