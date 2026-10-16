@@ -669,4 +669,50 @@ describe("RequirementAnalysisSection · 3B-2 (quota canònica, adopció, buits i
     await flush();
     expect(screen.getByText(/anàlisi de simulació: no és vigent/i)).toBeTruthy();
   });
+
+  // P2-01: el cas de L'Escala. Tres lectures reals, cap de vigent; mai es promouen.
+  it("sense anàlisi vigent, diu quantes n'hi ha d'anteriors i per què cap no compta", async () => {
+    respond({
+      "/tenders/t1/analysis/runs": [
+        run({ id: "r3", is_current: false, requirements_extracted: 197, award_criteria_extracted: 97, error_code: "experimental_profile_not_current" }),
+        run({ id: "r2", is_current: false, status: "partial", requirements_extracted: 160, chunks_completed: 12, chunks_total: 15, chunks_failed: 3, error_code: "some_chunks_failed" }),
+        run({ id: "r1", is_current: false, status: "failed", requirements_extracted: 0, award_criteria_extracted: 0, error_code: "all_chunks_failed" }),
+      ],
+    });
+    renderSection(null);
+    await flush();
+    expect(get).toHaveBeenCalledWith("/tenders/t1/analysis/runs?limit=20");
+    expect(screen.getByText("3 anàlisis anteriors d'aquests plecs no són vigents")).toBeTruthy();
+    expect(screen.getByText(/continua sense anàlisi vigent/)).toBeTruthy();
+    expect(screen.getByText(/Perfil experimental: es conserva com a historial/)).toBeTruthy();
+    expect(screen.getByText(/Lectura parcial: alguns fragments/)).toBeTruthy();
+    expect(screen.getByText(/Ha fallat: cap part del plec/)).toBeTruthy();
+    expect(screen.getByText("Historial (només lectura)")).toBeTruthy();
+    // Només lectura: cap requisit d'aquestes passades, cap acció per adoptar-les.
+    expect(screen.queryByText("Requisits extrets")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Adopta-la" })).toBeNull();
+    // L'estat buit i la seva acció es mantenen.
+    expect(screen.getByRole("button", { name: "Analitza el plec" })).toBeTruthy();
+  });
+
+  it("amb una anàlisi vigent, les anteriors surten com a historial i la vigent no hi és", async () => {
+    respond({
+      "/tenders/t1/analysis/runs": [
+        run({ id: "x1", is_current: true }),
+        run({ id: "x0", is_current: false, started_at: "2026-09-01T10:00:00Z", requirements_extracted: 5 }),
+      ],
+    });
+    renderSection(analysis());
+    await flush();
+    expect(screen.getByText("1 anàlisi anterior d'aquests plecs no és vigent")).toBeTruthy();
+    expect(screen.getByText(/No és la vigent: n'hi ha una de posterior/)).toBeTruthy();
+    expect(screen.queryByText(/continua sense anàlisi vigent/)).toBeNull();
+  });
+
+  it("sense cap anàlisi anterior no vigent, no hi ha avís d'historial", async () => {
+    respond({ "/tenders/t1/analysis/runs": [run({ id: "x1", is_current: true })] });
+    renderSection(analysis());
+    await flush();
+    expect(screen.queryByText(/anteriors? d'aquests plecs no/)).toBeNull();
+  });
 });

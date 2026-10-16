@@ -272,6 +272,43 @@ export const COMPLETED_EMPTY_TEXT = "Anàlisi acabada sense resultats: cal revis
 /** Una simulació (`fake`) mai és vigent (3B-2 §6.3). */
 export const SIMULATION_NOT_CURRENT_TEXT = "Anàlisi de simulació: no és vigent";
 
+/** Quantes passades de l'historial es demanen per explicar-lo (P2-01); és el màxim per defecte de l'API. */
+export const RUN_HISTORY_LIMIT = 20;
+
+/**
+ * Les anàlisis d'aquests plecs que existeixen però no són la vigent (P2-01): es
+ * poden consultar com a historial, però mai es promouen ni es barregen amb el
+ * conjunt efectiu. Les que encara corren no hi són: d'aquestes en parla la feina.
+ */
+export function historicRuns(runs: ExtractionRun[] | null | undefined, effectiveRunId: string | null): ExtractionRun[] {
+  if (!Array.isArray(runs)) return [];
+  return runs.filter(
+    (item) => item.id !== effectiveRunId && !item.is_current && item.status !== "pending" && item.status !== "running",
+  );
+}
+
+/** Per què una anàlisi de l'historial no és la vigent, en llenguatge de producte. */
+export function notCurrentReason(item: ExtractionRun): string {
+  if (item.run_basis !== "real" && item.run_basis !== "gold") return "Simulació: no ha llegit el plec i mai no pot ser vigent.";
+  if (item.error_code === "experimental_profile_not_current")
+    return "Perfil experimental: es conserva com a historial, però mai no pot ser la base vigent.";
+  if (item.error_code === "forced_not_canonical") return "Anàlisi forçada per l'operador: mai no és la vigent.";
+  if (item.status === "failed") return "Ha fallat: cap part del plec s'ha pogut analitzar.";
+  if (item.status === "partial") return "Lectura parcial: alguns fragments del plec han fallat.";
+  if (item.status === "completed_empty") return "Acabada sense cap requisit ni criteri: ho ha de mirar una persona.";
+  return "No és la vigent: n'hi ha una de posterior o els plecs han canviat.";
+}
+
+/** Estat d'una passada de l'historial, tal com el desa el run. */
+export const RUN_STATUS_LABELS: Record<AnalysisRunStatus, string> = {
+  pending: "Pendent",
+  running: "En curs",
+  completed: "Completada",
+  completed_empty: "Sense resultats",
+  partial: "Parcial",
+  failed: "Fallida",
+};
+
 export const ANALYSIS_STATE_LABELS: Record<AnalysisState, string> = {
   not_analyzed: "No analitzat",
   analyzing: "Analitzant",

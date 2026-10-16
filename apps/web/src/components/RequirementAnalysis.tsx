@@ -57,8 +57,12 @@ import {
 } from "@/lib/labels";
 import {
   COMPLETED_EMPTY_TEXT,
+  RUN_HISTORY_LIMIT,
+  RUN_STATUS_LABELS,
   SIMULATION_NOT_CURRENT_TEXT,
   canAdoptAnalysis,
+  historicRuns,
+  notCurrentReason,
   requirementAnalysisState,
   type AwardCriterion,
   type ExtractionRun,
@@ -71,6 +75,55 @@ import {
 import type { TenderDocumentMeta, TenderPackage } from "@/lib/tenders";
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
+
+/** Data i hora d'una passada: el mateix dia en pot haver-hi més d'una. */
+const RUN_DATE = new Intl.DateTimeFormat("ca-ES", { dateStyle: "medium", timeStyle: "short" });
+function runDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : RUN_DATE.format(date);
+}
+
+/**
+ * L'historial d'anàlisis no vigents (P2-01): quantes n'hi ha i per què cap no
+ * compta. Només lectura: no ensenya els seus requisits ni permet promoure'n cap.
+ */
+function RunHistoryNotice({ runs, hasEffective }: { runs: ExtractionRun[]; hasEffective: boolean }) {
+  if (runs.length === 0) return null;
+  const title =
+    runs.length === 1 ? "1 anàlisi anterior d'aquests plecs no és vigent" : `${runs.length} anàlisis anteriors d'aquests plecs no són vigents`;
+  return (
+    <div
+      className={
+        hasEffective ? "mx-4 my-3 border border-border px-3.5 py-2.5" : "m-4 border border-border-strong bg-subtle px-3.5 py-2.5"
+      }
+    >
+      <p className="font-heading text-[14px] font-semibold text-ink">{title}</p>
+      <p className="mt-0.5 text-body text-muted">
+        Es conserven com a historial i no compten: cap dels seus requisits ni criteris es mostra aquí ni entra en cap
+        recompte.
+        {!hasEffective && " Per això aquesta licitació continua sense anàlisi vigent."}
+      </p>
+      <details className="mt-1.5">
+        <summary className="cursor-pointer text-caption text-muted">Historial (només lectura)</summary>
+        <ul className="mt-1.5 flex flex-col gap-2">
+          {runs.map((item) => (
+            <li key={item.id} className="text-[13px]">
+              <p className="text-ink">
+                <span className="tabular-nums">{runDate(item.started_at)}</span> · {RUN_STATUS_LABELS[item.status]} ·{" "}
+                <span className="tabular-nums">{item.requirements_extracted}</span> requisits ·{" "}
+                <span className="tabular-nums">{item.award_criteria_extracted}</span> criteris · fragments{" "}
+                <span className="tabular-nums">
+                  {item.chunks_completed} de {item.chunks_total}
+                </span>
+              </p>
+              <p className="text-muted">{notCurrentReason(item)}</p>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </div>
+  );
+}
 
 function evidenceHref(tenderId: string, evidence: RequirementEvidence): string | null {
   return evidence.tender_document_id
@@ -261,12 +314,13 @@ export function RequirementAnalysisSection({
 
   const state = analysisState(analysis);
   const run = analysis?.run ?? null;
-  // L'última run d'aquests plecs, sigui o no la vigent: una simulació o una
-  // lectura acabada sense resultats mai són vigents i no arriben a `analysis.run`,
-  // però s'han d'explicar (3B-2 §6.3).
-  const latestRuns = useResource<ExtractionRun[]>(`/tenders/${tenderId}/analysis/runs?limit=1`);
+  // Les runs d'aquests plecs, siguin o no la vigent: una simulació o una lectura
+  // acabada sense resultats mai són vigents i no arriben a `analysis.run`, però
+  // s'han d'explicar (3B-2 §6.3); i les altres no vigents, com a historial (P2-01).
+  const latestRuns = useResource<ExtractionRun[]>(`/tenders/${tenderId}/analysis/runs?limit=${RUN_HISTORY_LIMIT}`);
   const latest = Array.isArray(latestRuns.data) ? (latestRuns.data[0] ?? null) : null;
   const latestNotCurrent = latest && latest.id !== run?.id ? latest : null;
+  const history = historicRuns(latestRuns.data, run?.id ?? null);
   const { reload: reloadLatest } = latestRuns;
   const [acceptance, setAcceptance] = useState<QuoteAcceptance>({});
   const [quoteForce, setQuoteForce] = useState(false);
@@ -603,6 +657,8 @@ export function RequirementAnalysisSection({
               </p>
             </div>
           )}
+
+        <RunHistoryNotice runs={history} hasEffective={run !== null} />
 
         {run && !trustworthy && (
           <div className="m-4 flex flex-col gap-1 border border-warning bg-warning-soft px-3.5 py-2.5 sm:flex-row sm:items-center sm:gap-3.5">
