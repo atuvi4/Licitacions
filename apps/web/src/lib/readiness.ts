@@ -344,6 +344,11 @@ export function blockerCountLabel(count: number): string {
  * es resol fora de Preparar (Decidir, la fitxa de la licitació) o amb un codi que no
  * coneixem compta al total però a cap àrea.
  */
+/** El recompte d'una pestanya de Preparar dit amb paraules (P2-02): «1 pendent», «3 pendents». */
+export function pendingCountLabel(count: number): string {
+  return count === 1 ? "1 pendent" : `${count} pendents`;
+}
+
 export function blockersByArea(findings: ReadinessFinding[]): Record<PrepareArea, number> {
   const counts: Record<PrepareArea, number> = { solucio: 0, oferta: 0, dossier: 0, pla: 0 };
   for (const finding of findings) {

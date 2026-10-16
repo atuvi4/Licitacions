@@ -26,6 +26,17 @@ describe("Tabs", () => {
     expect(screen.getByRole("tab", { name: /Requisits/ }).textContent).toContain("2");
   });
 
+  it("amb countLabel, el text i el nom accessible diuen què compta el número (P2-02)", () => {
+    render(
+      <Tabs
+        items={[{ key: "dossier", label: "Dossier", count: 2, countLabel: "2 pendents", countLevel: "blocking" }]}
+        value="dossier"
+        onChange={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: "Dossier 2 pendents" }).textContent).toBe("Dossier 2 pendents");
+  });
+
   it("en canviar escriu ?tab= a la URL sense perdre els altres paràmetres i avisa onChange", () => {
     const onChange = vi.fn();
     render(<Tabs items={items} value="resum" onChange={onChange} />);

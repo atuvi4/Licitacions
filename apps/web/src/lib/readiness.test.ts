@@ -9,6 +9,7 @@ import {
   findingCopy,
   groupFindings,
   isPrepareArea,
+  pendingCountLabel,
 } from "@/lib/readiness";
 
 describe("Àrees de Preparar", () => {
@@ -59,6 +60,11 @@ describe("Recompte de bloquejos per àrea (B6)", () => {
 
   it("sense problemes, tot a zero", () => {
     expect(blockersByArea([])).toEqual({ solucio: 0, oferta: 0, dossier: 0, pla: 0 });
+  });
+
+  it("el recompte d'una pestanya es diu amb paraules: singular i plural (P2-02)", () => {
+    expect(pendingCountLabel(1)).toBe("1 pendent");
+    expect(pendingCountLabel(3)).toBe("3 pendents");
   });
 });
 

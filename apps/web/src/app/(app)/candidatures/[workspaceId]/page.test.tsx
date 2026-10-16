@@ -715,10 +715,14 @@ describe("Candidatura · Preparar per àrees", () => {
     expect(screen.getByText("4 pendents de preparació (totes les àrees)")).toBeTruthy();
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Solució tècnica",
-      "Oferta econòmica1",
-      "Dossier2",
-      "Pla de treball1",
+      "Oferta econòmica 1 pendent",
+      "Dossier 2 pendents",
+      "Pla de treball 1 pendent",
     ]);
+    // P2-02: el nom accessible diu què compta el número, no només «Dossier 2».
+    expect(screen.getByRole("tab", { name: "Dossier 2 pendents" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Oferta econòmica 1 pendent" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Solució tècnica" })).toBeTruthy();
   });
 
   it("un desat del dossier torna a preguntar la preparació final i el capçal canvia", async () => {

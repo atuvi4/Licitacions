@@ -11,6 +11,11 @@ export interface TabItem {
   /** Només feina pendent; en Bloqueig si bloqueja. */
   count?: number | string;
   countLevel?: Level;
+  /**
+   * Què compta el número, si sol no ho diu (P2-02): p. ex. «2 pendents». Es mostra
+   * en lloc del número i forma part del nom accessible de la pestanya.
+   */
+  countLabel?: string;
 }
 
 export interface TabsProps {
@@ -81,9 +86,14 @@ export function Tabs({ items, value, onChange, param = "tab", history = "replace
             )}
           >
             {item.label}
+            {item.countLabel && item.count !== undefined && item.count !== null && (
+              // L'espai separa el recompte de l'etiqueta al nom accessible («Dossier 2 pendents»);
+              // dins del flex no ocupa lloc.
+              <> </>
+            )}
             {item.count !== undefined && item.count !== null && (
               <span className={cn("tabular-nums", COUNT_CLASS[item.countLevel ?? "neutral"] ?? "text-muted")}>
-                {item.count}
+                {item.countLabel ?? item.count}
               </span>
             )}
           </button>

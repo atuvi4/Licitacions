@@ -32,7 +32,7 @@ import { ReadinessProvider, useInvalidateReadiness, useReadiness } from "@/compo
 import { decisionAnalysisState, analysisPath, type AnalysisRun } from "@/lib/analysis";
 import { useResource } from "@/lib/hooks";
 import { IssuesDrawer } from "@/components/IssuesDrawer";
-import { PREPARE_AREAS, PREPARE_AREA_LABELS, blockerCount, blockersByArea, isPrepareArea, type PrepareArea } from "@/lib/readiness";
+import { PREPARE_AREAS, PREPARE_AREA_LABELS, blockerCount, blockersByArea, isPrepareArea, pendingCountLabel, type PrepareArea } from "@/lib/readiness";
 import {
   WORKSPACE_STATUS_LEVEL,
   deadlineCountdownView,
@@ -539,7 +539,9 @@ function WorkspaceView() {
                 items={PREPARE_AREAS.map((key) => ({
                   key,
                   label: PREPARE_AREA_LABELS[key],
-                  ...(areaBlockers && areaBlockers[key] > 0 ? { count: areaBlockers[key], countLevel: "blocking" as const } : {}),
+                  ...(areaBlockers && areaBlockers[key] > 0
+                    ? { count: areaBlockers[key], countLabel: pendingCountLabel(areaBlockers[key]), countLevel: "blocking" as const }
+                    : {}),
                 }))}
                 value={area}
                 param="area"
