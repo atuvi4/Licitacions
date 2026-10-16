@@ -20,6 +20,7 @@ import {
   DIMENSION_ORDER,
   MATCH_STATUS_LABELS,
   PREFIT_DISCLAIMER,
+  factorSourceValue,
   isUnknown,
   lotSummary,
   profileGaps,
@@ -130,7 +131,7 @@ function FactorRow({ factor }: { factor: MatchFactor }) {
         <p className="mt-0.5 text-[11px] text-faint">
           {factor.company_value && <>Perfil: {factor.company_value}</>}
           {factor.company_value && factor.source_value && " · "}
-          {factor.source_value && <>Licitació: {factor.source_value}</>}
+          {factor.source_value && <>Licitació: {factorSourceValue(factor)}</>}
         </p>
       )}
     </div>

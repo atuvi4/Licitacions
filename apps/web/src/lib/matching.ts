@@ -156,8 +156,24 @@ export const SOURCE_GAP_REASONS: ReadonlySet<string> = new Set([
   "CPV_UNKNOWN",
   "TERRITORY_UNKNOWN",
   "AMOUNT_UNKNOWN",
+  "AMOUNT_BUDGET_LOWER_BOUND",
+  "AMOUNT_INCOHERENT",
   "DEADLINE_UNKNOWN",
 ]);
+
+/**
+ * El valor de la licitació d'un factor, amb la base de l'import quan no és el VEC
+ * (F-06b, regles v2). Un import del PBL sense VEC és una cota inferior: es diu.
+ */
+export function factorSourceValue(factor: Pick<MatchFactor, "dimension" | "source_value" | "detail">): string | null {
+  if (!factor.source_value) return null;
+  if (factor.dimension !== "economic") return factor.source_value;
+  const basis = factor.detail?.amount_basis;
+  if (basis === "pbl_net") return `${factor.source_value} € (PBL sense IVA, sense VEC publicat: com a mínim)`;
+  if (basis === "pbl_gross") return `${factor.source_value} € (PBL amb IVA, sense VEC publicat: com a mínim)`;
+  if (basis === "vec") return `${factor.source_value} € (VEC)`;
+  return factor.source_value;
+}
 
 export type InsufficientCause = "profile" | "source" | "both" | "unknown";
 
@@ -262,6 +278,11 @@ export const REASON_LABELS: Record<string, string> = {
   AMOUNT_BELOW_MINIMUM: "L'import és per sota del mínim que us interessa",
   AMOUNT_UNKNOWN: "La licitació no publica l'import",
   AMOUNT_NO_COMPANY_PREFERENCES: "L'empresa encara no ha configurat la capacitat de contractació",
+  // F-06b (regles v2): el PBL sense VEC només és una cota inferior.
+  AMOUNT_BUDGET_LOWER_BOUND:
+    "Només es coneix el pressupost base sense IVA i no supera cap llindar: el valor estimat pot ser més alt",
+  AMOUNT_INCOHERENT:
+    "Els imports de la font no quadren (el valor estimat és inferior al pressupost base): no se'n treu cap conclusió",
 
   // Termini
   DEADLINE_COMFORTABLE: "Queda temps de sobres per preparar l'oferta",
