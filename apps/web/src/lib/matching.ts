@@ -285,7 +285,7 @@ export const REASON_LABELS: Record<string, string> = {
   AMOUNT_BUDGET_LOWER_BOUND:
     "Només es coneix el pressupost base sense IVA i no supera cap màxim configurat: el valor estimat pot ser més alt",
   AMOUNT_INCOHERENT:
-    "Els imports de la font no quadren (el valor estimat és inferior al pressupost base): no se'n treu cap conclusió",
+    "Els imports de la font no quadren (el valor estimat és inferior al pressupost base sense IVA): no se'n treu cap conclusió",
   AMOUNT_BUDGET_WITH_TAX_ONLY:
     "Només es coneix el pressupost base amb IVA, que no es pot comparar amb el valor estimat (sense IVA): no se'n treu cap conclusió",
 

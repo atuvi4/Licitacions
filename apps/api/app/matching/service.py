@@ -232,10 +232,10 @@ class MatchingService:
                 match.lot_matches = []
                 self.session.add(match)
                 summary.created += 1
-            else:
+                self._apply(match, outcome, moment, profile, tender, revisions.get(tender.id))
+            elif self._apply(match, outcome, moment, profile, tender, revisions.get(tender.id)):
+                # Amb `preserve_unchanged`, una fila que no canvia no compta com a actualitzada.
                 summary.updated += 1
-
-            self._apply(match, outcome, moment, profile, tender, revisions.get(tender.id))
 
             candidates = [
                 (lot, lot_outcome)
@@ -274,7 +274,8 @@ class MatchingService:
         profile: CompanyMatchProfile,
         tender: Tender,
         revision_id: uuid.UUID | None = None,
-    ) -> None:
+    ) -> bool:
+        """Desa el resultat. `False` si no ha calgut tocar la fila (`preserve_unchanged`)."""
         values = {
             "score": outcome.score,
             "status": outcome.status,
@@ -298,10 +299,11 @@ class MatchingService:
             and match.calculated_at is not None
             and all(getattr(match, key) == value for key, value in values.items())
         ):
-            return
+            return False
         for key, value in values.items():
             setattr(match, key, value)
         match.calculated_at = moment
+        return True
 
     async def _sync_lot_matches(
         self,

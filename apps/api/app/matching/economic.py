@@ -12,7 +12,7 @@ assumible configurat per l'empresa": es una decisio de capacitat interna.
 
 El VEC (art. 101 LCSP: pròrrogues i modificacions incloses, sense IVA) i el PBL
 (art. 100: el maxim de l'oferta del contracte inicial) NO son el mateix. El PBL
-sense IVA, pero, mai pot superar el VEC: n'es una **cota inferior**. Per aixo:
+sense IVA, pero, no hauria de superar mai el VEC: n'es una **cota inferior**. Per aixo:
 
 - amb VEC (> 0), mana el VEC, com a v1;
 - sense VEC, el PBL sense IVA nomes serveix per dir que el contracte SUPERA un
