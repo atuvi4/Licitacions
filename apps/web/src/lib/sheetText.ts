@@ -97,7 +97,7 @@ export function parseSheetPage(text: string): SheetPage {
     page.notes.push(line);
   }
   for (const { row, rest, line } of rows) {
-    const cells = rowCells(rest, line, page.notes);
+    const cells = rowCells(rest.replace(/\n+$/, ""), line, page.notes);
     if (cells.length > 0) page.rows.push({ row, cells });
   }
   return page;
@@ -126,5 +126,8 @@ export function floatArtifactClean(raw: string): string | null {
   if (!Number.isFinite(parsed)) return null;
   const clean = String(Number(parsed.toPrecision(15)));
   if (clean.includes("e") || clean.length >= literal.length) return null;
+  // Un error de representació és a 1-2 ULP del valor escrit; més lluny, és un decimal precís.
+  const ulp = Math.max(Math.abs(parsed), Number.MIN_VALUE) * Number.EPSILON;
+  if (Math.abs(Number(clean) - parsed) > 4 * ulp) return null;
   return clean;
 }

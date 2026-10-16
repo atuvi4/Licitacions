@@ -60,6 +60,7 @@ describe("parseSheetPage (P2-07)", () => {
     );
     expect(page.notes).toEqual([]);
     expect(page.rows.map((row) => row.row)).toEqual(["4", "5"]);
+    expect(parseSheetPage("Fila 1 | A1: y\n\n").rows[0].cells[0].value).toBe("y");
     expect(page.rows[0].cells.map((cell) => [cell.ref, cell.value])).toEqual([
       ["A4", "Línia 1\nLínia 2\n\nLínia 4"],
       ["B4", "5"],
@@ -108,6 +109,7 @@ describe("floatArtifactClean (P2-07): només errors evidents de coma flotant", (
       "0.6666666666666666",
       "12345678.123456789",
       "0.00001234567890123",
+      "1234567.000000123",
     ]) {
       expect(floatArtifactClean(value)).toBeNull();
     }

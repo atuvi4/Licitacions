@@ -139,6 +139,7 @@ function DocumentText() {
   // tria local només val mentre l'URL no canvia, i cobreix el moment fins que `replace` hi arriba.
   const urlKey = `${citedExtraction ?? ""}|${rawPage ?? ""}`;
   const [picked, setPicked] = useState<{ key: string; page: number } | null>(null);
+  if (picked && picked.key !== urlKey) setPicked(null);
   const pageNumber = picked && picked.key === urlKey ? picked.page : (urlPage ?? 1);
 
   // El títol ha de ser el NOM del document («Plec de prescripcions tècniques»),

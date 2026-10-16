@@ -11,7 +11,7 @@ import { AMOUNT_BASIS_LABEL, AMOUNT_BASIS_SHORT, AMOUNT_NOT_PUBLISHED, type Amou
 export function AmountBasisTag({ basis }: { basis: AmountBasis }) {
   return (
     <span className="text-caption text-muted">
-      <abbr title={AMOUNT_BASIS_LABEL[basis]} className="no-underline" aria-hidden="true">
+      <abbr title={AMOUNT_BASIS_LABEL[basis]} className="cursor-help underline decoration-dotted underline-offset-2" aria-hidden="true">
         {AMOUNT_BASIS_SHORT[basis]}
       </abbr>
       <span className="sr-only">{AMOUNT_BASIS_LABEL[basis]}</span>
