@@ -187,7 +187,14 @@ class TestRecalc:
         await _prepare(db, company_id)
         table = CompanyTenderMatch.__table__
         odd = '[ {"z": 1,  "dimension": "economic", "a": [2, 1]} ]'
-        await db.execute(sa.update(table).values(factors=sa.type_coerce(sa.literal(odd), sa.Text)))
+        # El text tal qual: a PostgreSQL amb CAST a json (que el desa literal); a SQLite, text.
+        raw = sa.literal(odd, type_=sa.Text)
+        value = (
+            sa.cast(raw, table.c.factors.type)
+            if db.get_bind().dialect.name == "postgresql"
+            else sa.type_coerce(raw, sa.Text)
+        )
+        await db.execute(sa.update(table).values(factors=value))
         await db.commit()
 
         async def raw_texts():
