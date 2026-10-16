@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const get = vi.fn();
+const replace = vi.fn();
 let search = "";
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -19,7 +20,7 @@ vi.mock("@/components/SessionProvider", () => ({
 }));
 vi.mock("next/navigation", () => ({
   useParams: () => ({ tenderId: "t1", documentId: "d3" }),
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace, refresh: vi.fn() }),
   usePathname: () => "/licitacions/t1/documents/d3",
   useSearchParams: () => new URLSearchParams(search),
 }));
@@ -79,6 +80,7 @@ function base() {
 describe("Text extret d'un plec", () => {
   beforeEach(() => {
     get.mockReset();
+    replace.mockReset();
     search = "";
     companyId = "c1";
   });
@@ -126,6 +128,103 @@ describe("Text extret d'un plec", () => {
     expect(await screen.findByText("Text antic de la revisió 1")).toBeTruthy();
     expect(container.textContent).toContain("revisió 1");
     expect(container.textContent).toContain("Ja no és la revisió vigent");
+  });
+
+  // P2-07: la pàgina viu a l'URL.
+  it("navegar escriu ?page= a l'URL (replace, sense scroll) i conserva la revisió citada", async () => {
+    search = "extraction=e2";
+    respondWith(base());
+    render(<DocumentTextPage />);
+    await screen.findByText("Text de la pàgina 1");
+    fireEvent.click(screen.getByRole("button", { name: "Següent" }));
+    await flush();
+    expect(replace).toHaveBeenCalledWith("/licitacions/t1/documents/d3?extraction=e2&page=2", { scroll: false });
+  });
+
+  it("un enllaç amb ?page=2 obre directament la pàgina 2", async () => {
+    search = "page=2";
+    respondWith(base());
+    render(<DocumentTextPage />);
+    await flush();
+    expect(get).toHaveBeenCalledWith("/companies/c1/tender-document-extractions/e2/pages/2");
+    expect(await screen.findByText("Pàgina 2 de 3")).toBeTruthy();
+  });
+
+  it("fora de rang: es mostra l'última pàgina, es diu, i mai es demana la que no existeix", async () => {
+    search = "page=9";
+    respondWith({ ...base(), "/companies/c1/tender-document-extractions/e2/pages/3": { page_number: 3, text: "Text de la pàgina 3", char_count: 19, status: "extracted" } });
+    render(<DocumentTextPage />);
+    expect(await screen.findByText("Text de la pàgina 3")).toBeTruthy();
+    expect(screen.getByText(/La pàgina 9 no existeix: aquest document en té 3/)).toBeTruthy();
+    expect(get).not.toHaveBeenCalledWith("/companies/c1/tender-document-extractions/e2/pages/9");
+  });
+
+  it("un ?page= no vàlid obre la pàgina 1 i ho diu", async () => {
+    search = "page=abc";
+    respondWith(base());
+    render(<DocumentTextPage />);
+    expect(await screen.findByText("Text de la pàgina 1")).toBeTruthy();
+    expect(screen.getByText(/no és vàlida \(«abc»\)/)).toBeTruthy();
+  });
+
+  it("el número escrit s'aplica en confirmar, no a cada tecla", async () => {
+    respondWith(base());
+    render(<DocumentTextPage />);
+    await screen.findByText("Text de la pàgina 1");
+    const input = screen.getByRole("spinbutton", { name: "Número de pàgina" });
+    fireEvent.change(input, { target: { value: "2" } });
+    expect(replace).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await flush();
+    expect(replace).toHaveBeenCalledWith("/licitacions/t1/documents/d3?page=2", { scroll: false });
+    // Un número fora de rang no navega i torna al valor vigent.
+    fireEvent.change(input, { target: { value: "7" } });
+    fireEvent.blur(input);
+    expect(replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("«Copia l'enllaç» copia l'URL de la pàgina que es veu", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    search = "page=2";
+    respondWith(base());
+    render(<DocumentTextPage />);
+    await screen.findByText("Pàgina 2 de 3");
+    fireEvent.click(screen.getByRole("button", { name: "Copia l'enllaç a aquesta pàgina" }));
+    await flush();
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/licitacions/t1/documents/d3?page=2`);
+    expect(screen.getByText("Enllaç copiat.")).toBeTruthy();
+  });
+
+  it("un PDF no té vista de taula", async () => {
+    respondWith(base());
+    render(<DocumentTextPage />);
+    await screen.findByText("Text de la pàgina 1");
+    expect(screen.queryByRole("button", { name: "Taula" })).toBeNull();
+  });
+
+  it("un full de càlcul: taula amb el valor net i el valor sense format, i el text original a un clic", async () => {
+    const sheet = [{ ...files[0], content: { ...files[0].content, mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, extraction: { ...files[0].extraction, parser_version: "xlsx-v1", page_count: 2, ocr_candidate: false, qa_issues: [] } }];
+    respondWith({
+      ...base(),
+      "/companies/c1/tenders/t1/documents/d3/files": sheet,
+      "/companies/c1/tender-document-extractions/e2/pages/1": {
+        page_number: 1,
+        text: "# Full: Inputs\nFila 9 | A9: PL2 | B9: Bloc 2 | C9: =48*798.46 → 38326.080000000002 | D9: 64200000",
+        char_count: 90,
+        status: "extracted",
+      },
+    });
+    const { container } = render(<DocumentTextPage />);
+    expect(await screen.findByText("38.326,08")).toBeTruthy();
+    expect(screen.getByText("Full 1 de 2")).toBeTruthy();
+    expect(container.querySelector("[data-raw-value]")?.textContent).toBe("sense format: 38326.080000000002");
+    // Els codis i els enters no es toquen.
+    expect(screen.getByText("64200000")).toBeTruthy();
+    expect(screen.queryByText("64.200.000")).toBeNull();
+    expect(screen.getByRole("button", { name: "Copia l'enllaç a aquest full" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Text original" }));
+    expect(container.querySelector("pre")?.textContent).toContain("C9: =48*798.46 → 38326.080000000002");
   });
 
   it("sense cap fitxer → buit amb tornada a la pestanya Plecs", async () => {

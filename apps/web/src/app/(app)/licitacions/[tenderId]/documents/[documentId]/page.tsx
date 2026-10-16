@@ -10,8 +10,8 @@
  */
 
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 
 import {
   Banner,
@@ -27,9 +27,12 @@ import {
   StatusPill,
 } from "@/components/ui";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SheetPageView } from "@/components/SheetPageView";
 import { useSession } from "@/components/SessionProvider";
 import { formatDate } from "@/lib/format";
 import { useResource } from "@/lib/hooks";
+import { parsePageParam } from "@/lib/pageParam";
+import { isSpreadsheetParser } from "@/lib/sheetText";
 import { DOCUMENT_STATE_LEVEL, QA_LEVEL, formatDateTime } from "@/lib/labels";
 import {
   DOCUMENT_STATE_LABELS,
@@ -116,7 +119,11 @@ function DocumentText() {
   // obrir aquella, no la vigent: si el document s'ha reextret, la revisió nova
   // pot dir una altra cosa i la cita deixaria de ser verificable.
   const citedExtraction = search.get("extraction");
-  const citedPage = Number(search.get("page")) || null;
+  // P2-07: la pàgina viu a l'URL (`?page=`), perquè es pugui recarregar i compartir.
+  const router = useRouter();
+  const pathname = usePathname();
+  const rawPage = search.get("page");
+  const urlPage = parsePageParam(rawPage);
 
   // Les rutes van sense `/api/v1`: el proxy `/bff/*` ja hi reescriu a sobre.
   //
@@ -127,7 +134,11 @@ function DocumentText() {
   const files = useResource<FileRead[]>(
     `/companies/${companyId}/tenders/${params.tenderId}/documents/${params.documentId}/files`,
   );
-  const [pageNumber, setPageNumber] = useState(citedPage ?? 1);
+  const [pageNumber, setPageNumber] = useState(urlPage ?? 1);
+  // Enrere, Endavant o un enllaç nou canvien l'URL: la pàgina la segueix.
+  useEffect(() => {
+    if (urlPage !== null) setPageNumber(urlPage);
+  }, [urlPage]);
 
   // El títol ha de ser el NOM del document («Plec de prescripcions tècniques»),
   // no el tros final de la seva URL: `original_filename` surt de l'adreça i a
@@ -142,13 +153,56 @@ function DocumentText() {
   const extraction = current?.extraction ?? null;
   const showingCitedRevision = Boolean(citedExtraction && extraction?.id === citedExtraction);
 
+  const total = extraction?.page_count ?? 0;
+  // Mai es demana una pàgina que no existeix: fora de rang, la més propera, i es diu.
+  const shownPage = total > 0 ? Math.min(Math.max(pageNumber, 1), total) : pageNumber;
+  const rangeNotice =
+    rawPage !== null && urlPage === null
+      ? `L'enllaç demanava una pàgina que no és vàlida («${rawPage}»): es mostra la pàgina ${shownPage}.`
+      : total > 0 && pageNumber > total
+        ? `La pàgina ${pageNumber} no existeix: aquest document en té ${total}. Es mostra la ${shownPage}.`
+        : null;
+  const spreadsheet = isSpreadsheetParser(extraction?.parser_version);
+  const unit = spreadsheet ? "Full" : "Pàgina";
+  const [view, setView] = useState<"table" | "text">("table");
+  const [draft, setDraft] = useState(String(shownPage));
+  useEffect(() => setDraft(String(shownPage)), [shownPage]);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+
+  function pageHref(number: number): string {
+    const params = new URLSearchParams(search?.toString() ?? "");
+    params.set("page", String(number));
+    return `${pathname}?${params.toString()}`;
+  }
+
+  function goTo(number: number) {
+    if (total > 0 && (number < 1 || number > total)) return;
+    setPageNumber(number);
+    setCopyNotice(null);
+    router.replace(pageHref(number), { scroll: false });
+  }
+
+  function commitDraft() {
+    const value = parsePageParam(draft.trim());
+    if (value !== null && value >= 1 && value <= total) goTo(value);
+    else setDraft(String(shownPage));
+  }
+
+  async function copyLink() {
+    const href = `${window.location.origin}${pageHref(shownPage)}`;
+    try {
+      await navigator.clipboard.writeText(href);
+      setCopyNotice("Enllaç copiat.");
+    } catch {
+      setCopyNotice(`No s'ha pogut copiar: ${href}`);
+    }
+  }
+
   const page = useResource<PageRead>(
     extraction
-      ? `/companies/${companyId}/tender-document-extractions/${extraction.id}/pages/${pageNumber}`
+      ? `/companies/${companyId}/tender-document-extractions/${extraction.id}/pages/${shownPage}`
       : null,
   );
-
-  const total = extraction?.page_count ?? 0;
 
   // El resum reutilitza l'etiquetatge de la fitxa perquè els dos llocs han de
   // dir exactament el mateix del mateix document.
@@ -296,34 +350,61 @@ function DocumentText() {
           <Card>
             <CardHeader
               title="Text extret"
-              description={total ? `Pàgina ${pageNumber} de ${total}` : "Sense pàgines"}
+              description={total ? `${unit} ${shownPage} de ${total}` : "Sense pàgines"}
             />
             {total === 0 ? (
               <p className="px-5 py-4 text-[13px] text-muted">Aquest document no té text extret.</p>
             ) : (
               <>
+                {rangeNotice && (
+                  <p role="status" className="border-b border-border bg-subtle px-4 py-2 text-[13px] text-ink">
+                    {rangeNotice}
+                  </p>
+                )}
                 <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-                  <Button variant="secondary" size="sm" onClick={() => setPageNumber((n) => Math.max(1, n - 1))} disabled={pageNumber <= 1}>
+                  <Button variant="secondary" size="sm" onClick={() => goTo(shownPage - 1)} disabled={shownPage <= 1}>
                     Anterior
                   </Button>
                   <Input
                     type="number"
                     min={1}
                     max={total}
-                    value={pageNumber}
-                    onChange={(event) => {
-                      const value = Number(event.target.value);
-                      if (value >= 1 && value <= total) setPageNumber(value);
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onBlur={commitDraft}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") commitDraft();
                     }}
                     className="w-20"
-                    aria-label="Número de pàgina"
+                    aria-label={spreadsheet ? "Número de full" : "Número de pàgina"}
                   />
-                  <Button variant="secondary" size="sm" onClick={() => setPageNumber((n) => Math.min(total, n + 1))} disabled={pageNumber >= total}>
+                  <Button variant="secondary" size="sm" onClick={() => goTo(shownPage + 1)} disabled={shownPage >= total}>
                     Següent
                   </Button>
+                  <Button variant="ghost" size="sm" onClick={() => void copyLink()}>
+                    Copia l&apos;enllaç {spreadsheet ? "a aquest full" : "a aquesta pàgina"}
+                  </Button>
+                  {copyNotice && (
+                    <span role="status" className="text-[13px] break-all text-muted">
+                      {copyNotice}
+                    </span>
+                  )}
                 </div>
+                {spreadsheet && (
+                  // Al full de càlcul, la taula per defecte i el text desat a un clic: mai se n'amaga cap.
+                  <div role="group" aria-label="Vista del full" className="flex gap-2 border-b border-border px-4 py-2">
+                    <Button variant={view === "table" ? "secondary" : "ghost"} size="sm" aria-pressed={view === "table"} onClick={() => setView("table")}>
+                      Taula
+                    </Button>
+                    <Button variant={view === "text" ? "secondary" : "ghost"} size="sm" aria-pressed={view === "text"} onClick={() => setView("text")}>
+                      Text original
+                    </Button>
+                  </div>
+                )}
                 {page.loading && !page.data ? (
                   <LoadingRows />
+                ) : spreadsheet && view === "table" ? (
+                  <SheetPageView text={page.data?.text ?? ""} />
                 ) : (
                   <pre className="max-h-[60vh] overflow-auto px-5 py-4 font-mono text-[12px] leading-relaxed whitespace-pre-wrap text-ink">
                     {page.data?.text || "(pàgina sense text extret)"}
