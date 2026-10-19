@@ -510,3 +510,52 @@ async def test_els_enums_tenen_check_a_la_base(db):
     )
     await db.commit()
     assert await _count(db, tender_id) == 2
+
+
+# --------------------------------------------------------------------------- #
+# SCHEMA_REVISION a 0063: el reintent nomes toca registres FALLITS              #
+# --------------------------------------------------------------------------- #
+
+
+def test_pujar_a_0063_nomes_reintenta_registres_fallits():
+    """Al pilot (lectura feta pel controlador el 19-10-2026) els 24.586 `source_records`
+    son `processed` amb `failed_schema_revision` NULL: el conjunt de reintents es buit.
+    Aqui es demostra la regla: amb la revisio nova, un registre processat continua
+    `unchanged`; nomes un FALLIT determinista d'una revisio anterior es reintenta."""
+    from app.db.revision import SCHEMA_REVISION
+    from app.ingestion.placsp import parser as placsp_parser
+    from app.ingestion.placsp.service import KNOWN_FAILURE, RETRY, UNCHANGED, _existing_verdict
+    from app.models.enums import ProcessingStatus
+    from app.models.sources import SourceRecord
+
+    def record(status, *, error=None, revision=None):
+        return SourceRecord(
+            processing_status=status,
+            error_message=error,
+            parser_version=placsp_parser.PARSER_VERSION,
+            failed_schema_revision=revision,
+        )
+
+    assert SCHEMA_REVISION == "0063_tender_amount_observations"
+    # Processat (com tots els del pilot): mai no es reintenta, sigui quina sigui la revisio.
+    assert _existing_verdict(record(ProcessingStatus.PROCESSED)) == UNCHANGED
+    assert (
+        _existing_verdict(
+            record(ProcessingStatus.PROCESSED, revision="0062_requirement_uncertainties")
+        )
+        == UNCHANGED
+    )
+    # Fallit determinista amb 0062: es reintenta una vegada amb 0063.
+    failed_62 = record(
+        ProcessingStatus.FAILED,
+        error="db_data: StringDataRightTruncationError (22001) tender_lots.title",
+        revision="0062_requirement_uncertainties",
+    )
+    assert _existing_verdict(failed_62) == RETRY
+    # Fallit determinista ja amb 0063: fallada coneguda, no es reintenta.
+    failed_63 = record(
+        ProcessingStatus.FAILED,
+        error="db_data: StringDataRightTruncationError (22001) tender_lots.title",
+        revision=SCHEMA_REVISION,
+    )
+    assert _existing_verdict(failed_63) == KNOWN_FAILURE

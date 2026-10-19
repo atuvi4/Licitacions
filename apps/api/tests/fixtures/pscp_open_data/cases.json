@@ -1,0 +1,755 @@
+{
+ "_readme": "Files reals redactades del dataset ybgg-dgi6 (sondeig F-06a del 16-10-2026, respostes a f06/pscp_full/raw) reduides al $select minim de l'adaptador, i els imports de la nostra BD per a cada cas. Font: Generalitat de Catalunya. Departament d'Economia i Finances. Llicencia oberta d'us d'informacio - Catalunya. Darrera actualitzacio del dataset: 2026-10-16T08:00:41+00:00.",
+ "rows_updated_at": 1792137641,
+ "cases": {
+  "lescala": {
+   "why": "L'Escala: expedient sense lots, acceptat",
+   "pilot_tender_id": "740f6fbe-5b8e-47f8-8d25-df5b0881c1c7",
+   "ours": {
+    "pscp_id_intern": "84d32d92-7e21-4645-b0c9-4e2f482c6bbf",
+    "placsp_organ_id": "2294119",
+    "base_budget_without_tax": "204232.75",
+    "estimated_value": "245079.30",
+    "lots": []
+   },
+   "raw_files": [
+    "raw/batch_040_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-mr82.geec~9kjg",
+     ":updated_at": "2026-09-19T08:00:27.659Z",
+     "id_intern": "84d32d92-7e21-4645-b0c9-4e2f482c6bbf",
+     "codi_organ": "2294119",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "pressupost_licitacio_amb_1": "247121.63",
+     "pressupost_licitacio_sense_1": "204232.75",
+     "valor_estimat_expedient": "245079.3",
+     "pressupost_licitacio_amb": "247121.63",
+     "pressupost_licitacio_sense": "204232.75",
+     "valor_estimat_contracte": "245079.3",
+     "data_publicacio_anunci": "2026-09-18T06:00:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/84d32d92-7e21-4645-b0c9-4e2f482c6bbf/300885305"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300885305/CEud-snzCEHeFgHA_rr2-XIOOqkv7D1sawJ6kR-QUJF-JvEg7jiToNrVa2qJwffmSaOiGl3fK7gvMtz0Tyh9GJDQPi5PljFLXznYkJL9KBNhvPlLZvuU2SaTZe9W9YK8YwDuuDKK7eVJieOKQV2oMGZhDiWwF865bQqY_0gcrcRvRnu_w3TSH62nW9B4k08F8SovWQ7wDQBiitoXKyrTtnO9uV6tAuY20tJTiC1WxuiSbMIhbOSmks092LPp0qF5TNdAVmaf5nE7LKdgjIh2oSm1FLeym0vUC-Dd_d7aXDFxJxmLzNrvXQCJkeQ2LNE4rT_3BoOxXBCXmbWGbQEN3Q=="
+     }
+    }
+   ]
+  },
+  "lots": {
+   "why": "expedient amb 3 lots, tots acceptats",
+   "pilot_tender_id": "0098bc8e-7475-45f0-9456-3e0a7880c7ad",
+   "ours": {
+    "pscp_id_intern": "188e6cdd-8cd5-4aaf-ad0f-5560ccb160d7",
+    "placsp_organ_id": "206343",
+    "base_budget_without_tax": "59510.00",
+    "estimated_value": "59510.00",
+    "lots": [
+     {
+      "lot_number": 1,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     },
+     {
+      "lot_number": 2,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     },
+     {
+      "lot_number": 3,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     }
+    ]
+   },
+   "raw_files": [
+    "raw/batch_007_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-3ur6-2zs7.8zyu",
+     ":updated_at": "2026-10-03T08:00:23.505Z",
+     "id_intern": "188e6cdd-8cd5-4aaf-ad0f-5560ccb160d7_0",
+     "codi_organ": "206343",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "numero_lot": "1",
+     "pressupost_licitacio_amb_1": "72007.1",
+     "pressupost_licitacio_sense_1": "59510",
+     "valor_estimat_expedient": "59510",
+     "pressupost_licitacio_amb": "43789.9",
+     "pressupost_licitacio_sense": "36190",
+     "valor_estimat_contracte": "36190",
+     "data_publicacio_anunci": "2026-10-02T10:42:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/188e6cdd-8cd5-4aaf-ad0f-5560ccb160d7/300892062"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300898278/P-9pVoXhqNXOpT38BeDbDytkvwSa9q_F_xyVH5OQpwg5pb4dMp7a8yG0_KtbwMb-RuIlgJF_ssOyhwm05AzOtv790kPoi1SgNwDwj5McB3ozHVvSUXUZQjNjikeA5o8ztjtRiyAX6iDruwaHQ_TxNoB65rACbYFBr6MxMrRKZpjAy8mcb3d_OSwF9K27c_yx2ES9nMhNEycg6Vxfc7kFctxTJpOeyI-nH2he50BO65lIZKOdPo1ol1bpQrB6cjkW-2xGfcUzItZCOfAmGcoGBCBY9rumiZEEkK2zUyV0HyE2vzlYpFtLBNbZkzQ1XE3qE0trPMOiuaKirQZjhHvdVA=="
+     }
+    },
+    {
+     ":id": "row-d8i8-z3uj.9tqk",
+     ":updated_at": "2026-10-03T08:00:23.505Z",
+     "id_intern": "188e6cdd-8cd5-4aaf-ad0f-5560ccb160d7_1",
+     "codi_organ": "206343",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "numero_lot": "2",
+     "pressupost_licitacio_amb_1": "72007.1",
+     "pressupost_licitacio_sense_1": "59510",
+     "valor_estimat_expedient": "59510",
+     "pressupost_licitacio_amb": "3993",
+     "pressupost_licitacio_sense": "3300",
+     "valor_estimat_contracte": "3300",
+     "data_publicacio_anunci": "2026-10-02T10:42:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/188e6cdd-8cd5-4aaf-ad0f-5560ccb160d7/300892062"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300898278/P-9pVoXhqNXOpT38BeDbDytkvwSa9q_F_xyVH5OQpwg5pb4dMp7a8yG0_KtbwMb-RuIlgJF_ssOyhwm05AzOtv790kPoi1SgNwDwj5McB3ozHVvSUXUZQjNjikeA5o8ztjtRiyAX6iDruwaHQ_TxNoB65rACbYFBr6MxMrRKZpjAy8mcb3d_OSwF9K27c_yx2ES9nMhNEycg6Vxfc7kFctxTJpOeyI-nH2he50BO65lIZKOdPo1ol1bpQrB6cjkW-2xGfcUzItZCOfAmGcoGBCBY9rumiZEEkK2zUyV0HyE2vzlYpFtLBNbZkzQ1XE3qE0trPMOiuaKirQZjhHvdVA=="
+     }
+    },
+    {
+     ":id": "row-87fs~widk-j7ja",
+     ":updated_at": "2026-10-03T08:00:23.505Z",
+     "id_intern": "188e6cdd-8cd5-4aaf-ad0f-5560ccb160d7_2",
+     "codi_organ": "206343",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "numero_lot": "3",
+     "pressupost_licitacio_amb_1": "72007.1",
+     "pressupost_licitacio_sense_1": "59510",
+     "valor_estimat_expedient": "59510",
+     "pressupost_licitacio_amb": "24224.2",
+     "pressupost_licitacio_sense": "20020",
+     "valor_estimat_contracte": "20020",
+     "data_publicacio_anunci": "2026-10-02T10:42:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/188e6cdd-8cd5-4aaf-ad0f-5560ccb160d7/300892062"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300898278/P-9pVoXhqNXOpT38BeDbDytkvwSa9q_F_xyVH5OQpwg5pb4dMp7a8yG0_KtbwMb-RuIlgJF_ssOyhwm05AzOtv790kPoi1SgNwDwj5McB3ozHVvSUXUZQjNjikeA5o8ztjtRiyAX6iDruwaHQ_TxNoB65rACbYFBr6MxMrRKZpjAy8mcb3d_OSwF9K27c_yx2ES9nMhNEycg6Vxfc7kFctxTJpOeyI-nH2he50BO65lIZKOdPo1ol1bpQrB6cjkW-2xGfcUzItZCOfAmGcoGBCBY9rumiZEEkK2zUyV0HyE2vzlYpFtLBNbZkzQ1XE3qE0trPMOiuaKirQZjhHvdVA=="
+     }
+    }
+   ]
+  },
+  "rounding": {
+   "why": "3 lots; la suma dels lots supera l'expedient en 1 centim (arrodoniment de la font)",
+   "pilot_tender_id": "000454f2-385b-496c-8310-762d9c9277c9",
+   "ours": {
+    "pscp_id_intern": "a8d1c069-b350-424d-b7db-31679bd3a36c",
+    "placsp_organ_id": "9205334",
+    "base_budget_without_tax": "72695.13",
+    "estimated_value": "159929.29",
+    "lots": [
+     {
+      "lot_number": 1,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     },
+     {
+      "lot_number": 2,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     },
+     {
+      "lot_number": 3,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     }
+    ]
+   },
+   "raw_files": [
+    "raw/batch_051_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-dwmf.nt27_3j24",
+     ":updated_at": "2026-10-09T08:00:21.565Z",
+     "id_intern": "a8d1c069-b350-424d-b7db-31679bd3a36c_0",
+     "codi_organ": "9205334",
+     "fase_publicacio": "Expedient en avaluaci\u00f3",
+     "numero_lot": "1",
+     "pressupost_licitacio_amb_1": "79964.64",
+     "pressupost_licitacio_sense_1": "72695.13",
+     "valor_estimat_expedient": "159929.29",
+     "pressupost_licitacio_amb": "31697.69",
+     "pressupost_licitacio_sense": "28816.08",
+     "valor_estimat_contracte": "63395.38",
+     "data_publicacio_anunci": "2026-09-15T14:02:00.000",
+     "data_publicacio_avaluacio": "2026-10-08T11:04:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/a8d1c069-b350-424d-b7db-31679bd3a36c/300903853"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300881400/llVdIYZ0odeRgb2Y0xBVzMUlVP5Ldlq82Dc9V_a1yyxo6mGeuGuLwHXrxwBHls8RGxZJC_29OoRtNZyuthbFidzEX8y90onV_FMEKlGv3mCCP5LYn57nxktklU8E3Yx6E3-ST3iF4qr7mdkF4hnJ2vDP1_wqYx2sLi8DzSjBVrYYFPHcmHxaZumtekD5eWpDIQyAdiPmKMFpo54oceI4FNQuMChZ_hv44w4uaLoPz4MokrZ_AHFamHSUecsjnP7tleXS8vrfvrOl0r-elTPDjIDs2iMcIMek1YsWgVHKGG2CfKzhH3IR-cceu7wi_uIho-YE06V6JXnqk1cigqHa5A=="
+     },
+     "url_json_avaluacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300903853/ngydquD65OmDbLg5HRcaDzQSed8KHnRv494oAbJpAYBDoFDaSC4b3pg0l78OvuziMfccqPAa2oBGLuhV3K_VeXdjsRXtZmJPqDqTAS71y-SwS-rGqqfqulLIUo7AY5m0PpFKqnU3S7a39Lq16K-egU5IkGpojX2bSA0XTn1lnLcjatnda47P1p0nJZtUIrk7HpKTY9mJHTsknLXxO5KBByglT35Oyk6rVjcbgjCX6eq2HWlfybismp0x0wOUeB9IBIWuNXm74u9QO1SbAX8sUh7WYxKb9wml5f46upYoGUJg9YiEa37CGMVKiwexsImWw4CUlaZxp6qvkNniiRrjgw=="
+     }
+    },
+    {
+     ":id": "row-dprz-ihmx.cqtm",
+     ":updated_at": "2026-10-09T08:00:21.565Z",
+     "id_intern": "a8d1c069-b350-424d-b7db-31679bd3a36c_1",
+     "codi_organ": "9205334",
+     "fase_publicacio": "Expedient en avaluaci\u00f3",
+     "numero_lot": "2",
+     "pressupost_licitacio_amb_1": "79964.64",
+     "pressupost_licitacio_sense_1": "72695.13",
+     "valor_estimat_expedient": "159929.29",
+     "pressupost_licitacio_amb": "22344.39",
+     "pressupost_licitacio_sense": "20313.08",
+     "valor_estimat_contracte": "44688.78",
+     "data_publicacio_anunci": "2026-09-15T14:02:00.000",
+     "data_publicacio_avaluacio": "2026-10-08T11:04:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/a8d1c069-b350-424d-b7db-31679bd3a36c/300903853"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300881400/llVdIYZ0odeRgb2Y0xBVzMUlVP5Ldlq82Dc9V_a1yyxo6mGeuGuLwHXrxwBHls8RGxZJC_29OoRtNZyuthbFidzEX8y90onV_FMEKlGv3mCCP5LYn57nxktklU8E3Yx6E3-ST3iF4qr7mdkF4hnJ2vDP1_wqYx2sLi8DzSjBVrYYFPHcmHxaZumtekD5eWpDIQyAdiPmKMFpo54oceI4FNQuMChZ_hv44w4uaLoPz4MokrZ_AHFamHSUecsjnP7tleXS8vrfvrOl0r-elTPDjIDs2iMcIMek1YsWgVHKGG2CfKzhH3IR-cceu7wi_uIho-YE06V6JXnqk1cigqHa5A=="
+     },
+     "url_json_avaluacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300903853/ngydquD65OmDbLg5HRcaDzQSed8KHnRv494oAbJpAYBDoFDaSC4b3pg0l78OvuziMfccqPAa2oBGLuhV3K_VeXdjsRXtZmJPqDqTAS71y-SwS-rGqqfqulLIUo7AY5m0PpFKqnU3S7a39Lq16K-egU5IkGpojX2bSA0XTn1lnLcjatnda47P1p0nJZtUIrk7HpKTY9mJHTsknLXxO5KBByglT35Oyk6rVjcbgjCX6eq2HWlfybismp0x0wOUeB9IBIWuNXm74u9QO1SbAX8sUh7WYxKb9wml5f46upYoGUJg9YiEa37CGMVKiwexsImWw4CUlaZxp6qvkNniiRrjgw=="
+     }
+    },
+    {
+     ":id": "row-sei2_kexe-ttze",
+     ":updated_at": "2026-10-09T08:00:21.565Z",
+     "id_intern": "a8d1c069-b350-424d-b7db-31679bd3a36c_2",
+     "codi_organ": "9205334",
+     "fase_publicacio": "Expedient en avaluaci\u00f3",
+     "numero_lot": "3",
+     "pressupost_licitacio_amb_1": "79964.64",
+     "pressupost_licitacio_sense_1": "72695.13",
+     "valor_estimat_expedient": "159929.29",
+     "pressupost_licitacio_amb": "25922.57",
+     "pressupost_licitacio_sense": "23565.97",
+     "valor_estimat_contracte": "51845.13",
+     "data_publicacio_anunci": "2026-09-15T14:02:00.000",
+     "data_publicacio_avaluacio": "2026-10-08T11:04:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/a8d1c069-b350-424d-b7db-31679bd3a36c/300903853"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300881400/llVdIYZ0odeRgb2Y0xBVzMUlVP5Ldlq82Dc9V_a1yyxo6mGeuGuLwHXrxwBHls8RGxZJC_29OoRtNZyuthbFidzEX8y90onV_FMEKlGv3mCCP5LYn57nxktklU8E3Yx6E3-ST3iF4qr7mdkF4hnJ2vDP1_wqYx2sLi8DzSjBVrYYFPHcmHxaZumtekD5eWpDIQyAdiPmKMFpo54oceI4FNQuMChZ_hv44w4uaLoPz4MokrZ_AHFamHSUecsjnP7tleXS8vrfvrOl0r-elTPDjIDs2iMcIMek1YsWgVHKGG2CfKzhH3IR-cceu7wi_uIho-YE06V6JXnqk1cigqHa5A=="
+     },
+     "url_json_avaluacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300903853/ngydquD65OmDbLg5HRcaDzQSed8KHnRv494oAbJpAYBDoFDaSC4b3pg0l78OvuziMfccqPAa2oBGLuhV3K_VeXdjsRXtZmJPqDqTAS71y-SwS-rGqqfqulLIUo7AY5m0PpFKqnU3S7a39Lq16K-egU5IkGpojX2bSA0XTn1lnLcjatnda47P1p0nJZtUIrk7HpKTY9mJHTsknLXxO5KBByglT35Oyk6rVjcbgjCX6eq2HWlfybismp0x0wOUeB9IBIWuNXm74u9QO1SbAX8sUh7WYxKb9wml5f46upYoGUJg9YiEa37CGMVKiwexsImWw4CUlaZxp6qvkNniiRrjgw=="
+     }
+    }
+   ]
+  },
+  "vat0": {
+   "why": "IVA del 0 %: PBL amb IVA = sense IVA",
+   "pilot_tender_id": "000d03f8-9d0e-485b-a3e6-2f23b29c3cd6",
+   "ours": {
+    "pscp_id_intern": "a93ed621-5d9f-4ea4-b698-214f9b053903",
+    "placsp_organ_id": "3060713",
+    "base_budget_without_tax": "225000.00",
+    "estimated_value": "225000.00",
+    "lots": []
+   },
+   "raw_files": [
+    "raw/batch_051_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-7yn6.9yen~cnah",
+     ":updated_at": "2026-09-29T08:00:16.417Z",
+     "id_intern": "a93ed621-5d9f-4ea4-b698-214f9b053903",
+     "codi_organ": "3060713",
+     "fase_publicacio": "Formalitzaci\u00f3",
+     "pressupost_licitacio_amb_1": "225000",
+     "pressupost_licitacio_sense_1": "225000",
+     "valor_estimat_expedient": "225000",
+     "pressupost_licitacio_amb": "225000",
+     "pressupost_licitacio_sense": "225000",
+     "valor_estimat_contracte": "225000",
+     "data_publicacio_anunci": "2026-07-13T12:06:00.000",
+     "data_publicacio_avaluacio": "2026-08-17T10:18:00.000",
+     "data_publicacio_adjudicacio": "2026-09-18T13:38:00.000",
+     "data_publicacio_formalitzacio": "2026-09-28T10:00:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/a93ed621-5d9f-4ea4-b698-214f9b053903/300887260"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300830827/lNuLkPf3A19zukYvzCfsRhMX3gj4o72ZE331e13CI4tcakQYXVn7glwQ3cEKbdKzA0zqUTaEU_sCO5WVItfTtBT7gJ3MynDMEIXUHUIURa16Uw_Ji0Y8xUkgngbJwB_DMlJpUOtvSQhSx1QyX9dnm8Et2LjVxWTIOxMH0JIijzTiscOh_oh0pptfm4dHLM1uki_WVzQhfjj8AXtbm1ekHhPF7OCAJ1rfahrxRhthJ0FGnFTgfTpYkYmcnAmeL7BH74f_BI77B29qTv791e1-SJLJUXH5AWVGhEfeb6zwn8ps0Z64VOLRoZgmdMIWrJzHb91vy0sdnzCNmqGWch6_0g=="
+     },
+     "url_json_avaluacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300862558/USo-plnKzK6r46l98UvVR75sHtCl3j15FK7mTY1z9VHkRSZLoqYobjeMBk955vIw7Jki1VqlHlm6CywFqhtqk7AS5Gvat98v7dKemyy5Z4vCvdDEy9t4m_mFe-X6UgziGnINCcjNH2xHBvbCmxxox-6FlEfG8HWBw_IomOUO-Vxlp07QEZfsxiEN-THdx535gx18XZdfuhvKUH4xINErRponb4Q7cgIqR3Ca9ccupX2L97CtLA6W3VQwz71J4dD-mFvDztAAbxCOMI1bzT93YSmZnMWti7Hj-hZ8eFHowVAVc4fFM9b9XR0KyRk3WpY-FJwrEcfIdVJo3INRx5gihw=="
+     },
+     "url_json_adjudicacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300886932/hzH2MWKr25QxCQ4Q6APLmzpuA7BrUsM-_FOTLScHQmFB3lj8DpCz2LAPSUQLeaHen80PcS0YDAkaedWIcZtyh-MQRgQq4WT8eQbEZSOOBDB3ysl51ZnAsnMqJE3UnCrS7CVdXt-CO_h9dlH9wRtvPdFSdNvuVQ2oQ8Rzp3MshfvOLlAVMgyaEtxGOXlc_RP6SvogpdiIrd3y7fkU8JvXLFfA5PEGu-5E9b49ftPCjqQVwOHxkXCKxHZGTazzC5zKhwYwHhs3-g2_BJPYVrFhnaH8iM5dCXqL-rTW812gUwZ3DZbleYgaXtJUjhEWhDF4138oZITxAfkZezO2n25phg=="
+     },
+     "url_json_formalitzacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300887260/h8oAlBqkwlivk_m1fPlLPyosAvxq4qdiuHUCIEqHg2RI79rdxBGXASNOi2mgOMZ-SJWyOfpOYYIM_OWsTK15P4EikuN_6QDysHWz9yTv6GYKvIGBuJx9PryRZWJa7mXXHvGC61jaMQor5bi2Yjql-pOOFrCfRB7pQwnBofa41ZWvLnbtPzrL-qQuD7bEy3zBS6Wlm9yVNDRUuKiWvx5drHSuYWVIYqbZ36q8rO1nRc958HF18JEFr8L5DFs5K3dUAOEWuJEHk645ULkDpwDelZPGffpydsLL7SutHBpgaiLxtHyDiKQulEmFQU0KHZBia5129Adk9764VFwfhuXKhA=="
+     }
+    }
+   ]
+  },
+  "zero": {
+   "why": "PBL amb IVA publicat a 0 (concessio): no_value",
+   "pilot_tender_id": "019575ad-56d7-46b2-8764-6120a3a70615",
+   "ours": {
+    "pscp_id_intern": "f02299c4-105f-4e14-aff3-cb064212c71a",
+    "placsp_organ_id": "7158713",
+    "base_budget_without_tax": "0.00",
+    "estimated_value": "372297.24",
+    "lots": []
+   },
+   "raw_files": [
+    "raw/batch_073_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-ws6x-khku-xdma",
+     ":updated_at": "2026-09-01T08:00:22.362Z",
+     "id_intern": "f02299c4-105f-4e14-aff3-cb064212c71a",
+     "codi_organ": "7158713",
+     "fase_publicacio": "Formalitzaci\u00f3",
+     "pressupost_licitacio_amb_1": "0",
+     "pressupost_licitacio_sense_1": "0",
+     "valor_estimat_expedient": "372297.24",
+     "pressupost_licitacio_amb": "0",
+     "pressupost_licitacio_sense": "0",
+     "valor_estimat_contracte": "372297.24",
+     "data_publicacio_anunci": "2026-05-11T14:02:00.000",
+     "data_publicacio_avaluacio": "2026-07-28T13:12:00.000",
+     "data_publicacio_adjudicacio": "2026-07-28T13:32:00.000",
+     "data_publicacio_formalitzacio": "2026-08-31T11:34:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/f02299c4-105f-4e14-aff3-cb064212c71a/300870428"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300771424/pXNI7LYA3gSWw9_95_wagVD-rX_OT2YRThcl6DRuBNJkLxuNd6BPWbmPC_dkfQIcz_Ou6Z3v0uTcpG3qggKIXaYf5Da1ohUIC2iBtb-xeVa8_m7p0SttgPJyGFRi6J9X-RFEbmKcAs2VzIz4RPP5KwzrTvmSyuhXl7hC8l4Xd9qSJkgWCPiYmTDOmuM3c20lOO9eBzWK-PNUwv5gflSYXpxzQoYi323AhgoGE9TzRRW_G-2uX_JMKukhsvN3twb0oRM9ig9gfoTjfSfO3_GRMZSjCRKquwWM5L6wA0LXVR3p_hODlGMUVAc4pN4LIKhOZ6GmJ102jFBCZUcgSIGLGA=="
+     },
+     "url_json_avaluacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300847786/QmoGpb5w677qti3NTuIFkTEbIBNu5_4MGvkIpKHfjeDggAKpiyePOVr1EGb5T1ECSnu6o3OBrlm427HcvfZw3wM8Ib-4lD7FZKr9AwKEZQ8s2nOlVqQtkbR5m1hu0PySczQv_UiXEXKa527niPHVzFk9mzMxtMNLWgZsG8Fu0GSbOoHElusrSlltzIFip19h1yLchn6eqlXEhv2KkSdUVj_gmlBV3MjgDdWZ4bXaOZrgHMIzBMc6BRVx-oqux_8pO07RnxzqlgzWkqryFeFmUnfvugXaAJfYJS8VLo7INpTLbEms2i3-RvgFz5P5mG1AxznKvhHG66vwqzFwrg0E5w=="
+     },
+     "url_json_adjudicacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300847851/aG0EGG6CKGkdCBvsvre3kSXKEWCJ8tOYNiWQh50ruYZKkiMqB2UFRRqejz5XUAJnio7m8x1SAxG3bQBt1nwbRydSU-2DHVuRb6K-FHzeIP0GHenPmfd0TwQ1Lrj09nK08bGvgsJ50AZp9RKq4Fu9Hj-_vcNbr4QrWRxiiF-y3fA_3Af5tJDtXDcsYEBt8XzooD6jWkDhlFOtg9SnXTi6iIfUC8zbPUZW5IPs-YTG3ylTHAzEA8pTCJWcVlR_jsuS_gYwfXDQUIllvwOCQVgyOjdYKf-1WDJoMjPE59ci8tXttWhRT20u7vie4CmrZXAYJkKtcyHaAYvxOWGWzhzzzw=="
+     },
+     "url_json_formalitzacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300870428/bi6JwiHxfwN1xP_8kcwuxZQNqkMwk_LBJebr-YkrWqoAtws6VnhdHLnSJ5XE9PZn4moa_HeZ88vV-_VuTgFks9J9Oz_YqrM1q8yZSEotA5b6as0yE5ZbsbfWcS_tIHE6bIw-96g7TrfVTVNB04zqB5KeblViQ9QCphnT4de3lZGLuGPA730N073dXxiOVUvWjXk9eP51FpaH4duGA9Fq-1MrVLihp8324HqPTs44rVwvpyK09b5c6FoC0rxYSVINV-97nt5P6NYgHg4j20TYjY0zUplMfoL5_7a8T2VQhUVV97-_nbPfhE4-ylCmNp4lGCqNyYmNBkZQz931LCfw-g=="
+     }
+    }
+   ]
+  },
+  "null": {
+   "why": "PBL amb IVA no publicat, BD amb 0.00: no_value",
+   "pilot_tender_id": "0a0befd3-a923-4fff-a98e-fbde43e1ed6c",
+   "ours": {
+    "pscp_id_intern": "bb9bbc99-1dd6-4c48-9e87-e9a31a8f9360",
+    "placsp_organ_id": "202259",
+    "base_budget_without_tax": "0.00",
+    "estimated_value": "691048.54",
+    "lots": []
+   },
+   "raw_files": [
+    "raw/batch_057_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-zeri-g67y-gs6k",
+     ":updated_at": "2026-09-15T08:00:17.115Z",
+     "id_intern": "bb9bbc99-1dd6-4c48-9e87-e9a31a8f9360",
+     "codi_organ": "202259",
+     "fase_publicacio": "Anunci previ",
+     "valor_estimat_expedient": "691048.54",
+     "valor_estimat_contracte": "691048.54",
+     "data_publicacio_previ": "2026-09-14T10:26:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/bb9bbc99-1dd6-4c48-9e87-e9a31a8f9360/300881075"
+     },
+     "url_json_previ": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300881075/bx8a8dYC1RDhFvr8gR-yNpYhNqAmjfATAPhYKzFDg4-uO0VH4HM8EzHcuPG4e36G4a1IwhJiKHmf7dSCcTwdZuGqjeOCPABAYZZzFIzOmi-HCDvVh2ZIxtmEDJrga9_yTlx7fxELIaSqgIU2dhgt0I4rstvAQRgq9hjnEZbYuvacfXgosGt7Ak1iByV9zIukcsqIF_skMmFuqd1wXMUAcSxxwCGk6qBzBYQnVXFclEmkLaGDfss2H4DP9nqVSom1R6LA8Gy2PCd9PjJYqXQxxOqKrYweu0XKiQrcWlUnKzNyhoOJqRtUdoNoVdZZ2eZP1gacVNFuzD01I_ctZlcsGA=="
+     }
+    }
+   ]
+  },
+  "stale": {
+   "why": "la PSCP va corregir l'import i la nostra BD conserva l'antic: conflicte",
+   "pilot_tender_id": "2f3d9963-ebbf-462d-bb18-e4538806e736",
+   "ours": {
+    "pscp_id_intern": "bf7ea673-2a2d-4319-a713-84f5e5810230",
+    "placsp_organ_id": "865462",
+    "base_budget_without_tax": "20000.00",
+    "estimated_value": "20000.00",
+    "lots": []
+   },
+   "raw_files": [
+    "raw/batch_058_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-qsw3~5du7.z99c",
+     ":updated_at": "2026-10-14T08:00:25.588Z",
+     "id_intern": "bf7ea673-2a2d-4319-a713-84f5e5810230",
+     "codi_organ": "865462",
+     "fase_publicacio": "Adjudicaci\u00f3",
+     "pressupost_licitacio_amb_1": "33988.9",
+     "pressupost_licitacio_sense_1": "28090",
+     "valor_estimat_expedient": "28090",
+     "pressupost_licitacio_amb": "33988.9",
+     "pressupost_licitacio_sense": "28090",
+     "valor_estimat_contracte": "28090",
+     "data_publicacio_anunci": "2026-10-13T10:48:00.000",
+     "data_publicacio_avaluacio": "2026-10-13T10:50:00.000",
+     "data_publicacio_adjudicacio": "2026-10-13T13:42:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/bf7ea673-2a2d-4319-a713-84f5e5810230/300906980"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300906508/IolWiQOmT8XxuGGyu_IUtHpi3nUENG3fgdbhk8dUrq5YA1jEO15a3Fv7Zi6R4nRqo2UbZlWbf3o5aHHLPZNTBcROddChmD9dK8Q29ua3n33ajrrrTfLaMlk9obzlCdSk1OF8RmzwFMqFyqZVYsnobx4d7U5npZa4xpHPNcNio8pvOtD-EvpKXIMRRkBrKWhiJv651OwGVNSwnBpwSJBy18jAukti_YP5DK9sLqUWDtVDSIMZGfmDA76Eo1dOM34bUx0nefSDATv_B2XafANbaWup5ObxQUpMOl3_jW5_NFMiEX_3IGsz5hsPZtoq5JcVTEBmeG6x5IWsM5ipMJJacg=="
+     },
+     "url_json_avaluacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300906539/gsLeMjJqeZPqkBWvIXaDG5VeOCrzQaAYGoqET_it0uTAl4NWz6Mi_V9uN_oCq5dzvmaaQPyv7g7rzl9Wy6aJ4vQT2LpYhM1iJ1kDCk_eexkzEKvwvUWJlyU6G8Z2HEdNqiTKLCuYn52oxaoIFQwXkS4ccsWG0bD5fplg6NezT9efODbMhyQXdBgBIrPg4fCnrenrA3TiJYiF_t7e52RaPTRtRc7KdsEugAYwtZX_4HRwNGbNtlN7-HdRq84a0_0Kxi8Or1BvCAOytCupBeS8xZKhr6huRmXXhkP5x2j_a3HatD6z-1Zh4iDHfHhzXf7Q7Q20I40FOkd8YS8VrQPR-w=="
+     },
+     "url_json_adjudicacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300906980/XIFzDy0k-KOmIAZLQnHkqc3EdzxRN2_RQ73pM80WWKH2j3FEZl--QojSRIB0pJnqMWS4gZY9C2NxjGap9-c3m7JG2QEKQDEIgla8V3whGg7Rx9QeJhZT27x-TTVFM_9So6LanUbh39ut971T9QzKEviUYc4Jj9nN-XhsTvGPDKAfOggPuzXfmjSR8nb2luXeuFS35TWWuQKalg_3MlBhPXtABLpEJVEJyFyD6pcfH_LjHXzobORhOV-GPCDvviL19zgwNE4x7H5JFo8gXynlBJ25IhqoifWAtAUloW5ueTYvZVDuqdyUd8MmFYuTCgsEHTWpf0fZwE_oNK84Lw7bFw=="
+     }
+    }
+   ]
+  },
+  "stale_zero": {
+   "why": "la nostra BD te 0.00 com a marcador i la font si que publica: conflicte",
+   "pilot_tender_id": "6f1fbbe3-3c7c-47ed-9734-9f88aa490f98",
+   "ours": {
+    "pscp_id_intern": "5dc506a1-c6b4-41cf-b8b6-bef469353699",
+    "placsp_organ_id": "204588",
+    "base_budget_without_tax": "0.00",
+    "estimated_value": "747507.60",
+    "lots": []
+   },
+   "raw_files": [
+    "raw/batch_028_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-gyqk.92cp~fg9b",
+     ":updated_at": "2026-10-15T08:00:17.573Z",
+     "id_intern": "5dc506a1-c6b4-41cf-b8b6-bef469353699",
+     "codi_organ": "204588",
+     "fase_publicacio": "Adjudicaci\u00f3",
+     "pressupost_licitacio_amb_1": "430706.76",
+     "pressupost_licitacio_sense_1": "355956",
+     "valor_estimat_expedient": "747507.6",
+     "pressupost_licitacio_amb": "430706.76",
+     "pressupost_licitacio_sense": "355956",
+     "valor_estimat_contracte": "747507.6",
+     "data_publicacio_anunci": "2026-08-24T04:12:00.000",
+     "data_publicacio_avaluacio": "2026-10-14T08:52:00.000",
+     "data_publicacio_adjudicacio": "2026-10-14T10:20:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/5dc506a1-c6b4-41cf-b8b6-bef469353699/300907579"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300855289/Q1XsDLsDuC2VMrkL-2ws9vPafbvP4xyNpXMnNPFvBa8wq8IreGaaucn6Ng73ihSLLw-wNHHU3lQsfy7qd2USayT3dGsfmUMIAWVbgTWbDQfrmd2xbkenol5LDaXZLvCAqU5FNkQEYED5qL0RgnHTWp2p_RZ3gbw0RzYxQsjEiM6QQ2p_sdz1Re7dFDgS-vRIFICNdIu-QZyShpfvE9aF21bzxzbS6be60Lu8GE0lpMgm4bUT8Rh1KibLyz8xAYee5rV2tSi91KlkM3eBQ39xLFH5jbVEqRpYwlI6876zgqJCb2TUESHTvAN3vW7nXN5iZsUGWvbAFEF6NzAporPRug=="
+     },
+     "url_json_avaluacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300907509/Lv4ouw-ZS40Vf--vi5iO73yOXcDQZpnvg0tHEZVv-g4qcXdg90DbGrZDW_Pgzb2XcxGhvpKpb4E1mEK8soLvCRUyNaiBvDDnyPOcV--88bLnU7jmNAzv2CYo7dW4PFLpHcVoE1J50l-aZuhfm_Gtsm5USw-Yj6issehfKx4qg5KaJXsHrkIhSod9SpwiALHnXaVk9HECeIItsQ8SzJ8fWLQiMMBNwj_YwbdKTsDF4a2BQeIuU8IzNmeAwmYj0ZRLVs3f1o0_SLwBlP1NLMnRRwi9Hs_e3C9Y20rAG6W8OgTzatI4o4QGXVBHDSDAD6W3_DB3AxrUeALIhlX5yf_iXw=="
+     },
+     "url_json_adjudicacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300907579/eTlUzr_NSWTXJEOdoqvGO8rYPPHJaZ03uVI4VwZ5kgDP-60jZZS3dSyD4v9YSsy3qMuhfQ8vd9hdnQ3_9eQDyeiqBfFIRg93r_T0NvUHhzl_gGZynPRis-rSaTxP_oPADaC23XUyNHv0TYukz2hJK0u3Yf6Nb-mEqIklfctuwJ7MchH89fA-emn8Qd4DcF0d4VmUzn64uWERDNZeyqWrQbznWVt_Y6rP_jXoaR9TDLFUBk2zutGMGmtblTWVlim80hDgLkbpmkW7azvbHRMl438wUx_64-fVStdgtCfbJuFSBxcw7zUDnudDhlR4gJ67fA7EBi1HOkzprEWj1Uykeg=="
+     }
+    }
+   ]
+  },
+  "superseded": {
+   "why": "fila d'anunci previ amb valor + 3 files de lot posteriors: superseded",
+   "pilot_tender_id": "77f03e3a-ae83-4a43-bdf8-8cb7f302d712",
+   "ours": {
+    "pscp_id_intern": "4a59a9bb-1948-4c72-bb15-729e769770a0",
+    "placsp_organ_id": "202184",
+    "base_budget_without_tax": "811914.31",
+    "estimated_value": "877606.68",
+    "lots": [
+     {
+      "lot_number": 1,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     },
+     {
+      "lot_number": 2,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     },
+     {
+      "lot_number": 3,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     }
+    ]
+   },
+   "raw_files": [
+    "raw/batch_022_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-nm3y.2eku_uyzw",
+     ":updated_at": "2026-09-10T08:01:55.127Z",
+     "id_intern": "4a59a9bb-1948-4c72-bb15-729e769770a0",
+     "codi_organ": "202184",
+     "fase_publicacio": "Anunci previ",
+     "pressupost_licitacio_amb_1": "970236.39",
+     "pressupost_licitacio_sense_1": "811914.31",
+     "valor_estimat_expedient": "877606.68",
+     "pressupost_licitacio_amb": "970236.39",
+     "pressupost_licitacio_sense": "811914.31",
+     "valor_estimat_contracte": "877606.68",
+     "data_publicacio_previ": "2026-09-09T08:02:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/4a59a9bb-1948-4c72-bb15-729e769770a0/300868820"
+     },
+     "url_json_previ": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300868820/r-ZS2CyiF2GTIvckpoVUk3uuScMWWiYxVpoQ7nAoLZZjZSXYEdtcjyjMtNNy3ACjLpuwKRB573L2qyix5mRnquJRIdo7tmNIG1NXk_mdCSJo0zmuZR4oAsT1cn5L-Nq--RTBN4lKGuoi74RmzehSHXtdLh6yUAno96Yi9z_-N4SlKgubhnIxjMr3ij60vmYoVdTn_ajHK2kkMQ4gPFFAz87ggYFt6afv7R7qyobAXu7Yhyy7g1V9TG7mn33Ba_0F4VXeeOw-5NKLyTV2u4G-UdsYTlwtc3-v7qrkfHD6iSfGzCLIU_iHEQ0rxtFrjAV-jnMbBc8A48Rqrs7LDrY7kg=="
+     }
+    },
+    {
+     ":id": "row-8srx~7deq_mpdp",
+     ":updated_at": "2026-09-30T08:00:18.193Z",
+     "id_intern": "4a59a9bb-1948-4c72-bb15-729e769770a0_0",
+     "codi_organ": "202184",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "numero_lot": "1",
+     "pressupost_licitacio_amb_1": "970236.39",
+     "pressupost_licitacio_sense_1": "811914.31",
+     "valor_estimat_expedient": "877606.68",
+     "pressupost_licitacio_amb": "794877.69",
+     "pressupost_licitacio_sense": "656923.71",
+     "valor_estimat_contracte": "722616.08",
+     "data_publicacio_previ": "2026-09-09T08:02:00.000",
+     "data_publicacio_anunci": "2026-09-29T12:02:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/4a59a9bb-1948-4c72-bb15-729e769770a0/300878603"
+     },
+     "url_json_previ": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300868820/r-ZS2CyiF2GTIvckpoVUk3uuScMWWiYxVpoQ7nAoLZZjZSXYEdtcjyjMtNNy3ACjLpuwKRB573L2qyix5mRnquJRIdo7tmNIG1NXk_mdCSJo0zmuZR4oAsT1cn5L-Nq--RTBN4lKGuoi74RmzehSHXtdLh6yUAno96Yi9z_-N4SlKgubhnIxjMr3ij60vmYoVdTn_ajHK2kkMQ4gPFFAz87ggYFt6afv7R7qyobAXu7Yhyy7g1V9TG7mn33Ba_0F4VXeeOw-5NKLyTV2u4G-UdsYTlwtc3-v7qrkfHD6iSfGzCLIU_iHEQ0rxtFrjAV-jnMbBc8A48Rqrs7LDrY7kg=="
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300894537/DaXm2yD82XBfqfi8Ha7aEjMipCMPMH6VJ2T1IR7pUDB7n6Qghf0kNAf65L2cdYtkDe1Lng8PVCD_e44viz76y5GliynXEZ99LdlobcnGw7Yu2MuP9lH9AlVwxPEdcv_PYG56_eSbM7SgKsgB2d3MC-A6mWc-2xa9kqmJa9xuk65Q-2dot7wLGBscGRyUxpyMKcn1ubfz9XUkSQvjIsCIUlWWEamp4DTsNgR7fRrf9Fx7T2wA25s7wSPZDmPGX9ahdeCWByCjMc437zd5R26Tf5i997g9fMG5FvSmfH5KHwd5vjIcLfUgdQ0wbwzhbegNqEPz1vZ322eB4NMQJEjaDQ=="
+     }
+    },
+    {
+     ":id": "row-ekx9-j64e~5iag",
+     ":updated_at": "2026-09-30T08:00:18.193Z",
+     "id_intern": "4a59a9bb-1948-4c72-bb15-729e769770a0_1",
+     "codi_organ": "202184",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "numero_lot": "2",
+     "pressupost_licitacio_amb_1": "970236.39",
+     "pressupost_licitacio_sense_1": "811914.31",
+     "valor_estimat_expedient": "877606.68",
+     "pressupost_licitacio_amb": "53559.44",
+     "pressupost_licitacio_sense": "44264",
+     "valor_estimat_contracte": "44264",
+     "data_publicacio_previ": "2026-09-09T08:02:00.000",
+     "data_publicacio_anunci": "2026-09-29T12:02:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/4a59a9bb-1948-4c72-bb15-729e769770a0/300878603"
+     },
+     "url_json_previ": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300868820/r-ZS2CyiF2GTIvckpoVUk3uuScMWWiYxVpoQ7nAoLZZjZSXYEdtcjyjMtNNy3ACjLpuwKRB573L2qyix5mRnquJRIdo7tmNIG1NXk_mdCSJo0zmuZR4oAsT1cn5L-Nq--RTBN4lKGuoi74RmzehSHXtdLh6yUAno96Yi9z_-N4SlKgubhnIxjMr3ij60vmYoVdTn_ajHK2kkMQ4gPFFAz87ggYFt6afv7R7qyobAXu7Yhyy7g1V9TG7mn33Ba_0F4VXeeOw-5NKLyTV2u4G-UdsYTlwtc3-v7qrkfHD6iSfGzCLIU_iHEQ0rxtFrjAV-jnMbBc8A48Rqrs7LDrY7kg=="
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300894537/DaXm2yD82XBfqfi8Ha7aEjMipCMPMH6VJ2T1IR7pUDB7n6Qghf0kNAf65L2cdYtkDe1Lng8PVCD_e44viz76y5GliynXEZ99LdlobcnGw7Yu2MuP9lH9AlVwxPEdcv_PYG56_eSbM7SgKsgB2d3MC-A6mWc-2xa9kqmJa9xuk65Q-2dot7wLGBscGRyUxpyMKcn1ubfz9XUkSQvjIsCIUlWWEamp4DTsNgR7fRrf9Fx7T2wA25s7wSPZDmPGX9ahdeCWByCjMc437zd5R26Tf5i997g9fMG5FvSmfH5KHwd5vjIcLfUgdQ0wbwzhbegNqEPz1vZ322eB4NMQJEjaDQ=="
+     }
+    },
+    {
+     ":id": "row-29pu-acn3~qhbi",
+     ":updated_at": "2026-09-30T08:00:18.193Z",
+     "id_intern": "4a59a9bb-1948-4c72-bb15-729e769770a0_2",
+     "codi_organ": "202184",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "numero_lot": "3",
+     "pressupost_licitacio_amb_1": "970236.39",
+     "pressupost_licitacio_sense_1": "811914.31",
+     "valor_estimat_expedient": "877606.68",
+     "pressupost_licitacio_amb": "121799.26",
+     "pressupost_licitacio_sense": "110726.6",
+     "valor_estimat_contracte": "110726.6",
+     "data_publicacio_previ": "2026-09-09T08:02:00.000",
+     "data_publicacio_anunci": "2026-09-29T12:02:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/4a59a9bb-1948-4c72-bb15-729e769770a0/300878603"
+     },
+     "url_json_previ": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300868820/r-ZS2CyiF2GTIvckpoVUk3uuScMWWiYxVpoQ7nAoLZZjZSXYEdtcjyjMtNNy3ACjLpuwKRB573L2qyix5mRnquJRIdo7tmNIG1NXk_mdCSJo0zmuZR4oAsT1cn5L-Nq--RTBN4lKGuoi74RmzehSHXtdLh6yUAno96Yi9z_-N4SlKgubhnIxjMr3ij60vmYoVdTn_ajHK2kkMQ4gPFFAz87ggYFt6afv7R7qyobAXu7Yhyy7g1V9TG7mn33Ba_0F4VXeeOw-5NKLyTV2u4G-UdsYTlwtc3-v7qrkfHD6iSfGzCLIU_iHEQ0rxtFrjAV-jnMbBc8A48Rqrs7LDrY7kg=="
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300894537/DaXm2yD82XBfqfi8Ha7aEjMipCMPMH6VJ2T1IR7pUDB7n6Qghf0kNAf65L2cdYtkDe1Lng8PVCD_e44viz76y5GliynXEZ99LdlobcnGw7Yu2MuP9lH9AlVwxPEdcv_PYG56_eSbM7SgKsgB2d3MC-A6mWc-2xa9kqmJa9xuk65Q-2dot7wLGBscGRyUxpyMKcn1ubfz9XUkSQvjIsCIUlWWEamp4DTsNgR7fRrf9Fx7T2wA25s7wSPZDmPGX9ahdeCWByCjMc437zd5R26Tf5i997g9fMG5FvSmfH5KHwd5vjIcLfUgdQ0wbwzhbegNqEPz1vZ322eB4NMQJEjaDQ=="
+     }
+    }
+   ]
+  },
+  "superseded_null": {
+   "why": "fila d'alerta futura sense valor + 2 lots: no_value amb l'evidencia de substitucio",
+   "pilot_tender_id": "8065f3bc-a89a-4346-99a9-399d58e4e2b4",
+   "ours": {
+    "pscp_id_intern": "b50557d6-18b1-4fa3-895f-97175438693b",
+    "placsp_organ_id": "14301168",
+    "base_budget_without_tax": "73600.00",
+    "estimated_value": "73600.00",
+    "lots": [
+     {
+      "lot_number": 1,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     },
+     {
+      "lot_number": 2,
+      "base_budget_without_tax": null,
+      "estimated_value": null
+     }
+    ]
+   },
+   "raw_files": [
+    "raw/batch_055_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-spgy~mvzg.9f82",
+     ":updated_at": "2026-07-30T08:00:15.037Z",
+     "id_intern": "b50557d6-18b1-4fa3-895f-97175438693b",
+     "codi_organ": "14301168",
+     "fase_publicacio": "Alerta futura",
+     "data_publicacio_futura": "2026-07-29T09:24:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/b50557d6-18b1-4fa3-895f-97175438693b/300848539"
+     }
+    },
+    {
+     ":id": "row-esmn.q3t4_8hbj",
+     ":updated_at": "2026-10-01T08:00:16.663Z",
+     "id_intern": "b50557d6-18b1-4fa3-895f-97175438693b_0",
+     "codi_organ": "14301168",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "numero_lot": "1",
+     "pressupost_licitacio_amb_1": "89056",
+     "pressupost_licitacio_sense_1": "73600",
+     "valor_estimat_expedient": "73600",
+     "pressupost_licitacio_amb": "77440",
+     "pressupost_licitacio_sense": "64000",
+     "valor_estimat_contracte": "64000",
+     "data_publicacio_futura": "2026-07-29T09:24:00.000",
+     "data_publicacio_anunci": "2026-09-30T10:04:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/b50557d6-18b1-4fa3-895f-97175438693b/300884318"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300884318/XseazABL39nKa-iOFOHkkaJlaeyqpIlm20VluDCbySbsH4XlR5g9IXYuiHwiHDUcY7vffE4lfMk3D3OoYOh8KSP2ef-KRfOvhaxAaO8ibZ2wyw3acCMordnG3VG1UZqBYGcErAUK8mWsJCweuCbZxsuQ0YO7PS3vk5pv4-bW8iDFrFrhjg7szMGcvFGaqzTtw7GSK02Y27JRu5ZP0zF5N5gbADvRaDKBbdG9HLubn741AzL5L8cpfNdwZDH1XyuRPjll--eIXxbD0YZYjAetVEEc8BraBeE21TnLJiYUshlRvvlb5CKOJ1kEt0e0BtXLLL92Zc6iWONej6bpLNQQGg=="
+     }
+    },
+    {
+     ":id": "row-pzm9.ec66~cef2",
+     ":updated_at": "2026-10-01T08:00:16.663Z",
+     "id_intern": "b50557d6-18b1-4fa3-895f-97175438693b_1",
+     "codi_organ": "14301168",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "numero_lot": "2",
+     "pressupost_licitacio_amb_1": "89056",
+     "pressupost_licitacio_sense_1": "73600",
+     "valor_estimat_expedient": "73600",
+     "pressupost_licitacio_amb": "11616",
+     "pressupost_licitacio_sense": "9600",
+     "valor_estimat_contracte": "9600",
+     "data_publicacio_futura": "2026-07-29T09:24:00.000",
+     "data_publicacio_anunci": "2026-09-30T10:04:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/b50557d6-18b1-4fa3-895f-97175438693b/300884318"
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300884318/XseazABL39nKa-iOFOHkkaJlaeyqpIlm20VluDCbySbsH4XlR5g9IXYuiHwiHDUcY7vffE4lfMk3D3OoYOh8KSP2ef-KRfOvhaxAaO8ibZ2wyw3acCMordnG3VG1UZqBYGcErAUK8mWsJCweuCbZxsuQ0YO7PS3vk5pv4-bW8iDFrFrhjg7szMGcvFGaqzTtw7GSK02Y27JRu5ZP0zF5N5gbADvRaDKBbdG9HLubn741AzL5L8cpfNdwZDH1XyuRPjll--eIXxbD0YZYjAetVEEc8BraBeE21TnLJiYUshlRvvlb5CKOJ1kEt0e0BtXLLL92Zc6iWONej6bpLNQQGg=="
+     }
+    }
+   ]
+  },
+  "lot_without_db_lot": {
+   "why": "fila antiga + 2 files de lot, i la BD no te lots: conflicte amb tender_lot_id NULL",
+   "pilot_tender_id": "db0e460a-9c4f-46b5-b797-998eb0135509",
+   "ours": {
+    "pscp_id_intern": "78b36700-a83b-41ce-9737-ccf9722a18e6",
+    "placsp_organ_id": "1679536",
+    "base_budget_without_tax": "18600.00",
+    "estimated_value": "18600.00",
+    "lots": []
+   },
+   "raw_files": [
+    "raw/batch_036_off0.json"
+   ],
+   "rows": [
+    {
+     ":id": "row-8dn5.y8er_segm",
+     ":updated_at": "2026-10-07T08:00:18.324Z",
+     "id_intern": "78b36700-a83b-41ce-9737-ccf9722a18e6",
+     "codi_organ": "1679536",
+     "fase_publicacio": "Anunci previ",
+     "pressupost_licitacio_amb_1": "22506",
+     "pressupost_licitacio_sense_1": "18600",
+     "valor_estimat_expedient": "18600",
+     "pressupost_licitacio_amb": "22506",
+     "pressupost_licitacio_sense": "18600",
+     "valor_estimat_contracte": "18600",
+     "data_publicacio_previ": "2026-10-06T13:26:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/78b36700-a83b-41ce-9737-ccf9722a18e6/300901485"
+     },
+     "url_json_previ": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300901485/OMwkWDAMsK9Uw6vQCuEuWSKC7lnEer2jhkcpHnuFrgLc52R77FiSpHlUjY1Jib2llOcBHXXVx4NJQy-uUKQWt80eCQ2Tzp6d002_EnpJak9IM4SBQBc2aIYi6JE0KWtlVZXTZ-L_vw40VvJl_Kz_4OxjsRhFY0U-X5P_-osD9DwNYDgILvrvjZvo-Tfk8P-2K84etwbPtuprKQpOx7ZJiYlzupDRvUEB4KDK3YWemcy82pPd25-5JSpcDx-kQO9-QgiInpi1USn3gkgneK9A8-wvW5Iz3EwVUtymvBtovdZEjZqtvs--7HRqLqeCUIa9fEUKkuAOoGnGInjL5bnuBg=="
+     }
+    },
+    {
+     ":id": "row-pbp6_2uan~sm79",
+     ":updated_at": "2026-10-08T14:57:25.082Z",
+     "id_intern": "78b36700-a83b-41ce-9737-ccf9722a18e6_0",
+     "codi_organ": "1679536",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "numero_lot": "1",
+     "pressupost_licitacio_amb_1": "22506",
+     "pressupost_licitacio_sense_1": "18600",
+     "valor_estimat_expedient": "18600",
+     "pressupost_licitacio_amb": "18033.84",
+     "pressupost_licitacio_sense": "14904",
+     "valor_estimat_contracte": "14904",
+     "data_publicacio_previ": "2026-10-06T13:26:00.000",
+     "data_publicacio_anunci": "2026-10-07T09:42:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/78b36700-a83b-41ce-9737-ccf9722a18e6/300901562"
+     },
+     "url_json_previ": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300901485/OMwkWDAMsK9Uw6vQCuEuWSKC7lnEer2jhkcpHnuFrgLc52R77FiSpHlUjY1Jib2llOcBHXXVx4NJQy-uUKQWt80eCQ2Tzp6d002_EnpJak9IM4SBQBc2aIYi6JE0KWtlVZXTZ-L_vw40VvJl_Kz_4OxjsRhFY0U-X5P_-osD9DwNYDgILvrvjZvo-Tfk8P-2K84etwbPtuprKQpOx7ZJiYlzupDRvUEB4KDK3YWemcy82pPd25-5JSpcDx-kQO9-QgiInpi1USn3gkgneK9A8-wvW5Iz3EwVUtymvBtovdZEjZqtvs--7HRqLqeCUIa9fEUKkuAOoGnGInjL5bnuBg=="
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300901562/bpEaxZIX36hZ4OTd27YgWA1zljCby8gehy45NOTVLtI68U40KILDmUsYfomhofniZr9GWuT35nDpmq3-Mzb2gdSFxaPjY8U3fW0hrcyZoBLmfYUmKdvp8IPO7U9vnVJG9osoPWjnND8xkAU57K0Ja-mqYAcU4U5ZyDcWx-XPTS-Fv4pAxi2wj7CGSSVlIXxoAt7GWEaVfJe2Z_qor2K9ys2puZyti21Z-3uiL_eN64kYtmmTiQ73lWnKhrG3iUTLqjAsG8YFZfscIlzUw4WGAOx2f426mgHcGA9QWAyhpkPbeW8dqA38EDxINhKktMdytkVuJ26ekcTE1vX9v4GVmg=="
+     }
+    },
+    {
+     ":id": "row-4ny7_4k24.ifqp",
+     ":updated_at": "2026-10-08T14:57:25.082Z",
+     "id_intern": "78b36700-a83b-41ce-9737-ccf9722a18e6_1",
+     "codi_organ": "1679536",
+     "fase_publicacio": "Anunci de licitaci\u00f3",
+     "numero_lot": "2",
+     "pressupost_licitacio_amb_1": "22506",
+     "pressupost_licitacio_sense_1": "18600",
+     "valor_estimat_expedient": "18600",
+     "pressupost_licitacio_amb": "4472.16",
+     "pressupost_licitacio_sense": "3696",
+     "valor_estimat_contracte": "3696",
+     "data_publicacio_previ": "2026-10-06T13:26:00.000",
+     "data_publicacio_anunci": "2026-10-07T09:42:00.000",
+     "enllac_publicacio": {
+      "url": "https://contractaciopublica.cat/ca/detall-publicacio/78b36700-a83b-41ce-9737-ccf9722a18e6/300901562"
+     },
+     "url_json_previ": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300901485/OMwkWDAMsK9Uw6vQCuEuWSKC7lnEer2jhkcpHnuFrgLc52R77FiSpHlUjY1Jib2llOcBHXXVx4NJQy-uUKQWt80eCQ2Tzp6d002_EnpJak9IM4SBQBc2aIYi6JE0KWtlVZXTZ-L_vw40VvJl_Kz_4OxjsRhFY0U-X5P_-osD9DwNYDgILvrvjZvo-Tfk8P-2K84etwbPtuprKQpOx7ZJiYlzupDRvUEB4KDK3YWemcy82pPd25-5JSpcDx-kQO9-QgiInpi1USn3gkgneK9A8-wvW5Iz3EwVUtymvBtovdZEjZqtvs--7HRqLqeCUIa9fEUKkuAOoGnGInjL5bnuBg=="
+     },
+     "url_json_licitacio": {
+      "url": "https://contractaciopublica.cat/portal-api/documents-publicacio/json-xifrat/300901562/bpEaxZIX36hZ4OTd27YgWA1zljCby8gehy45NOTVLtI68U40KILDmUsYfomhofniZr9GWuT35nDpmq3-Mzb2gdSFxaPjY8U3fW0hrcyZoBLmfYUmKdvp8IPO7U9vnVJG9osoPWjnND8xkAU57K0Ja-mqYAcU4U5ZyDcWx-XPTS-Fv4pAxi2wj7CGSSVlIXxoAt7GWEaVfJe2Z_qor2K9ys2puZyti21Z-3uiL_eN64kYtmmTiQ73lWnKhrG3iUTLqjAsG8YFZfscIlzUw4WGAOx2f426mgHcGA9QWAyhpkPbeW8dqA38EDxINhKktMdytkVuJ26ekcTE1vX9v4GVmg=="
+     }
+    }
+   ]
+  }
+ }
+}
