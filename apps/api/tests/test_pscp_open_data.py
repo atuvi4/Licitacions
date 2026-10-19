@@ -274,13 +274,27 @@ def test_fila_de_fase_previa_substituida_amb_evidencia_concloent():
     assert {d.status for d in _by(ev, "lot")} == {S.ACCEPTED}
 
 
-def test_fila_substituida_sense_valor_es_no_value_amb_l_evidencia():
+def test_fila_substituida_sense_valor_es_superseded_amb_import_nul():
+    """L'estat diu el resultat de la validacio (substituida); l'import, el que es publica
+    (res)."""
     ev = g.evaluate(_snapshot("superseded_null"), _rows("superseded_null"))
     old = _old_row(ev)
-    assert old.status == S.NO_VALUE and old.amount is None
+    assert old.status == S.SUPERSEDED and old.amount is None
+    assert old.published_text is None
     assert old.validation["role"] == "superseded_row"
     assert old.validation["supersession"]["verdict"] == "superseded"
     assert {d.status for d in _by(ev, "expedient") + _by(ev, "lot")} == {S.ACCEPTED}
+
+
+def test_fila_antiga_sense_valor_i_evidencia_no_concloent_es_conflicte_amb_import_nul():
+    snapshot = _snapshot("superseded_null")
+    rows = _rows("superseded_null")
+    _exact(rows, snapshot.pscp_id).update(fase_publicacio="Formalitzaci\u00f3")
+    ev = g.evaluate(snapshot, rows)
+    old = _old_row(ev)
+    assert old.validation["role"] == "unexplained_row"
+    assert old.status == S.CONFLICT and old.amount is None
+    assert {d.status for d in _by(ev, "expedient") + _by(ev, "lot")} == {S.CONFLICT}
 
 
 def _exact(rows, uid):
@@ -340,14 +354,17 @@ def test_files_de_lot_sense_lot_a_la_bd_queden_en_conflicte_sense_lot():
     assert expedient.validation["guards"]["lots"]["problem"] == "unexpected_lot_rows"
 
 
-def test_mes_de_dos_decimals_es_refusa_i_no_es_desa():
+def test_mes_de_dos_decimals_es_conflicte_amb_import_nul_i_el_text_publicat():
+    """No es pot desar sense alterar-lo: `amount` NULL, el text tal com es publica."""
     rows = _rows("lescala")
     rows[0]["pressupost_licitacio_amb_1"] = "247121.635"
     ev = g.evaluate(_snapshot("lescala"), rows)
-    assert ev.drafts == []
-    [refusal] = ev.refusals
-    assert refusal.problem == "more_than_2_decimals"
-    assert refusal.published_text == "247121.635"
+    [draft] = ev.drafts
+    assert draft.status == S.CONFLICT
+    assert draft.amount is None
+    assert draft.published_text == "247121.635"
+    assert draft.validation["amount_problem"] == "more_than_2_decimals"
+    assert draft.validation["no_value_reason"] is None
     assert "parse" in ev.failed
 
 
@@ -356,10 +373,12 @@ def test_mes_de_dos_decimals_a_un_lot_deixa_la_resta_en_conflicte():
     lot_row = next(r for r in rows if r["id_intern"].endswith(rows[0]["id_intern"][36:]))
     lot_row["pressupost_licitacio_amb"] = "1.001"
     ev = g.evaluate(_snapshot("lots"), rows)
-    assert [r.problem for r in ev.refusals] == ["more_than_2_decimals"]
-    assert len(_by(ev, "lot")) == 2
-    # Sense poder llegir un lot, la suma no es pot comprovar: no s'aplica (cap acceptacio
-    # amaga el lot refusat: el lot refusat no es desa).
+    lots = _by(ev, "lot")
+    [bad] = [d for d in lots if d.validation["amount_problem"]]
+    assert bad.status == S.CONFLICT and bad.amount is None and bad.published_text == "1.001"
+    assert bad.validation["lot_failed"] == ["amount"]
+    assert len(lots) == 3
+    # Sense poder llegir un lot, la suma no es pot comprovar: no s'aplica.
     assert _by(ev, "expedient")[0].validation["guards"]["lot_sum"] == {"ok": None}
 
 
@@ -376,7 +395,7 @@ def test_un_pscp_id_compartit_es_conflicte():
 
 def test_sense_files_no_hi_ha_observacions():
     ev = g.evaluate(_snapshot("lescala"), [])
-    assert ev.shape == "not_found" and ev.drafts == [] and ev.refusals == []
+    assert ev.shape == "not_found" and ev.drafts == []
 
 
 def test_la_validation_es_determinista():
@@ -496,7 +515,9 @@ def test_la_redaccio_tapa_nif_contactes_i_adjudicataris():
 class FakeSoda:
     """Respon com SODA a partir de les fixtures: filtra per UUID, ordena i pagina."""
 
-    UID = re.compile(r"'([0-9a-f-]{36})_?'")
+    EQUAL = re.compile(r"id_intern='([^']*)'")
+    IN = re.compile(r"id_intern IN \(([^)]*)\)")
+    PREFIX = re.compile(r"starts_with\(id_intern,'([^']*)'\)")
 
     def __init__(self, rows: dict[str, list[dict]], rows_updated_at=(ROWS_UPDATED_AT,)):
         self.rows = rows
@@ -525,17 +546,23 @@ class FakeSoda:
             ).encode()
         else:
             params = request.url.params
-            wanted = set(self.UID.findall(params["$where"]))
+            where = params["$where"]
+            equal = set(self.EQUAL.findall(where))
+            for listed in self.IN.findall(where):
+                equal |= set(re.findall(r"'([^']*)'", listed))
+            prefixes = self.PREFIX.findall(where)
             matched = sorted(
                 (
                     row
-                    for uid in wanted
-                    for row in self.rows.get(uid, [])
-                    if row["id_intern"] == uid or row["id_intern"].startswith(uid + "_")
+                    for rows in self.rows.values()
+                    for row in rows
+                    if row["id_intern"] in equal
+                    or any(row["id_intern"].startswith(prefix) for prefix in prefixes)
                 ),
                 key=lambda row: (row["id_intern"], row[":id"]),
             )
-            offset, limit = int(params["$offset"]), int(params["$limit"])
+            offset = int(params.get("$offset", 0))
+            limit = int(params.get("$limit", 1000))
             body = json.dumps(matched[offset : offset + limit]).encode()
         self.bodies[str(request.url)] = body
         return httpx.Response(200, content=body)
@@ -656,10 +683,23 @@ async def test_run_real_desa_amb_procedencia_i_el_segon_no_escriu_res(
     assert escala.currency == "EUR"
     assert escala.valid_to is None
     assert _utc(escala.source_dataset_updated_at) == datetime.fromtimestamp(ROWS_UPDATED_AT, UTC)
-    # Evidencia: la consulta exacta, el SHA del cos original i la resposta redactada.
-    assert "$where" in httpx.URL(escala.evidence_url).params
-    assert escala.evidence_sha256 == hashlib.sha256(fake.bodies[escala.evidence_url]).hexdigest()
+    # Evidencia: la consulta curta i exacta de la fila; la peticio per lots, pel SHA del
+    # seu cos original i la resposta redactada (i la URL completa, un sol cop, al manifest).
+    uid = CASES["lescala"]["ours"]["pscp_id_intern"]
+    assert httpx.URL(escala.evidence_url).params["$where"] == f"id_intern='{uid}'"
+    assert len(escala.evidence_url) < 200
+    manifest = json.loads((tmp_path / "1" / "raw_manifest.json").read_text(encoding="utf-8"))
+    [batch] = [entry for entry in manifest if entry["key"] == escala.raw_storage_key]
+    assert batch["sha256_original"] == escala.evidence_sha256
+    assert hashlib.sha256(fake.bodies[batch["url"]]).hexdigest() == escala.evidence_sha256
     assert (tmp_path / "1" / escala.raw_storage_key).exists()
+    # Cada evidence_url es torna a demanar i porta exactament les files de l'observacio.
+    for row in rows:
+        assert len(row.evidence_url) <= 1024
+        refetched = json.loads(fake(httpx.Request("GET", row.evidence_url)).content)
+        assert sorted(r[":id"] for r in refetched) == sorted(
+            r[":id"] for r in row.provenance["rows"]
+        )
     provenance = escala.provenance
     assert provenance["field"] == "pressupost_licitacio_amb_1"
     assert provenance["published_value"] == "247121.63"

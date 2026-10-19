@@ -23,6 +23,12 @@ Flux d'un run:
 7. **Informe** a `--out`: `report.json`, `observations.csv`, `fetch_log.json` i el
    manifest de les respostes desades.
 
+Evidencia de cada observacio: `evidence_url` es la consulta curta i exacta de la seva
+fila (`id_intern = ...`) o de les files de lot de l'expedient (`starts_with(id_intern,
+'<uuid>_')`), que es pot tornar a demanar; la peticio per lots d'on surt queda
+referenciada per `evidence_sha256` (el seu cos original) i `raw_storage_key` (la resposta
+redactada), i la seva URL completa, un sol cop, a `fetch_log.json` i `raw_manifest.json`.
+
 Nomes s'escriu `amount_kind = pbl_with_tax`. El PBL sense IVA i el VEC publicats van a
 `validation` i a `provenance` com a evidencia de contrast. Mai no es toca cap altra taula.
 """
@@ -55,7 +61,13 @@ from app.ingestion.pscp_open_data import (
 )
 from app.ingestion.pscp_open_data import guards as g
 from app.ingestion.pscp_open_data import parser as p
-from app.ingestion.pscp_open_data.client import SodaClient, metadata_url, redact, rows_url
+from app.ingestion.pscp_open_data.client import (
+    SodaClient,
+    metadata_url,
+    redact,
+    row_evidence_url,
+    rows_url,
+)
 from app.models.enums import AmountObservationStatus, TenderAmountKind
 from app.models.tender_amounts import TenderAmountObservation
 from app.models.tenders import Tender, TenderLot
@@ -344,8 +356,7 @@ class PscpOpenDataService:
         }
         if len(pages) > 1:
             provenance["pages"] = [
-                {"url": page.url, "sha256": page.sha256, "storage_key": page.storage_key}
-                for page in pages
+                {"sha256": page.sha256, "storage_key": page.storage_key} for page in pages
             ]
         return provenance
 
@@ -526,7 +537,7 @@ class PscpOpenDataService:
                         source_phase=draft.source_phase,
                         source_dataset_updated_at=dataset_updated,
                         retrieved_at=first.retrieved_at,
-                        evidence_url=first.url,
+                        evidence_url=_evidence_url(draft),
                         evidence_sha256=first.sha256,
                         raw_storage_key=first.storage_key,
                         validation_status=draft.status,
@@ -554,6 +565,14 @@ class PscpOpenDataService:
         }
 
 
+def _evidence_url(draft: g.Draft) -> str:
+    """La consulta curta de la fila (o files) de l'observacio, tal com es publiquen."""
+    ids = {str(row.get("id_intern")) for row in draft.rows}
+    if len(ids) == 1:
+        return row_evidence_url(ids.pop())
+    return row_evidence_url(prefix=draft.source_row_id.removesuffix("*"))
+
+
 def _same(existing: TenderAmountObservation, draft: g.Draft) -> bool:
     return (
         existing.validation_status == draft.status
@@ -569,7 +588,7 @@ def _summarize(evaluations: list[g.TenderEvaluation]) -> dict[str, Any]:
     no_value: Counter = Counter()
     conflicts = []
     superseded = []
-    refusals = []
+    unrepresentable = []
     shapes = Counter(ev.shape for ev in evaluations)
     for ev in evaluations:
         for draft in ev.drafts:
@@ -602,16 +621,16 @@ def _summarize(evaluations: list[g.TenderEvaluation]) -> dict[str, Any]:
                         "superseded_by": len(draft.validation["supersession"]["superseded_by"]),
                     }
                 )
-        for refusal in ev.refusals:
-            refusals.append(
-                {
-                    "tender_id": str(refusal.tender_id),
-                    "level": refusal.level,
-                    "source_row_id": refusal.source_row_id,
-                    "field": refusal.field,
-                    "problem": refusal.problem,
-                }
-            )
+            if draft.validation.get("amount_problem"):
+                unrepresentable.append(
+                    {
+                        "tender_id": str(ev.tender_id),
+                        "level": draft.level,
+                        "source_row_id": draft.source_row_id,
+                        "field": draft.field,
+                        "problem": draft.validation["amount_problem"],
+                    }
+                )
     conflict_tenders = {item["tender_id"] for item in conflicts if item["level"] == "expedient"}
     return {
         "tenders": len(evaluations),
@@ -623,7 +642,17 @@ def _summarize(evaluations: list[g.TenderEvaluation]) -> dict[str, Any]:
         "conflict_tenders": len(conflict_tenders),
         "conflicts": conflicts,
         "superseded_rows": superseded,
-        "refusals": refusals,
+        "unrepresentable_amounts": unrepresentable,
+        "old_rows": dict(
+            sorted(
+                Counter(
+                    f"{d.validation['role']}:{d.status.value}"
+                    for ev in evaluations
+                    for d in ev.drafts
+                    if d.validation.get("role")
+                ).items()
+            )
+        ),
         "guard_failures": dict(
             sorted(Counter(name for ev in evaluations for name in ev.failed).items())
         ),
@@ -661,7 +690,7 @@ def _write_observations_csv(path: Path, evaluations: list[g.TenderEvaluation]) -
                         "tender_id": ev.tender_id,
                         "pscp_id_intern": ev.pscp_id,
                         "shape": ev.shape,
-                        "status": ev.shape if ev.shape == "not_found" else "refused",
+                        "status": ev.shape,
                     }
                 )
             for draft in ev.drafts:

@@ -265,14 +265,6 @@ async def test_l_expedient_i_els_lots_no_comparteixen_unicitat(db):
         ({"amount": Decimal("0.00")}, "accepted amb import 0"),
         ({"amount": None}, "accepted sense import"),
         (
-            {"amount": None, "validation_status": AmountObservationStatus.CONFLICT},
-            "conflict sense import",
-        ),
-        (
-            {"amount": None, "validation_status": AmountObservationStatus.SUPERSEDED},
-            "superseded sense import",
-        ),
-        (
             {"amount": Decimal("1.00"), "validation_status": AmountObservationStatus.NO_VALUE},
             "no_value amb un import",
         ),
@@ -281,6 +273,7 @@ async def test_l_expedient_i_els_lots_no_comparteixen_unicitat(db):
             "conflict negatiu",
         ),
         ({"currency": "EU"}, "moneda de 2"),
+        ({"evidence_url": "https://x/" + "a" * 1015}, "evidence_url de mes de 1024"),
         ({"evidence_sha256": "a" * 63}, "sha massa curt"),
         ({"evidence_sha256": "a" * 64 + "b"}, "sha massa llarg"),
         ({"valid_to": NOW - timedelta(seconds=1)}, "tancada abans de comencar"),
@@ -296,8 +289,9 @@ async def test_els_check_refusen_el_que_no_te_sentit(db, override, why):
 
 
 async def test_els_imports_valids_per_estat(db):
-    """`no_value` amb NULL o amb el 0 publicat; `conflict` i `superseded` amb 0 o mes;
-    `accepted` > 0; `valid_to = valid_from` tambe es valid."""
+    """`no_value` amb NULL o amb el 0 publicat; `conflict` i `superseded` amb NULL (la font
+    no publica import, o no es pot desar sense alterar-lo) o amb 0 o mes; `accepted` > 0;
+    una `evidence_url` de 1024 i `valid_to = valid_from` tambe son valids."""
     tender, _ = await _tender(db)
     rows = [
         ("r1", AmountObservationStatus.NO_VALUE, None),
@@ -305,14 +299,26 @@ async def test_els_imports_valids_per_estat(db):
         ("r3", AmountObservationStatus.CONFLICT, Decimal("0.00")),
         ("r4", AmountObservationStatus.SUPERSEDED, Decimal("10.00")),
         ("r5", AmountObservationStatus.ACCEPTED, Decimal("0.01")),
+        ("r7", AmountObservationStatus.SUPERSEDED, None),
+        ("r8", AmountObservationStatus.CONFLICT, None),
+        ("r9", AmountObservationStatus.SUPERSEDED, Decimal("0.00")),
     ]
     db.add_all(
         _observation(tender, source_row_id=row, validation_status=status, amount=amount)
         for row, status, amount in rows
     )
     db.add(_observation(tender, source_row_id="r6", amount=Decimal("1.00"), valid_to=NOW))
+    db.add(
+        _observation(
+            tender,
+            source_row_id="r10",
+            evidence_url="https://x/" + "a" * 1014,
+            validation_status=AmountObservationStatus.CONFLICT,
+        )
+    )
+    db.add(_observation(tender, source_row_id="r10", valid_to=NOW, amount=Decimal("2.00")))
     await db.commit()
-    assert await _count(db, tender.id) == 6
+    assert await _count(db, tender.id) == 11
 
 
 async def test_la_procedencia_es_obligatoria(db):
@@ -476,11 +482,12 @@ async def test_els_enums_tenen_check_a_la_base(db):
         f"ck_{TABLE}_amount_non_negative",
         f"ck_{TABLE}_accepted_amount_positive",
         f"ck_{TABLE}_no_value_amount",
-        f"ck_{TABLE}_null_amount_is_no_value",
         f"ck_{TABLE}_validity_ordered",
         f"ck_{TABLE}_evidence_sha256_length",
         f"ck_{TABLE}_currency_length",
+        f"ck_{TABLE}_evidence_url_length",
     } <= names
+    assert f"ck_{TABLE}_null_amount_is_no_value" not in names
 
     tender, _ = await _tender(db)
     tender_id = tender.id
@@ -498,18 +505,19 @@ async def test_els_enums_tenen_check_a_la_base(db):
         # Les regles de l'import tambe sense l'ORM.
         {"kind": "pbl_with_tax", "status": "accepted", "amount": 0},
         {"kind": "pbl_with_tax", "status": "accepted", "amount": None},
-        {"kind": "pbl_with_tax", "status": "conflict", "amount": None},
         {"kind": "pbl_with_tax", "status": "no_value", "amount": 5},
+        {"kind": "pbl_with_tax", "status": "conflict", "amount": -1},
     ):
         with pytest.raises(IntegrityError):
             await db.execute(insert, {**ok, **bad})
         await db.rollback()
     await db.execute(insert, {**ok, "kind": "pbl_with_tax", "status": "accepted"})
-    await db.execute(
-        insert, {**ok, "kind": "pbl_with_tax", "status": "no_value", "amount": None, "row": "n"}
-    )
+    for row, status in (("n", "no_value"), ("s", "superseded"), ("c", "conflict")):
+        await db.execute(
+            insert, {**ok, "kind": "pbl_with_tax", "status": status, "amount": None, "row": row}
+        )
     await db.commit()
-    assert await _count(db, tender_id) == 2
+    assert await _count(db, tender_id) == 4
 
 
 # --------------------------------------------------------------------------- #

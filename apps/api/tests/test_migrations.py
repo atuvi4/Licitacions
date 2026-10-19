@@ -3997,7 +3997,7 @@ def test_0063_crea_la_taula_global_amb_les_restriccions():
         "CHECK (amount IS NULL OR amount >= 0)",
         "CHECK (validation_status <> 'accepted' OR (amount IS NOT NULL AND amount > 0))",
         "CHECK (validation_status <> 'no_value' OR amount IS NULL OR amount = 0)",
-        "CHECK (amount IS NOT NULL OR validation_status = 'no_value')",
+        "CHECK (length(evidence_url) <= 1024)",
         "CHECK (length(currency) = 3)",
         "CHECK (valid_to IS NULL OR valid_to >= valid_from)",
         "CHECK (length(evidence_sha256) = 64)",
@@ -4190,7 +4190,7 @@ async def test_0063_round_trip_real_a_postgres(engine):
         f"ck_{_AMOUNTS}_amount_non_negative",
         f"ck_{_AMOUNTS}_accepted_amount_positive",
         f"ck_{_AMOUNTS}_no_value_amount",
-        f"ck_{_AMOUNTS}_null_amount_is_no_value",
+        f"ck_{_AMOUNTS}_evidence_url_length",
         f"ck_{_AMOUNTS}_validity_ordered",
         f"ck_{_AMOUNTS}_evidence_sha256_length",
         f"ck_{_AMOUNTS}_currency_length",
@@ -4280,6 +4280,8 @@ async def test_0063_round_trip_real_a_postgres(engine):
         {**base, "amount": None, "row": "old", "status": "no_value"},
         {**base, "amount": 0, "row": "zero", "status": "no_value"},
         {**base, "amount": 5, "row": "pre", "status": "superseded"},
+        {**base, "amount": None, "row": "pre_null", "status": "superseded"},
+        {**base, "amount": None, "row": "bad", "status": "conflict"},
         {**base, "lot": lot_id, "amount": 7, "row": "r_1", "status": "accepted"},
     ]
     async with engine.begin() as conn:
@@ -4289,7 +4291,7 @@ async def test_0063_round_trip_real_a_postgres(engine):
         {**base, "amount": 11, "row": "r2", "status": "accepted"},  # 2a accepted vigent
         {**base, "amount": 3, "row": "r", "status": "conflict"},  # 2a vigent de la fila
         {**base, "amount": 0, "row": "z", "status": "accepted"},
-        {**base, "amount": None, "row": "z", "status": "conflict"},
+        {**base, "amount": -1, "row": "z", "status": "conflict"},
         {**base, "amount": 1, "row": "z", "status": "no_value"},
     ):
         with pytest.raises(DBAPIError):

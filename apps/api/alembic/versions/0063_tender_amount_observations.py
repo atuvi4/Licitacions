@@ -10,9 +10,14 @@ ha, la resposta redactada desada). **No toca cap taula existent**: ni
 * Estats: `accepted`, `conflict`, `no_value` (la font publica 0 o res: es desa tal com
   es publica pero mai no es un import valid) i `superseded` (una publicacio posterior
   ho substitueix, demostrat per identificador, fase i dates).
-* Import: `amount` es nul.lable (un import publicat buit es desa com a `no_value` amb
-  `amount` NULL, per tracabilitat). CHECK: `accepted` => `amount > 0`; `no_value` =>
-  `amount` NULL o 0; `amount` NULL => `no_value`; `amount >= 0`.
+* Import: `amount` es el que es publica (NULL si no es publica o no es pot desar sense
+  alterar-lo); l'estat, el resultat de la validacio. CHECK: `accepted` => `amount > 0`;
+  `no_value` => `amount` NULL o 0; `amount >= 0`. `superseded` i `conflict` admeten NULL
+  o qualsevol import >= 0.
+* Evidencia: `evidence_url` es la consulta CURTA i exacta de la fila (o files) de la font
+  d'aquella observacio, que es pot tornar a demanar (CHECK `length <= 1024`); la peticio
+  per lots queda referenciada per `evidence_sha256` (el cos original) i `raw_storage_key`
+  (la resposta redactada), i la seva URL completa una sola vegada al registre del run.
 * Procedencia: `provenance` (JSON, NOT NULL) amb el camp d'origen, el valor publicat en
   text, la fila (`:id`, `:updated_at`, organ, fase, enllacos), el dataset, el seu
   `rowsUpdatedAt` i la llicencia amb el text d'atribucio.
@@ -64,7 +69,7 @@ _CURRENT = "valid_to IS NULL"
 #: Regles de l'import (el mateix text que el model).
 _ACCEPTED_AMOUNT_POSITIVE = "validation_status <> 'accepted' OR (amount IS NOT NULL AND amount > 0)"
 _NO_VALUE_AMOUNT = "validation_status <> 'no_value' OR amount IS NULL OR amount = 0"
-_NULL_AMOUNT_IS_NO_VALUE = "amount IS NOT NULL OR validation_status = 'no_value'"
+_EVIDENCE_URL_MAX = 1024
 _AMOUNT_NON_NEGATIVE = "amount IS NULL OR amount >= 0"
 
 # El mateix text que `app.models.tender_amounts`.
@@ -195,9 +200,6 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(_NO_VALUE_AMOUNT, name=op.f(f"ck_{_TABLE}_no_value_amount")),
         sa.CheckConstraint(
-            _NULL_AMOUNT_IS_NO_VALUE, name=op.f(f"ck_{_TABLE}_null_amount_is_no_value")
-        ),
-        sa.CheckConstraint(
             "valid_to IS NULL OR valid_to >= valid_from",
             name=op.f(f"ck_{_TABLE}_validity_ordered"),
         ),
@@ -205,6 +207,10 @@ def upgrade() -> None:
             "length(evidence_sha256) = 64", name=op.f(f"ck_{_TABLE}_evidence_sha256_length")
         ),
         sa.CheckConstraint("length(currency) = 3", name=op.f(f"ck_{_TABLE}_currency_length")),
+        sa.CheckConstraint(
+            f"length(evidence_url) <= {_EVIDENCE_URL_MAX}",
+            name=op.f(f"ck_{_TABLE}_evidence_url_length"),
+        ),
     )
     op.create_index(f"ix_{_TABLE}_tender_id", _TABLE, ["tender_id"])
     op.create_index(

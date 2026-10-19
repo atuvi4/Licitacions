@@ -32,21 +32,19 @@ Guardes de l'expedient (sobre les files seleccionades):
 * `rows` (d0): cap fila sense explicar (la fila antiga d'un `mixed` nomes queda
   explicada si esta demostradament substituida).
 
-Estat, per ordre de precedencia:
+L'estat diu el resultat de la validacio i `amount`, el que es publica. Per ordre:
 
-1. `no_value`: el PBL amb IVA no es publica (NULL: `amount` NULL) o es publica a 0
-   (`amount` 0, tal com es publica). Mai no es un import valid. Te precedencia sobre
-   tot: tambe una fila substituida o en conflicte que no porta import es `no_value` (la
-   substitucio o el conflicte queden a `validation`), perque la base no admet `amount`
-   NULL amb cap altre estat.
-2. `superseded`: la fila antiga d'un `mixed`, demostradament substituida.
-3. `conflict`: alguna guarda (de l'expedient o del lot) falla.
-4. `accepted`.
-
-Un import que no es pot desar sense alterar-lo (mes de 2 decimals, negatiu, no
-decimal, o el camp d'expedient diferent entre files) NO es desa: es una `Refusal`, i la
-resta d'observacions de l'expedient queden en `conflict` per la guarda `parse` o
-`consistent`.
+1. La fila antiga d'un `mixed`: `superseded` si la substitucio es demostra, `conflict`
+   si no; amb l'import que porti (tambe NULL).
+2. `conflict` si l'import publicat no es pot desar sense alterar-lo (mes de 2 decimals,
+   negatiu, no decimal, o el camp d'expedient diferent entre files): `amount` NULL i el
+   text publicat a la procedencia (`validation.amount_problem` diu per que). La resta
+   d'observacions de l'expedient tambe queden en `conflict` (guardes `parse` o
+   `consistent`).
+3. `no_value`: el PBL amb IVA no es publica (`amount` NULL) o es publica a 0 (`amount`
+   0, tal com es publica). Mai no es un import valid, ni entra a cap calcul.
+4. `conflict`: alguna guarda (de l'expedient o del lot) falla.
+5. `accepted`.
 
 Convencions de les claus:
 
@@ -124,25 +122,12 @@ class Draft:
         return (self.tender_id, self.tender_lot_id, self.source_row_id)
 
 
-@dataclass(frozen=True)
-class Refusal:
-    """Un import publicat que no es pot desar sense alterar-lo."""
-
-    tender_id: uuid.UUID
-    level: str
-    source_row_id: str
-    field: str
-    published_text: str | None
-    problem: str
-
-
 @dataclass
 class TenderEvaluation:
     tender_id: uuid.UUID
     pscp_id: str
     shape: str
     drafts: list[Draft] = field(default_factory=list)
-    refusals: list[Refusal] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     notes: dict[str, Any] = field(default_factory=dict)
 
@@ -283,6 +268,8 @@ def _phase(rows: list[dict[str, Any]]) -> str | None:
 
 
 def _no_value_reason(amount: p.ParsedAmount) -> str | None:
+    if amount.problem:
+        return None
     if amount.value is None:
         return "null_published"
     if amount.value == 0:
@@ -291,12 +278,14 @@ def _no_value_reason(amount: p.ParsedAmount) -> str | None:
 
 
 def _status(
-    amount: p.ParsedAmount, *, failed: bool, superseded: bool = False
+    amount: p.ParsedAmount, *, failed: bool, role: str | None = None
 ) -> AmountObservationStatus:
+    if role == "superseded_row":
+        return SUPERSEDED
+    if role == "unexplained_row" or amount.problem:
+        return CONFLICT
     if _no_value_reason(amount):
         return NO_VALUE
-    if superseded:
-        return SUPERSEDED
     return CONFLICT if failed else ACCEPTED
 
 
@@ -447,57 +436,40 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
     # --- Observacio de l'expedient ------------------------------------------- #
     expedient_row_id = f"{uid}_*" if by_lot else uid
     selected_ids = [str(row.get("id_intern")) for row in selected]
-    if with_tax.problem:
-        evaluation.refusals.append(
-            Refusal(
-                snapshot.id,
-                "expedient",
-                expedient_row_id,
-                p.EXPEDIENT_WITH_TAX,
-                with_tax.text,
-                with_tax.problem,
-            )
+    evaluation.drafts.append(
+        Draft(
+            tender_id=snapshot.id,
+            tender_lot_id=None,
+            level="expedient",
+            source_entity_key=uid,
+            source_row_id=expedient_row_id,
+            source_phase=_phase(selected),
+            status=_status(with_tax, failed=bool(failed)),
+            amount=with_tax.value,
+            field=p.EXPEDIENT_WITH_TAX,
+            published_text=with_tax.text,
+            validation={
+                **common,
+                "level": "expedient",
+                "no_value_reason": _no_value_reason(with_tax),
+                "amount_problem": with_tax.problem,
+                "guards": guards,
+                "failed": failed,
+                "rows": selected_ids,
+            },
+            rows=selected,
+            cross_check={
+                p.EXPEDIENT_WITHOUT_TAX: without_tax.text,
+                p.EXPEDIENT_ESTIMATED: estimated.text,
+            },
         )
-    else:
-        evaluation.drafts.append(
-            Draft(
-                tender_id=snapshot.id,
-                tender_lot_id=None,
-                level="expedient",
-                source_entity_key=uid,
-                source_row_id=expedient_row_id,
-                source_phase=_phase(selected),
-                status=_status(with_tax, failed=bool(failed)),
-                amount=with_tax.value,
-                field=p.EXPEDIENT_WITH_TAX,
-                published_text=with_tax.text,
-                validation={
-                    **common,
-                    "level": "expedient",
-                    "no_value_reason": _no_value_reason(with_tax),
-                    "guards": guards,
-                    "failed": failed,
-                    "rows": selected_ids,
-                },
-                rows=selected,
-                cross_check={
-                    p.EXPEDIENT_WITHOUT_TAX: without_tax.text,
-                    p.EXPEDIENT_ESTIMATED: estimated.text,
-                },
-            )
-        )
+    )
 
     # --- La fila antiga d'un `mixed` ----------------------------------------- #
     for row in superseded_rows + unexplained:
         amount = p.parse_amount(row.get(p.EXPEDIENT_WITH_TAX))
         is_superseded = row in superseded_rows
-        if amount.problem:
-            evaluation.refusals.append(
-                Refusal(
-                    snapshot.id, "expedient", uid, p.EXPEDIENT_WITH_TAX, amount.text, amount.problem
-                )
-            )
-            continue
+        role = "superseded_row" if is_superseded else "unexplained_row"
         evaluation.drafts.append(
             Draft(
                 tender_id=snapshot.id,
@@ -506,15 +478,16 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
                 source_entity_key=uid,
                 source_row_id=uid,
                 source_phase=_phase([row]),
-                status=_status(amount, failed=True, superseded=is_superseded),
+                status=_status(amount, failed=not is_superseded, role=role),
                 amount=amount.value,
                 field=p.EXPEDIENT_WITH_TAX,
                 published_text=amount.text,
                 validation={
                     **common,
                     "level": "expedient",
-                    "role": "superseded_row" if is_superseded else "unexplained_row",
+                    "role": role,
                     "no_value_reason": _no_value_reason(amount),
+                    "amount_problem": amount.problem,
                     "supersession": supersession,
                     "failed": [] if is_superseded else ["rows"],
                     "rows": [uid],
@@ -531,11 +504,6 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
     expedient_guards = {name: guard.get("ok") for name, guard in guards.items()}
     for row, number, amount in zip(lot_rows, source_numbers, lot_amounts, strict=True):
         row_id = str(row.get("id_intern"))
-        if amount.problem:
-            evaluation.refusals.append(
-                Refusal(snapshot.id, "lot", row_id, p.LOT_WITH_TAX, amount.text, amount.problem)
-            )
-            continue
         matched = None
         if number is None:
             match = {"ok": False, "problem": "no_number"}
@@ -552,6 +520,7 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
         lot_vec = p.parse_amount(row.get(p.LOT_ESTIMATED))
         lot_guards: dict[str, dict[str, Any]] = {
             "match": match,
+            "amount": {"ok": amount.problem is None, "problem": amount.problem},
             "net": _optional_equal_to_cent(lot_net, matched.net if matched else None),
             "vec": _optional_equal_to_cent(lot_vec, matched.vec if matched else None),
             "tax_order": _tax_order(amount, lot_net),
@@ -582,6 +551,7 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
                     "level": "lot",
                     "numero_lot": None if row.get("numero_lot") is None else str(row["numero_lot"]),
                     "no_value_reason": _no_value_reason(amount),
+                    "amount_problem": amount.problem,
                     "lot_guards": lot_guards,
                     "lot_failed": lot_failed,
                     "expedient_guards": expedient_guards,

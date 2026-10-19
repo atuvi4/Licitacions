@@ -103,6 +103,30 @@ def rows_url(
     return f"{RESOURCE_URL}?{query}"
 
 
+def _soql_literal(value: str) -> str:
+    """Un literal de text SoQL (les cometes simples es dupliquen)."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def row_evidence_url(id_intern: str | None = None, *, prefix: str | None = None) -> str:
+    """La consulta CURTA i exacta d'una fila (`id_intern = ...`) o de les files de lot d'un
+    expedient (`starts_with(id_intern, '<uuid>_')`), que es pot tornar a demanar.
+
+    Es la `evidence_url` de cada observacio: la peticio per lots d'on surt (unes 11 kB
+    d'URL) es referencia pel SHA-256 del seu cos i per la resposta desada, i la seva URL
+    completa queda una sola vegada al registre del run.
+    """
+    if (id_intern is None) == (prefix is None):
+        raise ValueError("Cal exactament un de `id_intern` o `prefix`.")
+    if id_intern is not None:
+        where = f"id_intern={_soql_literal(id_intern)}"
+    else:
+        where = f"starts_with(id_intern,{_soql_literal(prefix)})"
+    params = {"$where": where, "$order": "id_intern,:id"}
+    query = urllib.parse.urlencode(params, quote_via=urllib.parse.quote, safe="(),'*:_=")
+    return f"{RESOURCE_URL}?{query}"
+
+
 def metadata_url() -> str:
     return METADATA_URL
 

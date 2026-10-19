@@ -22,10 +22,15 @@ objectiu (expedient, lot o expedient, tipus, font, `source_row_id`): un refresc 
 una lectura diferent tanca l'anterior abans d'afegir-ne una, i mai no se n'acumulen dues
 de vigents de la mateixa fila.
 
-Import: `amount` NULL nomes amb `no_value` (la font no el publica); `accepted` sempre
-amb `amount > 0`; `no_value` nomes amb NULL o 0 (el 0 tal com es publica). Mai mes de
-2 decimals: l'adaptador refusa el valor abans d'arribar aqui (Numeric(18,2) arrodoniria
-sense avisar, i la llicencia no permet alterar el contingut).
+Import i estat son independents: `amount` es el que es publica i l'estat, el resultat
+de la validacio. `accepted` sempre amb `amount > 0`; `no_value` nomes amb NULL o el 0
+publicat; `superseded` i `conflict` admeten NULL (la fila no publica import, o el que
+publica no es pot desar sense alterar-lo: mes de 2 decimals, que `Numeric(18,2)`
+arrodoniria sense avisar i la llicencia no permet) o qualsevol import >= 0.
+
+Evidencia: `evidence_url` es la consulta curta i exacta de la fila (o files) d'aquella
+observacio, que es pot tornar a demanar (com a molt 1024 caracters); la peticio per lots
+d'on surt queda referenciada per `evidence_sha256` i `raw_storage_key`.
 """
 
 from __future__ import annotations
@@ -58,7 +63,7 @@ CURRENT = "valid_to IS NULL"
 #: Regles de l'import (el mateix text que la migracio 0063).
 ACCEPTED_AMOUNT_POSITIVE = "validation_status <> 'accepted' OR (amount IS NOT NULL AND amount > 0)"
 NO_VALUE_AMOUNT = "validation_status <> 'no_value' OR amount IS NULL OR amount = 0"
-NULL_AMOUNT_IS_NO_VALUE = "amount IS NOT NULL OR validation_status = 'no_value'"
+EVIDENCE_URL_MAX = 1024
 AMOUNT_NON_NEGATIVE = "amount IS NULL OR amount >= 0"
 
 #: Nomes es pot TANCAR una observacio vigent (`valid_to` de NULL a un valor), sense
@@ -127,12 +132,14 @@ class TenderAmountObservation(UUIDPrimaryKeyMixin, Base):
         sa.CheckConstraint(AMOUNT_NON_NEGATIVE, name="amount_non_negative"),
         sa.CheckConstraint(ACCEPTED_AMOUNT_POSITIVE, name="accepted_amount_positive"),
         sa.CheckConstraint(NO_VALUE_AMOUNT, name="no_value_amount"),
-        sa.CheckConstraint(NULL_AMOUNT_IS_NO_VALUE, name="null_amount_is_no_value"),
         sa.CheckConstraint("valid_to IS NULL OR valid_to >= valid_from", name="validity_ordered"),
         # `length` i no `char_length`: SQLite no te `char_length`, i a PostgreSQL sobre
         # text son el mateix (caracters, no bytes).
         sa.CheckConstraint("length(evidence_sha256) = 64", name="evidence_sha256_length"),
         sa.CheckConstraint("length(currency) = 3", name="currency_length"),
+        sa.CheckConstraint(
+            f"length(evidence_url) <= {EVIDENCE_URL_MAX}", name="evidence_url_length"
+        ),
     )
 
     # Noms de FK explicits, els mateixos que la migracio 0063.
@@ -173,9 +180,11 @@ class TenderAmountObservation(UUIDPrimaryKeyMixin, Base):
     #: Darrera actualitzacio del dataset en llegir-lo (`rowsUpdatedAt`).
     source_dataset_updated_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     retrieved_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
-    #: La consulta exacta a la font.
+    #: La consulta curta i exacta de la fila (o files) d'aquesta observacio a la font, que
+    #: es pot tornar a demanar. La peticio per lots d'on surt: `evidence_sha256` i
+    #: `raw_storage_key` (i la seva URL completa, al registre del run).
     evidence_url: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    #: SHA-256 (hex) del cos de la resposta original, abans de redactar-la.
+    #: SHA-256 (hex) del cos original de la peticio per lots, abans de redactar-lo.
     evidence_sha256: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     #: Resposta desada (redactada) a l'emmagatzematge d'objectes, si n'hi ha.
     raw_storage_key: Mapped[str | None] = mapped_column(sa.String(512))
