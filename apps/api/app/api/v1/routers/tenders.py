@@ -76,6 +76,7 @@ from app.schemas.tenders import (
 from app.services import audit, manual_tender, tender_document_upload
 from app.services.tender_analysis import load_structure_view
 from app.services.tender_document_processing import is_text_extractable_mime
+from app.tenders import amount_observations
 from app.tenders.documents import is_active_document
 from app.tenders.visibility import (
     buyer_visible_to_company,
@@ -662,6 +663,11 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
     # vista pura que llegeix el motor (`section_status_for`): cap segona regla aqui.
     # Vista global (sense empresa): el paquet es de la licitacio, no d'una empresa.
     view, _ = await load_structure_view(session, tender)
+    # F-06a: el PBL amb IVA de la PSCP, nomes informatiu (una consulta, expedient i
+    # lots vigents). La licitacio ja ha passat el filtre de visibilitat de dalt.
+    budget_observations = await amount_observations.load(
+        session, tender.id, {lot.id for lot in tender.lots if lot.removed_at is None}
+    )
 
     return TenderDetail(
         id=tender.id,
@@ -756,6 +762,7 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
         planned_start_date=tender.planned_start_date,
         blocks=[TenderBlockRead.model_validate(block) for block in tender.blocks],
         sites=[TenderSiteRead.model_validate(site) for site in tender.sites],
+        budget_with_tax_observations=budget_observations,
     )
 
 

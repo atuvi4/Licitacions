@@ -351,6 +351,48 @@ class TenderPackageRead(BaseModel):
     )
 
 
+#: Codis estables de les comprovacions que fallen en una observacio en `conflict`.
+AmountFailedCheck = Literal["organ", "pbl_without_tax", "vec", "lots"]
+
+
+class AmountObservationRead(ORMModel):
+    """El PBL amb IVA que publica una font externa (F-06a): nomes el que ensenya la fitxa.
+
+    `status` mai no es `superseded` (no es mostra). `amount` es l'import tal com es
+    publica (NULL si no es publica); amb `no_value`, `published_zero` diu si es va
+    publicar a 0 (cert) o buit (fals, `amount` NULL). Un `conflict` porta l'import nomes
+    com a context de l'avis: mai no es el valor del fet.
+    """
+
+    status: Literal["accepted", "conflict", "no_value"]
+    amount: Decimal | None = None
+    currency: str = "EUR"
+    published_zero: bool = False
+    #: Nomes amb `conflict`: organ, PBL sense IVA, VEC o lots (buida en els altres).
+    failed_checks: list[AmountFailedCheck] = []
+    #: `enllac_publicacio` de la font, si n'hi ha (nomes http/https).
+    publication_url: str | None = None
+    #: Darrera actualitzacio del dataset (`rowsUpdatedAt`) quan es va llegir.
+    source_updated_at: datetime | None = None
+    retrieved_at: datetime
+    source_code: str
+
+
+class BudgetWithTaxObservations(ORMModel):
+    """Observacions vigents del PBL amb IVA de la PSCP per a la fitxa (F-06a, fase 3).
+
+    `expedient`: la de l'expedient, o NULL. `lots`: per lot vigent d'aquesta licitacio
+    (`tender_lot_id` -> observacio); una fila de lot de la font sense lot nostre no hi
+    es (ni a `expedient`). `attribution` (el text de la llicencia, sense data) i
+    `source_updated_at` (la mes recent de les ensenyades) nomes quan n'hi ha alguna.
+    """
+
+    expedient: AmountObservationRead | None = None
+    lots: dict[uuid.UUID, AmountObservationRead] = {}
+    attribution: str | None = None
+    source_updated_at: datetime | None = None
+
+
 class TenderDetail(ORMModel):
     id: uuid.UUID
     external_id: str
@@ -401,6 +443,11 @@ class TenderDetail(ORMModel):
     planned_start_date: date | None = None
     blocks: list[TenderBlockRead] = []
     sites: list[TenderSiteRead] = []
+    #: PBL amb IVA segons la PSCP (F-06a, nomes informatiu): no canvia cap import de
+    #: dalt ni cap calcul. Sempre present; buit si no hi ha cap observacio ensenyable.
+    budget_with_tax_observations: BudgetWithTaxObservations = Field(
+        default_factory=BudgetWithTaxObservations
+    )
 
 
 class IngestionRunRead(ORMModel):
