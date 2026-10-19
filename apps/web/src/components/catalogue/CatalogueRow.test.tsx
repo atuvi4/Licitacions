@@ -33,6 +33,16 @@ function tender(overrides: Partial<TenderListItem> = {}): TenderListItem {
 }
 
 describe("CatalogueRow", () => {
+  it("F-06a: la fila del catàleg no canvia encara que l'API portés el PBL amb IVA de la PSCP", () => {
+    const plain = render(<CatalogueRow tender={tender()} match={null} />).container.innerHTML;
+    // Una propietat de més (la fitxa en té; la fila no la fa servir) no hi afegeix res.
+    const withExtra = { ...tender(), budget_with_tax_observations: { expedient: { status: "accepted", amount: "247121.63" } } } as unknown as TenderListItem;
+    const { container } = render(<CatalogueRow tender={withExtra} match={null} />);
+    expect(container.innerHTML).toBe(plain);
+    expect(container.textContent).not.toContain("PSCP");
+    expect(container.textContent).not.toContain("247.121,63");
+  });
+
   it("«Anul·lada» només quan la font ho diu; «Ja no disponible a la font» és una altra cosa", () => {
     const { container, rerender } = render(<CatalogueRow tender={tender()} match={null} />);
     expect(container.textContent).not.toContain("Anul·lada");

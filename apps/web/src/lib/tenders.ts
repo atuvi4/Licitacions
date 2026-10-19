@@ -506,6 +506,37 @@ export interface TenderDetail {
   /** Estat del paquet documental i forats oberts (global, com la licitació). */
   package: TenderPackage | null;
   traceability: TenderTraceability | null;
+  /** F-06a: el PBL amb IVA segons la PSCP, només informatiu (vegeu `lib/pscpAmounts`). */
+  budget_with_tax_observations?: BudgetWithTaxObservations | null;
+}
+
+/** Comprovació contra la PLACSP que falla en una observació en `conflict`. */
+export type AmountFailedCheck = "organ" | "pbl_without_tax" | "vec" | "lots";
+
+/**
+ * Una observació vigent del PBL amb IVA d'una font externa (F-06a). Mai `superseded`: no es
+ * mostra. Un `conflict` porta l'import només com a context de l'avís, mai com a valor.
+ */
+export interface AmountObservation {
+  status: "accepted" | "conflict" | "no_value";
+  amount: string | null;
+  currency: string;
+  /** `no_value` publicat a 0 (cert) o buit (fals, `amount` nul). */
+  published_zero: boolean;
+  failed_checks: AmountFailedCheck[];
+  publication_url: string | null;
+  /** Darrera actualització del dataset quan es va llegir. */
+  source_updated_at: string | null;
+  retrieved_at: string;
+  source_code: string;
+}
+
+export interface BudgetWithTaxObservations {
+  expedient: AmountObservation | null;
+  /** Per lot vigent (`TenderLot.id`). */
+  lots: Record<string, AmountObservation>;
+  attribution: string | null;
+  source_updated_at: string | null;
 }
 
 export interface TenderFacets {

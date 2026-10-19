@@ -32,6 +32,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ApiError, api } from "@/lib/api";
 import type { Compliance } from "@/lib/compliance";
 import { formatAmount, formatDate } from "@/lib/format";
+import { budgetWithTaxView } from "@/lib/pscpAmounts";
 import { useMutation, useResource } from "@/lib/hooks";
 import { type AnalysisLimits, jobErrorMessage, requestProcessing, useJobRequest } from "@/lib/jobs";
 import { jobErrorAction, shortSummary, tenderStatusView } from "@/lib/labels";
@@ -62,6 +63,7 @@ import type { WorkspaceDetail } from "@/lib/workspace";
 
 import { extractedText, fileErrorText, isQueued, jobPill, readingLabel, readingSubtext, selectionLabel, versionText } from "./documents";
 import { topLevelDocuments } from "./package";
+import { PscpAttribution, PscpBudgetValue, PscpLotLine } from "./BudgetWithTax";
 import { DocumentBadges, PackageNotice, PlecsReadingLine, RemovedDocuments } from "./PlecsOverview";
 import {
   amountMeta,
@@ -298,6 +300,8 @@ function TenderDetail() {
   const deadline = deadlineMeta(data.deadline_at);
   const statusView = tenderStatusView(data);
   const amount = amountMeta(data);
+  // F-06a: el PBL amb IVA de la PSCP, només informatiu (la capçalera no canvia).
+  const budgetWithTax = budgetWithTaxView(data);
   const requirements = requirementsLine(analysis.data, compliance.data);
   const candidatureInfo = candidatureMeta(candidature.workspace);
   const cancelled = data.status === "cancelled";
@@ -630,9 +634,14 @@ function TenderDetail() {
                 <AmountValue value={data.base_budget_without_tax} currency={data.currency} />
               </Fact>
               <Fact label={AMOUNT_BASIS_LABEL.pbl_gross}>
-                <AmountValue value={data.base_budget} currency={data.currency} />
+                {budgetWithTax.expedient ? (
+                  <PscpBudgetValue observation={budgetWithTax.expedient} />
+                ) : (
+                  <AmountValue value={data.base_budget} currency={data.currency} />
+                )}
               </Fact>
               <p className="text-caption text-muted sm:col-span-3">{AMOUNT_HELP}</p>
+              <PscpAttribution text={budgetWithTax.attribution} />
 
               <Fact label="Publicació">{formatDate(data.publication_date)}</Fact>
               <Fact label="Termini de presentació">
@@ -768,7 +777,13 @@ function TenderDetail() {
                     align: "right",
                     width: "14%",
                     // P2-06: abans barrejava PBL i VEC sense dir-ho; ara, com a la taula d'oportunitats.
-                    cell: (lot) => <AmountStack item={lot} currency={lot.currency} />,
+                    // F-06a: i, a sota, el PBL amb IVA de la PSCP si n'hi ha (mai un conflicte com a import).
+                    cell: (lot) => (
+                      <>
+                        <AmountStack item={lot} currency={lot.currency} />
+                        <PscpLotLine observation={budgetWithTax.lots[lot.id]} />
+                      </>
+                    ),
                   },
                   {
                     key: "cpv",

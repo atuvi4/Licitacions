@@ -36,6 +36,7 @@ vi.mock("@/components/RequirementAnalysis", () => ({ RequirementAnalysisSection:
 vi.mock("@/components/TenderChangeHistory", () => ({ TenderChangeHistory: () => <div data-testid="history">Historial de canvis (secció actual)</div> }));
 
 import { ApiError } from "@/lib/api";
+import { formatDate } from "@/lib/format";
 
 import TenderDetailPage from "./page";
 
@@ -721,5 +722,150 @@ describe("Fitxa de licitació", () => {
     // L'abreviatura visible i, per als lectors de pantalla, el nom sencer.
     expect(text(row?.querySelector("[data-amount-budget]"))).toBe("PBL sense IVAPressupost base de licitació sense IVA (PBL) 19.876,25 €");
     expect(row?.querySelector("abbr")?.getAttribute("title")).toBe("Valor estimat del contracte (VEC)");
+  });
+});
+
+describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+    replace.mockReset();
+    jobRequest = null;
+    search = "";
+  });
+
+  const LINK = "https://contractaciopublica.cat/ca/detall-publicacio/x/300001";
+  const UPDATED = "2026-10-16T06:30:00Z";
+  const NOT_PUBLISHED = "No consta a les dades de la font";
+  const ATTRIBUTION_START =
+    "Font: Generalitat de Catalunya. Departament d'Economia i Finances — Contractació pública a Catalunya: publicacions a la Plataforma de serveis de contractació pública (dades obertes). Llicència oberta d'ús d'informació – Catalunya. Darrera actualització: ";
+  const observation = (overrides: Record<string, unknown> = {}) => ({
+    status: "accepted",
+    amount: "247121.63",
+    currency: "EUR",
+    published_zero: false,
+    failed_checks: [],
+    publication_url: LINK,
+    source_updated_at: UPDATED,
+    retrieved_at: "2026-10-16T12:00:00Z",
+    source_code: "pscp_open_data:ybgg-dgi6",
+    ...overrides,
+  });
+  const lotOf = (id: string, title: string) => ({
+    id, external_lot_id: id, lot_number: Number(id.slice(1)), title, description: null,
+    estimated_value: null, base_budget: null, base_budget_without_tax: null, currency: "EUR",
+    place_of_execution: null, nuts_code: null, deadline_at: null, cpvs: [],
+  });
+  const text = (node: Element | null | undefined) => node?.textContent?.replace(/ /g, " ") ?? "";
+  const field = (expedient: unknown, lots: Record<string, unknown> = {}) => ({ expedient, lots, attribution: "Font: ...", source_updated_at: UPDATED });
+  const amountFact = () => screen.getByText("Pressupost base de licitació amb IVA", { selector: "p" }).parentElement!;
+
+  async function renderWith(observations: unknown, extra: Record<string, unknown> = {}) {
+    respondWith(base({ "/tenders/t1": { ...detail, base_budget: null, budget_with_tax_observations: observations, ...extra } }));
+    render(<TenderDetailPage />);
+    await flush();
+    return amountFact();
+  }
+
+  it("accepted: l'import amb cèntims, la font amb la data i l'enllaç a la publicació; atribució visible", async () => {
+    const fact = await renderWith(field(observation()));
+    expect(text(fact)).toContain("247.121,63 €");
+    expect(text(fact)).not.toContain(NOT_PUBLISHED);
+    expect(text(fact.querySelector("[data-pscp-source]"))).toBe(
+      `Segons la PSCP (dades obertes de la Generalitat de Catalunya), actualitzat el ${formatDate(UPDATED)} · Veure la publicació ↗`,
+    );
+    const link = screen.getByRole("link", { name: "Veure la publicació ↗" });
+    expect(link.getAttribute("href")).toBe(LINK);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+    expect(text(document.querySelector("[data-pscp-attribution]"))).toBe(`${ATTRIBUTION_START}${formatDate(UPDATED)}.`);
+    // La capçalera no canvia: continua amb el VEC.
+    expect(text(document.querySelector("[data-tender-header]"))).not.toContain("247.121,63");
+  });
+
+  it("accepted sense enllaç: la línia de font, sense «Veure la publicació»", async () => {
+    const fact = await renderWith(field(observation({ publication_url: null })));
+    expect(text(fact)).toContain("247.121,63 €");
+    expect(text(fact.querySelector("[data-pscp-source]"))).toBe(
+      `Segons la PSCP (dades obertes de la Generalitat de Catalunya), actualitzat el ${formatDate(UPDATED)}`,
+    );
+    expect(screen.queryByRole("link", { name: "Veure la publicació ↗" })).toBeNull();
+  });
+
+  it("no_value publicat a 0: el text exacte i la mateixa línia de font", async () => {
+    const fact = await renderWith(field(observation({ status: "no_value", amount: "0.00", published_zero: true })));
+    expect(text(fact)).toContain("Publicat a 0,00 € a la PSCP (sense pressupost base de despesa; no s'utilitza com a import econòmic)");
+    expect(text(fact)).not.toContain(NOT_PUBLISHED);
+    expect(text(fact.querySelector("[data-pscp-source]"))).toContain("Segons la PSCP (dades obertes de la Generalitat de Catalunya), actualitzat el");
+    expect(screen.getByRole("link", { name: "Veure la publicació ↗" })).toBeTruthy();
+    expect(document.querySelector("[data-pscp-attribution]")).not.toBeNull();
+  });
+
+  it("no_value nul: com abans, «No consta a les dades de la font», sense font ni atribució", async () => {
+    const fact = await renderWith(field(observation({ status: "no_value", amount: null, published_zero: false })));
+    expect(text(fact)).toBe(`Pressupost base de licitació amb IVA${NOT_PUBLISHED}`);
+    expect(document.querySelector("[data-pscp-attribution]")).toBeNull();
+    expect(document.body.textContent).not.toContain("Segons la PSCP");
+    expect(document.querySelector("[data-pscp-status]")).toBeNull();
+  });
+
+  it("sense observació: com abans, i sense atribució", async () => {
+    const fact = await renderWith(field(null));
+    expect(text(fact)).toBe(`Pressupost base de licitació amb IVA${NOT_PUBLISHED}`);
+    expect(document.querySelector("[data-pscp-attribution]")).toBeNull();
+    expect(document.body.textContent).not.toContain("Segons la PSCP");
+    expect(document.querySelector("[data-pscp-status]")).toBeNull();
+  });
+
+  it("conflict amb comprovacions: «Pendent de verificació…» com a valor, l'import només dins de l'avís, mai «No consta…»", async () => {
+    const fact = await renderWith(
+      field(observation({ status: "conflict", amount: "98600.00", failed_checks: ["organ", "pbl_without_tax", "vec", "lots"] })),
+    );
+    expect(fact.querySelector("[data-pscp-status]")?.firstElementChild?.textContent).toBe("Pendent de verificació (discrepància entre fonts)");
+    expect(text(fact)).not.toContain(NOT_PUBLISHED);
+    const notice = fact.querySelector("[data-pscp-notice]");
+    expect(text(notice)).toBe(
+      "La PSCP publica 98.600,00 € com a pressupost base amb IVA, però no coincideix amb les dades de la PLACSP (òrgan, PBL sense IVA, VEC i lots). No es fa servir fins que es verifiqui. · Veure la publicació ↗",
+    );
+    // L'import de la PSCP només surt dins de l'avís.
+    expect(text(fact).replace(text(notice), "")).not.toContain("98.600,00");
+    expect(document.querySelector("[data-pscp-source]")).toBeNull();
+    expect(document.querySelector("[data-pscp-attribution]")).not.toBeNull();
+  });
+
+  it("conflict sense import: la variant «no hi publica cap import vàlid»", async () => {
+    const fact = await renderWith(field(observation({ status: "conflict", amount: null, failed_checks: [], publication_url: null })));
+    expect(text(fact)).toContain("Pendent de verificació (discrepància entre fonts)");
+    expect(text(fact.querySelector("[data-pscp-notice]"))).toBe(
+      "La PSCP no hi publica cap import vàlid com a pressupost base amb IVA. No es fa servir fins que es verifiqui.",
+    );
+    expect(text(fact)).not.toContain(NOT_PUBLISHED);
+  });
+
+  it("si la PLACSP ja publica el PBL amb IVA, el fet continua sent el seu", async () => {
+    const fact = await renderWith(field(observation()), { base_budget: "200000" });
+    expect(text(fact)).toBe("Pressupost base de licitació amb IVA200.000,00 €");
+    expect(document.querySelector("[data-pscp-attribution]")).toBeNull();
+  });
+
+  it("lots: accepted, conflict i no_value a 0, cadascun amb la seva línia; mai un conflicte com a import", async () => {
+    const lots = [lotOf("l1", "Lot u"), lotOf("l2", "Lot dos"), lotOf("l3", "Lot tres"), lotOf("l4", "Lot quatre")];
+    await renderWith(
+      field(null, {
+        l1: observation({ amount: "32670.00" }),
+        l2: observation({ status: "conflict", amount: "1000.00", failed_checks: ["organ"] }),
+        l3: observation({ status: "no_value", amount: "0.00", published_zero: true }),
+      }),
+      { lots, lot_count: 4 },
+    );
+    const row = (title: string) => screen.getByText(title).closest("tr");
+    expect(text(row("Lot u")?.querySelector("[data-pscp-lot]"))).toBe("PBL amb IVA: 32.670,00 € · PSCP");
+    expect(text(row("Lot dos")?.querySelector("[data-pscp-lot]"))).toBe("PBL amb IVA: pendent de verificació (discrepància entre fonts)");
+    expect(text(row("Lot dos"))).not.toContain("1.000,00");
+    expect(text(row("Lot tres")?.querySelector("[data-pscp-lot]"))).toBe("PBL amb IVA: publicat a 0,00 € a la PSCP");
+    expect(row("Lot quatre")?.querySelector("[data-pscp-lot]")).toBeNull();
+    // Només un lot amb observació ja porta l'atribució; el fet de l'expedient no canvia.
+    expect(text(document.querySelector("[data-pscp-attribution]"))).toBe(`${ATTRIBUTION_START}${formatDate(UPDATED)}.`);
+    expect(text(amountFact())).toBe(`Pressupost base de licitació amb IVA${NOT_PUBLISHED}`);
   });
 });
