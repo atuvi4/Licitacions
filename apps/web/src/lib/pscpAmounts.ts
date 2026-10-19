@@ -23,13 +23,19 @@ export const PSCP_NOT_USED_TEXT = "No es fa servir fins que es verifiqui.";
 /** La part de la PLACSP d'un lot sense import quan la PSCP sí que en diu alguna cosa. */
 export const PLACSP_NO_AMOUNT_TEXT = "Sense import a la PLACSP";
 
-/** Les comprovacions, en català i en l'ordre de l'API. */
-export const FAILED_CHECK_LABELS: Record<AmountFailedCheck, string> = {
+/** Les comprovacions contra la PLACSP, en català i en l'ordre de l'API. */
+export const FAILED_CHECK_LABELS: Record<Exclude<AmountFailedCheck, "lot_sum">, string> = {
   organ: "òrgan",
   pbl_without_tax: "PBL sense IVA",
   vec: "VEC",
   lots: "lots",
 };
+
+/** `lot_sum`: la PSCP no quadra amb ella mateixa; mai no es diu que és culpa de la PLACSP. */
+export const PSCP_LOT_SUM_TEXT =
+  "La suma dels imports dels lots publicats a la PSCP no coincideix amb l'import total de l'expedient publicat per la mateixa PSCP.";
+/** `evaluation_error`: no s'ha pogut avaluar; no vol dir que la PSCP no publiqui cap import. */
+export const PSCP_UNVERIFIED_TEXT = "No s'ha pogut verificar l'import publicat a la PSCP.";
 
 /** «a», «a i b», «a, b i c». */
 export function joinCatalan(items: string[]): string {
@@ -37,8 +43,9 @@ export function joinCatalan(items: string[]): string {
   return `${items.slice(0, -1).join(", ")} i ${items[items.length - 1]}`;
 }
 
+/** Només les comprovacions contra la PLACSP (`lot_sum` va a part). */
 export function failedChecksText(checks: AmountFailedCheck[]): string {
-  return joinCatalan(checks.map((check) => FAILED_CHECK_LABELS[check] ?? check));
+  return joinCatalan(checks.filter((check) => check !== "lot_sum").map((check) => FAILED_CHECK_LABELS[check as Exclude<AmountFailedCheck, "lot_sum">] ?? check));
 }
 
 /** «Segons la PSCP (…), actualitzat el <data>»: la font sempre a la vista. */
@@ -49,17 +56,26 @@ export function pscpSourceLine(updatedAt: string | null | undefined): string {
 
 /**
  * L'avís d'un `conflict`: l'import de la PSCP només surt aquí, mai com a valor del fet.
- * Només diu «no coincideix amb les dades de la PLACSP» si ha fallat alguna comprovació contra
- * la PLACSP (òrgan, PBL sense IVA, VEC o lots); si només n'han fallat d'internes de la font
- * (ordre de l'IVA, coherència entre files, files sense explicar…), diu això.
+ * - Lectura que no s'ha pogut avaluar: «No s'ha pogut verificar…» (mai «no hi publica cap import»).
+ * - Només diu «no coincideix amb les dades de la PLACSP» si ha fallat alguna comprovació contra
+ *   la PLACSP (òrgan, PBL sense IVA, VEC o lots).
+ * - `lot_sum` (la suma dels lots de la PSCP contra el seu total) es diu a part, sense culpar la PLACSP.
+ * - Si només n'han fallat d'altres internes de la font (ordre de l'IVA, coherència entre files,
+ *   files sense explicar…), diu que no ha superat les comprovacions de coherència de la font.
  */
 export function pscpConflictNotice(observation: AmountObservation): string {
+  if (observation.evaluation_error) return `${PSCP_UNVERIFIED_TEXT} ${PSCP_NOT_USED_TEXT}`;
   const checks = failedChecksText(observation.failed_checks);
+  const lotSum = observation.failed_checks.includes("lot_sum");
   if (observation.amount === null || observation.amount === "") {
     const mismatch = checks ? `, i les seves dades no coincideixen amb les de la PLACSP (${checks})` : "";
     return `La PSCP no hi publica cap import vàlid com a pressupost base amb IVA${mismatch}. ${PSCP_NOT_USED_TEXT}`;
   }
   const amount = formatAmount(observation.amount, observation.currency);
+  if (checks && lotSum) {
+    return `La PSCP publica ${amount} com a pressupost base amb IVA, però no coincideix amb les dades de la PLACSP (${checks}). A més, l${PSCP_LOT_SUM_TEXT.slice(1)} ${PSCP_NOT_USED_TEXT}`;
+  }
+  if (lotSum) return `${PSCP_LOT_SUM_TEXT} ${PSCP_NOT_USED_TEXT}`;
   const why = checks
     ? `no coincideix amb les dades de la PLACSP (${checks})`
     : "no ha superat les comprovacions de coherència de la font";

@@ -510,8 +510,11 @@ export interface TenderDetail {
   budget_with_tax_observations?: BudgetWithTaxObservations | null;
 }
 
-/** Comprovació contra la PLACSP que falla en una observació en `conflict`. */
-export type AmountFailedCheck = "organ" | "pbl_without_tax" | "vec" | "lots";
+/**
+ * Comprovació que falla en una observació en `conflict`. `lot_sum` és interna de la PSCP (la suma
+ * dels seus lots contra el seu total de l'expedient); les altres comparen la PSCP amb la PLACSP.
+ */
+export type AmountFailedCheck = "organ" | "pbl_without_tax" | "vec" | "lots" | "lot_sum";
 
 /**
  * Una observació vigent del PBL amb IVA d'una font externa (F-06a). Mai `superseded`: no es
@@ -524,6 +527,8 @@ export interface AmountObservation {
   /** `no_value` publicat a 0 (cert) o buit (fals, `amount` nul). */
   published_zero: boolean;
   failed_checks: AmountFailedCheck[];
+  /** `conflict` perquè la lectura de la font no s'ha pogut avaluar (no que no publiqui l'import). */
+  evaluation_error?: boolean;
   publication_url: string | null;
   /** Darrera actualització del dataset quan es va llegir. */
   source_updated_at: string | null;

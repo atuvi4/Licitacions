@@ -137,4 +137,21 @@ describe("PBL amb IVA de la PSCP (F-06a)", () => {
     expect(budgetWithTaxView({ base_budget: null, lots: [], budget_with_tax_observations: observations }).attribution).toBeNull();
     expect(pscpAttribution(OFFICIAL, null)).toBe(`${OFFICIAL} Darrera actualització: desconeguda.`);
   });
+  it("lot_sum: la suma dels lots de la PSCP contra el seu total; mai no culpa la PLACSP", () => {
+    expect(pscpConflictNotice(obs({ status: "conflict", amount: "98600.00", failed_checks: ["lot_sum"] }))).toBe(
+      "La suma dels imports dels lots publicats a la PSCP no coincideix amb l'import total de l'expedient publicat per la mateixa PSCP. No es fa servir fins que es verifiqui.",
+    );
+    expect(pscpConflictNotice(obs({ status: "conflict", amount: "98600.00", failed_checks: ["lot_sum"] }))).not.toContain("PLACSP");
+    // Amb una discrepància amb la PLACSP també, totes dues coses, i `lot_sum` no surt al parèntesi.
+    expect(nbsp(pscpConflictNotice(obs({ status: "conflict", amount: "98600.00", failed_checks: ["lots", "lot_sum"] })))).toBe(
+      "La PSCP publica 98.600,00 € com a pressupost base amb IVA, però no coincideix amb les dades de la PLACSP (lots). A més, la suma dels imports dels lots publicats a la PSCP no coincideix amb l'import total de l'expedient publicat per la mateixa PSCP. No es fa servir fins que es verifiqui.",
+    );
+    expect(failedChecksText(["vec", "lot_sum"])).toBe("VEC");
+  });
+
+  it("evaluation_error: no s'ha pogut verificar, mai «no hi publica cap import vàlid»", () => {
+    const notice = pscpConflictNotice(obs({ status: "conflict", amount: null, evaluation_error: true }));
+    expect(notice).toBe("No s'ha pogut verificar l'import publicat a la PSCP. No es fa servir fins que es verifiqui.");
+    expect(notice).not.toContain("no hi publica");
+  });
 });

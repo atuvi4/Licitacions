@@ -137,6 +137,7 @@ async def test_accepted_d_expedient(db, client_a):
         "currency": "EUR",
         "published_zero": False,
         "failed_checks": [],
+        "evaluation_error": False,
         "publication_url": LINK,
         "source_updated_at": "2026-10-16T06:30:00Z",
         "retrieved_at": "2026-10-16T12:00:00Z",
@@ -183,8 +184,8 @@ async def test_conflict_d_expedient_amb_les_comprovacions_que_fallen(db, client_
             validation={
                 "v": 1,
                 "level": "expedient",
-                # `net` -> pbl_without_tax, `lot_sum` -> lots; `tax_order` i `rows` no es
-                # llisten; l'ordre de sortida es fix.
+                # `net` -> pbl_without_tax, `lot_sum` -> lot_sum (interna de la PSCP, no
+                # `lots`); `tax_order` i `rows` no es llisten; l'ordre de sortida es fix.
                 "failed": ["lot_sum", "net", "organ", "rows", "tax_order", "vec"],
             },
         )
@@ -194,8 +195,49 @@ async def test_conflict_d_expedient_amb_les_comprovacions_que_fallen(db, client_
     expedient = (await _field(client_a, tender))["expedient"]
     assert expedient["status"] == "conflict"
     assert expedient["amount"] == "98600.00"
-    assert expedient["failed_checks"] == ["organ", "pbl_without_tax", "vec", "lots"]
+    assert expedient["failed_checks"] == ["organ", "pbl_without_tax", "vec", "lot_sum"]
+    assert expedient["evaluation_error"] is False
     assert expedient["publication_url"] == LINK
+
+
+async def test_lot_sum_es_un_codi_propi_i_no_culpa_la_placsp(db, client_a):
+    """`lot_sum` compara la PSCP amb ella mateixa: no es `lots` (nombre de lots, PLACSP)."""
+    only_sum, (lot,) = await _tender(db, lots=1)
+    both, _ = await _tender(db)
+    db.add_all(
+        [
+            _obs(
+                only_sum,
+                source_row_id=f"{UID}_*",
+                validation_status=CONFLICT,
+                validation={"v": 1, "level": "expedient", "failed": ["lot_sum"]},
+            ),
+            _obs(
+                only_sum,
+                tender_lot_id=lot.id,
+                source_entity_key=f"{UID}#lot=1",
+                source_row_id=f"{UID}_1",
+                validation_status=CONFLICT,
+                amount=Decimal("100.00"),
+                validation={
+                    "v": 1,
+                    "level": "lot",
+                    "lot_failed": [],
+                    "expedient_failed": ["lot_sum"],
+                },
+            ),
+            _obs(
+                both,
+                validation_status=CONFLICT,
+                validation={"v": 1, "level": "expedient", "failed": ["lot_sum", "lots"]},
+            ),
+        ]
+    )
+    await db.commit()
+    field = await _field(client_a, only_sum)
+    assert field["expedient"]["failed_checks"] == ["lot_sum"]
+    assert field["lots"][str(lot.id)]["failed_checks"] == ["lot_sum"]
+    assert (await _field(client_a, both))["expedient"]["failed_checks"] == ["lots", "lot_sum"]
 
 
 async def test_conflict_sense_import_i_sense_comprovacions_mapejables(db, client_a):
@@ -215,6 +257,22 @@ async def test_conflict_sense_import_i_sense_comprovacions_mapejables(db, client
     assert expedient["status"] == "conflict"
     assert expedient["amount"] is None
     assert expedient["failed_checks"] == []
+    # La web ha de dir que no s'ha pogut verificar, no que la PSCP no publica cap import.
+    assert expedient["evaluation_error"] is True
+
+
+async def test_evaluation_error_tambe_pel_rol(db, client_a):
+    tender, _ = await _tender(db)
+    db.add(
+        _obs(
+            tender,
+            validation_status=CONFLICT,
+            amount=None,
+            validation={"v": 1, "level": "expedient", "role": "evaluation_error"},
+        )
+    )
+    await db.commit()
+    assert (await _field(client_a, tender))["expedient"]["evaluation_error"] is True
 
 
 async def test_superseded_no_surt_mai(db, client_a):

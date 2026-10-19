@@ -852,6 +852,23 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
     expect(text(fact)).not.toContain("PLACSP");
   });
 
+  it("conflict per lot_sum o per evaluation_error: l'avís diu el que ha passat, sense culpar la PLACSP", async () => {
+    const fact = await renderWith(field(observation({ status: "conflict", amount: "98600.00", failed_checks: ["lot_sum"], publication_url: null })));
+    expect(text(fact.querySelector("[data-pscp-notice]"))).toBe(
+      "La suma dels imports dels lots publicats a la PSCP no coincideix amb l'import total de l'expedient publicat per la mateixa PSCP. No es fa servir fins que es verifiqui.",
+    );
+    expect(text(fact)).toContain("Pendent de verificació (discrepància entre fonts)");
+    expect(text(fact)).not.toContain("PLACSP");
+  });
+
+  it("conflict per evaluation_error: «No s'ha pogut verificar…», mai «no hi publica cap import vàlid»", async () => {
+    const fact = await renderWith(field(observation({ status: "conflict", amount: null, evaluation_error: true, publication_url: null })));
+    expect(text(fact.querySelector("[data-pscp-notice]"))).toBe(
+      "No s'ha pogut verificar l'import publicat a la PSCP. No es fa servir fins que es verifiqui.",
+    );
+    expect(text(fact)).not.toContain("no hi publica");
+  });
+
   it("si la PLACSP ja publica el PBL amb IVA, el fet continua sent el seu", async () => {
     const fact = await renderWith(field(observation()), { base_budget: "200000" });
     expect(text(fact)).toBe("Pressupost base de licitació amb IVA200.000,00 €");

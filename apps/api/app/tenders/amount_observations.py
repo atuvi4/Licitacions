@@ -24,11 +24,14 @@ vigent ensenyable:
    una `conflict` vigent guanya a una `no_value` mes nova del mateix objectiu (l'adaptador
    no tanca les observacions de files desaparegudes, per decisio del propietari; es el
    criteri conservador: una discrepancia no s'amaga perque n'arribi una lectura buida);
-2. la CANONICA abans que la d'una fila antiga: en la forma `mixed` amb la fila exacta no
-   explicada, l'adaptador desa al mateix run (mateix `valid_from`) la de l'expedient
-   (`<uuid>_*`) i la de la fila antiga (`validation.role = "unexplained_row"`). La de la
-   fila antiga no s'ensenya mai si hi ha la canonica (ni import, ni enllac, ni
-   comprovacions). `evaluation_error` es la lectura de l'expedient: compta com a canonica;
+2. DINS DEL MATEIX ESTAT, la canonica abans que la d'una fila antiga: en la forma `mixed`
+   amb la fila exacta no explicada, l'adaptador desa al mateix run (mateix `valid_from`)
+   la de l'expedient (`<uuid>_*`) i la de la fila antiga (`validation.role =
+   "unexplained_row"`). Si totes dues tenen el mateix estat, s'ensenya la canonica (import,
+   enllac i comprovacions). Entre estats diferents mana l'estat (punt 1): si la canonica
+   es `no_value` (les files de lot publiquen l'import de l'expedient nul o a 0) i la de la
+   fila antiga es `conflict`, s'ensenya la `conflict` de la fila antiga.
+   `evaluation_error` es la lectura de l'expedient: compta com a canonica;
 3. la de `valid_from` mes recent;
 4. a igualtat, l'`id` mes petit (en text).
 
@@ -63,7 +66,9 @@ SHOWN_STATUSES: tuple[AmountObservationStatus, ...] = (ACCEPTED, CONFLICT, NO_VA
 _RANK = {status: index for index, status in enumerate(SHOWN_STATUSES)}
 
 #: Codis estables de les comprovacions que fallen, en l'ordre en que es llisten.
-FAILED_CHECKS: tuple[str, ...] = ("organ", "pbl_without_tax", "vec", "lots")
+#: `organ`, `pbl_without_tax`, `vec` i `lots` comparen la PSCP amb la PLACSP; `lot_sum`
+#: es interna de la PSCP (la suma dels seus lots contra el seu total de l'expedient).
+FAILED_CHECKS: tuple[str, ...] = ("organ", "pbl_without_tax", "vec", "lots", "lot_sum")
 #: Guardes de l'adaptador (`guards.py`) -> codi de la fitxa. Les que no hi son
 #: (identitat, ordre de l'IVA, coherencia, lectura, files) no es llisten.
 _EXPEDIENT_GUARDS = {
@@ -71,7 +76,7 @@ _EXPEDIENT_GUARDS = {
     "net": "pbl_without_tax",
     "vec": "vec",
     "lots": "lots",
-    "lot_sum": "lots",
+    "lot_sum": "lot_sum",
 }
 _LOT_GUARDS = {
     "net": "pbl_without_tax",
@@ -142,6 +147,16 @@ def failed_checks(observation: TenderAmountObservation) -> list[str]:
     return [code for code in FAILED_CHECKS if code in found]
 
 
+def is_evaluation_error(observation: TenderAmountObservation) -> bool:
+    """La lectura de la font no s'ha pogut avaluar (`guards.error_evaluation`)."""
+    if observation.validation_status != CONFLICT:
+        return False
+    validation = observation.validation if isinstance(observation.validation, dict) else {}
+    return validation.get("role") == "evaluation_error" or "evaluation_error" in _as_list(
+        validation.get("failed")
+    )
+
+
 def _as_list(value: Any) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
 
@@ -185,6 +200,7 @@ def observation_read(observation: TenderAmountObservation) -> AmountObservationR
         currency=observation.currency,
         published_zero=status == NO_VALUE and amount is not None and amount == 0,
         failed_checks=failed_checks(observation),
+        evaluation_error=is_evaluation_error(observation),
         publication_url=publication_url(observation.provenance),
         source_updated_at=source_updated_at(observation),
         retrieved_at=_aware(observation.retrieved_at),

@@ -352,7 +352,9 @@ class TenderPackageRead(BaseModel):
 
 
 #: Codis estables de les comprovacions que fallen en una observacio en `conflict`.
-AmountFailedCheck = Literal["organ", "pbl_without_tax", "vec", "lots"]
+#: `lot_sum` es interna de la PSCP (la suma dels seus lots contra el seu total); les
+#: altres comparen la PSCP amb la PLACSP.
+AmountFailedCheck = Literal["organ", "pbl_without_tax", "vec", "lots", "lot_sum"]
 
 
 class AmountObservationRead(ORMModel):
@@ -370,6 +372,9 @@ class AmountObservationRead(ORMModel):
     published_zero: bool = False
     #: Nomes amb `conflict`: organ, PBL sense IVA, VEC o lots (buida en els altres).
     failed_checks: list[AmountFailedCheck] = []
+    #: `conflict` perque la lectura de la font no s'ha pogut avaluar (no que la font
+    #: no publiqui l'import).
+    evaluation_error: bool = False
     #: `enllac_publicacio` de la font, si n'hi ha (nomes http/https).
     publication_url: str | None = None
     #: Darrera actualitzacio del dataset (`rowsUpdatedAt`) quan es va llegir.
