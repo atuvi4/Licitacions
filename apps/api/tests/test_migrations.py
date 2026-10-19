@@ -3209,8 +3209,10 @@ async def test_0059_round_trip_real_a_postgres_amb_trigger(engine):
         functions = (
             await conn.execute(
                 sa.text(
-                    "SELECT count(*) FROM pg_proc "
-                    "WHERE proname = 'document_role_reviews_append_only'"
+                    "SELECT count(*) FROM pg_proc p "
+                    "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname = current_schema() "
+                    "AND p.proname = 'document_role_reviews_append_only'"
                 )
             )
         ).scalar_one()
