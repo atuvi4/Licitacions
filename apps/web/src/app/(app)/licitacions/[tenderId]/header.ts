@@ -1,5 +1,6 @@
 import type { TabItem } from "@/components/ui/Tabs";
 import type { Compliance } from "@/lib/compliance";
+import { MANUAL_ZERO_AMOUNT_TEXT, PLACSP_ZERO_AMOUNT_TEXT, isPublishedZero, usefulAmount } from "@/lib/amounts";
 import { formatAmount } from "@/lib/format";
 import { AMOUNT_NOT_PUBLISHED, tenderAmounts, type AmountBasis } from "@/lib/tenders";
 import {
@@ -112,6 +113,22 @@ export function amountMeta(tender: {
       ? { text: formatAmount(amounts.budget.value, tender.currency), note: AMOUNT_NOTE[amounts.budget.basis] }
       : null,
   };
+}
+
+/**
+ * Un fet d'import del Resum (P2-06), d'una base concreta: l'import exacte si és útil (> 0); si la font
+ * l'ha publicat a 0,00 €, el text aprovat (mai «0,00 €» com si fos un import); si no hi és, «no consta».
+ * Un negatiu (la font no n'hauria de publicar) es mostra tal com ve, però tampoc no s'utilitza.
+ */
+export function amountFact(
+  value: string | null,
+  currency: string,
+  { manual = false }: { manual?: boolean } = {},
+): { kind: "amount" | "zero" | "missing" | "not_used"; text: string } {
+  if (usefulAmount(value) !== null) return { kind: "amount", text: formatAmount(value, currency) };
+  if (isPublishedZero(value)) return { kind: "zero", text: manual ? MANUAL_ZERO_AMOUNT_TEXT : PLACSP_ZERO_AMOUNT_TEXT };
+  if (value === null || value.trim() === "") return { kind: "missing", text: AMOUNT_NOT_PUBLISHED };
+  return { kind: "not_used", text: `${formatAmount(value, currency)} (no s'utilitza com a import econòmic)` };
 }
 
 export interface Pill {

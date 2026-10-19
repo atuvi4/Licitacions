@@ -17,6 +17,7 @@ import {
   formatPercent,
   isRevisionConflict,
   limitVerdict,
+  lotMaximum,
   lotLimitVerdict,
   lineIsDirty,
   resolveEntity,
@@ -279,6 +280,13 @@ describe("limitVerdict (auditoria UI P1-01)", () => {
   });
   it("supera el màxim", () => {
     expect(limitVerdict({ tender_max: "100.00", difference_to_maximum: "10.00", exceeds_lot_max: true })).toBe("exceeds");
+  });
+  it("un màxim publicat a 0,00 € no és cap màxim: desconegut, mai «supera el pressupost»", () => {
+    expect(limitVerdict({ tender_max: "0.00", difference_to_maximum: "-1000.00", exceeds_lot_max: true })).toBe("unknown");
+    expect(limitVerdict({ tender_max: "0", difference_to_maximum: null, exceeds_lot_max: null })).toBe("unknown");
+    expect(lotMaximum({ tender_max: "0.00" })).toBeNull();
+    expect(lotMaximum({ tender_max: "100.00" })).toBe("100.00");
+    expect(lotLimitVerdict(lotFixture({ limit: { tender_max: "0.00", difference_to_maximum: "-5.00", exceeds_lot_max: true }, sections: [sectionFixture()] }))).toBe("unknown");
   });
   it("les etiquetes dels tres estats", () => {
     expect(LIMIT_VERDICT_LABEL.unknown).toMatch(/Pendent de calcular/);

@@ -26,6 +26,7 @@ from typing import Any
 
 from app.compliance.specs import Threshold, to_decimal
 from app.models.enums import PercentageBase
+from app.tenders.amounts import useful_amount
 
 #: Bases que es poden llegir directament d'un camp de l'expedient.
 DIRECT_BASES: dict[PercentageBase, str] = {
@@ -99,7 +100,11 @@ def resolve_threshold(threshold: Threshold, tender: Any = None) -> ThresholdReso
             reason=UNRESOLVABLE_BASES.get(base, "base_not_resolvable"),
         )
 
-    base_amount = to_decimal(getattr(tender, field, None)) if tender is not None else None
+    # Un `0.00` publicat no es una base: el 70% de zero donaria un llindar de 0 que
+    # qualsevol empresa compliria. Es com si no hi fos (`app.tenders.amounts`).
+    base_amount = (
+        useful_amount(to_decimal(getattr(tender, field, None))) if tender is not None else None
+    )
     if base_amount is None:
         return ThresholdResolution(
             amount=None,

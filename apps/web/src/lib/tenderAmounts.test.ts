@@ -32,4 +32,23 @@ describe("tenderAmounts (P2-06)", () => {
   it("un camp absent (llistes sense `base_budget_without_tax`) es tracta com a no publicat", () => {
     expect(tenderAmounts({ estimated_value: null, base_budget: null })).toEqual({ primary: null, budget: null });
   });
+
+  it("zeros (19-10-2026): un 0,00 € publicat no és cap xifra, en el mateix ordre que el filtre", () => {
+    // VEC 0 i PBL > 0 (46 al pilot): la principal és el PBL sense IVA.
+    expect(tenderAmounts({ estimated_value: "0.00", base_budget_without_tax: "30000.00", base_budget: null })).toEqual({
+      primary: { value: "30000.00", basis: "pbl_net" },
+      budget: null,
+    });
+    // VEC > 0 i PBL 0 (228): el VEC, sense la línia «PBL sense IVA: 0,00 €».
+    expect(tenderAmounts({ estimated_value: "50000.00", base_budget_without_tax: "0.00", base_budget: null })).toEqual({
+      primary: { value: "50000.00", basis: "vec" },
+      budget: null,
+    });
+    // Tots dos a 0 (38) o nul i 0 (7): el mateix estat que sense import.
+    expect(tenderAmounts({ estimated_value: "0.00", base_budget_without_tax: "0.00", base_budget: null })).toEqual({ primary: null, budget: null });
+    expect(tenderAmounts({ estimated_value: null, base_budget_without_tax: "0.00", base_budget: null })).toEqual({ primary: null, budget: null });
+    // Un PBL amb IVA a 0 tampoc no fa de PBL; ni un negatiu.
+    expect(tenderAmounts({ estimated_value: "10", base_budget_without_tax: "0", base_budget: "0.00" }).budget).toBeNull();
+    expect(tenderAmounts({ estimated_value: "-1", base_budget_without_tax: null, base_budget: "12.10" }).primary).toEqual({ value: "12.10", basis: "pbl_gross" });
+  });
 });

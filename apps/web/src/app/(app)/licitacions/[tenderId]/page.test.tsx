@@ -707,6 +707,32 @@ describe("Fitxa de licitació", () => {
     expect(facts).toContain("valor estimat del contracte (VEC)");
     expect(document.querySelector("[data-amount-budget]")?.textContent).toContain("pressupost base de licitació sense IVA");
   });
+  it("zeros (19-10-2026): el Resum diu que la PLACSP l'ha publicat a 0,00 € i la capçalera no el fa servir", async () => {
+    const ZERO = "Publicat a 0,00 € a la PLACSP (no s'utilitza com a import econòmic)";
+    respondWith(base({ "/tenders/t1": { ...detail, estimated_value: "0.00", base_budget: null, base_budget_without_tax: "30000.00" } }));
+    render(<TenderDetailPage />);
+    await flush();
+    const fact = (label: string) => screen.getByText(label, { selector: "p, dt" }).parentElement?.textContent?.replace(/\u00a0/g, " ");
+    expect(fact("Valor estimat del contracte (VEC)")).toBe(`Valor estimat del contracte (VEC)${ZERO}`);
+    expect(fact("Pressupost base de licitació sense IVA (PBL)")).toBe("Pressupost base de licitació sense IVA (PBL)30.000,00 €");
+    const header = document.querySelector("[data-tender-header]")?.textContent?.replace(/\u00a0/g, " ") ?? "";
+    expect(header).toContain("30.000,00 €");
+    expect(header).toContain("pressupost base de licitació sense IVA");
+    expect(header).not.toMatch(/(^|[^\d.])0,00 €/);
+  });
+  it("zeros (19-10-2026): amb VEC i PBL sense IVA a 0,00 €, tots dos fets diuen el text del zero i la capçalera, que no consta", async () => {
+    const ZERO = "Publicat a 0,00 € a la PLACSP (no s'utilitza com a import econòmic)";
+    respondWith(base({ "/tenders/t1": { ...detail, estimated_value: "0.00", base_budget: null, base_budget_without_tax: "0.00" } }));
+    render(<TenderDetailPage />);
+    await flush();
+    const fact = (label: string) => screen.getByText(label, { selector: "p, dt" }).parentElement?.textContent?.replace(/\u00a0/g, " ");
+    expect(fact("Valor estimat del contracte (VEC)")).toBe(`Valor estimat del contracte (VEC)${ZERO}`);
+    expect(fact("Pressupost base de licitació sense IVA (PBL)")).toBe(`Pressupost base de licitació sense IVA (PBL)${ZERO}`);
+    expect(fact("Pressupost base de licitació amb IVA")).toBe("Pressupost base de licitació amb IVANo consta a les dades de la font");
+    expect(document.querySelectorAll("[data-amount-zero]").length).toBe(2);
+    expect(document.querySelector("[data-tender-header]")?.textContent).toContain("No consta a les dades de la font");
+    expect(document.querySelector("[data-amount-budget]")).toBeNull();
+  });
   it("P2-06: un lot amb VEC i PBL diferents mostra totes dues xifres, cadascuna amb la seva base", async () => {
     const lot = {
       id: "l1", external_lot_id: "1", lot_number: 1, title: "Lot de connectivitat", description: null,

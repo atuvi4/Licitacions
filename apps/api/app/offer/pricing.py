@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.models.enums import PricingBasis
+from app.tenders.amounts import useful_amount
 
 #: Els imports s'exposen sempre a 2 decimals.
 MONEY_PLACES = Decimal("0.01")
@@ -191,7 +192,7 @@ class LotLimit:
     """L'oferta d'un lot contra el maxim del plec.
 
     Amb `tender_max` a `None` —que es el cas real quan la font no publica
-    `base_budget_without_tax`— tot queda indeterminat. Dir-ne `False` seria
+    `base_budget_without_tax`, o el publica a `0.00`— tot queda indeterminat. Dir-ne `False` seria
     afirmar que l'oferta cap dins d'un pressupost que no coneixem (C-1).
     """
 
@@ -238,13 +239,20 @@ def exceeds_unit_max(
 
 
 def exceeds_lot_max(total_revenue: Decimal | None, tender_max: Decimal | None) -> bool | None:
+    """`None` sense maxim util: un maxim de 0 (o negatiu) no es un maxim, es com NULL."""
+    tender_max = useful_amount(tender_max)
     if total_revenue is None or tender_max is None:
         return None
     return total_revenue > tender_max
 
 
 def lot_limit(total_revenue: Decimal | None, tender_max: Decimal | None) -> LotLimit:
-    """Quant queda fins al maxim del lot, i si ja s'ha passat."""
+    """Quant queda fins al maxim del lot, i si ja s'ha passat.
+
+    Un maxim publicat a `0.00` no es un maxim valid (`app.tenders.amounts`): queda
+    indeterminat com si no hi fos, mai «supera el pressupost» amb una diferencia negativa.
+    """
+    tender_max = useful_amount(tender_max)
     if total_revenue is None or tender_max is None:
         return LotLimit(tender_max=tender_max, difference_to_maximum=None, exceeds_lot_max=None)
     return LotLimit(

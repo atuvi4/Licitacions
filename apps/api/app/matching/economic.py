@@ -44,6 +44,7 @@ from app.matching.rules import (
     ReasonCode,
 )
 from app.models.enums import DimensionResult
+from app.tenders.amounts import useful_amount
 
 
 class AmountBasis(StrEnum):
@@ -66,11 +67,6 @@ class AmountReference:
 INCOHERENCE_TOLERANCE = Decimal("0.01")
 
 
-def _positive(value: Decimal | None) -> Decimal | None:
-    # Un zero (acords marc, contractes centralitzats) no es un import util: absent.
-    return value if value is not None and value > 0 else None
-
-
 def reference_amount(
     estimated_value: Decimal | None,
     base_budget_without_tax: Decimal | None,
@@ -80,9 +76,11 @@ def reference_amount(
 
     Sempre del mateix ambit: la licitacio amb els seus imports, el lot amb els seus.
     """
-    vec = _positive(estimated_value)
-    net = _positive(base_budget_without_tax)
-    gross = _positive(base_budget)
+    # Un zero (acords marc, contractes centralitzats) no es un import util: absent.
+    # La regla es la comuna (`app.tenders.amounts`), la mateixa del cataleg i l'oferta.
+    vec = useful_amount(estimated_value)
+    net = useful_amount(base_budget_without_tax)
+    gross = useful_amount(base_budget)
     if vec is not None:
         incoherent = net if net is not None and net - vec > INCOHERENCE_TOLERANCE else None
         return AmountReference(vec, AmountBasis.VEC, incoherent_budget=incoherent)

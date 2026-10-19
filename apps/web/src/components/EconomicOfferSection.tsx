@@ -44,6 +44,7 @@ import {
   formatQuantity,
   isRevisionConflict,
   lotLimitVerdict,
+  lotMaximum,
   lineIsDirty,
   resolveEntity,
   unitSuffix,
@@ -791,7 +792,7 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
             hint={`${data.totals.line_count} ${data.totals.line_count === 1 ? "línia" : "línies"}`}
             strong
           />
-          {singleLot && singleLot.limit.tender_max !== null && (
+          {singleLot && lotMaximum(singleLot.limit) !== null && (
             <>
               <Summary label="Pressupost de licitació" value={formatAmount(singleLot.limit.tender_max, currency)} />
               <Summary
@@ -802,7 +803,7 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
               />
             </>
           )}
-          {singleLot && singleLot.limit.tender_max === null && <Summary label="Pressupost de licitació" value="No consta" />}
+          {singleLot && lotMaximum(singleLot.limit) === null && <Summary label="Pressupost de licitació" value="No consta" />}
           {internal && data.internal_economics && (
             <Summary
               label="Marge"
@@ -971,7 +972,7 @@ export function EconomicOfferSection({ workspace, registerLeaveGuard }: Props) {
               )}
             </div>
 
-            {!singleLot && lot.limit.tender_max !== null && (
+            {!singleLot && lotMaximum(lot.limit) !== null && (
               <p className="border-b border-border px-3.5 py-1.5 text-caption text-muted">
                 Pressupost del lot {formatAmount(lot.limit.tender_max, currency)} · diferència{" "}
                 <span className={cn(lotLimitVerdict(lot) === "exceeds" && "text-danger")}>{formatAmount(lot.limit.difference_to_maximum, currency)}</span>

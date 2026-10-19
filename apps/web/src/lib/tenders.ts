@@ -6,6 +6,8 @@
  * d'aquests tipus porta `company_id`.
  */
 
+import { usefulAmount } from "@/lib/amounts";
+
 const LOCALE = "ca-ES";
 
 export type TenderStatus =
@@ -143,7 +145,7 @@ export const AMOUNT_BASIS_SHORT: Record<AmountBasis, string> = {
 export const AMOUNT_HELP =
   "El valor estimat (VEC) inclou les pròrrogues i les modificacions previstes; el pressupost base de licitació (PBL) és l'import màxim de l'oferta.";
 
-/** El filtre i l'ordenació per import (API `amount_expression`): el VEC, i si no n'hi ha, el pressupost base. */
+/** El filtre i l'ordenació per import (API `amount_expression`): el VEC, i si no n'hi ha, el pressupost base. Un import a 0,00 € compta com a no publicat. */
 export const AMOUNT_FILTER_HINT =
   "S'aplica al valor estimat del contracte (VEC). Si una licitació no en té, s'aplica al pressupost base de licitació.";
 
@@ -153,7 +155,7 @@ export interface AmountFigure {
 }
 
 export interface TenderAmountsView {
-  /** La xifra principal, en el mateix ordre que el filtre i l'ordenació: VEC → PBL sense IVA → PBL amb IVA. */
+  /** La xifra principal, en el mateix ordre que el filtre i l'ordenació: VEC → PBL sense IVA → PBL amb IVA, saltant els imports no útils (≤ 0). */
   primary: AmountFigure | null;
   /** El pressupost base, quan la principal és el VEC i el pressupost hi és i és diferent. */
   budget: AmountFigure | null;
@@ -171,10 +173,11 @@ export function tenderAmounts(item: {
   base_budget_without_tax?: string | null;
   base_budget: string | null;
 }): TenderAmountsView {
-  const present = (value: string | null | undefined) => (value === "" || value === undefined ? null : value);
-  const vec = present(item.estimated_value);
-  const net = present(item.base_budget_without_tax);
-  const gross = present(item.base_budget);
+  // Només imports útils (> 0): un 0,00 € publicat no és cap xifra principal ni cap línia de PBL
+  // («PBL sense IVA: 0,00 €»). Sense cap import útil, el mateix estat que sense import.
+  const vec = usefulAmount(item.estimated_value);
+  const net = usefulAmount(item.base_budget_without_tax);
+  const gross = usefulAmount(item.base_budget);
   if (vec) {
     const budget: AmountFigure | null = net
       ? differs(vec, net)

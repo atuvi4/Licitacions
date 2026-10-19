@@ -30,7 +30,7 @@ import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ApiError, api } from "@/lib/api";
 import type { Compliance } from "@/lib/compliance";
-import { formatAmount, formatDate } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { budgetWithTaxView } from "@/lib/pscpAmounts";
 import { useMutation, useResource } from "@/lib/hooks";
 import { type AnalysisLimits, jobErrorMessage, requestProcessing, useJobRequest } from "@/lib/jobs";
@@ -42,7 +42,6 @@ import { publicationStatusLabel, type TenderHistoryRevision } from "@/lib/tender
 import {
   AMOUNT_BASIS_LABEL,
   AMOUNT_HELP,
-  AMOUNT_NOT_PUBLISHED,
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
   SOURCE_FIRST_CPV_HELP,
@@ -65,6 +64,7 @@ import { topLevelDocuments } from "./package";
 import { LotAmountCell, PscpAttribution, PscpBudgetValue } from "./BudgetWithTax";
 import { DocumentBadges, PackageNotice, PlecsReadingLine, RemovedDocuments } from "./PlecsOverview";
 import {
+  amountFact,
   amountMeta,
   candidatureMeta,
   deadlineMeta,
@@ -83,13 +83,15 @@ import {
 
 const KICKER = "font-heading text-kicker font-semibold tracking-[0.1em] text-muted uppercase";
 
-/** Un import d'una base concreta (P2-06): el valor exacte, amb cèntims, o que no consta. */
-function AmountValue({ value, currency }: { value: string | null; currency: string }) {
-  return value !== null && value !== "" ? (
-    <span className="tabular-nums">{formatAmount(value, currency)}</span>
-  ) : (
-    <span className="text-muted">{AMOUNT_NOT_PUBLISHED}</span>
-  );
+/**
+ * Un import d'una base concreta (P2-06): el valor exacte, amb cèntims, o que no consta. Un 0,00 €
+ * publicat no és cap import: es diu que s'ha publicat a zero i que no s'utilitza (`amountFact`).
+ */
+function AmountValue({ value, currency, manual = false }: { value: string | null; currency: string; manual?: boolean }) {
+  const fact = amountFact(value, currency, { manual });
+  if (fact.kind === "missing") return <span className="text-muted">{fact.text}</span>;
+  if (fact.kind === "amount") return <span className="tabular-nums">{fact.text}</span>;
+  return <span data-amount-zero={fact.kind === "zero" ? "" : undefined}>{fact.text}</span>;
 }
 
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {
@@ -627,16 +629,16 @@ function TenderDetail() {
 
               {/* P2-06: cada fet diu la seva base; si la font no la publica, es diu, no «—». */}
               <Fact label={AMOUNT_BASIS_LABEL.vec}>
-                <AmountValue value={data.estimated_value} currency={data.currency} />
+                <AmountValue value={data.estimated_value} currency={data.currency} manual={isManual} />
               </Fact>
               <Fact label={AMOUNT_BASIS_LABEL.pbl_net}>
-                <AmountValue value={data.base_budget_without_tax} currency={data.currency} />
+                <AmountValue value={data.base_budget_without_tax} currency={data.currency} manual={isManual} />
               </Fact>
               <Fact label={AMOUNT_BASIS_LABEL.pbl_gross}>
                 {budgetWithTax.expedient ? (
                   <PscpBudgetValue observation={budgetWithTax.expedient} />
                 ) : (
-                  <AmountValue value={data.base_budget} currency={data.currency} />
+                  <AmountValue value={data.base_budget} currency={data.currency} manual={isManual} />
                 )}
               </Fact>
               <p className="text-caption text-muted sm:col-span-3">{AMOUNT_HELP}</p>

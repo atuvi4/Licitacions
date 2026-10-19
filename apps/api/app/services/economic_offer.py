@@ -56,6 +56,7 @@ from app.offer.pricing import (
     proposed_unit_price,
 )
 from app.offer.pricing import unit_amount as _unit_amount
+from app.tenders.amounts import useful_amount
 from app.workspace.checklist import applies_to_workspace_lot
 
 
@@ -376,7 +377,9 @@ async def _lot_maximums(
 
     Amb lot del plec, el del lot; sense lot, el de la licitacio. Si no el
     publiquen, es queda a `None` i S1 deixa el limit indeterminat: dir que
-    l'oferta hi cap seria afirmar-ho sobre un pressupost que no coneixem.
+    l'oferta hi cap seria afirmar-ho sobre un pressupost que no coneixem. Un
+    `0.00` publicat tampoc no es un maxim (`app.tenders.amounts`): `None`, mai
+    «qualsevol oferta positiva supera el maxim».
     """
     tender_lot_ids = {lot.tender_lot_id for lot in offer.lots if lot.tender_lot_id}
     lots: dict[uuid.UUID, TenderLot] = {}
@@ -393,7 +396,7 @@ async def _lot_maximums(
             source = lots.get(lot.tender_lot_id)
         else:
             source = tender
-        maximums[lot.id] = getattr(source, "base_budget_without_tax", None)
+        maximums[lot.id] = useful_amount(getattr(source, "base_budget_without_tax", None))
     return maximums
 
 

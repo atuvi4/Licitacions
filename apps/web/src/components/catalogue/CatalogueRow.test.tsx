@@ -226,6 +226,28 @@ describe("CatalogueRow", () => {
     expect(container.querySelector("[data-amount-budget]")).toBeNull();
   });
 
+  it("zeros (19-10-2026): un 0,00 € no és cap import, ni la xifra principal ni la línia de PBL", () => {
+    const text = (node: Element | null | undefined) => node?.textContent?.replace(/\u00a0/g, " ");
+    // VEC 0 i PBL > 0: la xifra és el PBL sense IVA, amb la seva base.
+    const { container, rerender } = render(
+      <CatalogueRow tender={tender({ estimated_value: "0.00", base_budget_without_tax: "30000.00", base_budget: null })} match={null} />,
+    );
+    expect(text(container)).toContain("30.000,00 €");
+    expect(text(container)).not.toContain("0,00 € VEC");
+    expect(container.textContent).not.toContain("Valor estimat (VEC)");
+    // VEC > 0 i PBL 0: el VEC i cap línia «PBL sense IVA: 0,00 €».
+    rerender(<CatalogueRow tender={tender({ estimated_value: "50000.00", base_budget_without_tax: "0.00", base_budget: null })} match={null} />);
+    expect(text(container)).toContain("50.000,00 €");
+    expect(container.querySelector("[data-amount-budget]")).toBeNull();
+    expect(container.textContent).not.toContain("PBL sense IVA");
+    // Cap import útil: el mateix estat que sense import.
+    rerender(<CatalogueRow tender={tender({ estimated_value: "0.00", base_budget_without_tax: "0.00", base_budget: null })} match={null} />);
+    expect(container.textContent).toContain("No consta a les dades de la font");
+    expect(text(container)).not.toMatch(/(^|[^\d.])0,00 €/);
+    rerender(<CatalogueRow tender={tender({ estimated_value: null, base_budget_without_tax: "0.00", base_budget: null })} match={null} />);
+    expect(container.textContent).toContain("No consta a les dades de la font");
+  });
+
   it("és una targeta que s'apila: columna al mòbil, graella a partir de md", () => {
     const { container } = render(<CatalogueRow tender={tender()} match={null} />);
     const card = container.querySelector("article")!;

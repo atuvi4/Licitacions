@@ -805,6 +805,37 @@ async def test_el_maxim_no_surt_mai_del_valor_estimat_ni_del_pressupost_amb_iva(
     assert limit["difference_to_maximum"] is None
 
 
+async def test_un_pressupost_publicat_a_zero_no_es_cap_maxim(client_a, db, tenant_a):
+    """La PLACSP publica `0.00` (acords marc...): indeterminat, mai «supera el maxim»."""
+    _user, company = tenant_a
+    workspace = await _workspace(db, company, await _tender(db, budget=Decimal("0.00")))
+    await a_workspace_with_one_line(client_a, workspace, offered_unit_price_ex_vat="1000")
+
+    limit = only_lot(await read(client_a, workspace))["limit"]
+
+    assert limit["tender_max"] is None
+    assert limit["exceeds_lot_max"] is None
+    assert limit["difference_to_maximum"] is None
+    # La dada crua no es toca: el zero continua a la licitacio.
+    tender = await db.get(Tender, workspace.tender_id)
+    await db.refresh(tender)
+    assert tender.base_budget_without_tax == Decimal("0.00")
+
+
+async def test_un_lot_publicat_a_zero_no_es_cap_maxim(client_a, db, tenant_a):
+    _user, company = tenant_a
+    tender = await _tender(db, budget=Decimal("999999"))
+    lots = await _lots(db, tender, budgets=(Decimal("0.00"), Decimal("7000")))
+    workspace = await _workspace(db, company, tender, tender_lot_id=lots[0].id)
+    await a_workspace_with_one_line(client_a, workspace, offered_unit_price_ex_vat="1000")
+
+    limit = only_lot(await read(client_a, workspace))["limit"]
+
+    # Ni el zero del lot ni el pressupost de l'expedient: indeterminat.
+    assert limit["tender_max"] is None
+    assert limit["exceeds_lot_max"] is None
+
+
 # --------------------------------------------------------------------------- #
 # El contracte de lectura ensenya els arxivats                                  #
 # --------------------------------------------------------------------------- #

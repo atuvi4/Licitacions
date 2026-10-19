@@ -8,6 +8,7 @@ import type { WorkspaceDetail } from "@/lib/workspace";
 
 import {
   TABS,
+  amountFact,
   amountMeta,
   candidatureMeta,
   deadlineMeta,
@@ -162,6 +163,31 @@ describe("termini, import i candidatura", () => {
       note: "valor estimat del contracte (VEC)",
       budget: { text: formatAmount("204232.75", "EUR"), note: "pressupost base de licitació sense IVA" },
     });
+  });
+
+  it("zeros (19-10-2026): la capçalera salta els imports a 0,00 € i no en diu cap línia de PBL", () => {
+    // VEC 0 i PBL > 0: el PBL sense IVA, amb la seva base.
+    expect(amountMeta({ estimated_value: "0.00", base_budget: null, base_budget_without_tax: "30000.00", currency: "EUR" })).toEqual({
+      text: formatAmount("30000.00", "EUR"),
+      note: "pressupost base de licitació sense IVA",
+      budget: null,
+    });
+    // VEC > 0 i PBL 0: el VEC, sense «PBL sense IVA: 0,00 €».
+    expect(amountMeta({ estimated_value: "50000.00", base_budget: null, base_budget_without_tax: "0.00", currency: "EUR" }).budget).toBeNull();
+    // Cap import útil: el mateix que sense import.
+    expect(amountMeta({ estimated_value: "0.00", base_budget: null, base_budget_without_tax: "0.00", currency: "EUR" })).toEqual({ text: "No consta a les dades de la font", note: null, budget: null });
+    expect(amountMeta({ estimated_value: null, base_budget: null, base_budget_without_tax: "0.00", currency: "EUR" })).toEqual({ text: "No consta a les dades de la font", note: null, budget: null });
+  });
+
+  it("zeros (19-10-2026): el fet del Resum diu que s'ha publicat a zero i que no s'utilitza", () => {
+    const PLACSP = "Publicat a 0,00 € a la PLACSP (no s'utilitza com a import econòmic)";
+    expect(amountFact("0.00", "EUR")).toEqual({ kind: "zero", text: PLACSP });
+    expect(amountFact("0", "EUR")).toEqual({ kind: "zero", text: PLACSP });
+    expect(amountFact("0.00", "EUR", { manual: true }).text).toBe("Entrat a 0,00 € (no s'utilitza com a import econòmic)");
+    expect(amountFact(null, "EUR")).toEqual({ kind: "missing", text: "No consta a les dades de la font" });
+    expect(amountFact("", "EUR")).toEqual({ kind: "missing", text: "No consta a les dades de la font" });
+    expect(amountFact("204232.75", "EUR")).toEqual({ kind: "amount", text: formatAmount("204232.75", "EUR") });
+    expect(amountFact("-5", "EUR").kind).toBe("not_used");
   });
 
   it("candidatura només si existeix; la decisió humana només si és real", () => {

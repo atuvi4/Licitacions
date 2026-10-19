@@ -16,6 +16,7 @@
  * l'absència del bloc `internal_economics` sencer.
  */
 
+import { usefulAmount } from "@/lib/amounts";
 import { ROLE_LABELS } from "@/lib/labels";
 
 export type PricingBasis = "one_off" | "monthly" | "annual" | "per_unit";
@@ -67,7 +68,17 @@ export interface LotLimit {
  */
 export type LimitVerdict = "unknown" | "within" | "exceeds";
 
+/**
+ * El màxim del lot si és vàlid. Un pressupost publicat a 0,00 € no és un màxim (regla única
+ * d'imports, `lib/amounts`): com si no hi fos. L'API ja l'envia nul; això ho manté si no.
+ */
+export function lotMaximum(limit: Pick<LotLimit, "tender_max">): Money {
+  return usefulAmount(limit.tender_max);
+}
+
 export function limitVerdict(limit: LotLimit): LimitVerdict {
+  // Un màxim de 0,00 € (o negatiu) no és cap màxim: indeterminat, mai «supera el pressupost».
+  if (lotMaximum(limit) === null) return "unknown";
   if (limit.exceeds_lot_max === true) return "exceeds";
   if (
     limit.exceeds_lot_max === false &&

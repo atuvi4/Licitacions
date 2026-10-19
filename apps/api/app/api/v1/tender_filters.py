@@ -42,6 +42,7 @@ from app.models.tenders import (
     TenderLotCPV,
 )
 from app.schemas.tenders import BuyerSummary, TenderCPVRead, TenderListItem
+from app.tenders.amounts import useful_amount_sql
 from app.tenders.documents import ACTIVE_DOCUMENT
 from app.tenders.search import fold_matches, normalize_search_text, search_terms
 
@@ -65,9 +66,17 @@ _NOT_DIGIT = re.compile(r"\D")
 
 
 def amount_expression() -> sa.ColumnElement:
-    """L'import d'una licitacio per filtrar i ordenar (spec §7.3)."""
+    """L'import d'una licitacio per filtrar i ordenar (spec §7.3).
+
+    VEC -> PBL sense IVA -> PBL amb IVA, saltant els que no son utils (<= 0): un
+    `0.00` publicat per la PLACSP es com si no hi fos (`app.tenders.amounts`). Sense
+    cap import util, l'import es NULL i la licitacio compta com a «sense import
+    conegut» (`without_amount_criteria`).
+    """
     return sa.func.coalesce(
-        Tender.estimated_value, Tender.base_budget_without_tax, Tender.base_budget
+        useful_amount_sql(Tender.estimated_value),
+        useful_amount_sql(Tender.base_budget_without_tax),
+        useful_amount_sql(Tender.base_budget),
     )
 
 

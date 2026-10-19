@@ -250,8 +250,9 @@ class TenderListItem(ORMModel):
     contract_type: ContractType
     estimated_value: Decimal | None = None
     base_budget: Decimal | None = None
-    #: Pressupost base sense IVA: el filtre i l'ordre d'import usen
-    #: `coalesce(estimated_value, base_budget_without_tax, base_budget)`.
+    #: Pressupost base sense IVA: el filtre i l'ordre d'import usen el primer import
+    #: util (> 0) de `estimated_value`, `base_budget_without_tax` i `base_budget`.
+    #: Els tres es serveixen crus: un `0.00` de la font es conserva tal com ve.
     base_budget_without_tax: Decimal | None = None
     currency: str
     publication_date: date | None = None
@@ -282,7 +283,8 @@ class CataloguePage(Page[T], Generic[T]):  # noqa: UP046 - mateix patro que `Pag
 
     `excluded_without_amount` nomes te valor quan l'usuari ha fixat un filtre
     d'import: quantes files, amb la resta de filtres aplicats, no es mostren
-    nomes perque no tenen import conegut. Sense filtre d'import es `None`: no
+    nomes perque no tenen import conegut (cap import util, > 0: un `0.00` publicat
+    tampoc no ho es). Sense filtre d'import es `None`: no
     s'exclou res per manca de dada.
     """
 
