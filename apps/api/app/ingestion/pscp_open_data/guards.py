@@ -35,7 +35,9 @@ Guardes de l'expedient (sobre les files seleccionades):
 L'estat diu el resultat de la validacio i `amount`, el que es publica. Per ordre:
 
 1. La fila antiga d'un `mixed`: `superseded` si la substitucio es demostra, `conflict`
-   si no; amb l'import que porti (tambe NULL).
+   si no; amb l'import que porti, tambe NULL o 0 (l'estat diu la validacio; que la fila
+   no portava import ho diu `validation.no_value_reason`). Mai no es llegeix com a
+   import vigent.
 2. `conflict` si l'import publicat no es pot desar sense alterar-lo (mes de 2 decimals,
    negatiu, no decimal, o el camp d'expedient diferent entre files): `amount` NULL i el
    text publicat a la procedencia (`validation.amount_problem` diu per que). La resta
@@ -198,6 +200,11 @@ def supersession_evidence(old: dict[str, Any], newer: list[dict[str, Any]]) -> d
             after = p.floating_date(row.get(name))
             if after is None or after < before:
                 publication_ok = False
+    unreadable = sorted(
+        {name for row in [old, *newer] for name in p.unreadable_publication_dates(row)}
+    )
+    if unreadable:
+        publication_ok = False
     dates_ok = updated_ok and publication_ok
 
     verdict = "superseded" if (pub_ok and phase_ok and dates_ok) else "inconclusive"
@@ -226,6 +233,7 @@ def supersession_evidence(old: dict[str, Any], newer: list[dict[str, Any]]) -> d
                 ),
                 "old_latest_publication": _iso(old_latest),
                 "new_earliest_publication": _iso(earliest_new),
+                "unreadable": unreadable,
             },
         },
     }
@@ -289,6 +297,17 @@ def _status(
     return CONFLICT if failed else ACCEPTED
 
 
+def _unkeyable(row: dict[str, Any]) -> str | None:
+    """Per que una fila no es pot desar com a clau (None si es pot)."""
+    identifier = row.get("id_intern")
+    if not isinstance(identifier, str) or not p.KEYABLE_ID.fullmatch(identifier):
+        return "id_intern_not_keyable"
+    number = p.normalize_lot_number(row.get("numero_lot"))
+    if number is not None and len(number) > p.MAX_LOT_NUMBER_LENGTH:
+        return "numero_lot_too_long"
+    return None
+
+
 def _expedient_value(rows: list[dict[str, Any]], name: str) -> tuple[p.ParsedAmount, bool]:
     """El camp d'expedient (repetit a cada fila) i si es identic a totes."""
     values = {row.get(name) for row in rows}
@@ -302,10 +321,18 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
     """Les observacions d'una licitacio a partir de les seves files del dataset."""
     uid = snapshot.pscp_id
     rows = sorted(rows, key=lambda row: (str(row.get("id_intern")), str(row.get(":id"))))
+    # (m-1) Una fila que no es pot desar com a clau (id_intern massa llarg o amb
+    # caracters inesperats, numero_lot desmesurat) es llista i no es desa; la resta de
+    # l'expedient queda en `conflict` (guarda `rows`). Mai no atura el run.
+    unkeyable = [row for row in rows if _unkeyable(row)]
+    rows = [row for row in rows if not _unkeyable(row)]
     exact = [row for row in rows if str(row.get("id_intern")).lower() == uid]
     lot_rows = [row for row in rows if str(row.get("id_intern")).lower() != uid]
     if not rows:
-        return TenderEvaluation(snapshot.id, uid, "not_found")
+        evaluation = TenderEvaluation(snapshot.id, uid, "not_found")
+        if unkeyable:
+            evaluation.notes["unkeyable_rows"] = [_unkeyable(row) for row in unkeyable]
+        return evaluation
     if exact and lot_rows:
         shape = "mixed"
     elif lot_rows:
@@ -313,6 +340,8 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
     else:
         shape = "single" if len(exact) == 1 else "multi_exact"
     evaluation = TenderEvaluation(snapshot.id, uid, shape)
+    if unkeyable:
+        evaluation.notes["unkeyable_rows"] = [_unkeyable(row) for row in unkeyable]
 
     superseded_rows: list[dict[str, Any]] = []
     unexplained: list[dict[str, Any]] = []
@@ -407,7 +436,14 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
         evaluation.notes["our_lots_without_row"] = missing
 
     # (e) suma dels lots, amb la tolerancia de l'arrodoniment de la font.
+    # (I-2) Un import de lot NO REPRESENTABLE (mes de 2 decimals, no decimal...) fa fallar
+    # `parse` de l'expedient: tot l'expedient i els seus lots queden en `conflict`. Un
+    # import de lot NO PUBLICAT (NULL) es legitim (lot sense PBL propi): la suma no es pot
+    # comprovar i (e) no s'aplica (`ok` None, `skipped`), sense fer caure la resta.
     lot_amounts = [p.parse_amount(row.get(p.LOT_WITH_TAX)) for row in lot_rows]
+    for row, amount in zip(lot_rows, lot_amounts, strict=True):
+        if amount.problem:
+            parse_problems[f"{p.LOT_WITH_TAX}[{row.get('id_intern')}]"] = amount.problem
     if by_lot and with_tax.usable and lot_amounts and all(a.usable for a in lot_amounts):
         total = sum((a.value for a in lot_amounts), Decimal("0"))
         difference = total - with_tax.value
@@ -419,13 +455,19 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
             "difference": p.cents(difference),
             "tolerance": p.cents(tolerance),
         }
+    elif by_lot and any(a.problem for a in lot_amounts):
+        guards["lot_sum"] = {"ok": None, "skipped": "lot_amount_unrepresentable"}
+    elif by_lot and any(a.value is None for a in lot_amounts):
+        guards["lot_sum"] = {"ok": None, "skipped": "lot_amount_not_published"}
     else:
         guards["lot_sum"] = {"ok": None}
     guards["parse"] = {"ok": not parse_problems, "problems": parse_problems}
     rows_guard: dict[str, Any] = {
-        "ok": not unexplained,
+        "ok": not unexplained and not unkeyable,
         "unexplained": sorted(str(row.get("id_intern")) for row in unexplained),
     }
+    if unkeyable:
+        rows_guard["unkeyable"] = len(unkeyable)
     if supersession is not None:
         rows_guard["supersession"] = supersession["verdict"]
     guards["rows"] = rows_guard
@@ -509,7 +551,9 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
             match = {"ok": False, "problem": "no_number"}
         elif source_counts[number] > 1:
             match = {"ok": False, "problem": "duplicate_in_source"}
-        elif our_counts.get(int(number) if number.isdigit() else number, 0) > 1:
+        elif (
+            our_counts.get(int(number) if number.isascii() and number.isdigit() else number, 0) > 1
+        ):
             match = {"ok": False, "problem": "ambiguous_in_ours"}
         elif number in our_by_number:
             matched = our_by_number[number]

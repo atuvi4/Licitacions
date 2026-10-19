@@ -1,17 +1,24 @@
 """CLI de l'adaptador de dades obertes de la PSCP (F-06a, fase 1).
 
-    python -m app.ingestion.pscp_open_data --out <dir> --dry-run
+    python -m app.ingestion.pscp_open_data --out <dir>                  (dry-run)
     python -m app.ingestion.pscp_open_data --out <dir> --limit 50
     python -m app.ingestion.pscp_open_data --out <dir> --tender <uuid>
-    python -m app.ingestion.pscp_open_data --out <dir>
+    python -m app.ingestion.pscp_open_data --out <dir> --apply          (escriu)
 
-`--dry-run` ho calcula tot (consulta, guardes, escriptura) i escriu l'informe, pero desfa
-la transaccio: no queda res a la base. `--tender` accepta l'id de la licitacio o el seu
-`pscp_id_intern`. `--out` es el directori de l'informe i, alhora, l'arrel on es desen les
-respostes redactades (`raw_storage_key` hi es relatiu).
+**Segur per defecte**: sense `--apply` es un dry-run (`--dry-run` n'es un alias). El
+dry-run ho calcula tot (consulta, guardes i la mateixa escriptura) i escriu l'informe,
+pero desfa la transaccio: no queda res a la base. ATENCIO: no es de "nomes lectura" a
+nivell de base: fa els INSERT/UPDATE dins d'una transaccio que acaba amb ROLLBACK, i per
+tant necessita la migracio 0063 aplicada (la taula ha d'existir). Nomes `--apply`
+escriu de debo.
+
+`--tender` accepta l'id de la licitacio o el seu `pscp_id_intern`. `--out` es el
+directori de l'informe i, alhora, l'arrel on es desen les respostes redactades
+(`raw_storage_key` hi es relatiu).
 
 Codi de sortida: 0 be; 1 fallada (cap escriptura); 3 el dataset s'ha actualitzat durant
-el run (`rowsUpdatedAt` diferent a l'inici i al final): cap escriptura.
+el run (`rowsUpdatedAt` diferent a l'inici i al final); 4 el dataset no informa de
+`rowsUpdatedAt` (la llicencia exigeix la data). En 1, 3 i 4 no s'escriu res.
 
 Sense programador ni sync diari: cada execucio la llanca un operador.
 """
@@ -35,6 +42,20 @@ from app.ingestion.pscp_open_data.service import (
 )
 
 
+def _positive(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("ha de ser un enter >= 1")
+    return number
+
+
+def _batch_size(value: str) -> int:
+    number = _positive(value)
+    if number > 100:
+        raise argparse.ArgumentTypeError("ha de ser entre 1 i 100")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m app.ingestion.pscp_open_data",
@@ -42,16 +63,26 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--out", required=True, type=Path, help="Directori de l'informe.")
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Ho calcula tot pero no escriu res a la base."
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--apply",
+        action="store_true",
+        help="Escriu a la base. Sense aquesta opcio, el run es un dry-run.",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Maxim de licitacions.")
+    mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Alias del comportament per defecte: ho calcula tot i no escriu res.",
+    )
+    parser.add_argument("--limit", type=_positive, default=None, help="Maxim de licitacions.")
     parser.add_argument("--tender", default=None, help="Una sola licitacio (id o pscp_id_intern).")
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help=argparse.SUPPRESS)
-    parser.add_argument("--page-limit", type=int, default=PAGE_LIMIT, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--batch-size", type=_batch_size, default=BATCH_SIZE, help=argparse.SUPPRESS
+    )
+    parser.add_argument("--page-limit", type=_positive, default=PAGE_LIMIT, help=argparse.SUPPRESS)
     parser.add_argument(
         "--max-requests",
-        type=int,
+        type=_positive,
         default=DEFAULT_MAX_REQUESTS,
         help="Limit dur de peticions a la font en aquest run.",
     )
@@ -65,15 +96,13 @@ async def amain(
     client: SodaClient | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    if args.batch_size < 1 or args.batch_size > 100:
-        raise SystemExit("--batch-size ha de ser entre 1 i 100")
     if session_factory is None:
         from app.db.session import SessionFactory
 
         session_factory = SessionFactory
     options = RunOptions(
         out_dir=args.out,
-        dry_run=args.dry_run,
+        dry_run=not args.apply,
         limit=args.limit,
         tender=args.tender,
         batch_size=args.batch_size,

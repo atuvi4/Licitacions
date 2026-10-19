@@ -162,7 +162,8 @@ class TenderAmountObservation(UUIDPrimaryKeyMixin, Base):
     amount_kind: Mapped[TenderAmountKind] = mapped_column(
         enum_column(TenderAmountKind, "tender_amount_kind"), nullable=False
     )
-    #: Tal com el publica la font, al centim. NULL nomes amb `no_value` (no publicat).
+    #: Tal com el publica la font, al centim. NULL si no es publica (o no es pot desar
+    #: sense alterar-lo); l'estat diu el resultat de la validacio, no si hi ha import.
     amount: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 2))
     currency: Mapped[str] = mapped_column(
         sa.String(3), nullable=False, default="EUR", server_default="EUR"

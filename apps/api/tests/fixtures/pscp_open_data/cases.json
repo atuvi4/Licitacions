@@ -584,7 +584,7 @@
    ]
   },
   "superseded_null": {
-   "why": "fila d'alerta futura sense valor + 2 lots: no_value amb l'evidencia de substitucio",
+   "why": "fila d'alerta futura sense valor + 2 lots: superseded amb amount NULL i l'evidencia de substitucio",
    "pilot_tender_id": "8065f3bc-a89a-4346-99a9-399d58e4e2b4",
    "ours": {
     "pscp_id_intern": "b50557d6-18b1-4fa3-895f-97175438693b",

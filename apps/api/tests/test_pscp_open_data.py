@@ -30,7 +30,7 @@ from app.ingestion.pscp_open_data import SOURCE_CODE, attribution
 from app.ingestion.pscp_open_data import client as client_module
 from app.ingestion.pscp_open_data import guards as g
 from app.ingestion.pscp_open_data import parser as p
-from app.ingestion.pscp_open_data.__main__ import amain
+from app.ingestion.pscp_open_data.__main__ import amain, build_parser
 from app.ingestion.pscp_open_data.client import (
     RequestBudgetExceeded,
     SodaClient,
@@ -40,6 +40,8 @@ from app.ingestion.pscp_open_data.client import (
 )
 from app.ingestion.pscp_open_data.service import (
     EXIT_DATASET_CHANGED,
+    EXIT_DATASET_DATE_MISSING,
+    EXIT_FAILED,
     EXIT_OK,
     PscpOpenDataService,
     RunOptions,
@@ -368,18 +370,114 @@ def test_mes_de_dos_decimals_es_conflicte_amb_import_nul_i_el_text_publicat():
     assert "parse" in ev.failed
 
 
-def test_mes_de_dos_decimals_a_un_lot_deixa_la_resta_en_conflicte():
+@pytest.mark.parametrize("bad", ["1.001", "1e3", "-5"])
+def test_un_import_de_lot_no_representable_deixa_tot_l_expedient_en_conflicte(bad):
+    """(I-2) Mai no s'accepta l'expedient ni cap lot germa si un lot no es pot llegir."""
     rows = _rows("lots")
-    lot_row = next(r for r in rows if r["id_intern"].endswith(rows[0]["id_intern"][36:]))
-    lot_row["pressupost_licitacio_amb"] = "1.001"
+    lot_row = next(r for r in rows if len(r["id_intern"]) > 36)
+    lot_row["pressupost_licitacio_amb"] = bad
     ev = g.evaluate(_snapshot("lots"), rows)
     lots = _by(ev, "lot")
-    [bad] = [d for d in lots if d.validation["amount_problem"]]
-    assert bad.status == S.CONFLICT and bad.amount is None and bad.published_text == "1.001"
-    assert bad.validation["lot_failed"] == ["amount"]
-    assert len(lots) == 3
-    # Sense poder llegir un lot, la suma no es pot comprovar: no s'aplica.
-    assert _by(ev, "expedient")[0].validation["guards"]["lot_sum"] == {"ok": None}
+    [expedient] = _by(ev, "expedient")
+    [unreadable] = [d for d in lots if d.validation["amount_problem"]]
+    assert unreadable.amount is None and unreadable.published_text == bad
+    assert "parse" in ev.failed
+    assert expedient.status == S.CONFLICT
+    assert {d.status for d in lots} == {S.CONFLICT} and len(lots) == 3
+    assert expedient.validation["guards"]["lot_sum"] == {
+        "ok": None,
+        "skipped": "lot_amount_unrepresentable",
+    }
+
+
+def test_un_lot_sense_import_publicat_no_fa_caure_la_resta():
+    """Decisio documentada: un lot NULL (no publicat) es `no_value`; la suma (e) no es
+    pot comprovar i no s'aplica, pero la resta d'observacions es valida amb les altres
+    guardes."""
+    rows = _rows("lots")
+    lot_row = next(r for r in rows if len(r["id_intern"]) > 36)
+    lot_row["pressupost_licitacio_amb"] = None
+    ev = g.evaluate(_snapshot("lots"), rows)
+    [expedient] = _by(ev, "expedient")
+    assert expedient.status == S.ACCEPTED
+    assert expedient.validation["guards"]["lot_sum"] == {
+        "ok": None,
+        "skipped": "lot_amount_not_published",
+    }
+    assert sorted(d.status for d in _by(ev, "lot")) == sorted([S.ACCEPTED, S.ACCEPTED, S.NO_VALUE])
+
+
+def test_expedient_publicat_a_zero_amb_lots_es_no_value_i_els_lots_conflicte():
+    rows = _rows("lots")
+    for row in rows:
+        row["pressupost_licitacio_amb_1"] = "0"
+    ev = g.evaluate(_snapshot("lots"), rows)
+    [expedient] = _by(ev, "expedient")
+    assert expedient.status == S.NO_VALUE and expedient.amount == Decimal("0")
+    assert "lot_sum" in ev.failed
+    assert {d.status for d in _by(ev, "lot")} == {S.CONFLICT}
+
+
+def test_identificadors_de_publicacio_iguals_no_demostren_la_substitucio():
+    snapshot = _snapshot("superseded")
+    rows = _rows("superseded")
+    newer = next(r for r in rows if len(r["id_intern"]) > 36)["enllac_publicacio"]["url"]
+    _exact(rows, snapshot.pscp_id)["enllac_publicacio"]["url"] = (
+        _exact(rows, snapshot.pscp_id)["enllac_publicacio"]["url"].rsplit("/", 1)[0]
+        + "/"
+        + newer.rsplit("/", 1)[1]
+    )
+    ev = g.evaluate(snapshot, rows)
+    old = _old_row(ev)
+    assert old.status == S.CONFLICT
+    assert old.validation["supersession"]["checks"]["publication_id"]["ok"] is False
+
+
+def test_una_fila_nova_sense_updated_at_no_demostra_la_substitucio():
+    snapshot = _snapshot("superseded")
+    rows = _rows("superseded")
+    next(r for r in rows if len(r["id_intern"]) > 36).pop(":updated_at")
+    ev = g.evaluate(snapshot, rows)
+    old = _old_row(ev)
+    assert old.status == S.CONFLICT
+    assert old.validation["supersession"]["checks"]["dates"]["updated_at_ok"] is False
+
+
+def test_una_data_amb_zona_no_atura_res_i_fa_l_evidencia_no_concloent():
+    """(m-1) Abans: TypeError en comparar dates amb i sense zona."""
+    snapshot = _snapshot("superseded")
+    rows = _rows("superseded")
+    _exact(rows, snapshot.pscp_id)["data_publicacio_previ"] = "2026-09-09T00:00:00+02:00"
+    ev = g.evaluate(snapshot, rows)
+    old = _old_row(ev)
+    assert old.status == S.CONFLICT
+    assert old.validation["supersession"]["checks"]["dates"]["unreadable"] == [
+        "data_publicacio_previ"
+    ]
+
+
+def test_un_numero_de_lot_amb_digit_no_ascii_es_conflicte():
+    """(m-1) Abans: ValueError a `int("\u00b2")`."""
+    rows = _rows("lots")
+    next(r for r in rows if len(r["id_intern"]) > 36)["numero_lot"] = "\u00b2"
+    ev = g.evaluate(_snapshot("lots"), rows)
+    assert {d.status for d in ev.drafts} == {S.CONFLICT}
+    [orphan] = [d for d in _by(ev, "lot") if d.tender_lot_id is None]
+    assert orphan.validation["lot_guards"]["match"]["problem"] == "no_lot_in_ours"
+
+
+def test_una_fila_que_no_es_pot_desar_com_a_clau_es_llista_i_la_resta_es_conflicte():
+    """(m-1) Un id_intern desmesurat (o amb caracters inesperats) no es desa: es llista,
+    i l'expedient i els altres lots queden en conflicte."""
+    snapshot = _snapshot("lots")
+    rows = _rows("lots")
+    rows[-1]["id_intern"] = snapshot.pscp_id + "_" + "x" * 300
+    ev = g.evaluate(snapshot, rows)
+    assert ev.notes["unkeyable_rows"] == ["id_intern_not_keyable"]
+    assert all(len(d.source_row_id) <= 200 for d in ev.drafts)
+    assert len(_by(ev, "lot")) == 2
+    assert {d.status for d in ev.drafts} == {S.CONFLICT}
+    assert ev.drafts[0].validation["guards"]["rows"]["unkeyable"] == 1
 
 
 def test_un_organ_diferent_es_conflicte():
@@ -507,6 +605,23 @@ def test_la_redaccio_tapa_nif_contactes_i_adjudicataris():
     assert count == 5
 
 
+def test_la_redaccio_tapa_nif_dins_d_un_text_lliure():
+    """(m-8) Un NIF/NIE dins d'una frase d'una clau no sensible tambe es tapa; els UUID i
+    els testimonis xifrats dels enllacos no es toquen."""
+    uid = CASES["lescala"]["ours"]["pscp_id_intern"]
+    link = _rows("lescala")[0]["url_json_licitacio"]["url"]
+    document = {
+        "descripcio": "Adjudicat a B12345678 i a X1234567L (UTE), amb 12345678Z.",
+        "id_intern": uid,
+        "enllac": link,
+    }
+    clean, count = redact(document)
+    assert count == 3
+    assert "B12345678" not in clean["descripcio"] and "X1234567L" not in clean["descripcio"]
+    assert "12345678Z" not in clean["descripcio"] and "(UTE)" in clean["descripcio"]
+    assert clean["id_intern"] == uid and clean["enllac"] == link
+
+
 # --------------------------------------------------------------------------- #
 # Servei (base de dades): dry-run, idempotencia, historial                      #
 # --------------------------------------------------------------------------- #
@@ -623,6 +738,7 @@ async def _seed(db, names=ALL) -> dict[str, uuid.UUID]:
 
 
 async def _run(session_factory, fake, out: Path, **options) -> tuple[int, dict]:
+    options.setdefault("dry_run", False)
     http = httpx.AsyncClient(transport=httpx.MockTransport(fake))
     async with SodaClient(client=http, pause_seconds=0) as soda:
         return await PscpOpenDataService(session_factory, soda).run(
@@ -821,7 +937,15 @@ async def test_paginacio_i_cli_amb_tender_i_limit(db, session_factory, tmp_path)
     http = httpx.AsyncClient(transport=httpx.MockTransport(fake))
     soda = SodaClient(client=http, pause_seconds=0)
     code = await amain(
-        ["--out", str(tmp_path / "t"), "--tender", str(ids["superseded"]), "--page-limit", "2"],
+        [
+            "--out",
+            str(tmp_path / "t"),
+            "--tender",
+            str(ids["superseded"]),
+            "--page-limit",
+            "2",
+            "--apply",
+        ],
         session_factory=session_factory,
         client=soda,
     )
@@ -846,3 +970,206 @@ async def test_paginacio_i_cli_amb_tender_i_limit(db, session_factory, tmp_path)
     assert code == EXIT_OK
     report = json.loads((tmp_path / "l" / "report.json").read_text(encoding="utf-8"))
     assert report["universe"]["selected"] == 1 and report["dry_run"] is True
+
+
+async def test_el_cli_per_defecte_no_escriu_i_nomes_apply_escriu(db, session_factory, tmp_path):
+    """(m-3) Segur per defecte: sense `--apply` es un dry-run (i `--dry-run`, un alias)."""
+    await _seed(db, ["lescala"])
+    for n, extra in enumerate(([], ["--dry-run"])):
+        soda = SodaClient(
+            client=httpx.AsyncClient(
+                transport=httpx.MockTransport(FakeSoda(_source_rows(["lescala"])))
+            ),
+            pause_seconds=0,
+        )
+        code = await amain(
+            ["--out", str(tmp_path / f"d{n}"), *extra], session_factory=session_factory, client=soda
+        )
+        assert code == EXIT_OK
+        report = json.loads((tmp_path / f"d{n}" / "report.json").read_text(encoding="utf-8"))
+        assert report["dry_run"] is True and report["writes"]["committed"] is False
+        assert await _observations(db) == []
+    soda = SodaClient(
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(FakeSoda(_source_rows(["lescala"])))
+        ),
+        pause_seconds=0,
+    )
+    code = await amain(
+        ["--out", str(tmp_path / "a"), "--apply"], session_factory=session_factory, client=soda
+    )
+    assert code == EXIT_OK
+    assert len(await _observations(db)) == 1
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--apply", "--dry-run"],
+        ["--page-limit", "0"],
+        ["--limit", "0"],
+        ["--limit", "-3"],
+        ["--max-requests", "0"],
+        ["--batch-size", "101"],
+        ["--batch-size", "0"],
+    ],
+)
+def test_el_cli_refusa_opcions_invalides(argv, tmp_path):
+    """(m-7) Abans, `--page-limit 0` feia un bucle fins al limit de peticions."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--out", str(tmp_path), *argv])
+
+
+async def test_sense_rows_updated_at_no_s_escriu_res(db, session_factory, tmp_path):
+    """(m-2) La llicencia exigeix informar de la darrera actualitzacio."""
+    await _seed(db, ["lescala"])
+    for n, dates in enumerate(((None,), (ROWS_UPDATED_AT, None))):
+        fake = FakeSoda(_source_rows(["lescala"]), rows_updated_at=dates)
+        code, report = await _run(session_factory, fake, tmp_path / str(n))
+        assert code == EXIT_DATASET_DATE_MISSING
+        assert report["writes"] == {"skipped": "dataset_rows_updated_at_missing"}
+    assert await _observations(db) == []
+
+
+async def test_una_fallada_a_mitja_consulta_no_escriu_res(db, session_factory, tmp_path):
+    await _seed(db, ["lescala", "lots"])
+    fake = FakeSoda(_source_rows(["lescala", "lots"]))
+
+    def failing(request):
+        if request.url.path.startswith("/resource/"):
+            return httpx.Response(404)
+        return fake(request)
+
+    code, report = await _run(session_factory, failing, tmp_path)
+    assert code == EXIT_FAILED
+    assert "SodaFetchError" in report["error"]
+    assert await _observations(db) == []
+
+
+async def test_una_forma_inesperada_no_atura_el_run(db, session_factory, tmp_path):
+    """(m-1) Una data amb zona, un numero de lot estrany o un id desmesurat en una
+    licitacio: aquella queda en conflicte (o la fila es llista) i la resta es desa."""
+    ids = await _seed(db, ["lescala", "lots", "superseded"])
+    source = _source_rows(["lescala", "lots", "superseded"])
+    sup = CASES["superseded"]["ours"]["pscp_id_intern"]
+    _exact(source[sup], sup)["data_publicacio_previ"] = "2026-09-09T00:00:00+02:00"
+    lots_uid = CASES["lots"]["ours"]["pscp_id_intern"]
+    source[lots_uid][-1]["id_intern"] = lots_uid + "_" + "x" * 300
+    code, report = await _run(session_factory, FakeSoda(source), tmp_path)
+    assert code == EXIT_OK, report.get("error")
+    assert report["evaluation"]["evaluation_errors"] == []
+    current = await _observations(db, current_only=True)
+    by_tender: dict = {}
+    for row in current:
+        by_tender.setdefault(row.tender_id, set()).add(row.validation_status)
+    assert by_tender[ids["lescala"]] == {S.ACCEPTED}
+    assert by_tender[ids["lots"]] == {S.CONFLICT}
+    assert by_tender[ids["superseded"]] == {S.CONFLICT}
+
+
+# --------------------------------------------------------------------------- #
+# (I-1) Una lectura nova mai no deixa vigent una `accepted` que ja no avala      #
+# --------------------------------------------------------------------------- #
+
+
+def _current_accepted(rows, tender_id):
+    return [r for r in rows if r.tender_id == tender_id and r.validation_status == S.ACCEPTED]
+
+
+async def test_lot_retirat_tanca_l_accepted_de_la_clau_antiga(db, session_factory, tmp_path):
+    ids = await _seed(db, ["lots"])
+    source = _source_rows(["lots"])
+    await _run(session_factory, FakeSoda(source), tmp_path / "1")
+    first = await _observations(db, current_only=True)
+    assert len(_current_accepted(first, ids["lots"])) == 4
+
+    lot = (
+        (
+            await db.execute(
+                sa.select(TenderLot)
+                .where(TenderLot.tender_id == ids["lots"])
+                .order_by(TenderLot.lot_number)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    removed_lot_id = lot.id
+    lot.removed_at = datetime.now(UTC)
+    await db.commit()
+
+    code, report = await _run(session_factory, FakeSoda(source), tmp_path / "2")
+    assert code == EXIT_OK, report.get("error")
+    assert report["writes"]["closed_reassigned"] == 1
+    assert report["writes"]["disappeared_not_closed"] == []
+    current = await _observations(db, current_only=True)
+    assert _current_accepted(current, ids["lots"]) == []
+    assert removed_lot_id not in {r.tender_lot_id for r in current}
+    orphans = [r for r in current if r.tender_lot_id is None and "#lot=" in r.source_entity_key]
+    assert [r.validation_status for r in orphans] == [S.CONFLICT]
+
+
+async def test_accepted_passa_a_conflict_quan_canvia_el_valor(db, session_factory, tmp_path):
+    ids = await _seed(db, ["lescala"])
+    source = _source_rows(["lescala"])
+    await _run(session_factory, FakeSoda(source), tmp_path / "1")
+    uid = CASES["lescala"]["ours"]["pscp_id_intern"]
+    source[uid][0]["pressupost_licitacio_sense_1"] = "204232.76"
+    source[uid][0]["pressupost_licitacio_amb_1"] = "247121.64"
+    code, report = await _run(session_factory, FakeSoda(source), tmp_path / "2")
+    assert code == EXIT_OK
+    assert report["writes"]["closed_changed"] == 1
+    current = await _observations(db, current_only=True)
+    assert [(r.validation_status, r.amount) for r in current] == [
+        (S.CONFLICT, Decimal("247121.64"))
+    ]
+    assert _current_accepted(current, ids["lescala"]) == []
+
+
+async def test_accepted_passa_a_superseded_quan_arriben_els_lots(db, session_factory, tmp_path):
+    ids = await _seed(db, ["superseded"])
+    uid = CASES["superseded"]["ours"]["pscp_id_intern"]
+    lots = (
+        (await db.execute(sa.select(TenderLot).where(TenderLot.tender_id == ids["superseded"])))
+        .scalars()
+        .all()
+    )
+    for lot in lots:  # abans: la nostra BD encara no tenia els lots
+        lot.removed_at = datetime.now(UTC)
+    await db.commit()
+    source = _source_rows(["superseded"])
+    only_exact = {uid: [_exact(source[uid], uid)]}
+    await _run(session_factory, FakeSoda(only_exact), tmp_path / "1")
+    [first] = await _observations(db, current_only=True)
+    assert first.validation_status == S.ACCEPTED and first.source_row_id == uid
+
+    for lot in lots:
+        lot.removed_at = None
+    await db.commit()
+    code, report = await _run(session_factory, FakeSoda(source), tmp_path / "2")
+    assert code == EXIT_OK, report.get("error")
+    current = await _observations(db, current_only=True)
+    expedient = [r for r in current if r.tender_lot_id is None]
+    assert {(r.source_row_id, r.validation_status) for r in expedient} == {
+        (uid, S.SUPERSEDED),
+        (f"{uid}_*", S.ACCEPTED),
+    }
+    assert len(_current_accepted(current, ids["superseded"])) == 4  # expedient + 3 lots
+
+
+async def test_una_lectura_nova_no_acceptada_tanca_l_accepted_d_una_fila_que_ja_no_hi_es(
+    db, session_factory, tmp_path
+):
+    ids = await _seed(db, ["lescala"])
+    uid = CASES["lescala"]["ours"]["pscp_id_intern"]
+    source = _source_rows(["lescala"])
+    await _run(session_factory, FakeSoda(source), tmp_path / "1")
+    # La font substitueix la fila de l'expedient per una fila de lot que la nostra BD no
+    # te: la lectura d'ara de l'expedient es `conflict`.
+    row = dict(source[uid][0], id_intern=f"{uid}_1", numero_lot="1")
+    code, report = await _run(session_factory, FakeSoda({uid: [row]}), tmp_path / "2")
+    assert code == EXIT_OK
+    assert report["writes"]["closed_superseded_by_reading"] == 1
+    current = await _observations(db, current_only=True)
+    assert _current_accepted(current, ids["lescala"]) == []
+    assert {r.validation_status for r in current} == {S.CONFLICT}

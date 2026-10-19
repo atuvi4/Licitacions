@@ -251,6 +251,13 @@ class SodaClient:
 
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _NIF_LIKE = re.compile(r"(?i)[A-HJ-NP-SUVW]\d{7}[0-9A-J]|\d{8}[A-Z]|[XYZ]\d{7}[A-Z]")
+#: (m-8) Un NIF/NIE dins d'un text lliure (no nomes quan es tot el valor). En
+#: majuscules i amb vores de paraula: els UUID (hex en minuscules) i els testimonis
+#: xifrats dels enllacos (sense vores) no hi casen.
+_NIF_TOKEN = re.compile(
+    r"(?<![0-9A-Za-z])(?:[A-HJ-NP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])"
+    r"(?![0-9A-Za-z])"
+)
 _SENSITIVE_KEYS = (
     "nif",
     "cif",
@@ -272,7 +279,9 @@ def redact(value: Any) -> tuple[Any, int]:
     """Copia redactada d'un document JSON i quants valors s'hi han tapat.
 
     Es tapa tot valor escalar d'una clau sensible (NIF, identificacio, contacte,
-    adjudicatari) i tot text que sigui exactament un NIF/NIE o que porti un correu.
+    adjudicatari), tot text que sigui exactament un NIF/NIE, i dins de qualsevol text els
+    correus i els NIF/NIE que hi apareguin com a paraula. El SHA-256 de l'original es
+    conserva a part (manifest).
     """
     count = 0
 
@@ -307,9 +316,11 @@ def redact(value: Any) -> tuple[Any, int]:
             if _NIF_LIKE.fullmatch(node.strip()):
                 count += 1
                 return REDACTED
-            if _EMAIL.search(node):
-                count += 1
-                return _EMAIL.sub("[EMAIL REDACTAT]", node)
+            text, emails = _EMAIL.subn("[EMAIL REDACTAT]", node)
+            text, nifs = _NIF_TOKEN.subn(REDACTED, text)
+            if emails or nifs:
+                count += emails + nifs
+                return text
         return node
 
     return walk(value), count

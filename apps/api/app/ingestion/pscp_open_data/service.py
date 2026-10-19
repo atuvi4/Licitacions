@@ -10,16 +10,24 @@ Flux d'un run:
    `<uuid>_`, `$select` minim, `$order=id_intern,:id`, paginant. Cada resposta es desa
    redactada a `--out` (amb el SHA-256 de l'original).
 4. **Metadades** al final: si `rowsUpdatedAt` ha canviat durant el run, el run **no
-   escriu res** (les files llegides podrien barrejar dues versions del dataset).
+   escriu res** (les files llegides podrien barrejar dues versions del dataset); si
+   falta a l'inici o al final, tampoc (la llicencia exigeix informar de la data).
 5. **Guardes** (`guards.evaluate`) per licitacio.
 6. **Escriptura** en una sola transaccio (en `--dry-run` es fa igual i es desfa):
    per a cada (licitacio, lot o expedient, `pbl_with_tax`, font, `source_row_id`):
    * cap observacio vigent -> se n'afegeix una;
    * la vigent te el mateix estat, import, fase i `validation` -> no s'escriu res;
    * si no, es TANCA la vigent (`valid_to = ara`) i se n'afegeix una de nova.
-   Una observacio vigent la fila de la qual ja no torna en aquest run **no es tanca**:
-   es llista a l'informe (`disappeared`). Nomes es tanca si una altra fila passa a ser
-   l'`accepted` del mateix objectiu (`displaced`), perque nomes n'hi pot haver una.
+   Una lectura nova mai no deixa vigent una d'antiga que ja no avala:
+   * la mateixa fila llegida ara sota una altra clau (lot retirat, lot que ja no
+     s'identifica) tanca la vigent de la clau antiga (`reassigned`);
+   * una `accepted` vigent d'una fila que no torna, en un objectiu que si te lectura
+     nova, es tanca (`displaced` si la nova es `accepted`, `superseded_by_reading` si
+     no).
+   Una observacio d'un objectiu del qual la font ja no publica res **no es tanca**: es
+   llista a l'informe (`disappeared`), segons la regla del propietari.
+   Un `unchanged` no reescriu res: la data de la darrera reverificacio d'una
+   observacio es la del darrer informe de run (`report.json`), no `retrieved_at`.
 7. **Informe** a `--out`: `report.json`, `observations.csv`, `fetch_log.json` i el
    manifest de les respostes desades.
 
@@ -81,6 +89,7 @@ STORAGE_PREFIX = "pscp_open_data"
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_DATASET_CHANGED = 3
+EXIT_DATASET_DATE_MISSING = 4
 
 
 class DatasetChangedDuringRun(Exception):
@@ -90,7 +99,8 @@ class DatasetChangedDuringRun(Exception):
 @dataclass
 class RunOptions:
     out_dir: Path
-    dry_run: bool = False
+    #: Segur per defecte: nomes `dry_run=False` (el CLI, `--apply`) escriu.
+    dry_run: bool = True
     limit: int | None = None
     tender: str | None = None
     batch_size: int = BATCH_SIZE
@@ -398,12 +408,33 @@ class PscpOpenDataService:
             report["attribution"] = attribution(meta_start.get("rows_updated_at"))
             report["unexpected_rows"] = unexpected
 
-            evaluations = [g.evaluate(snap, by_uuid.get(snap.pscp_id, [])) for snap in snapshots]
+            evaluations = []
+            evaluation_errors = []
+            for snap in snapshots:
+                # (m-1) Una forma inesperada de la font en una licitacio no atura el run:
+                # les guardes ja la converteixen en `conflict`; si mai una excepcio s'hi
+                # escapa, aquella licitacio es llista i no s'hi escriu res.
+                try:
+                    evaluations.append(g.evaluate(snap, by_uuid.get(snap.pscp_id, [])))
+                except Exception as exc:  # noqa: BLE001 - es llista a l'informe
+                    logger.warning("pscp_open_data.evaluate.failed", extra={"tender": str(snap.id)})
+                    evaluation_errors.append(
+                        {"tender_id": str(snap.id), "error": type(exc).__name__}
+                    )
             report["evaluation"] = _summarize(evaluations)
+            report["evaluation"]["evaluation_errors"] = evaluation_errors
             changed = meta_start.get("rows_updated_at_epoch") != meta_end.get(
                 "rows_updated_at_epoch"
             )
-            if changed:
+            missing_date = not (
+                meta_start.get("rows_updated_at") and meta_end.get("rows_updated_at")
+            )
+            if missing_date:
+                # (m-2) La llicencia exigeix informar de la darrera actualitzacio: sense la
+                # data, no s'escriu res.
+                report["writes"] = {"skipped": "dataset_rows_updated_at_missing"}
+                exit_code = EXIT_DATASET_DATE_MISSING
+            elif changed:
                 report["writes"] = {"skipped": "dataset_changed_during_run"}
                 exit_code = EXIT_DATASET_CHANGED
             else:
@@ -483,15 +514,37 @@ class PscpOpenDataService:
                 if existing is not None:
                     to_close[existing.id] = (existing, "changed")
                 to_insert.append(draft)
-            # Una sola `accepted` vigent per objectiu: si una altra fila hi passa, la
-            # que hi havia (d'una fila que ja no torna o que ha canviat) es tanca.
-            for draft in to_insert:
-                if draft.status != AmountObservationStatus.ACCEPTED:
-                    continue
-                holder = accepted_at.get((draft.tender_id, draft.tender_lot_id))
-                if holder is not None and holder.id not in to_close:
-                    to_close[holder.id] = (holder, "displaced")
             produced = {draft.key for draft in drafts}
+            # (I-1) La mateixa fila de la font llegida ara sota una altra clau (p. ex. el
+            # lot s'ha retirat i la fila ja no te lot nostre): la vigent de la clau antiga
+            # es tanca. Una fila que encara hi es mai no deixa una lectura antiga vigent.
+            produced_rows = {(draft.tender_id, draft.source_row_id) for draft in drafts}
+            for key, obs in current.items():
+                if (
+                    key not in produced
+                    and (obs.tender_id, obs.source_row_id) in produced_rows
+                    and obs.id not in to_close
+                ):
+                    to_close[obs.id] = (obs, "reassigned")
+            # (I-1) Una `accepted` vigent la fila de la qual no torna en aquest run, en un
+            # objectiu que si te lectura nova: si la nova es `accepted`, la desplaca
+            # (n'hi ha d'haver una sola); si no, la lectura d'ara no l'avala i es tanca
+            # igualment. Un objectiu sense cap lectura nova (la font ja no en publica res)
+            # es llista com a `disappeared` i no es tanca (regla del propietari).
+            readings: dict[tuple, list[g.Draft]] = {}
+            for draft in drafts:
+                readings.setdefault((draft.tender_id, draft.tender_lot_id), []).append(draft)
+            for target, holder in accepted_at.items():
+                holder_key = (holder.tender_id, holder.tender_lot_id, holder.source_row_id)
+                if holder.id in to_close or holder_key in produced or target not in readings:
+                    continue
+                accepted_now = any(
+                    draft.status == AmountObservationStatus.ACCEPTED for draft in readings[target]
+                )
+                to_close[holder.id] = (
+                    holder,
+                    "displaced" if accepted_now else "superseded_by_reading",
+                )
             disappeared = sorted(
                 (
                     {
@@ -559,6 +612,8 @@ class PscpOpenDataService:
             "closed": len(to_close),
             "closed_changed": reasons.get("changed", 0),
             "closed_displaced": reasons.get("displaced", 0),
+            "closed_reassigned": reasons.get("reassigned", 0),
+            "closed_superseded_by_reading": reasons.get("superseded_by_reading", 0),
             "unchanged": unchanged,
             "inserted_by_status": dict(Counter(d.status.value for d in to_insert)),
             "disappeared_not_closed": disappeared,

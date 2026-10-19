@@ -20,6 +20,11 @@ _PUBLICATION_URL = re.compile(
     r"/detall-publicacio/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{12})/(\d+)/?$"
 )
+_ASCII_DIGITS = re.compile(r"[0-9]+")
+#: Un `id_intern` que es pot desar com a clau (`source_row_id`, 200) i demanar en una
+#: `evidence_url` curta: UUID + un sufix de caracters segurs.
+KEYABLE_ID = re.compile(r"^[0-9A-Za-z][0-9A-Za-z_.\-]{0,199}$")
+MAX_LOT_NUMBER_LENGTH = 100
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
 )
@@ -146,7 +151,8 @@ def normalize_lot_number(raw: Any) -> str | None:
     text = str(raw).strip()
     if text == "":
         return None
-    return str(int(text)) if text.isdigit() else text
+    # Nomes digits ASCII: `"\u00b2".isdigit()` es cert pero `int()` el refusa (m-1).
+    return str(int(text)) if _ASCII_DIGITS.fullmatch(text) else text
 
 
 def link_url(value: Any) -> str | None:
@@ -176,13 +182,27 @@ def phase_rank(phase: Any) -> int | None:
 
 
 def floating_date(raw: Any) -> datetime | None:
-    """Una data de publicacio de SODA (`2026-07-29T12:50:00.000`, sense zona)."""
+    """Una data de publicacio de SODA (`2026-07-29T12:50:00.000`, sense zona).
+
+    Una data amb zona (o qualsevol altra forma) no es comparable amb les flotants: es
+    torna None, i qui la necessita la tracta com a no llegible (m-1).
+    """
     if not isinstance(raw, str) or not raw:
         return None
     try:
-        return datetime.fromisoformat(raw.replace("Z", ""))
+        moment = datetime.fromisoformat(raw)
     except ValueError:
         return None
+    return None if moment.tzinfo is not None else moment
+
+
+def unreadable_publication_dates(row: dict[str, Any]) -> list[str]:
+    """Els camps de data de publicacio presents que no es poden llegir."""
+    return [
+        name
+        for name in PUBLICATION_DATE_FIELDS
+        if row.get(name) not in (None, "") and floating_date(row.get(name)) is None
+    ]
 
 
 def system_timestamp(raw: Any) -> datetime | None:
