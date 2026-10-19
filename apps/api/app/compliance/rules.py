@@ -29,7 +29,11 @@ from app.models.enums import (
 #: v2: les regles entenen agregacions, percentatges amb base, limits
 #: d'assegurança separats, vies alternatives i equivalencies. Un resultat
 #: calculat amb la v1 no es comparable amb un d'ara.
-RULES_VERSION = "company-compliance-v3"
+#: v4 (19-10-2026): un llindar en percentatge sobre una base publicada a `0.00`
+#: (VEC o PBL) ja no es resol a 0 EUR (que qualsevol empresa compliria) sino a
+#: "base no disponible" -> revisar (`app.tenders.amounts`). Un run v3 deixa de
+#: ser vigent i no es reutilitza.
+RULES_VERSION = "company-compliance-v4"
 
 
 class RuleCode:

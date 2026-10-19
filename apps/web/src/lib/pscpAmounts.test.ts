@@ -132,6 +132,17 @@ describe("PBL amb IVA de la PSCP (F-06a)", () => {
     expect(onlyPlacsp.attribution).toBeNull();
   });
 
+  it("zeros (19-10-2026): un PBL amb IVA de la PLACSP a 0,00 € no és un import i no amaga la PSCP", () => {
+    const view = budgetWithTaxView({
+      base_budget: "0.00",
+      lots: [lot("l1", "0.00"), lot("l2", "1000.00")],
+      budget_with_tax_observations: { expedient: obs(), lots: { l1: obs(), l2: obs() }, attribution: OFFICIAL, source_updated_at: null },
+    });
+    expect(view.expedient).toEqual(obs());
+    expect(Object.keys(view.lots)).toEqual(["l1"]);
+    expect(view.attribution).not.toBeNull();
+  });
+
   it("sense text d'atribució de l'API no se n'inventa cap; sense data, «desconeguda»", () => {
     const observations = { expedient: obs({ source_updated_at: null }), lots: {}, attribution: null, source_updated_at: null };
     expect(budgetWithTaxView({ base_budget: null, lots: [], budget_with_tax_observations: observations }).attribution).toBeNull();

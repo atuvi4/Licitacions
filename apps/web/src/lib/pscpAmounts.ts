@@ -7,11 +7,13 @@
  * - `no_value` publicat a 0: un text que diu què és, mai un import.
  * - `no_value` nul o sense observació: com abans («No consta a les dades de la font»).
  * - `conflict`: «Pendent de verificació…» com a valor; l'import de la PSCP només dins de l'avís.
- * - Si la PLACSP ja publica el PBL amb IVA (`base_budget`), el fet (o el lot) continua sent el seu.
+ * - Si la PLACSP ja publica el PBL amb IVA (`base_budget`), el fet (o el lot) continua sent el seu. Un
+ *   `base_budget` a 0,00 € no compta com a publicat (regla única dels imports, `lib/amounts`).
  * - Un lot amb observació mostrada diu «Sense import a la PLACSP», no «No consta…», a la part de la PLACSP.
  * - L'atribució és el text de l'API, amb la data del dataset.
  */
 
+import { usefulAmount } from "@/lib/amounts";
 import { formatAmount, formatDate } from "@/lib/format";
 import type { AmountFailedCheck, AmountObservation, BudgetWithTaxObservations, TenderDetail, TenderLot } from "@/lib/tenders";
 
@@ -133,7 +135,11 @@ function latest(dates: (string | null)[]): string | null {
   return best;
 }
 
-const present = (value: string | null | undefined) => value !== null && value !== undefined && value !== "";
+/**
+ * Si la PLACSP publica un PBL amb IVA ÚTIL (> 0, regla única de `lib/amounts`). Un 0,00 € de la PLACSP
+ * no és un import: no amaga l'observació de la PSCP (ni al fet ni a la cel·la del lot).
+ */
+const placspPublishes = (value: string | null | undefined) => usefulAmount(value) !== null;
 
 /**
  * Què es mostra a la fitxa, a partir de la resposta de l'API. Si la PLACSP ja publica el PBL
@@ -147,11 +153,11 @@ export function budgetWithTaxView(
   },
 ): BudgetWithTaxView {
   const observations = detail.budget_with_tax_observations;
-  const expedient = !present(detail.base_budget) && isShownObservation(observations?.expedient) ? observations!.expedient : null;
+  const expedient = !placspPublishes(detail.base_budget) && isShownObservation(observations?.expedient) ? observations!.expedient : null;
   const lots: Record<string, AmountObservation> = {};
   for (const lot of detail.lots) {
     const observation = observations?.lots?.[lot.id];
-    if (!present(lot.base_budget) && isShownObservation(observation)) lots[lot.id] = observation;
+    if (!placspPublishes(lot.base_budget) && isShownObservation(observation)) lots[lot.id] = observation;
   }
   const shown = [...(expedient ? [expedient] : []), ...Object.values(lots)];
   const date = latest(shown.map((o) => o.source_updated_at)) ?? observations?.source_updated_at ?? null;

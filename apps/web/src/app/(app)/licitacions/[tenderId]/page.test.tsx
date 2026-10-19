@@ -940,4 +940,20 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
     expect(text(row)).not.toContain("32.670,00");
     expect(document.querySelector("[data-pscp-attribution]")).toBeNull();
   });
+
+  it("zeros (19-10-2026): un PBL amb IVA de la PLACSP a 0,00 € no amaga la PSCP, ni al fet ni al lot", async () => {
+    const zeroLot = { ...lotOf("l1", "Lot amb zero"), base_budget: "0.00" };
+    const fact = await renderWith(field(observation(), { l1: observation({ amount: "32670.00" }) }), {
+      base_budget: "0.00",
+      lots: [zeroLot],
+      lot_count: 1,
+    });
+    expect(text(fact)).toContain("247.121,63 €");
+    expect(text(fact)).not.toContain("Publicat a 0,00 € a la PLACSP");
+    const row = screen.getByText("Lot amb zero").closest("tr");
+    expect(text(row?.querySelector("[data-pscp-lot]"))).toBe("PBL amb IVA: 32.670,00 € · PSCP");
+    expect(text(row?.querySelector("[data-placsp-empty]"))).toBe("Sense import a la PLACSP");
+    expect(text(row)).not.toContain(NOT_PUBLISHED);
+    expect(document.querySelector("[data-pscp-attribution]")).not.toBeNull();
+  });
 });

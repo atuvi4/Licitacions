@@ -197,6 +197,26 @@ async def test_el_recompte_sense_import_conegut_compta_els_zeros(client_a, zeros
     assert D(raw[zeros.vec0_pbl0]["base_budget_without_tax"]) == D("0")
 
 
+async def test_el_radar_compta_els_zeros_com_a_sense_import_conegut(client_a, tenant_a, zeros):
+    """`/companies/{id}/matches` (Radar) comparteix el recompte i l'ordre del cataleg."""
+    _, company = tenant_a
+    url = f"/api/v1/companies/{company.id}/matches"
+    response = await client_a.get(url, params={"limit": 100, "min_amount": 1})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["excluded_without_amount"] == 3  # tot a zero, nul i zero, cap import
+    assert {item["tender"]["id"] for item in body["items"]} == {
+        zeros.vec_pbl0,
+        zeros.vec0_pbl,
+        zeros.gross0,
+    }
+    unfiltered = (await client_a.get(url, params={"limit": 100})).json()
+    assert unfiltered["excluded_without_amount"] is None
+    ordered = (await client_a.get(url, params={"limit": 100, "sort": "amount"})).json()
+    ids = [item["tender"]["id"] for item in ordered["items"]]
+    assert ids[:3] == [zeros.vec_pbl0, zeros.vec0_pbl, zeros.gross0]
+
+
 async def test_l_ordre_per_import_salta_els_zeros(client_a, zeros):
     ordered = await _ids(client_a, sort="amount")
     # Amb import util, de mes gran a mes petit; sense, al final per l'ordre neutral.

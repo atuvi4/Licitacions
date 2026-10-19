@@ -43,6 +43,7 @@ from app.models.tenders import Tender
 from app.services.compliance_analysis import (
     NoRequirementsError,
     analyze_company_compliance,
+    is_run_stale,
     review_assessment,
 )
 
@@ -179,7 +180,7 @@ async def test_a_met_threshold_produces_a_satisfying_assessment(
     run = outcome.run
     assert run.overall_result == EligibilityResult.ELIGIBLE
     assert run.satisfies_count == 1
-    assert run.rules_version == "company-compliance-v3"
+    assert run.rules_version == "company-compliance-v4"
 
     assessment = await db.scalar(sa.select(CompanyRequirementAssessment))
     assert assessment.requirement_id == requirement.id
@@ -350,6 +351,34 @@ async def test_changing_the_profile_makes_the_run_stale_and_recalculates(
     await db.refresh(first)
     assert first.is_current is False, "el run anterior deixa de ser el vigent"
     assert second.run.is_current is True
+
+
+async def test_a_run_from_the_previous_rules_version_is_stale_and_not_reused(
+    db, tenant_a, tender, extraction_run
+):
+    """v4 (imports a zero): un run calculat amb la v3 no pot passar per vigent.
+
+    Mateix perfil i mateixos requisits: nomes canvia `rules_version`. El mecanisme
+    existent (`analyze_company_compliance` i `is_run_stale`) el recalcula.
+    """
+    company = await company_of(db, tenant_a)
+    await add_requirement(db, extraction_run, tender, value={"amount": 1000})
+
+    first = (await analyze_company_compliance(db, company, tender)).run
+    assert first.rules_version == "company-compliance-v4"
+    first.rules_version = "company-compliance-v3"
+    await db.commit()
+    assert await is_run_stale(db, first, company) is True
+
+    second = await analyze_company_compliance(db, company, tender)
+
+    assert second.reused is False
+    assert second.run.id != first.id
+    assert second.run.rules_version == "company-compliance-v4"
+    assert await is_run_stale(db, second.run, company) is False
+    await db.refresh(first)
+    assert first.is_current is False
+    assert first.rules_version == "company-compliance-v3", "el run historic no es reescriu"
 
 
 async def test_a_new_extraction_run_forces_a_new_compliance_run(
@@ -625,7 +654,7 @@ async def test_the_api_returns_the_full_chain(client_a, db, tenant_a, tender, ex
     assert response.status_code == 200
     body = response.json()
 
-    assert body["run"]["rules_version"] == "company-compliance-v3"
+    assert body["run"]["rules_version"] == "company-compliance-v4"
     assert body["is_stale"] is False
 
     item = body["assessments"][0]
