@@ -132,6 +132,56 @@ class TenderEvaluation:
     drafts: list[Draft] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     notes: dict[str, Any] = field(default_factory=dict)
+    #: La font publica files d'aquesta licitacio que no s'han pogut llegir del tot (una
+    #: fila no desable, o una fallada en avaluar-la): cap `accepted` vigent que aquesta
+    #: lectura no torni a avalar no pot quedar vigent (I-3, n-1).
+    unverified: bool = False
+
+
+def error_evaluation(
+    snapshot: TenderSnapshot, rows: list[dict[str, Any]], *, error: dict[str, Any]
+) -> TenderEvaluation:
+    """La lectura d'una licitacio que la font publica pero que no s'ha pogut avaluar.
+
+    Una sola observacio d'expedient en `conflict`, amb `amount` NULL i l'error a
+    `validation.error`, clau `<uuid>` (si hi ha la fila exacta i cap de lot) o `<uuid>_*`.
+    Res d'aqui no interpreta els valors de les files (nomes `id_intern`): no pot tornar
+    a fallar pel mateix motiu. Les `accepted` vigents d'aquesta licitacio que aquesta
+    lectura no avala les tanca el servei (`unverifiable`).
+    """
+    uid = snapshot.pscp_id
+    identifiers = sorted(str(row.get("id_intern")) for row in rows)
+    by_lot = any(identifier.lower() != uid for identifier in identifiers)
+    row_id = f"{uid}_*" if by_lot else uid
+    evaluation = TenderEvaluation(snapshot.id, uid, "unreadable", unverified=True)
+    evaluation.failed = ["evaluation_error"]
+    evaluation.notes["error"] = error
+    evaluation.drafts.append(
+        Draft(
+            tender_id=snapshot.id,
+            tender_lot_id=None,
+            level="expedient",
+            source_entity_key=uid,
+            source_row_id=row_id,
+            source_phase=None,
+            status=CONFLICT,
+            amount=None,
+            field=p.EXPEDIENT_WITH_TAX,
+            published_text=None,
+            validation={
+                "v": VALIDATION_VERSION,
+                "shape": "unreadable",
+                "level": "expedient",
+                "role": "evaluation_error",
+                "error": error,
+                "failed": ["evaluation_error"],
+                "source_rows": len(identifiers),
+                "rows": [identifier[:200] for identifier in identifiers],
+            },
+            rows=list(rows),
+        )
+    )
+    return evaluation
 
 
 # --------------------------------------------------------------------------- #
@@ -328,11 +378,19 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
     rows = [row for row in rows if not _unkeyable(row)]
     exact = [row for row in rows if str(row.get("id_intern")).lower() == uid]
     lot_rows = [row for row in rows if str(row.get("id_intern")).lower() != uid]
-    if not rows:
-        evaluation = TenderEvaluation(snapshot.id, uid, "not_found")
-        if unkeyable:
-            evaluation.notes["unkeyable_rows"] = [_unkeyable(row) for row in unkeyable]
+    if not rows and unkeyable:
+        # (n-1) La font publica files, pero cap no es pot desar: no es `not_found`, es una
+        # lectura en conflicte que no avala cap `accepted` anterior.
+        reasons = sorted({_unkeyable(row) for row in unkeyable})
+        evaluation = error_evaluation(
+            snapshot,
+            unkeyable,
+            error={"class": "unkeyable_rows", "message": ", ".join(reasons)},
+        )
+        evaluation.notes["unkeyable_rows"] = [_unkeyable(row) for row in unkeyable]
         return evaluation
+    if not rows:
+        return TenderEvaluation(snapshot.id, uid, "not_found")
     if exact and lot_rows:
         shape = "mixed"
     elif lot_rows:
@@ -342,6 +400,7 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
     evaluation = TenderEvaluation(snapshot.id, uid, shape)
     if unkeyable:
         evaluation.notes["unkeyable_rows"] = [_unkeyable(row) for row in unkeyable]
+        evaluation.unverified = True
 
     superseded_rows: list[dict[str, Any]] = []
     unexplained: list[dict[str, Any]] = []

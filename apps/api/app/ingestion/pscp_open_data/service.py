@@ -90,6 +90,28 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_DATASET_CHANGED = 3
 EXIT_DATASET_DATE_MISSING = 4
+#: El run ha escrit, pero alguna licitacio no s'ha pogut avaluar (desada com a
+#: `conflict` amb l'error; vegeu `evaluation_errors` a l'informe).
+EXIT_EVALUATION_ERRORS = 5
+#: Massa licitacions no avaluables: fallada sistematica, no s'escriu res.
+EXIT_EVALUATION_ABORTED = 6
+
+#: Llindar de fallada sistematica (I-3). Unes poques licitacions amb una forma de la
+#: font inesperada es desen com a `conflict` i el run continua; mes de 20, o mes de l'1 %
+#: de l'univers quan ja n'hi ha mes de 5, vol dir que el que falla es el codi (o la font
+#: ha canviat de forma) i el run s'atura sense escriure res. Amb l'univers del pilot
+#: (7.859) l'1 % son 78: mana el limit absolut de 20.
+MAX_EVALUATION_ERRORS = 20
+MAX_EVALUATION_ERROR_RATIO = 0.01
+MIN_EVALUATION_ERRORS_FOR_RATIO = 5
+
+
+def too_many_evaluation_errors(errors: int, tenders: int) -> bool:
+    if errors > MAX_EVALUATION_ERRORS:
+        return True
+    return (
+        errors > MIN_EVALUATION_ERRORS_FOR_RATIO and errors > MAX_EVALUATION_ERROR_RATIO * tenders
+    )
 
 
 class DatasetChangedDuringRun(Exception):
@@ -411,16 +433,21 @@ class PscpOpenDataService:
             evaluations = []
             evaluation_errors = []
             for snap in snapshots:
-                # (m-1) Una forma inesperada de la font en una licitacio no atura el run:
-                # les guardes ja la converteixen en `conflict`; si mai una excepcio s'hi
-                # escapa, aquella licitacio es llista i no s'hi escriu res.
+                rows = by_uuid.get(snap.pscp_id, [])
+                # (I-3) Una excepcio en avaluar una licitacio mai no s'empassa: es registra
+                # (amb la traca), es llista a l'informe, la licitacio es desa com a
+                # `conflict` amb l'error (i les seves `accepted` vigents es tanquen), i
+                # el run acaba amb un codi propi. Massa errors: no s'escriu res.
                 try:
-                    evaluations.append(g.evaluate(snap, by_uuid.get(snap.pscp_id, [])))
-                except Exception as exc:  # noqa: BLE001 - es llista a l'informe
-                    logger.warning("pscp_open_data.evaluate.failed", extra={"tender": str(snap.id)})
-                    evaluation_errors.append(
-                        {"tender_id": str(snap.id), "error": type(exc).__name__}
+                    evaluations.append(g.evaluate(snap, rows))
+                except Exception as exc:  # noqa: BLE001 - es desa, es llista i canvia el codi
+                    logger.exception(
+                        "pscp_open_data.evaluate.failed", extra={"tender_id": str(snap.id)}
                     )
+                    error = {"class": type(exc).__name__, "message": str(exc)[:200]}
+                    evaluation_errors.append({"tender_id": str(snap.id), **error})
+                    if rows:
+                        evaluations.append(g.error_evaluation(snap, rows, error=error))
             report["evaluation"] = _summarize(evaluations)
             report["evaluation"]["evaluation_errors"] = evaluation_errors
             changed = meta_start.get("rows_updated_at_epoch") != meta_end.get(
@@ -437,10 +464,15 @@ class PscpOpenDataService:
             elif changed:
                 report["writes"] = {"skipped": "dataset_changed_during_run"}
                 exit_code = EXIT_DATASET_CHANGED
+            elif too_many_evaluation_errors(len(evaluation_errors), len(snapshots)):
+                report["writes"] = {"skipped": "too_many_evaluation_errors"}
+                exit_code = EXIT_EVALUATION_ABORTED
             else:
                 report["writes"] = await self._write(
                     evaluations, snapshots, row_page, meta_start, dry_run=options.dry_run
                 )
+                if evaluation_errors:
+                    exit_code = EXIT_EVALUATION_ERRORS
             _write_observations_csv(out_dir / "observations.csv", evaluations)
         except Exception as exc:
             logger.exception("pscp_open_data.run.failed")
@@ -531,6 +563,18 @@ class PscpOpenDataService:
             # (n'hi ha d'haver una sola); si no, la lectura d'ara no l'avala i es tanca
             # igualment. Un objectiu sense cap lectura nova (la font ja no en publica res)
             # es llista com a `disappeared` i no es tanca (regla del propietari).
+            # (I-3, n-1) Una licitacio que la font publica pero que no s'ha pogut llegir
+            # del tot (error d'avaluacio, files no desables): cap `accepted` vigent que
+            # aquesta lectura no torni a avalar no queda vigent (`unverifiable`).
+            unverified = {ev.tender_id for ev in evaluations if ev.unverified}
+            for key, obs in current.items():
+                if (
+                    obs.tender_id in unverified
+                    and obs.validation_status == AmountObservationStatus.ACCEPTED
+                    and key not in produced
+                    and obs.id not in to_close
+                ):
+                    to_close[obs.id] = (obs, "unverifiable")
             readings: dict[tuple, list[g.Draft]] = {}
             for draft in drafts:
                 readings.setdefault((draft.tender_id, draft.tender_lot_id), []).append(draft)
@@ -614,6 +658,7 @@ class PscpOpenDataService:
             "closed_displaced": reasons.get("displaced", 0),
             "closed_reassigned": reasons.get("reassigned", 0),
             "closed_superseded_by_reading": reasons.get("superseded_by_reading", 0),
+            "closed_unverifiable": reasons.get("unverifiable", 0),
             "unchanged": unchanged,
             "inserted_by_status": dict(Counter(d.status.value for d in to_insert)),
             "disappeared_not_closed": disappeared,
@@ -621,10 +666,16 @@ class PscpOpenDataService:
 
 
 def _evidence_url(draft: g.Draft) -> str:
-    """La consulta curta de la fila (o files) de l'observacio, tal com es publiquen."""
+    """La consulta curta de la fila (o files) de l'observacio, tal com es publiquen.
+
+    Una fila desable: `id_intern = ...`. Diverses files, o una que no es pot desar com a
+    clau (lectura en error): el prefix de l'expedient (`<uuid>` o `<uuid>_`).
+    """
     ids = {str(row.get("id_intern")) for row in draft.rows}
     if len(ids) == 1:
-        return row_evidence_url(ids.pop())
+        identifier = ids.pop()
+        if p.KEYABLE_ID.fullmatch(identifier):
+            return row_evidence_url(identifier)
     return row_evidence_url(prefix=draft.source_row_id.removesuffix("*"))
 
 

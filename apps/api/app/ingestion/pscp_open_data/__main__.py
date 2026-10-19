@@ -18,7 +18,9 @@ directori de l'informe i, alhora, l'arrel on es desen les respostes redactades
 
 Codi de sortida: 0 be; 1 fallada (cap escriptura); 3 el dataset s'ha actualitzat durant
 el run (`rowsUpdatedAt` diferent a l'inici i al final); 4 el dataset no informa de
-`rowsUpdatedAt` (la llicencia exigeix la data). En 1, 3 i 4 no s'escriu res.
+`rowsUpdatedAt` (la llicencia exigeix la data); 5 completat, pero alguna licitacio no
+s'ha pogut avaluar (desada com a `conflict` amb l'error; vegeu `evaluation_errors`); 6
+massa licitacions no avaluables (fallada sistematica). En 1, 3, 4 i 6 no s'escriu res.
 
 Sense programador ni sync diari: cada execucio la llanca un operador.
 """
@@ -124,9 +126,17 @@ def _print(report: dict) -> None:
     print(f"  licitacions     : {evaluation.get('tenders')}")
     for key, value in (evaluation.get("observations") or {}).items():
         print(f"    {key:<22}: {value}")
+    errors = evaluation.get("evaluation_errors") or []
+    print(f"  errors d'avaluacio: {len(errors)}")
     if writes:
         for key in ("inserted", "closed", "unchanged"):
-            print(f"  {key:<16}: {writes.get(key)}")
+            if key in writes:
+                print(f"  {key:<16}: {writes.get(key)}")
+        for key, value in writes.items():
+            if key.startswith("closed_") and value:
+                print(f"    {key:<26}: {value}")
+        if "disappeared_not_closed" in writes:
+            print(f"  desaparegudes (no tancades): {len(writes['disappeared_not_closed'])}")
         if writes.get("skipped"):
             print(f"  escriptura      : NO ({writes['skipped']})")
     if report.get("error"):

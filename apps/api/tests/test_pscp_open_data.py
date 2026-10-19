@@ -41,10 +41,13 @@ from app.ingestion.pscp_open_data.client import (
 from app.ingestion.pscp_open_data.service import (
     EXIT_DATASET_CHANGED,
     EXIT_DATASET_DATE_MISSING,
+    EXIT_EVALUATION_ABORTED,
+    EXIT_EVALUATION_ERRORS,
     EXIT_FAILED,
     EXIT_OK,
     PscpOpenDataService,
     RunOptions,
+    too_many_evaluation_errors,
 )
 from app.models.enums import AmountObservationStatus as S
 from app.models.sources import Source
@@ -1032,17 +1035,24 @@ async def test_sense_rows_updated_at_no_s_escriu_res(db, session_factory, tmp_pa
 
 
 async def test_una_fallada_a_mitja_consulta_no_escriu_res(db, session_factory, tmp_path):
-    await _seed(db, ["lescala", "lots"])
-    fake = FakeSoda(_source_rows(["lescala", "lots"]))
+    """(n-3) La fallada arriba al TERCER lot de la consulta, despres de dos lots bons."""
+    names = ["lescala", "lots", "vat0", "zero"]
+    await _seed(db, names)
+    fake = FakeSoda(_source_rows(names))
+    resource_calls = []
 
     def failing(request):
         if request.url.path.startswith("/resource/"):
-            return httpx.Response(404)
+            resource_calls.append(str(request.url))
+            if len(resource_calls) == 3:
+                return httpx.Response(404)
         return fake(request)
 
-    code, report = await _run(session_factory, failing, tmp_path)
+    code, report = await _run(session_factory, failing, tmp_path, batch_size=1)
     assert code == EXIT_FAILED
+    assert len(resource_calls) == 3
     assert "SodaFetchError" in report["error"]
+    assert "writes" not in report
     assert await _observations(db) == []
 
 
@@ -1173,3 +1183,146 @@ async def test_una_lectura_nova_no_acceptada_tanca_l_accepted_d_una_fila_que_ja_
     current = await _observations(db, current_only=True)
     assert _current_accepted(current, ids["lescala"]) == []
     assert {r.validation_status for r in current} == {S.CONFLICT}
+
+
+# --------------------------------------------------------------------------- #
+# (I-3, n-1) Una licitacio que no es pot avaluar mai no s'empassa                #
+# --------------------------------------------------------------------------- #
+
+
+def _raising_for(monkeypatch, pscp_ids):
+    real = g.evaluate
+
+    def evaluate(snapshot, rows):
+        if snapshot.pscp_id in pscp_ids:
+            int("9" * 5000)  # ValueError: el limit de digits de `int()`
+        return real(snapshot, rows)
+
+    monkeypatch.setattr(g, "evaluate", evaluate)
+
+
+async def test_una_excepcio_en_avaluar_desa_conflict_i_tanca_l_accepted(
+    db, session_factory, tmp_path, monkeypatch, caplog
+):
+    names = ["lescala", "lots", "vat0"]
+    ids = await _seed(db, names)
+    source = _source_rows(names)
+    await _run(session_factory, FakeSoda(source), tmp_path / "1")
+    assert len(_current_accepted(await _observations(db, current_only=True), ids["lots"])) == 4
+
+    _raising_for(monkeypatch, {CASES["lots"]["ours"]["pscp_id_intern"]})
+    code, report = await _run(session_factory, FakeSoda(source), tmp_path / "2")
+    assert code == EXIT_EVALUATION_ERRORS
+    [error] = report["evaluation"]["evaluation_errors"]
+    assert error["tender_id"] == str(ids["lots"]) and error["class"] == "ValueError"
+    assert any(
+        record.exc_info and "pscp_open_data.evaluate.failed" in record.getMessage()
+        for record in caplog.records
+    )
+    current = await _observations(db, current_only=True)
+    lots_now = [r for r in current if r.tender_id == ids["lots"]]
+    assert _current_accepted(current, ids["lots"]) == []
+    [conflict] = [r for r in lots_now if r.validation_status == S.CONFLICT]
+    assert conflict.amount is None and conflict.tender_lot_id is None
+    assert conflict.validation["error"]["class"] == "ValueError"
+    assert conflict.source_row_id == CASES["lots"]["ours"]["pscp_id_intern"] + "_*"
+    assert report["writes"]["closed_changed"] == 1  # l'expedient (mateixa clau)
+    assert report["writes"]["closed_unverifiable"] == 3  # els tres lots
+    # Les altres licitacions no en pateixen.
+    assert len(_current_accepted(current, ids["lescala"])) == 1
+    assert len(_current_accepted(current, ids["vat0"])) == 1
+
+
+async def test_massa_errors_d_avaluacio_aturen_el_run_sense_escriure(
+    db, session_factory, tmp_path, monkeypatch
+):
+    await _seed(db)
+    source = _source_rows(ALL)
+    await _run(session_factory, FakeSoda(source), tmp_path / "1")
+    before = [(r.id, r.valid_to) for r in await _observations(db)]
+    _raising_for(monkeypatch, {CASES[name]["ours"]["pscp_id_intern"] for name in ALL})
+    code, report = await _run(session_factory, FakeSoda(source), tmp_path / "2")
+    assert code == EXIT_EVALUATION_ABORTED
+    assert len(report["evaluation"]["evaluation_errors"]) == len(ALL)
+    assert report["writes"] == {"skipped": "too_many_evaluation_errors"}
+    assert [(r.id, r.valid_to) for r in await _observations(db)] == before
+
+
+def test_el_llindar_de_fallada_sistematica():
+    assert not too_many_evaluation_errors(1, 3)
+    assert not too_many_evaluation_errors(5, 10)
+    assert too_many_evaluation_errors(6, 100)
+    assert not too_many_evaluation_errors(20, 7859)
+    assert too_many_evaluation_errors(21, 7859)
+
+
+async def test_un_numero_de_lot_de_5000_digits_no_falla_i_no_deixa_accepted(
+    db, session_factory, tmp_path
+):
+    """Abans: `int()` llancava ValueError (limit de 4.300 digits) dins de `evaluate`."""
+    ids = await _seed(db, ["lots"])
+    source = _source_rows(["lots"])
+    await _run(session_factory, FakeSoda(source), tmp_path / "1")
+    uid = CASES["lots"]["ours"]["pscp_id_intern"]
+    source[uid][0]["numero_lot"] = "1" * 5000
+    code, report = await _run(session_factory, FakeSoda(source), tmp_path / "2")
+    assert code == EXIT_OK, report.get("error")
+    assert report["evaluation"]["evaluation_errors"] == []
+    current = await _observations(db, current_only=True)
+    assert _current_accepted(current, ids["lots"]) == []
+    assert report["writes"]["closed_unverifiable"] == 1  # el lot de la fila no desable
+    assert report["writes"]["disappeared_not_closed"] == []
+
+
+async def test_si_cap_fila_no_es_pot_desar_no_es_not_found_i_tanca_l_accepted(
+    db, session_factory, tmp_path
+):
+    """(n-1) La font publica files, pero cap no es desable: lectura en conflicte."""
+    ids = await _seed(db, ["lots"])
+    source = _source_rows(["lots"])
+    await _run(session_factory, FakeSoda(source), tmp_path / "1")
+    uid = CASES["lots"]["ours"]["pscp_id_intern"]
+    for row in source[uid]:
+        row["numero_lot"] = "7" * 150
+    code, report = await _run(session_factory, FakeSoda(source), tmp_path / "2")
+    assert code == EXIT_OK, report.get("error")
+    assert report["evaluation"]["not_found"] == []
+    assert report["evaluation"]["shapes"] == {"unreadable": 1}
+    current = await _observations(db, current_only=True)
+    assert _current_accepted(current, ids["lots"]) == []
+    [conflict] = [r for r in current if r.tender_id == ids["lots"]]
+    assert conflict.validation_status == S.CONFLICT
+    assert conflict.validation["error"] == {
+        "class": "unkeyable_rows",
+        "message": "numero_lot_too_long",
+    }
+    assert len(conflict.evidence_url) <= 1024
+    assert report["writes"]["disappeared_not_closed"] == []
+
+
+def test_el_resum_del_cli_mostra_motius_i_desaparegudes(capsys):
+    """(n-2) L'operador veu per que s'ha tancat cada observacio i quantes no es tanquen."""
+    from app.ingestion.pscp_open_data.__main__ import _print
+
+    _print(
+        {
+            "dry_run": False,
+            "exit_code": 5,
+            "requests": 3,
+            "evaluation": {"tenders": 2, "observations": {}, "evaluation_errors": [{}]},
+            "writes": {
+                "inserted": 1,
+                "closed": 3,
+                "unchanged": 0,
+                "closed_changed": 1,
+                "closed_reassigned": 0,
+                "closed_unverifiable": 2,
+                "disappeared_not_closed": [{}, {}],
+            },
+        }
+    )
+    out = capsys.readouterr().out
+    assert "errors d'avaluacio: 1" in out
+    assert "closed_changed" in out and "closed_unverifiable" in out
+    assert "closed_reassigned" not in out
+    assert "desaparegudes (no tancades): 2" in out

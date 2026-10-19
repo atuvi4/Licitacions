@@ -151,6 +151,10 @@ def normalize_lot_number(raw: Any) -> str | None:
     text = str(raw).strip()
     if text == "":
         return None
+    # Un numero desmesurat no es normalitza: `int()` refusa mes de 4.300 digits, i
+    # tampoc no es pot desar com a clau (`MAX_LOT_NUMBER_LENGTH`).
+    if len(text) > MAX_LOT_NUMBER_LENGTH:
+        return text
     # Nomes digits ASCII: `"\u00b2".isdigit()` es cert pero `int()` el refusa (m-1).
     return str(int(text)) if _ASCII_DIGITS.fullmatch(text) else text
 
