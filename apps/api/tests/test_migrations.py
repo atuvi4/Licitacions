@@ -3973,7 +3973,7 @@ def test_0063_crea_la_taula_global_amb_les_restriccions():
         "tender_id UUID NOT NULL",
         "tender_lot_id UUID,",
         "amount_kind VARCHAR(15) NOT NULL",
-        "amount NUMERIC(18, 2) NOT NULL",
+        "amount NUMERIC(18, 2),",
         "currency VARCHAR(3) DEFAULT 'EUR' NOT NULL",
         "source_code VARCHAR(60) NOT NULL",
         "source_entity_key VARCHAR(200) NOT NULL",
@@ -3984,14 +3984,19 @@ def test_0063_crea_la_taula_global_amb_les_restriccions():
         "evidence_url TEXT NOT NULL",
         "evidence_sha256 VARCHAR(64) NOT NULL",
         "raw_storage_key VARCHAR(512),",
-        "validation_status VARCHAR(8) NOT NULL",
+        "validation_status VARCHAR(10) NOT NULL",
         "validation JSONB DEFAULT '{}' NOT NULL",
+        "provenance JSONB NOT NULL",
         "valid_from TIMESTAMP WITH TIME ZONE NOT NULL",
         "valid_to TIMESTAMP WITH TIME ZONE,",
         "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL",
         "amount_kind IN ('pbl_with_tax', 'pbl_without_tax', 'estimated_value')",
-        "validation_status IN ('accepted', 'conflict')",
-        "CHECK (amount >= 0)",
+        "validation_status IN ('accepted', 'conflict', 'no_value', 'superseded')",
+        "CHECK (amount IS NULL OR amount >= 0)",
+        "CHECK (validation_status <> 'accepted' OR (amount IS NOT NULL AND amount > 0))",
+        "CHECK (validation_status <> 'no_value' OR amount IS NULL OR amount = 0)",
+        "CHECK (amount IS NOT NULL OR validation_status = 'no_value')",
+        "CHECK (length(currency) = 3)",
         "CHECK (valid_to IS NULL OR valid_to >= valid_from)",
         "CHECK (length(evidence_sha256) = 64)",
         "CONSTRAINT fk_tender_amount_observations_tender_id FOREIGN KEY",
@@ -4004,6 +4009,12 @@ def test_0063_crea_la_taula_global_amb_les_restriccions():
         f"CREATE UNIQUE INDEX uq_{_AMOUNTS}_current ON {_AMOUNTS} (tender_id, "
         "coalesce(tender_lot_id, '00000000-0000-0000-0000-000000000000'), amount_kind, "
         "source_code) WHERE valid_to IS NULL AND validation_status = 'accepted'"
+    ) in sql
+    # Una sola vigent (de qualsevol estat) per fila de la font i objectiu.
+    assert (
+        f"CREATE UNIQUE INDEX uq_{_AMOUNTS}_current_row ON {_AMOUNTS} (tender_id, "
+        "coalesce(tender_lot_id, '00000000-0000-0000-0000-000000000000'), amount_kind, "
+        "source_code, source_row_id) WHERE valid_to IS NULL"
     ) in sql
     assert f"CREATE INDEX ix_{_AMOUNTS}_tender_id ON {_AMOUNTS} (tender_id)" in sql
     # Nomes d'afegir: el trigger refusa UPDATE (excepte tancar) i DELETE directe.
@@ -4022,6 +4033,7 @@ def test_0063_downgrade_refusa_si_hi_ha_observacions_abans_del_drop():
     assert "drop_amount_observations=yes" in sql[guard : guard + 300]
     assert guard < sql.index("DROP TRIGGER IF EXISTS tender_amount_observations_append_only")
     assert guard < sql.index(f"DROP TABLE {_AMOUNTS}")
+    assert guard < sql.index(f"DROP INDEX uq_{_AMOUNTS}_current_row")
     assert "DROP FUNCTION IF EXISTS tender_amount_observations_append_only()" in sql
 
 
@@ -4174,8 +4186,12 @@ async def test_0063_round_trip_real_a_postgres(engine):
         f"ck_{_AMOUNTS}_amount_kind_valid",
         f"ck_{_AMOUNTS}_validation_status_valid",
         f"ck_{_AMOUNTS}_amount_non_negative",
+        f"ck_{_AMOUNTS}_accepted_amount_positive",
+        f"ck_{_AMOUNTS}_no_value_amount",
+        f"ck_{_AMOUNTS}_null_amount_is_no_value",
         f"ck_{_AMOUNTS}_validity_ordered",
         f"ck_{_AMOUNTS}_evidence_sha256_length",
+        f"ck_{_AMOUNTS}_currency_length",
         f"fk_{_AMOUNTS}_tender_id",
         f"fk_{_AMOUNTS}_tender_lot_id",
         f"pk_{_AMOUNTS}",
@@ -4184,6 +4200,7 @@ async def test_0063_round_trip_real_a_postgres(engine):
         f"pk_{_AMOUNTS}",
         f"ix_{_AMOUNTS}_tender_id",
         f"uq_{_AMOUNTS}_current",
+        f"uq_{_AMOUNTS}_current_row",
     }
     assert [name for name, _ in from_migration[3]] == ["tender_amount_observations_append_only"]
 
@@ -4209,9 +4226,9 @@ async def test_0063_round_trip_real_a_postgres(engine):
             sa.text(
                 f"INSERT INTO {_AMOUNTS} (id, tender_id, amount_kind, amount, source_code, "
                 "source_entity_key, source_row_id, retrieved_at, evidence_url, evidence_sha256, "
-                "validation_status, valid_from) VALUES (gen_random_uuid(), :tender, "
+                "validation_status, valid_from, provenance) VALUES (gen_random_uuid(), :tender, "
                 "'pbl_with_tax', 247121.63, 'pscp_open_data:ybgg-dgi6', 'k', 'r', now(), "
-                "'https://x', :sha, 'accepted', now())"
+                "'https://x', :sha, 'accepted', now(), '{}')"
             ),
             {"tender": tender_id, "sha": "a" * 64},
         )
@@ -4233,4 +4250,52 @@ async def test_0063_round_trip_real_a_postgres(engine):
         assert await functions(conn) == []
         await conn.run_sync(run, m63.upgrade)
         assert await schema(conn) == from_migration
+        assert (await conn.execute(count)).scalar_one() == 0
+
+    # Sobre l'esquema de la MIGRACIO (no el dels models): les cascades, les dues
+    # unicitats i les regles de l'import.
+    insert = sa.text(
+        f"INSERT INTO {_AMOUNTS} (id, tender_id, tender_lot_id, amount_kind, amount, "
+        "source_code, source_entity_key, source_row_id, retrieved_at, evidence_url, "
+        "evidence_sha256, validation_status, valid_from, provenance) VALUES "
+        "(gen_random_uuid(), :tender, :lot, 'pbl_with_tax', :amount, 'pscp_open_data:ybgg-dgi6', "
+        "'k', :row, now(), 'https://x', :sha, :status, now(), '{}')"
+    )
+    async with engine.begin() as conn:
+        lot_id = (
+            await conn.execute(
+                sa.text(
+                    "INSERT INTO tender_lots (id, tender_id, external_lot_id, lot_number, "
+                    "currency, created_at, updated_at) VALUES (gen_random_uuid(), :t, '1', 1, "
+                    "'EUR', now(), now()) RETURNING id"
+                ),
+                {"t": tender_id},
+            )
+        ).scalar_one()
+    base = {"tender": tender_id, "lot": None, "sha": "a" * 64}
+    rows = [
+        {**base, "amount": 10, "row": "r", "status": "accepted"},
+        {**base, "amount": None, "row": "old", "status": "no_value"},
+        {**base, "amount": 0, "row": "zero", "status": "no_value"},
+        {**base, "amount": 5, "row": "pre", "status": "superseded"},
+        {**base, "lot": lot_id, "amount": 7, "row": "r_1", "status": "accepted"},
+    ]
+    async with engine.begin() as conn:
+        for row in rows:
+            await conn.execute(insert, row)
+    for bad in (
+        {**base, "amount": 11, "row": "r2", "status": "accepted"},  # 2a accepted vigent
+        {**base, "amount": 3, "row": "r", "status": "conflict"},  # 2a vigent de la fila
+        {**base, "amount": 0, "row": "z", "status": "accepted"},
+        {**base, "amount": None, "row": "z", "status": "conflict"},
+        {**base, "amount": 1, "row": "z", "status": "no_value"},
+    ):
+        with pytest.raises(DBAPIError):
+            async with engine.begin() as conn:
+                await conn.execute(insert, bad)
+    async with engine.begin() as conn:
+        assert (await conn.execute(count)).scalar_one() == len(rows)
+        await conn.execute(sa.text("DELETE FROM tender_lots WHERE id = :id"), {"id": lot_id})
+        assert (await conn.execute(count)).scalar_one() == len(rows) - 1
+        await conn.execute(sa.text("DELETE FROM tenders WHERE id = :id"), {"id": tender_id})
         assert (await conn.execute(count)).scalar_one() == 0

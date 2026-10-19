@@ -7,12 +7,24 @@ del dataset, moment de la consulta, consulta exacta, SHA-256 del cos original i,
 ha, la resposta redactada desada). **No toca cap taula existent**: ni
 `tenders.base_budget` ni cap altre import de la licitacio. Cap backfill.
 
-* Vigencia: `valid_to` NULL = vigent. Una sola observacio `accepted` vigent per
-  (expedient, lot o expedient, tipus d'import, font): index unic parcial amb
-  `coalesce(tender_lot_id, nil)`, perque dos NULL no son "diferents" aqui.
+* Estats: `accepted`, `conflict`, `no_value` (la font publica 0 o res: es desa tal com
+  es publica pero mai no es un import valid) i `superseded` (una publicacio posterior
+  ho substitueix, demostrat per identificador, fase i dates).
+* Import: `amount` es nul.lable (un import publicat buit es desa com a `no_value` amb
+  `amount` NULL, per tracabilitat). CHECK: `accepted` => `amount > 0`; `no_value` =>
+  `amount` NULL o 0; `amount` NULL => `no_value`; `amount >= 0`.
+* Procedencia: `provenance` (JSON, NOT NULL) amb el camp d'origen, el valor publicat en
+  text, la fila (`:id`, `:updated_at`, organ, fase, enllacos), el dataset, el seu
+  `rowsUpdatedAt` i la llicencia amb el text d'atribucio.
+* Vigencia: `valid_to` NULL = vigent. Dos index unics parcials, amb
+  `coalesce(tender_lot_id, nil)` perque dos NULL no son "diferents" aqui:
+  - una sola observacio `accepted` vigent per (expedient, lot o expedient, tipus
+    d'import, font);
+  - una sola observacio vigent, de qualsevol estat, per (expedient, lot o expedient,
+    tipus, font, fila de la font): cada refresc tanca l'anterior abans d'afegir-ne una.
 * CHECK: els valors dels dos enums (VARCHAR + CHECK, cap tipus natiu: vegeu
-  `enum_column`), `amount >= 0`, `valid_to >= valid_from` i el SHA-256 de 64
-  caracters.
+  `enum_column`), les regles de l'import, `valid_to >= valid_from`, el SHA-256 de 64
+  caracters i la moneda de 3.
 * Nomes d'afegir, a PostgreSQL: el mateix patro que `review_item_revisions` (0040).
   Un trigger refusa tot UPDATE que no sigui TANCAR una observacio vigent (`valid_to`
   de NULL a un valor, sense tocar res mes) i tot DELETE directe; un DELETE que arriba
@@ -45,9 +57,15 @@ _TABLE = "tender_amount_observations"
 
 # --- Copiat de l'aplicacio: la migracio no l'importa. ---------------------------
 _AMOUNT_KINDS = ("pbl_with_tax", "pbl_without_tax", "estimated_value")
-_STATUSES = ("accepted", "conflict")
+_STATUSES = ("accepted", "conflict", "no_value", "superseded")
 _NIL_LOT = "'00000000-0000-0000-0000-000000000000'"
 _CURRENT_ACCEPTED = "valid_to IS NULL AND validation_status = 'accepted'"
+_CURRENT = "valid_to IS NULL"
+#: Regles de l'import (el mateix text que el model).
+_ACCEPTED_AMOUNT_POSITIVE = "validation_status <> 'accepted' OR (amount IS NOT NULL AND amount > 0)"
+_NO_VALUE_AMOUNT = "validation_status <> 'no_value' OR amount IS NULL OR amount = 0"
+_NULL_AMOUNT_IS_NO_VALUE = "amount IS NOT NULL OR validation_status = 'no_value'"
+_AMOUNT_NON_NEGATIVE = "amount IS NULL OR amount >= 0"
 
 # El mateix text que `app.models.tender_amounts`.
 _APPEND_ONLY_FUNCTION = """
@@ -128,7 +146,7 @@ def upgrade() -> None:
         sa.Column("tender_id", sa.Uuid(), nullable=False),
         sa.Column("tender_lot_id", sa.Uuid(), nullable=True),
         sa.Column("amount_kind", sa.String(length=15), nullable=False),
-        sa.Column("amount", sa.Numeric(18, 2), nullable=False),
+        sa.Column("amount", sa.Numeric(18, 2), nullable=True),
         sa.Column("currency", sa.String(length=3), server_default="EUR", nullable=False),
         sa.Column("source_code", sa.String(length=60), nullable=False),
         sa.Column("source_entity_key", sa.String(length=200), nullable=False),
@@ -139,8 +157,9 @@ def upgrade() -> None:
         sa.Column("evidence_url", sa.Text(), nullable=False),
         sa.Column("evidence_sha256", sa.String(length=64), nullable=False),
         sa.Column("raw_storage_key", sa.String(length=512), nullable=True),
-        sa.Column("validation_status", sa.String(length=8), nullable=False),
+        sa.Column("validation_status", sa.String(length=10), nullable=False),
         sa.Column("validation", _json(), server_default=sa.text("'{}'"), nullable=False),
+        sa.Column("provenance", _json(), nullable=False),
         sa.Column("valid_from", sa.DateTime(timezone=True), nullable=False),
         sa.Column("valid_to", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
@@ -170,7 +189,14 @@ def upgrade() -> None:
             _in_list("validation_status", _STATUSES),
             name=op.f(f"ck_{_TABLE}_validation_status_valid"),
         ),
-        sa.CheckConstraint("amount >= 0", name=op.f(f"ck_{_TABLE}_amount_non_negative")),
+        sa.CheckConstraint(_AMOUNT_NON_NEGATIVE, name=op.f(f"ck_{_TABLE}_amount_non_negative")),
+        sa.CheckConstraint(
+            _ACCEPTED_AMOUNT_POSITIVE, name=op.f(f"ck_{_TABLE}_accepted_amount_positive")
+        ),
+        sa.CheckConstraint(_NO_VALUE_AMOUNT, name=op.f(f"ck_{_TABLE}_no_value_amount")),
+        sa.CheckConstraint(
+            _NULL_AMOUNT_IS_NO_VALUE, name=op.f(f"ck_{_TABLE}_null_amount_is_no_value")
+        ),
         sa.CheckConstraint(
             "valid_to IS NULL OR valid_to >= valid_from",
             name=op.f(f"ck_{_TABLE}_validity_ordered"),
@@ -178,6 +204,7 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "length(evidence_sha256) = 64", name=op.f(f"ck_{_TABLE}_evidence_sha256_length")
         ),
+        sa.CheckConstraint("length(currency) = 3", name=op.f(f"ck_{_TABLE}_currency_length")),
     )
     op.create_index(f"ix_{_TABLE}_tender_id", _TABLE, ["tender_id"])
     op.create_index(
@@ -192,6 +219,20 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text(_CURRENT_ACCEPTED),
         sqlite_where=sa.text(_CURRENT_ACCEPTED),
+    )
+    op.create_index(
+        f"uq_{_TABLE}_current_row",
+        _TABLE,
+        [
+            "tender_id",
+            sa.text(f"coalesce(tender_lot_id, {_NIL_LOT})"),
+            "amount_kind",
+            "source_code",
+            "source_row_id",
+        ],
+        unique=True,
+        postgresql_where=sa.text(_CURRENT),
+        sqlite_where=sa.text(_CURRENT),
     )
     if _is_postgresql():
         op.execute(_APPEND_ONLY_FUNCTION)
@@ -210,6 +251,7 @@ def apply_downgrade(*, drop_rows: bool) -> None:
             op.execute(_REFUSE_DOWNGRADE)
         op.execute(f"DROP TRIGGER IF EXISTS tender_amount_observations_append_only ON {_TABLE}")
         op.execute("DROP FUNCTION IF EXISTS tender_amount_observations_append_only()")
+    op.drop_index(f"uq_{_TABLE}_current_row", table_name=_TABLE)
     op.drop_index(f"uq_{_TABLE}_current", table_name=_TABLE)
     op.drop_index(f"ix_{_TABLE}_tender_id", table_name=_TABLE)
     op.drop_table(_TABLE)

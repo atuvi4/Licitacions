@@ -1953,9 +1953,18 @@ class TenderAmountKind(StrEnum):
 class AmountObservationStatus(StrEnum):
     """Resultat de les guardes d'una observacio d'import (0063).
 
-    Nomes una `accepted` vigent es pot mostrar; una `conflict` es desa amb el detall de
-    la guarda que ha fallat i no es mostra mai com a vigent.
+    * `accepted`: totes les guardes passen i l'import es > 0. Nomes una `accepted`
+      vigent es pot mostrar.
+    * `conflict`: alguna guarda falla (o l'evidencia no es concloent); es desa amb el
+      detall i queda pendent de revisio. Mai no es mostra com a vigent.
+    * `no_value`: la font publica l'import a 0 o buit (NULL). Es desa tal com es
+      publica, amb la procedencia, pero mai no es un import economic valid ni entra a
+      cap calcul.
+    * `superseded`: una publicacio posterior de la mateixa font la substitueix, i
+      l'identificador de publicacio, la fase i les dates ho demostren alhora.
     """
 
     ACCEPTED = "accepted"
     CONFLICT = "conflict"
+    NO_VALUE = "no_value"
+    SUPERSEDED = "superseded"
