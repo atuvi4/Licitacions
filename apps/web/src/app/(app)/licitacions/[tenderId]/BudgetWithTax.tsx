@@ -4,8 +4,10 @@
  * Els textos i les regles són a `lib/pscpAmounts`.
  */
 
+import { AmountStack } from "@/components/AmountStack";
 import { formatAmount } from "@/lib/format";
 import {
+  PLACSP_NO_AMOUNT_TEXT,
   PSCP_LINK_TEXT,
   PSCP_PENDING_TEXT,
   PSCP_ZERO_TEXT,
@@ -13,7 +15,7 @@ import {
   pscpLotLine,
   pscpSourceLine,
 } from "@/lib/pscpAmounts";
-import type { AmountObservation } from "@/lib/tenders";
+import { type AmountObservation, type TenderLot, tenderAmounts } from "@/lib/tenders";
 
 const LINK = "text-brand-strong hover:text-accent-800";
 
@@ -75,6 +77,28 @@ export function PscpLotLine({ observation }: { observation: AmountObservation | 
     <span className="block text-caption text-muted tabular-nums" data-pscp-lot={observation?.status}>
       {text}
     </span>
+  );
+}
+
+/**
+ * La cel·la «Import» d'un lot: la part de la PLACSP (com abans) i, a sota, la línia de la PSCP.
+ * Si la PSCP en diu alguna cosa i la PLACSP no hi té cap import, la part de la PLACSP diu
+ * «Sense import a la PLACSP» i no «No consta a les dades de la font», que la contradiria.
+ */
+export function LotAmountCell({ lot, observation }: { lot: TenderLot; observation: AmountObservation | undefined }) {
+  const pscpLine = pscpLotLine(observation);
+  const placspEmpty = tenderAmounts(lot).primary === null;
+  return (
+    <>
+      {pscpLine && placspEmpty ? (
+        <span className="text-muted" data-placsp-empty>
+          {PLACSP_NO_AMOUNT_TEXT}
+        </span>
+      ) : (
+        <AmountStack item={lot} currency={lot.currency} />
+      )}
+      <PscpLotLine observation={observation} />
+    </>
   );
 }
 

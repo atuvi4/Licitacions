@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
-import { AmountStack } from "@/components/AmountStack";
 import { ComplianceSection } from "@/components/ComplianceSection";
 import { PreFitMissing, PreFitPanel, ScoreValue } from "@/components/PreFit";
 import { RequirementAnalysisSection } from "@/components/RequirementAnalysis";
@@ -63,7 +62,7 @@ import type { WorkspaceDetail } from "@/lib/workspace";
 
 import { extractedText, fileErrorText, isQueued, jobPill, readingLabel, readingSubtext, selectionLabel, versionText } from "./documents";
 import { topLevelDocuments } from "./package";
-import { PscpAttribution, PscpBudgetValue, PscpLotLine } from "./BudgetWithTax";
+import { LotAmountCell, PscpAttribution, PscpBudgetValue } from "./BudgetWithTax";
 import { DocumentBadges, PackageNotice, PlecsReadingLine, RemovedDocuments } from "./PlecsOverview";
 import {
   amountMeta,
@@ -778,12 +777,7 @@ function TenderDetail() {
                     width: "14%",
                     // P2-06: abans barrejava PBL i VEC sense dir-ho; ara, com a la taula d'oportunitats.
                     // F-06a: i, a sota, el PBL amb IVA de la PSCP si n'hi ha (mai un conflicte com a import).
-                    cell: (lot) => (
-                      <>
-                        <AmountStack item={lot} currency={lot.currency} />
-                        <PscpLotLine observation={budgetWithTax.lots[lot.id]} />
-                      </>
-                    ),
+                    cell: (lot) => <LotAmountCell lot={lot} observation={budgetWithTax.lots[lot.id]} />,
                   },
                   {
                     key: "cpv",

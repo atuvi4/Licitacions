@@ -30,7 +30,9 @@ function obs(overrides: Partial<AmountObservation> = {}): AmountObservation {
   };
 }
 
-const lot = (id: string) => ({ id }) as TenderLot;
+const lot = (id: string, base_budget: string | null = null) => ({ id, base_budget }) as TenderLot;
+const OFFICIAL =
+  "Font: Generalitat de Catalunya. Departament d'Economia i Finances — Contractació pública a Catalunya: publicacions a la Plataforma de serveis de contractació pública (dades obertes). Llicència oberta d'ús d'informació – Catalunya.";
 
 describe("PBL amb IVA de la PSCP (F-06a)", () => {
   it("les comprovacions, en català i amb «i» al final", () => {
@@ -51,7 +53,7 @@ describe("PBL amb IVA de la PSCP (F-06a)", () => {
       "La PSCP publica 98.600,00 € com a pressupost base amb IVA, però no coincideix amb les dades de la PLACSP (òrgan i VEC). No es fa servir fins que es verifiqui.",
     );
     expect(nbsp(pscpConflictNotice(obs({ status: "conflict", amount: "98600.00" })))).toBe(
-      "La PSCP publica 98.600,00 € com a pressupost base amb IVA, però no coincideix amb les dades de la PLACSP. No es fa servir fins que es verifiqui.",
+      "La PSCP publica 98.600,00 € com a pressupost base amb IVA, però no ha superat les comprovacions de coherència de la font. No es fa servir fins que es verifiqui.",
     );
     expect(pscpConflictNotice(obs({ status: "conflict", amount: null }))).toBe(
       "La PSCP no hi publica cap import vàlid com a pressupost base amb IVA. No es fa servir fins que es verifiqui.",
@@ -82,7 +84,7 @@ describe("PBL amb IVA de la PSCP (F-06a)", () => {
   });
 
   it("la vista: si la PLACSP ja publica el PBL amb IVA, el fet és el seu; l'atribució, només si es mostra alguna cosa", () => {
-    const observations = { expedient: obs(), lots: {}, attribution: "x", source_updated_at: "2026-10-16T06:30:00Z" };
+    const observations = { expedient: obs(), lots: {}, attribution: OFFICIAL, source_updated_at: "2026-10-16T06:30:00Z" };
     expect(budgetWithTaxView({ base_budget: null, lots: [], budget_with_tax_observations: observations }).expedient).toEqual(obs());
     const placsp = budgetWithTaxView({ base_budget: "200000", lots: [], budget_with_tax_observations: observations });
     expect(placsp.expedient).toBeNull();
@@ -104,15 +106,35 @@ describe("PBL amb IVA de la PSCP (F-06a)", () => {
           l2: obs({ status: "conflict", source_updated_at: "2026-10-16T06:30:00Z" }),
           gone: obs(),
         },
-        attribution: "x",
+        attribution: OFFICIAL,
         source_updated_at: null,
       },
     });
     expect(Object.keys(view.lots)).toEqual(["l1", "l2"]);
-    expect(view.attribution).toBe(pscpAttribution("2026-10-16T06:30:00Z"));
-    expect(view.attribution).toBe(
-      "Font: Generalitat de Catalunya. Departament d'Economia i Finances — Contractació pública a Catalunya: publicacions a la Plataforma de serveis de contractació pública (dades obertes). Llicència oberta d'ús d'informació – Catalunya. Darrera actualització: " +
-        `${formatDate("2026-10-16T06:30:00Z")}.`,
-    );
+    expect(view.attribution).toBe(pscpAttribution(OFFICIAL, "2026-10-16T06:30:00Z"));
+    // El text és el de l'API, tal qual, i la data a continuació.
+    expect(view.attribution).toBe(`${OFFICIAL} Darrera actualització: ${formatDate("2026-10-16T06:30:00Z")}.`);
+  });
+
+  it("un lot amb PBL amb IVA de la PLACSP el conserva: la PSCP no s'hi mostra com a segon PBL", () => {
+    const view = budgetWithTaxView({
+      base_budget: null,
+      lots: [lot("l1", "1000.00"), lot("l2")],
+      budget_with_tax_observations: { expedient: null, lots: { l1: obs(), l2: obs() }, attribution: OFFICIAL, source_updated_at: null },
+    });
+    expect(Object.keys(view.lots)).toEqual(["l2"]);
+    const onlyPlacsp = budgetWithTaxView({
+      base_budget: null,
+      lots: [lot("l1", "1000.00")],
+      budget_with_tax_observations: { expedient: null, lots: { l1: obs() }, attribution: OFFICIAL, source_updated_at: null },
+    });
+    expect(onlyPlacsp.lots).toEqual({});
+    expect(onlyPlacsp.attribution).toBeNull();
+  });
+
+  it("sense text d'atribució de l'API no se n'inventa cap; sense data, «desconeguda»", () => {
+    const observations = { expedient: obs({ source_updated_at: null }), lots: {}, attribution: null, source_updated_at: null };
+    expect(budgetWithTaxView({ base_budget: null, lots: [], budget_with_tax_observations: observations }).attribution).toBeNull();
+    expect(pscpAttribution(OFFICIAL, null)).toBe(`${OFFICIAL} Darrera actualització: desconeguda.`);
   });
 });

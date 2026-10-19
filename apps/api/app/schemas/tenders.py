@@ -383,8 +383,9 @@ class BudgetWithTaxObservations(ORMModel):
 
     `expedient`: la de l'expedient, o NULL. `lots`: per lot vigent d'aquesta licitacio
     (`tender_lot_id` -> observacio); una fila de lot de la font sense lot nostre no hi
-    es (ni a `expedient`). `attribution` (el text de la llicencia, sense data) i
-    `source_updated_at` (la mes recent de les ensenyades) nomes quan n'hi ha alguna.
+    es (ni a `expedient`). `attribution` (el text oficial de la llicencia tal com l'ensenya
+    la fitxa, sense data: la web el pinta tal qual) i `source_updated_at` (la data del
+    dataset mes recent de les retornades) nomes quan se'n retorna alguna.
     """
 
     expedient: AmountObservationRead | None = None

@@ -18,9 +18,26 @@ Que s'ensenya:
 * Lots: nomes els lots vigents de la licitacio (`removed_at` NULL).
 
 Regla de seleccio, si un mateix objectiu (l'expedient o un lot) te mes d'una observacio
-vigent ensenyable: primer per estat (`accepted` > `conflict` > `no_value`), despres la de
-`valid_from` mes recent i, a igualtat, l'`id` mes petit (en text). Determinista: la
-mateixa base dona sempre la mateixa resposta.
+vigent ensenyable:
+
+1. per estat: `accepted` > `conflict` > `no_value`. L'estat passa per davant de la data:
+   una `conflict` vigent guanya a una `no_value` mes nova del mateix objectiu (l'adaptador
+   no tanca les observacions de files desaparegudes, per decisio del propietari; es el
+   criteri conservador: una discrepancia no s'amaga perque n'arribi una lectura buida);
+2. la CANONICA abans que la d'una fila antiga: en la forma `mixed` amb la fila exacta no
+   explicada, l'adaptador desa al mateix run (mateix `valid_from`) la de l'expedient
+   (`<uuid>_*`) i la de la fila antiga (`validation.role = "unexplained_row"`). La de la
+   fila antiga no s'ensenya mai si hi ha la canonica (ni import, ni enllac, ni
+   comprovacions). `evaluation_error` es la lectura de l'expedient: compta com a canonica;
+3. la de `valid_from` mes recent;
+4. a igualtat, l'`id` mes petit (en text).
+
+Determinista: la mateixa base dona sempre la mateixa resposta.
+
+Atribucio: el text oficial de la llicencia tal com l'ensenya la fitxa
+(`OFFICIAL_ATTRIBUTION`), sense data; la data del dataset va a part
+(`source_updated_at`). No es la constant `ATTRIBUTION` de l'adaptador: aquella es la
+procedencia que ja s'ha escrit a les observacions i no es toca.
 """
 
 from __future__ import annotations
@@ -32,7 +49,7 @@ from typing import Any
 
 import sqlalchemy as sa
 
-from app.ingestion.pscp_open_data import ATTRIBUTION, SOURCE_CODE
+from app.ingestion.pscp_open_data import SOURCE_CODE
 from app.models.enums import AmountObservationStatus, TenderAmountKind
 from app.models.tender_amounts import TenderAmountObservation
 from app.schemas.tenders import AmountObservationRead, BudgetWithTaxObservations
@@ -63,6 +80,17 @@ _LOT_GUARDS = {
 }
 
 LOT_KEY_MARKER = "#lot="
+#: Rols de `validation` d'una fila antiga de l'expedient (no la lectura canonica).
+NON_CANONICAL_ROLES = frozenset({"unexplained_row", "superseded_row"})
+
+#: L'atribucio que exigeix la llicencia, tal com l'ensenya la fitxa (sense la data, que
+#: va a `source_updated_at`). Una sola font de veritat: la web pinta aquest text.
+OFFICIAL_ATTRIBUTION = (
+    "Font: Generalitat de Catalunya. Departament d'Economia i Finances \u2014 "
+    "Contractaci\u00f3 p\u00fablica a Catalunya: publicacions a la Plataforma de serveis "
+    "de contractaci\u00f3 p\u00fablica (dades obertes). Llic\u00e8ncia oberta d'\u00fas "
+    "d'informaci\u00f3 \u2013 Catalunya."
+)
 
 
 def is_unmapped_lot_row(observation: TenderAmountObservation) -> bool:
@@ -73,11 +101,22 @@ def is_unmapped_lot_row(observation: TenderAmountObservation) -> bool:
     )
 
 
+def is_canonical(observation: TenderAmountObservation) -> bool:
+    """No es la d'una fila antiga de l'expedient (`validation.role`)."""
+    validation = observation.validation if isinstance(observation.validation, dict) else {}
+    return validation.get("role") not in NON_CANONICAL_ROLES
+
+
 def _sort_key(observation: TenderAmountObservation) -> tuple:
     valid_from = observation.valid_from
     if valid_from.tzinfo is None:  # SQLite torna les dates sense zona (son UTC).
         valid_from = valid_from.replace(tzinfo=UTC)
-    return (_RANK[observation.validation_status], -valid_from.timestamp(), str(observation.id))
+    return (
+        _RANK[observation.validation_status],
+        0 if is_canonical(observation) else 1,
+        -valid_from.timestamp(),
+        str(observation.id),
+    )
 
 
 def select_observation(
@@ -177,7 +216,7 @@ def build(
     return BudgetWithTaxObservations(
         expedient=observation_read(chosen) if chosen is not None else None,
         lots={lot_id: observation_read(o) for lot_id, o in lots.items()},
-        attribution=ATTRIBUTION if shown else None,
+        attribution=OFFICIAL_ATTRIBUTION if shown else None,
         source_updated_at=max(dates) if dates else None,
     )
 

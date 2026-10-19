@@ -737,8 +737,10 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
   const LINK = "https://contractaciopublica.cat/ca/detall-publicacio/x/300001";
   const UPDATED = "2026-10-16T06:30:00Z";
   const NOT_PUBLISHED = "No consta a les dades de la font";
-  const ATTRIBUTION_START =
-    "Font: Generalitat de Catalunya. Departament d'Economia i Finances — Contractació pública a Catalunya: publicacions a la Plataforma de serveis de contractació pública (dades obertes). Llicència oberta d'ús d'informació – Catalunya. Darrera actualització: ";
+  // El text oficial ve de l'API (una sola font de veritat): la web el pinta tal qual.
+  const OFFICIAL =
+    "Font: Generalitat de Catalunya. Departament d'Economia i Finances — Contractació pública a Catalunya: publicacions a la Plataforma de serveis de contractació pública (dades obertes). Llicència oberta d'ús d'informació – Catalunya.";
+  const ATTRIBUTION_START = `${OFFICIAL} Darrera actualització: `;
   const observation = (overrides: Record<string, unknown> = {}) => ({
     status: "accepted",
     amount: "247121.63",
@@ -757,7 +759,7 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
     place_of_execution: null, nuts_code: null, deadline_at: null, cpvs: [],
   });
   const text = (node: Element | null | undefined) => node?.textContent?.replace(/ /g, " ") ?? "";
-  const field = (expedient: unknown, lots: Record<string, unknown> = {}) => ({ expedient, lots, attribution: "Font: ...", source_updated_at: UPDATED });
+  const field = (expedient: unknown, lots: Record<string, unknown> = {}) => ({ expedient, lots, attribution: OFFICIAL, source_updated_at: UPDATED });
   const amountFact = () => screen.getByText("Pressupost base de licitació amb IVA", { selector: "p" }).parentElement!;
 
   async function renderWith(observations: unknown, extra: Record<string, unknown> = {}) {
@@ -842,6 +844,14 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
     expect(text(fact)).not.toContain(NOT_PUBLISHED);
   });
 
+  it("conflict sense cap comprovació contra la PLACSP: diu que no ha superat les de coherència de la font", async () => {
+    const fact = await renderWith(field(observation({ status: "conflict", amount: "98600.00", failed_checks: [] })));
+    expect(text(fact.querySelector("[data-pscp-notice]"))).toBe(
+      "La PSCP publica 98.600,00 € com a pressupost base amb IVA, però no ha superat les comprovacions de coherència de la font. No es fa servir fins que es verifiqui. · Veure la publicació ↗",
+    );
+    expect(text(fact)).not.toContain("PLACSP");
+  });
+
   it("si la PLACSP ja publica el PBL amb IVA, el fet continua sent el seu", async () => {
     const fact = await renderWith(field(observation()), { base_budget: "200000" });
     expect(text(fact)).toBe("Pressupost base de licitació amb IVA200.000,00 €");
@@ -864,8 +874,27 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
     expect(text(row("Lot dos"))).not.toContain("1.000,00");
     expect(text(row("Lot tres")?.querySelector("[data-pscp-lot]"))).toBe("PBL amb IVA: publicat a 0,00 € a la PSCP");
     expect(row("Lot quatre")?.querySelector("[data-pscp-lot]")).toBeNull();
+    // La part de la PLACSP no contradiu la línia de la PSCP: «Sense import a la PLACSP», no «No consta…».
+    for (const title of ["Lot u", "Lot dos", "Lot tres"]) {
+      expect(text(row(title)?.querySelector("[data-placsp-empty]"))).toBe("Sense import a la PLACSP");
+      expect(text(row(title))).not.toContain(NOT_PUBLISHED);
+    }
+    // Sense observació de la PSCP, com abans.
+    expect(row("Lot quatre")?.querySelector("[data-placsp-empty]")).toBeNull();
+    expect(text(row("Lot quatre"))).toContain(NOT_PUBLISHED);
     // Només un lot amb observació ja porta l'atribució; el fet de l'expedient no canvia.
     expect(text(document.querySelector("[data-pscp-attribution]"))).toBe(`${ATTRIBUTION_START}${formatDate(UPDATED)}.`);
     expect(text(amountFact())).toBe(`Pressupost base de licitació amb IVA${NOT_PUBLISHED}`);
+  });
+
+  it("un lot amb PBL amb IVA de la PLACSP el conserva: cap segon «PBL amb IVA» de la PSCP ni atribució", async () => {
+    const withPlacsp = { ...lotOf("l1", "Lot amb PLACSP"), base_budget: "1210.00" };
+    await renderWith(field(null, { l1: observation({ amount: "32670.00" }) }), { lots: [withPlacsp], lot_count: 1 });
+    const row = screen.getByText("Lot amb PLACSP").closest("tr");
+    expect(text(row)).toContain("1.210,00 €");
+    expect(row?.querySelector("[data-pscp-lot]")).toBeNull();
+    expect(row?.querySelector("[data-placsp-empty]")).toBeNull();
+    expect(text(row)).not.toContain("32.670,00");
+    expect(document.querySelector("[data-pscp-attribution]")).toBeNull();
   });
 });

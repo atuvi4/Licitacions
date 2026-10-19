@@ -7,17 +7,21 @@
  * - `no_value` publicat a 0: un text que diu què és, mai un import.
  * - `no_value` nul o sense observació: com abans («No consta a les dades de la font»).
  * - `conflict`: «Pendent de verificació…» com a valor; l'import de la PSCP només dins de l'avís.
- * - Si la PLACSP ja publica el PBL amb IVA (`base_budget`), el fet continua sent el seu.
+ * - Si la PLACSP ja publica el PBL amb IVA (`base_budget`), el fet (o el lot) continua sent el seu.
+ * - Un lot amb observació mostrada diu «Sense import a la PLACSP», no «No consta…», a la part de la PLACSP.
+ * - L'atribució és el text de l'API, amb la data del dataset.
  */
 
 import { formatAmount, formatDate } from "@/lib/format";
-import type { AmountFailedCheck, AmountObservation, BudgetWithTaxObservations, TenderDetail } from "@/lib/tenders";
+import type { AmountFailedCheck, AmountObservation, BudgetWithTaxObservations, TenderDetail, TenderLot } from "@/lib/tenders";
 
 export const PSCP_PENDING_TEXT = "Pendent de verificació (discrepància entre fonts)";
 export const PSCP_ZERO_TEXT =
   "Publicat a 0,00 € a la PSCP (sense pressupost base de despesa; no s'utilitza com a import econòmic)";
 export const PSCP_LINK_TEXT = "Veure la publicació ↗";
 export const PSCP_NOT_USED_TEXT = "No es fa servir fins que es verifiqui.";
+/** La part de la PLACSP d'un lot sense import quan la PSCP sí que en diu alguna cosa. */
+export const PLACSP_NO_AMOUNT_TEXT = "Sense import a la PLACSP";
 
 /** Les comprovacions, en català i en l'ordre de l'API. */
 export const FAILED_CHECK_LABELS: Record<AmountFailedCheck, string> = {
@@ -43,7 +47,12 @@ export function pscpSourceLine(updatedAt: string | null | undefined): string {
   return updatedAt ? `${base}, actualitzat el ${formatDate(updatedAt)}` : base;
 }
 
-/** L'avís d'un `conflict`: l'import de la PSCP només surt aquí, mai com a valor del fet. */
+/**
+ * L'avís d'un `conflict`: l'import de la PSCP només surt aquí, mai com a valor del fet.
+ * Només diu «no coincideix amb les dades de la PLACSP» si ha fallat alguna comprovació contra
+ * la PLACSP (òrgan, PBL sense IVA, VEC o lots); si només n'han fallat d'internes de la font
+ * (ordre de l'IVA, coherència entre files, files sense explicar…), diu això.
+ */
 export function pscpConflictNotice(observation: AmountObservation): string {
   const checks = failedChecksText(observation.failed_checks);
   if (observation.amount === null || observation.amount === "") {
@@ -51,8 +60,10 @@ export function pscpConflictNotice(observation: AmountObservation): string {
     return `La PSCP no hi publica cap import vàlid com a pressupost base amb IVA${mismatch}. ${PSCP_NOT_USED_TEXT}`;
   }
   const amount = formatAmount(observation.amount, observation.currency);
-  const detail = checks ? ` (${checks})` : "";
-  return `La PSCP publica ${amount} com a pressupost base amb IVA, però no coincideix amb les dades de la PLACSP${detail}. ${PSCP_NOT_USED_TEXT}`;
+  const why = checks
+    ? `no coincideix amb les dades de la PLACSP (${checks})`
+    : "no ha superat les comprovacions de coherència de la font";
+  return `La PSCP publica ${amount} com a pressupost base amb IVA, però ${why}. ${PSCP_NOT_USED_TEXT}`;
 }
 
 /** Text de la línia de lot, o `null` si aquest lot no n'ha de mostrar cap. */
@@ -83,14 +94,13 @@ export interface BudgetWithTaxView {
   attribution: string | null;
 }
 
-/** L'atribució que exigeix la llicència (sense logotips). */
-export function pscpAttribution(updatedAt: string | null | undefined): string {
+/**
+ * L'atribució que exigeix la llicència (sense logotips): el text oficial que dona l'API (una
+ * sola font de veritat) i, a continuació, la data de la darrera actualització del dataset.
+ */
+export function pscpAttribution(text: string, updatedAt: string | null | undefined): string {
   const when = updatedAt ? formatDate(updatedAt) : "desconeguda";
-  return (
-    "Font: Generalitat de Catalunya. Departament d'Economia i Finances — Contractació pública a Catalunya: " +
-    "publicacions a la Plataforma de serveis de contractació pública (dades obertes). " +
-    `Llicència oberta d'ús d'informació – Catalunya. Darrera actualització: ${when}.`
-  );
+  return `${text} Darrera actualització: ${when}.`;
 }
 
 function latest(dates: (string | null)[]): string | null {
@@ -107,22 +117,31 @@ function latest(dates: (string | null)[]): string | null {
   return best;
 }
 
-/** Què es mostra a la fitxa, a partir de la resposta de l'API. */
+const present = (value: string | null | undefined) => value !== null && value !== undefined && value !== "";
+
+/**
+ * Què es mostra a la fitxa, a partir de la resposta de l'API. Si la PLACSP ja publica el PBL
+ * amb IVA (`base_budget`), de l'expedient o d'un lot, aquest continua tenint prioritat i la
+ * PSCP no s'hi mostra (ni com a segon «PBL amb IVA»).
+ */
 export function budgetWithTaxView(
-  detail: Pick<TenderDetail, "base_budget" | "lots"> & { budget_with_tax_observations?: BudgetWithTaxObservations | null },
+  detail: Pick<TenderDetail, "base_budget"> & {
+    lots: Pick<TenderLot, "id" | "base_budget">[];
+    budget_with_tax_observations?: BudgetWithTaxObservations | null;
+  },
 ): BudgetWithTaxView {
   const observations = detail.budget_with_tax_observations;
-  const placspBudget = detail.base_budget !== null && detail.base_budget !== "";
-  const expedient = !placspBudget && isShownObservation(observations?.expedient) ? observations!.expedient : null;
+  const expedient = !present(detail.base_budget) && isShownObservation(observations?.expedient) ? observations!.expedient : null;
   const lots: Record<string, AmountObservation> = {};
   for (const lot of detail.lots) {
     const observation = observations?.lots?.[lot.id];
-    if (isShownObservation(observation)) lots[lot.id] = observation;
+    if (!present(lot.base_budget) && isShownObservation(observation)) lots[lot.id] = observation;
   }
   const shown = [...(expedient ? [expedient] : []), ...Object.values(lots)];
+  const date = latest(shown.map((o) => o.source_updated_at)) ?? observations?.source_updated_at ?? null;
   return {
     expedient,
     lots,
-    attribution: shown.length ? pscpAttribution(latest(shown.map((o) => o.source_updated_at))) : null,
+    attribution: shown.length && observations?.attribution ? pscpAttribution(observations.attribution, date) : null,
   };
 }

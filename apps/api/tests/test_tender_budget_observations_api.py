@@ -17,12 +17,14 @@ from decimal import Decimal
 import pytest
 import sqlalchemy as sa
 
-from app.ingestion.pscp_open_data import ATTRIBUTION, SOURCE_CODE
+from app.ingestion.pscp_open_data import ATTRIBUTION as ADAPTER_ATTRIBUTION
+from app.ingestion.pscp_open_data import SOURCE_CODE
 from app.models.enums import AmountObservationStatus, TenderAmountKind
 from app.models.sources import Source
 from app.models.tender_amounts import TenderAmountObservation
 from app.models.tenders import Tender, TenderLot
 from app.tenders import amount_observations
+from app.tenders.amount_observations import OFFICIAL_ATTRIBUTION
 
 NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
 DATASET_UPDATED = datetime(2026, 10, 16, 6, 30, tzinfo=UTC)
@@ -141,7 +143,7 @@ async def test_accepted_d_expedient(db, client_a):
         "source_code": SOURCE_CODE,
     }
     assert field["lots"] == {}
-    assert field["attribution"] == ATTRIBUTION
+    assert field["attribution"] == OFFICIAL_ATTRIBUTION
     assert field["source_updated_at"] == "2026-10-16T06:30:00Z"
 
 
@@ -168,7 +170,7 @@ async def test_no_value_publicat_a_0_i_nul(db, client_a):
     assert published_null["expedient"]["published_zero"] is False
     assert published_null["expedient"]["publication_url"] is None
     # Una observacio ensenyada (tambe un `no_value` nul) porta l'atribucio.
-    assert published_null["attribution"] == ATTRIBUTION
+    assert published_null["attribution"] == OFFICIAL_ATTRIBUTION
 
 
 async def test_conflict_d_expedient_amb_les_comprovacions_que_fallen(db, client_a):
@@ -460,7 +462,7 @@ async def test_lots_accepted_conflict_no_value_i_lot_retirat(db, client_a):
     assert lots[str(two.id)]["failed_checks"] == ["organ", "pbl_without_tax"]
     assert lots[str(three.id)]["status"] == "no_value"
     assert lots[str(three.id)]["published_zero"] is True
-    assert field["attribution"] == ATTRIBUTION
+    assert field["attribution"] == OFFICIAL_ATTRIBUTION
 
 
 async def test_la_data_del_dataset_cau_a_la_procedencia_si_la_columna_es_buida(db, client_a):
@@ -596,4 +598,100 @@ async def test_a_postgresql_la_consulta_llegeix_el_jsonb(db, client_a):
     assert field["expedient"]["publication_url"] == LINK
     assert field["lots"][str(lot.id)]["amount"] == "32670.00"
     assert field["lots"][str(lot.id)]["publication_url"] == LINK
-    assert field["attribution"] == ATTRIBUTION
+    assert field["attribution"] == OFFICIAL_ATTRIBUTION
+
+
+# --------------------------------------------------------------------------- #
+# Revisio F-06a3: canonica, estat abans que data, atribucio                    #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("canonical_first", [True, False])
+async def test_mixed_amb_fila_exacta_no_explicada_guanya_la_canonica(db, client_a, canonical_first):
+    """Dues `conflict` d'expedient del mateix run (mateix `valid_from`): la canonica.
+
+    La forma `mixed` amb la fila exacta no explicada (`guards.py`): la de l'expedient,
+    `<uuid>_*`, i la de la fila antiga, `<uuid>` amb `role = unexplained_row` i
+    `failed = ["rows"]`. Sigui quin sigui l'ordre dels `id`, s'ensenya la canonica: mai
+    l'import, l'enllac ni les comprovacions de la fila antiga.
+    """
+    tender, _ = await _tender(db)
+    low, high = sorted([uuid.uuid4(), uuid.uuid4()], key=str)
+    canonical_id, old_id = (low, high) if canonical_first else (high, low)
+    old_link = "https://contractaciopublica.cat/ca/detall-publicacio/" + UID + "/100001"
+    db.add_all(
+        [
+            _obs(
+                tender,
+                id=canonical_id,
+                source_row_id=f"{UID}_*",
+                validation_status=CONFLICT,
+                amount=Decimal("22506.00"),
+                validation={"v": 1, "level": "expedient", "failed": ["net", "rows"]},
+            ),
+            _obs(
+                tender,
+                id=old_id,
+                source_row_id=UID,
+                validation_status=CONFLICT,
+                amount=Decimal("11111.11"),
+                validation={
+                    "v": 1,
+                    "level": "expedient",
+                    "role": "unexplained_row",
+                    "failed": ["rows"],
+                },
+                provenance=_provenance(old_link),
+            ),
+        ]
+    )
+    await db.commit()
+
+    expedient = (await _field(client_a, tender))["expedient"]
+    assert expedient["amount"] == "22506.00"
+    assert expedient["failed_checks"] == ["pbl_without_tax"]
+    assert expedient["publication_url"] == LINK
+
+
+async def test_una_conflict_vigent_guanya_a_una_no_value_mes_nova(db, client_a):
+    """L'estat passa per davant de la data: una discrepancia no s'amaga per una lectura buida."""
+    tender, _ = await _tender(db)
+    db.add_all(
+        [
+            _obs(
+                tender,
+                source_row_id="disappeared",
+                validation_status=CONFLICT,
+                amount=Decimal("98600.00"),
+                validation={"v": 1, "level": "expedient", "failed": ["organ"]},
+            ),
+            _obs(
+                tender,
+                source_row_id="new",
+                validation_status=NO_VALUE,
+                amount=Decimal("0"),
+                valid_from=NOW + timedelta(days=2),
+            ),
+        ]
+    )
+    await db.commit()
+    expedient = (await _field(client_a, tender))["expedient"]
+    assert (expedient["status"], expedient["amount"]) == ("conflict", "98600.00")
+
+
+async def test_l_atribucio_es_el_text_oficial_de_la_fitxa_sense_data(db, client_a):
+    tender, _ = await _tender(db)
+    db.add(_obs(tender))
+    await db.commit()
+    field = await _field(client_a, tender)
+    text = field["attribution"]
+    assert text == OFFICIAL_ATTRIBUTION
+    assert text.startswith("Font: Generalitat de Catalunya. Departament d'Economia i Finances ")
+    assert "publicacions a la Plataforma de serveis de contractaci" in text
+    assert "(dades obertes). Llic" in text
+    assert text.endswith(" Catalunya.")
+    # La constant de l'adaptador (procedencia ja escrita) no es la que s'exposa, i la
+    # data va a part.
+    assert text != ADAPTER_ATTRIBUTION
+    assert "ybgg-dgi6" not in text and "Darrera" not in text
+    assert field["source_updated_at"] == "2026-10-16T06:30:00Z"
