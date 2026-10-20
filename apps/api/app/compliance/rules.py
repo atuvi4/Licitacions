@@ -38,8 +38,10 @@ from app.models.enums import (
 #: local, bases d'assegurança (per sinistre i any, per victima, RC patronal),
 #: periodes i percentatges. L'ENS nomenat es llegeix com a certificacio (revisio si
 #: el plec no en diu la categoria) i la documentacio RELI/ROLECE de qui ja hi es
-#: inscrit no es avalua com l'exigencia d'estar-hi. El sublimit patronal per
-#: victima ja no el respon la xifra global de la polissa. El resum compta
+#: inscrit no es avalua com l'exigencia d'estar-hi; una classificacio o un registre
+#: que el plec diu literalment que NO s'exigeix (i no es obligatori) no aplica. El
+#: sublimit patronal per victima ja no el respon la xifra global de la polissa.
+#: El resum compta
 #: EXIGENCIES (grups de requisits duplicats, `app.compliance.consolidation`), no
 #: files. El pilot no tenia cap run de compliment: el canvi es segur.
 RULES_VERSION = "company-compliance-v5"
@@ -180,6 +182,9 @@ class ExplanationCode:
     ALTERNATIVE_GROUP_INCOMPLETE = "ALTERNATIVE_GROUP_INCOMPLETE"
 
     REQUIREMENT_VALUE_MISSING = "REQUIREMENT_VALUE_MISSING"
+    #: El plec diu literalment que aquest registre o classificacio NO s'exigeix
+    #: («no és necessari disposar de classificació»): no aplica (v5).
+    REQUIREMENT_NOT_REQUIRED = "REQUIREMENT_NOT_REQUIRED"
     SCOPE_NOT_APPLICABLE = "SCOPE_NOT_APPLICABLE"
     SCOPE_AMBIGUOUS = "SCOPE_AMBIGUOUS"
 

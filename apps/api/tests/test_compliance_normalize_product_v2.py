@@ -615,3 +615,23 @@ def test_experiencia_amb_projectes_simulats_va_a_revisio_per_similitud():
     outcome = assess_requirement(req("29c336e8"), profile, deadline=DEADLINE, profile=PV2)
     assert outcome.result == AssessmentResult.NEEDS_REVIEW
     assert outcome.explanation_code == ExplanationCode.EXPERIENCE_SIMILARITY_REVIEW
+
+
+@pytest.mark.parametrize("prefix", ["3662d496", "40d49f88", "bceceeca"])
+def test_la_classificacio_que_el_plec_diu_que_no_s_exigeix_no_aplica(prefix):
+    """Abans: «sense dades» (i, amb el perfil complet, «no compleix»)."""
+    before = assess_requirement(req(prefix), empty())
+    assert before.explanation_code == ExplanationCode.REGISTRATION_DATA_INCOMPLETE
+    complete = ProfileSnapshot(company_id=uuid.uuid4(), section_ratio={"registrations": 1.0})
+    assert assess_requirement(req(prefix), complete).result == AssessmentResult.DOES_NOT_SATISFY
+
+    after = assess_requirement(req(prefix), complete, profile=PV2)
+    assert after.result == AssessmentResult.NOT_APPLICABLE
+    assert after.explanation_code == ExplanationCode.REQUIREMENT_NOT_REQUIRED
+    assert after.params["normalization"]["provenance"][0]["source"] == "quote"
+
+
+def test_un_obligatori_que_diu_no_s_exigeix_no_es_resol_sol():
+    requirement = req("40d49f88", obligation=RequirementObligation.MANDATORY)
+    outcome = assess_requirement(requirement, empty(), profile=PV2)
+    assert outcome.explanation_code == ExplanationCode.REGISTRATION_DATA_INCOMPLETE

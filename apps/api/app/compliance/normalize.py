@@ -108,6 +108,7 @@ ROUTE_ENS_CERTIFICATION = "ens_certification"
 ROUTE_ENS_LEVEL_NOT_STATED = "ens_level_not_stated"
 ROUTE_REGISTRY_DOCUMENTATION_ONLY = "registry_documentation_only"
 ROUTE_SECTOR_OPERATOR_REGISTRY = "sector_operator_registry"
+ROUTE_NOT_REQUIRED = "not_required"
 
 
 @dataclass(frozen=True, slots=True)
@@ -945,6 +946,33 @@ def _registration(sources: _Sources, requirement: Any) -> Normalization | None:
     return Normalization(status="not_normalized", reason=REASON_REGISTRY_NOT_NAMED)
 
 
+#: «no és necessari disposar de classificació», «la classificació no s'exigeix»:
+#: el plec diu que NO s'exigeix. Avaluar-lo com si l'exigis faria dir «sense dades»
+#: o, amb el perfil complet, «no compleix» a una cosa que el plec no demana.
+_NOT_REQUIRED = re.compile(
+    r"\bno es necessari\b|\bno s'exigeix\b|\bno s'exigira\b|\bno es requereix\b"
+    r"|\bno se exige\b|\bno es necesari[oa]\b|\bno sera exigible\b|\bno es exigible\b"
+)
+_NOT_REQUIRED_CATEGORIES = frozenset(
+    {RequirementCategory.REGISTRATION, RequirementCategory.BUSINESS_CLASSIFICATION}
+)
+
+
+def _not_required(sources: _Sources, requirement: Any) -> Normalization | None:
+    """El plec diu, literalment, que aquest registre o classificacio NO s'exigeix.
+
+    Nomes amb text literal (value o cita) i mai per a un requisit `mandatory`: un
+    obligatori que digues «no s'exigeix» es una contradiccio de l'extraccio, i
+    aquella la resol una persona.
+    """
+    if getattr(requirement, "obligation", None) == RequirementObligation.MANDATORY:
+        return None
+    origin = sources.literal_flag(_NOT_REQUIRED, "requirement.not_required")
+    if origin is None:
+        return None
+    return Normalization(status="routed", route=ROUTE_NOT_REQUIRED, provenance=(origin,))
+
+
 def _certification(sources: _Sources) -> Normalization:
     for key in ("name", "certification", "standard"):
         raw = sources.value.get(key)
@@ -978,6 +1006,10 @@ def normalize_requirement(requirement: Any, profile: str | None) -> Normalizatio
         routed = _ens(sources, requirement)
         if routed is not None and (routed.status == "routed" or category in _VALUE_CATEGORIES):
             return routed
+    if category in _NOT_REQUIRED_CATEGORIES:
+        not_required = _not_required(sources, requirement)
+        if not_required is not None:
+            return not_required
     if category not in _VALUE_CATEGORIES:
         return None
 

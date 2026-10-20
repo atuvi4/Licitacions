@@ -172,6 +172,15 @@ def assess_requirement_traced(
         outcome = needs_review(
             RuleCode.REGISTRATION_EXACT, ExplanationCode.REGISTRATION_DOCUMENTATION_ONLY
         )
+    elif normalization.route == normalize.ROUTE_NOT_REQUIRED:
+        # El plec diu literalment que no s'exigeix (p. ex. «no és necessari
+        # disposar de classificació»): no hi ha res a acreditar.
+        outcome = RuleOutcome(
+            result=AssessmentResult.NOT_APPLICABLE,
+            rule_code=RuleCode.REGISTRATION_EXACT,
+            explanation_code=ExplanationCode.REQUIREMENT_NOT_REQUIRED,
+            mode=AssessmentMode.AUTOMATIC,
+        )
     elif profile == "v1" and _legacy_readable(requirement) and normalization.route is None:
         # La v1 ja es llegia amb fiabilitat: es llegeix igual, sense rastre.
         return _dispatch(requirement, snapshot, deadline=deadline, tender=tender), None

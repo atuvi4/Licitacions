@@ -333,6 +333,7 @@ export const EXPLANATION_LABELS: Record<string, string> = {
   RULE_NOT_AUTOMATABLE: "Aquest requisit no es pot comprovar automàticament.",
   REQUIREMENT_VALUE_MISSING:
     "El requisit no té un valor estructurat que es pugui comparar. Revisa'l al plec.",
+  REQUIREMENT_NOT_REQUIRED: "El plec diu que no s'exigeix: no hi ha res a acreditar.",
   SCOPE_NOT_APPLICABLE: "El requisit no aplica a aquest lot.",
   SCOPE_AMBIGUOUS: "No se sap a quin lot aplica el requisit.",
 };
