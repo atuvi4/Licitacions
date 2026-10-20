@@ -188,8 +188,12 @@ class ReplayClient:
         self._requested = requested
         self._select = selects.pop() if selects else None
         self._rows = rows
+        resolved = self.directory.resolve()
         self.replay_info = {
-            "dir": str(self.directory.resolve()),
+            "dir": str(resolved),
+            #: Identificador logic de la captura (cap cami de la maquina): els dos darrers
+            #: components del directori, p. ex. `deploy_f06a/load_1`.
+            "capture": f"{resolved.parent.name}/{resolved.name}",
             "raw_manifest_sha256": _sha256(manifest_bytes),
             "files_verified": len(bodies),
             "uuids_captured": len(requested),

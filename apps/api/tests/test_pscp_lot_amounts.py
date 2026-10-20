@@ -16,6 +16,7 @@ Cap test no surt a la xarxa.
 from __future__ import annotations
 
 import copy
+import csv
 import hashlib
 import json
 import uuid
@@ -39,6 +40,7 @@ from app.models.tenders import Tender
 from tests.test_pscp_open_data import (
     ALL,
     CASES,
+    ROWS_UPDATED_AT,
     FakeSoda,
     _observations,
     _rows,
@@ -176,6 +178,43 @@ def test_publicat_a_zero_es_no_value_amb_el_zero_tal_com_es_publica():
     assert set(_statuses(ev, NET)) == {S.ACCEPTED}
 
 
+@pytest.mark.parametrize("expedient", ["3", "0", None])
+def test_un_import_de_lot_no_representable_fa_fallar_la_suma(expedient):
+    """M-4: com el PBL amb IVA (I-2), sigui quin sigui l'import de l'expedient."""
+    guard = g._lot_total(p.parse_amount(expedient), [p.parse_amount(v) for v in ["1", "1.001"]])
+    assert guard == {"ok": False, "problem": "lot_amount_unrepresentable"}
+
+
+def test_un_pbl_net_de_lot_no_representable_posa_tots_els_nets_en_conflict():
+    """M-4: el lot illegible en `conflict` pel seu valor; els germans, per la suma. El VEC
+    no en pateix."""
+    rows = _rows("lots")
+    bad = _lot_rows(rows)[0]
+    bad["pressupost_licitacio_sense"] = "36190.001"
+    ev = g.evaluate(_snapshot("lots"), rows)
+    assert set(_statuses(ev, NET)) == {S.CONFLICT}
+    for draft in _new(ev, NET):
+        assert "lot.lot_net_sum" in draft.validation["blocking_failed"]
+    assert set(_statuses(ev, VEC)) == {S.ACCEPTED}
+    # Les drafts de sempre no canvien (la guarda `parse` del lot ja ho veia).
+    [pbl] = [d for d in ev.drafts if d.source_row_id == bad["id_intern"]]
+    assert pbl.validation["lot_guards"]["parse"]["ok"] is False
+
+
+def test_el_tax_order_de_l_expedient_bloqueja_el_pbl_net_del_lot():
+    """M-3: PBL amb IVA < PBL sense IVA de l'expedient: el net del lot en `conflict`; el
+    VEC, no (i `lot_sum`, propia del PBL amb IVA, no bloqueja cap dels dos)."""
+    rows = _rows("lots")
+    for row in rows:
+        row["pressupost_licitacio_amb_1"] = "59000"  # < 59510 sense IVA
+    ev = g.evaluate(_snapshot("lots"), rows)
+    assert "tax_order" in ev.failed
+    assert set(_statuses(ev, NET)) == {S.CONFLICT}
+    for draft in _new(ev, NET):
+        assert draft.validation["blocking_failed"] == ["expedient.tax_order"]
+    assert set(_statuses(ev, VEC)) == {S.ACCEPTED}
+
+
 def test_un_valor_no_representable_es_conflict_amb_import_nul_i_el_text():
     rows = _rows("lots")
     lot = _lot_rows(rows)[0]
@@ -231,7 +270,11 @@ def test_iva_del_zero_per_cent_al_lot_es_legitim_i_sense_pbl_amb_iva_no_s_aplica
     second["pressupost_licitacio_amb"] = second["pressupost_licitacio_sense"]
     ev = g.evaluate(_snapshot("lots"), rows)
     net = {d.source_row_id: d for d in _new(ev, NET)}
-    assert net[second["id_intern"]].validation["lot_guards"]["tax_order"] == {"ok": True}
+    assert net[second["id_intern"]].validation["lot_guards"]["tax_order"] == {
+        "ok": True,
+        "high": "3300.00",
+        "low": "3300.00",
+    }
     # Un lot sense PBL amb IVA publicat: la guarda no s'aplica, el net s'accepta.
     rows = _rows("lots")
     first = _lot_rows(rows)[0]
@@ -293,7 +336,6 @@ def test_regla_estricta_sense_arrodoniment_especial_d2():
         (None, ["1", "2"], "expedient_amount_not_positive"),
         ("3", ["1", None], "lot_amount_not_published"),
         ("3", ["1", "0"], "lot_amount_zero"),
-        ("3", ["1", "1.001"], "lot_amount_unrepresentable"),
     ],
 )
 def test_la_suma_nomes_s_avalua_amb_tots_els_valors_positius(expedient, lot_values, skipped):
@@ -648,10 +690,13 @@ async def test_el_rejoc_amb_apply_apunta_a_la_captura_original(
         assert row.evidence_sha256 == entry["sha256_original"]
         assert _utc(row.retrieved_at) == datetime.fromisoformat(entry["retrieved_at"])
         assert (capture / row.raw_storage_key).exists()
+        # M-7: cap cami absolut; un identificador logic de la captura.
         assert row.provenance["replay"] == {
-            "dir": str(capture.resolve()),
+            "capture": f"{capture.resolve().parent.name}/{capture.name}",
             "raw_manifest_sha256": manifest_sha,
+            "rows_updated_at": _report(capture)["dataset_metadata"]["start"]["rows_updated_at"],
         }
+        assert str(capture.resolve()) not in json.dumps(row.provenance)
         assert (
             row.provenance["rows_updated_at"]
             == _report(capture)["dataset_metadata"]["start"]["rows_updated_at"]
@@ -763,3 +808,127 @@ def test_l_ordre_del_cli_amb_replay():
     args = cli.build_parser().parse_args(["--replay", "c", "--out", "o", "--apply"])
     assert args.replay == Path("c") and args.apply is True
     copy.deepcopy(args)  # cap estat ocult
+
+
+# --------------------------------------------------------------------------- #
+# Ronda 2                                                                       #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("where", ["same", "inside", "parent"])
+async def test_el_rejoc_refusa_un_out_que_toca_la_captura(
+    db, session_factory, tmp_path, no_network, where
+):
+    """I-2: `--out` igual a la captura, a dins o que la conte -> codi 1 i res escrit."""
+    capture = await _capture(db, session_factory, tmp_path, ["lots"])
+    before = {path: path.read_bytes() for path in capture.rglob("*") if path.is_file()}
+    out = {"same": capture, "inside": capture / "rejoc", "parent": tmp_path}[where]
+    code = await amain(
+        ["--replay", str(capture), "--out", str(out), "--apply"], session_factory=session_factory
+    )
+    assert code == EXIT_FAILED
+    assert await _observations(db) == []
+    after = {path: path.read_bytes() for path in capture.rglob("*") if path.is_file()}
+    assert after == before
+    assert not (capture / "rejoc").exists()
+
+
+def _without_new_drafts(monkeypatch):
+    real = g.evaluate
+
+    def evaluate(snapshot, rows):
+        ev = real(snapshot, rows)
+        ev.lot_amount_drafts = []
+        return ev
+
+    monkeypatch.setattr(g, "evaluate", evaluate)
+    return real
+
+
+async def test_el_rejoc_sobre_les_observacions_de_sempre_nomes_insereix_les_noves(
+    db, session_factory, tmp_path, no_network, monkeypatch
+):
+    """M-8: el run real (codi d'abans, `--apply`) desa la captura; el rejoc d'aquella
+    captura amb `--apply` deixa el PBL amb IVA intacte i nomes insereix els tipus nous."""
+    await _seed(db)
+    real = _without_new_drafts(monkeypatch)
+    capture = tmp_path / "captura"
+    code, report = await _run(session_factory, FakeSoda(_source_rows(ALL)), capture)
+    assert code == EXIT_OK, report.get("error")
+    existing = {(r.id, r.valid_to) for r in await _observations(db)}
+    assert {r.amount_kind for r in await _observations(db)} == {PBL}
+
+    monkeypatch.setattr(g, "evaluate", real)
+    out = tmp_path / "rejoc"
+    code = await amain(
+        ["--replay", str(capture), "--out", str(out), "--apply"], session_factory=session_factory
+    )
+    assert code == EXIT_OK
+    writes = _report(out)["writes"]
+    pbl = writes["by_kind"]["pbl_with_tax"]
+    assert pbl["inserted"] == 0 and pbl["closed"] == 0 and pbl["unchanged"] == len(existing)
+    assert writes["closed"] == 0
+    assert writes["inserted"] == sum(writes["by_kind"][k.value]["inserted"] for k in (NET, VEC))
+    rows = await _observations(db)
+    assert {(r.id, r.valid_to) for r in rows if r.amount_kind == PBL} == existing
+    assert all("replay" in r.provenance for r in rows if r.amount_kind != PBL)
+
+
+async def test_el_rejoc_d_una_captura_mes_antiga_que_les_vigents_es_refusa(
+    db, session_factory, tmp_path, no_network
+):
+    """I-1: un run real posterior ja ha deixat observacions amb una data del dataset mes
+    nova; rejugar la captura d'abans faria tornar enrere: codi 1 i res escrit, tambe en
+    dry-run, amb el motiu a l'informe. Amb la mateixa data, es permet."""
+    await _seed(db, ["lots", "lescala"])
+    names = ["lots", "lescala"]
+    old = tmp_path / "antiga"
+    code, _ = await _run(session_factory, FakeSoda(_source_rows(names)), old, dry_run=True)
+    assert code == EXIT_OK
+    later = ROWS_UPDATED_AT + 3600
+    code, _ = await _run(
+        session_factory, FakeSoda(_source_rows(names), rows_updated_at=(later,)), tmp_path / "nou"
+    )
+    assert code == EXIT_OK
+    before = [(r.id, r.valid_to) for r in await _observations(db)]
+    for n, extra in enumerate(([], ["--apply"])):
+        out = tmp_path / f"rejoc{n}"
+        code = await amain(
+            ["--replay", str(old), "--out", str(out), *extra], session_factory=session_factory
+        )
+        assert code == EXIT_FAILED
+        report = _report(out)
+        assert report["writes"] == {"skipped": "replay_capture_older_than_current"}
+        assert report["replay_freshness"]["observations"] == len(before)
+        assert "posterior" in report["error"]
+    assert [(r.id, r.valid_to) for r in await _observations(db)] == before
+
+
+async def test_l_informe_i_el_csv_diuen_el_que_ha_bloquejat_els_tipus_nous(
+    db, session_factory, tmp_path
+):
+    """M-6: per als tipus nous, `failed` = `blocking_failed` i `non_blocking_failed` a
+    part; el PBL amb IVA, com sempre."""
+    await _seed(db, ["lots"])
+    source = _source_rows(["lots"])
+    uid = CASES["lots"]["ours"]["pscp_id_intern"]
+    _no_expedient_net(source[uid])
+    code, report = await _run(session_factory, FakeSoda(source), tmp_path, dry_run=True)
+    assert code == EXIT_OK
+    by_kind = {}
+    for item in report["evaluation"]["conflicts"]:
+        by_kind.setdefault(item["amount_kind"], []).append(item)
+    # El PBL amb IVA de lot en conflict per `net`, com abans.
+    assert {tuple(i["failed"]) for i in by_kind["pbl_with_tax"] if i["level"] == "lot"} == {
+        ("net",)
+    }
+    assert "estimated_value" not in by_kind and "pbl_without_tax" not in by_kind
+    rows = list(csv.DictReader((tmp_path / "observations.csv").open(encoding="utf-8")))
+    vec = [r for r in rows if r["amount_kind"] == "estimated_value"]
+    assert vec and {(r["status"], r["failed"], r["non_blocking_failed"]) for r in vec} == {
+        ("accepted", "", "expedient.net")
+    }
+    net = [r for r in rows if r["amount_kind"] == "pbl_without_tax"]
+    assert {(r["status"], r["failed"]) for r in net} == {("no_value", "expedient.net")}
+    pbl = [r for r in rows if r["amount_kind"] == "pbl_with_tax" and r["level"] == "lot"]
+    assert {(r["failed"], r["non_blocking_failed"]) for r in pbl} == {("net", "")}

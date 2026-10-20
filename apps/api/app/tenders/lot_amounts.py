@@ -10,6 +10,11 @@ es fa servir i d'on surt:
 3. si no, cap valor (`value` None): ni `conflict`, ni `no_value`, ni un `0.00` no son
    mai un import (regla unica de `app.tenders.amounts`).
 
+Incoherencia (`LotAmounts.vec_incoherent`): si el VEC del lot no es resol i la PSCP el te
+en `conflict` perque es inferior al PBL sense IVA del lot (`vec_order`), el resolutor en
+dona els dos imports publicats, perque el pre-fit ho tracti com a incoherent (com a
+l'expedient) i no faci servir el PBL net com a cota inferior. Mai no es un import.
+
 Mai l'import de l'expedient per a un lot, i mai no escriu res (ni a `tender_lots`: la
 ingesta de la PLACSP no es toca). Els consumidors son la taula de lots de la fitxa, el
 maxim de l'oferta economica per lot i el pre-fit per lot.
@@ -71,6 +76,31 @@ class LotAmounts:
     estimated_value: ResolvedAmount = NO_AMOUNT
     base_budget_without_tax: ResolvedAmount = NO_AMOUNT
     base_budget: ResolvedAmount = NO_AMOUNT
+    #: (VEC, PBL sense IVA) tal com es publiquen, si el VEC no es resol i la PSCP el te en
+    #: `conflict` per `vec_order` (VEC < PBL net). Nomes informa de la incoherencia.
+    vec_incoherent: tuple[Decimal, Decimal] | None = None
+
+
+VEC_ORDER_BLOCK = "lot.vec_order"
+
+
+def _vec_incoherence(observations: Iterable[Any]) -> tuple[Decimal, Decimal] | None:
+    """Els imports d'un VEC de lot en `conflict` vigent per `vec_order`, si n'hi ha."""
+    for obs in sorted(observations, key=lambda o: (-_when(o.valid_from), str(o.id))):
+        validation = getattr(obs, "validation", None)
+        if (
+            obs.validation_status != AmountObservationStatus.CONFLICT
+            or obs.valid_to is not None
+            or not isinstance(validation, dict)
+            or VEC_ORDER_BLOCK not in (validation.get("blocking_failed") or [])
+        ):
+            continue
+        guard = (validation.get("lot_guards") or {}).get("vec_order") or {}
+        try:
+            return Decimal(str(guard["high"])), Decimal(str(guard["low"]))
+        except (KeyError, ArithmeticError, ValueError):
+            continue
+    return None
 
 
 def _when(moment: datetime | None) -> float:
@@ -111,16 +141,21 @@ def resolve(
             resolved[column] = ResolvedAmount(useful_amount(chosen.amount), "pscp", chosen.id)
         else:
             resolved[column] = NO_AMOUNT
-    return LotAmounts(**resolved)
+    incoherent = None
+    if resolved["estimated_value"].value is None:
+        incoherent = _vec_incoherence(observations.get(TenderAmountKind.ESTIMATED_VALUE, ()))
+    return LotAmounts(**resolved, vec_incoherent=incoherent)
 
 
 def observations_query(lot_ids: list[uuid.UUID]) -> sa.Select:
     """Les observacions que poden resoldre un import dels lots donats (una consulta).
 
-    Nomes les columnes que calen (cap `validation` ni `provenance`): en un recalcul
-    massiu en surten milers.
+    Les `accepted` amb import > 0 i, per a la incoherencia, els VEC en `conflict`. Nomes
+    les columnes que calen: la `validation` nomes dels `conflict` (cap `provenance`); en
+    un recalcul massiu en surten milers.
     """
     obs = TenderAmountObservation
+    conflict = obs.validation_status == AmountObservationStatus.CONFLICT
     return sa.select(
         obs.id,
         obs.tender_lot_id,
@@ -129,13 +164,19 @@ def observations_query(lot_ids: list[uuid.UUID]) -> sa.Select:
         obs.validation_status,
         obs.valid_from,
         obs.valid_to,
+        sa.case((conflict, obs.validation), else_=sa.null()).label("validation"),
     ).where(
-        TenderAmountObservation.tender_lot_id.in_(lot_ids),
-        TenderAmountObservation.source_code == SOURCE_CODE,
-        TenderAmountObservation.valid_to.is_(None),
-        TenderAmountObservation.validation_status == AmountObservationStatus.ACCEPTED,
-        TenderAmountObservation.amount_kind.in_(tuple(LOT_AMOUNT_KINDS.values())),
-        TenderAmountObservation.amount > 0,
+        obs.tender_lot_id.in_(lot_ids),
+        obs.source_code == SOURCE_CODE,
+        obs.valid_to.is_(None),
+        sa.or_(
+            sa.and_(
+                obs.validation_status == AmountObservationStatus.ACCEPTED,
+                obs.amount_kind.in_(tuple(LOT_AMOUNT_KINDS.values())),
+                obs.amount > 0,
+            ),
+            sa.and_(conflict, obs.amount_kind == TenderAmountKind.ESTIMATED_VALUE),
+        ),
     )
 
 

@@ -135,6 +135,15 @@ async def amain(
     if args.replay is not None:
         if client is not None:
             raise ValueError("--replay no admet un client injectat: no fa cap peticio.")
+        if _overlaps(args.out, args.replay):
+            # (I-2) L'informe del rejoc sobreescriuria l'evidencia de la captura: no
+            # s'escriu res, ni tan sols `report.json`.
+            print(
+                "ERROR: --out no pot ser el directori de la captura (--replay), ni estar-hi "
+                "dins, ni contenir-lo.",
+                file=sys.stderr,
+            )
+            return EXIT_FAILED
         # Exclusiu amb la xarxa: el client real no s'instancia mai.
         soda = ReplayClient(args.replay)
     else:
@@ -148,6 +157,12 @@ async def amain(
         code = EXIT_FAILED
     _print(report)
     return code
+
+
+def _overlaps(out: Path, capture: Path) -> bool:
+    """Si `out` i `capture` (resolts) son el mateix directori o l'un es dins de l'altre."""
+    out, capture = out.resolve(), capture.resolve()
+    return out == capture or capture in out.parents or out in capture.parents
 
 
 def _replay_failure(args: argparse.Namespace, options: RunOptions, exc: Exception) -> dict:

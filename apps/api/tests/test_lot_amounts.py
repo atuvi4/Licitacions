@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -20,6 +22,7 @@ import pytest
 import sqlalchemy as sa
 
 from app.ingestion.pscp_open_data import SOURCE_CODE
+from app.ingestion.pscp_open_data import guards as g
 from app.matching.rules import RULES_VERSION, ReasonCode
 from app.matching.service import MatchingService, evaluate_tender
 from app.models.enums import AmountObservationStatus as S
@@ -49,6 +52,7 @@ from tests.test_matching_amount_basis import _lot as _pure_lot
 from tests.test_matching_amount_basis import _tender as _pure_tender
 from tests.test_matching_api import add_lot, configure_company, make_source, make_tender
 from tests.test_matching_engine import make_profile, perfect_profile
+from tests.test_pscp_open_data import CASES, FakeSoda, _run, _seed, _snapshot, _source_rows
 
 D = Decimal
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
@@ -323,14 +327,57 @@ class TestPrefitPerLot:
         assert factor["reason_code"] == ReasonCode.AMOUNT_ABOVE_MAXIMUM
         assert outcome.status is MatchStatus.EXCLUDED
 
-    def test_vec_per_sota_del_pbl_net_es_incoherent(self):
-        outcome, factor = _lot_factor(
-            perfect_profile(),
-            _plain_lot(),
-            _resolved(estimated_value="1000", base_budget_without_tax="5000000"),
+    def test_un_vec_en_conflict_per_vec_order_es_incoherent_mai_cota_inferior(self):
+        """M-5: la draft real de l'adaptador (VEC < PBL net -> `conflict` per `vec_order`)
+        dona `AMOUNT_INCOHERENT`, com a l'expedient; mai el net com a cota inferior."""
+        rows = copy.deepcopy(CASES["lots"]["rows"])
+        lot_rows = [row for row in rows if len(row["id_intern"]) > 36]
+        lot_rows[2]["pressupost_licitacio_sense"] = "1500000"  # net del lot: 1.500.000
+        lot_rows[2]["valor_estimat_contracte"] = "1000"  # VEC < net
+        ev = g.evaluate(_snapshot("lots"), rows)
+        [vec] = [
+            d
+            for d in ev.lot_amount_drafts
+            if d.amount_kind == K.ESTIMATED_VALUE and d.source_row_id == lot_rows[2]["id_intern"]
+        ]
+        assert vec.status == S.CONFLICT and "lot.vec_order" in vec.validation["blocking_failed"]
+        observation = SimpleNamespace(
+            id=uuid.uuid4(),
+            amount_kind=K.ESTIMATED_VALUE,
+            amount=vec.amount,
+            validation_status=vec.status,
+            validation=json.loads(json.dumps(vec.validation)),
+            valid_to=None,
+            valid_from=NOW,
         )
+        net = _obs(K.PBL_WITHOUT_TAX, "1500000")
+        resolved = resolve(_lot(), {K.ESTIMATED_VALUE: [observation], K.PBL_WITHOUT_TAX: [net]})
+        assert resolved.estimated_value == NO_AMOUNT
+        assert resolved.vec_incoherent == (D("1000.00"), D("1500000.00"))
+        outcome, factor = _lot_factor(perfect_profile(), _plain_lot(), resolved)
         assert factor["reason_code"] == ReasonCode.AMOUNT_INCOHERENT
         assert outcome.status is not MatchStatus.EXCLUDED
+        # Sense la incoherencia, el mateix net (1.500.000) excloiria com a cota inferior.
+        _, without = _lot_factor(
+            perfect_profile(), _plain_lot(), _resolved(base_budget_without_tax="1500000")
+        )
+        assert without["reason_code"] == ReasonCode.AMOUNT_ABOVE_MAXIMUM
+
+    def test_un_vec_de_la_placsp_o_accepted_mana_sobre_la_incoherencia(self):
+        lot = _lot(estimated_value=D("300000"))
+        conflict = SimpleNamespace(
+            id=uuid.uuid4(),
+            amount_kind=K.ESTIMATED_VALUE,
+            amount=D("1000"),
+            validation_status=S.CONFLICT,
+            validation={
+                "blocking_failed": ["lot.vec_order"],
+                "lot_guards": {"vec_order": {"ok": False, "high": "1000.00", "low": "5000.00"}},
+            },
+            valid_to=None,
+            valid_from=NOW,
+        )
+        assert resolve(lot, {K.ESTIMATED_VALUE: [conflict]}).vec_incoherent is None
 
     def test_nomes_pbl_amb_iva_no_es_cota_de_res(self):
         _, factor = _lot_factor(perfect_profile(), _plain_lot(), _resolved(base_budget="300000"))
@@ -372,15 +419,12 @@ async def test_el_recalcul_fa_servir_els_imports_resolts_del_lot(db, tenant_a):
     tender = await make_tender(db, source, title="Amb lots", amount="5000000")
     vec_lot = await add_lot(db, tender, number=1, title="VEC PSCP")
     net_lot = await add_lot(db, tender, number=2, title="Net PSCP")
-    bad_lot = await add_lot(db, tender, number=3, title="Incoherent")
     conflict_lot = await add_lot(db, tender, number=4, title="Conflicte")
     empty_lot = await add_lot(db, tender, number=5, title="Publicat a 0")
     placsp_lot = await add_lot(db, tender, number=6, title="PLACSP", amount="300000")
     await db.commit()
     await observe(db, vec_lot, K.ESTIMATED_VALUE, "300000")
     await observe(db, net_lot, K.PBL_WITHOUT_TAX, "1500000")
-    await observe(db, bad_lot, K.ESTIMATED_VALUE, "1000")
-    await observe(db, bad_lot, K.PBL_WITHOUT_TAX, "5000000")
     await observe(db, conflict_lot, K.ESTIMATED_VALUE, "300000", status=S.CONFLICT)
     await observe(db, empty_lot, K.ESTIMATED_VALUE, "0", status=S.NO_VALUE)
     await observe(db, placsp_lot, K.ESTIMATED_VALUE, "2000000")  # la PLACSP (300.000) guanya
@@ -390,7 +434,6 @@ async def test_el_recalcul_fa_servir_els_imports_resolts_del_lot(db, tenant_a):
     matches = await _lot_matches(db, company.id)
     assert _reason(matches[vec_lot.id]) == ReasonCode.AMOUNT_PREFERRED
     assert _reason(matches[net_lot.id]) == ReasonCode.AMOUNT_ABOVE_MAXIMUM
-    assert _reason(matches[bad_lot.id]) == ReasonCode.AMOUNT_INCOHERENT
     assert _reason(matches[conflict_lot.id]) == ReasonCode.AMOUNT_UNKNOWN
     assert _reason(matches[empty_lot.id]) == ReasonCode.AMOUNT_UNKNOWN
     assert _reason(matches[placsp_lot.id]) == ReasonCode.AMOUNT_PREFERRED
@@ -408,3 +451,35 @@ async def test_sense_capacitat_el_recalcul_no_canvia(db, tenant_a):
     await MatchingService(db).recalculate(company.id, tender_ids=[tender.id])
     matches = await _lot_matches(db, company.id)
     assert _reason(matches[lot.id]) == ReasonCode.AMOUNT_NO_COMPANY_PREFERENCES
+
+
+async def test_el_pre_fit_d_un_lot_amb_vec_incoherent_surt_de_l_adaptador(
+    db, session_factory, tenant_a, tmp_path
+):
+    """M-5 de punta a punta: l'adaptador desa el VEC en `conflict` (`vec_order`) i el net
+    `accepted`; el recalcul del pre-fit en dona `AMOUNT_INCOHERENT`."""
+    _user, company = tenant_a
+    ids = await _seed(db, ["lots"])
+    source = _source_rows(["lots"])
+    uid = CASES["lots"]["ours"]["pscp_id_intern"]
+    lot_rows = [row for row in source[uid] if len(row["id_intern"]) > 36]
+    lot_rows[2]["valor_estimat_contracte"] = "20000"  # PBL net del lot: 20.020
+    lot_rows[0]["valor_estimat_contracte"] = "36210"  # la suma del VEC no canvia
+    code, report = await _run(session_factory, FakeSoda(source), tmp_path)
+    assert code == 0, report.get("error")
+    lots = {
+        lot.lot_number: lot
+        for lot in (
+            await db.execute(sa.select(TenderLot).where(TenderLot.tender_id == ids["lots"]))
+        ).scalars()
+    }
+    number = int(lot_rows[2]["numero_lot"])
+    resolved = await load_lot_amounts(db, list(lots.values()))
+    assert resolved[lots[number].id].vec_incoherent == (D("20000.00"), D("20020.00"))
+    assert resolved[lots[number].id].base_budget_without_tax.value == D("20020.00")
+    await configure_company(db, company.id, capacity=True)
+    await MatchingService(db).recalculate(company.id, tender_ids=[ids["lots"]])
+    matches = await _lot_matches(db, company.id)
+    assert _reason(matches[lots[number].id]) == ReasonCode.AMOUNT_INCOHERENT
+    others = [lot for n, lot in lots.items() if n != number]
+    assert all(_reason(matches[lot.id]) != ReasonCode.AMOUNT_INCOHERENT for lot in others)

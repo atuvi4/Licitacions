@@ -434,11 +434,14 @@ class PscpOpenDataService:
                 {"sha256": page.sha256, "storage_key": page.storage_key} for page in pages
             ]
         if replay is not None:
-            # Rejoc: no es una lectura nova de la font, sino la captura original
-            # (`raw_storage_key` es relatiu a `replay.dir`).
+            # Rejoc: no es una lectura nova de la font, sino la captura original.
+            # Identificador logic (cap cami de la maquina): els dos darrers components del
+            # directori, el SHA-256 del manifest i la data del dataset de la captura;
+            # `raw_storage_key` es relatiu a aquell directori.
             provenance["replay"] = {
-                "dir": replay["dir"],
+                "capture": replay["capture"],
                 "raw_manifest_sha256": replay["raw_manifest_sha256"],
+                "rows_updated_at": metadata.get("rows_updated_at"),
             }
         return provenance
 
@@ -521,6 +524,19 @@ class PscpOpenDataService:
             elif too_many_evaluation_errors(len(evaluation_errors), len(snapshots)):
                 report["writes"] = {"skipped": "too_many_evaluation_errors"}
                 exit_code = EXIT_EVALUATION_ABORTED
+            elif replay is not None and (
+                newer := await self._newer_than_capture(snapshots, meta_start)
+            ):
+                # (I-1) Una captura mes antiga que alguna observacio vigent de l'univers
+                # faria tornar enrere dades mes noves: no s'escriu res (tampoc en dry-run).
+                report["writes"] = {"skipped": "replay_capture_older_than_current"}
+                report["replay_freshness"] = newer
+                report["error"] = (
+                    f"ReplayError: {newer['observations']} observacions vigents de la PSCP "
+                    f"tenen una data del dataset ({newer['newest']}) posterior a la de la "
+                    f"captura ({newer['capture_rows_updated_at']})."
+                )
+                exit_code = EXIT_FAILED
             else:
                 report["writes"] = await self._write(
                     evaluations,
@@ -555,6 +571,40 @@ class PscpOpenDataService:
                 json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8"
             )
         return exit_code, report
+
+    async def _newer_than_capture(
+        self, snapshots: list[g.TenderSnapshot], metadata: dict
+    ) -> dict[str, Any] | None:
+        """(I-1) Les observacions PSCP vigents de l'univers amb una data del dataset
+        POSTERIOR a la de la captura (`rowsUpdatedAt`). Igual es admes."""
+        capture = datetime.fromisoformat(metadata["rows_updated_at"])
+        tender_ids = {snap.id for snap in snapshots}
+        obs = TenderAmountObservation
+        async with self._sessions() as session:
+            rows = (
+                await session.execute(
+                    sa.select(obs.tender_id, obs.source_dataset_updated_at).where(
+                        obs.source_code == SOURCE_CODE,
+                        obs.valid_to.is_(None),
+                        obs.source_dataset_updated_at.is_not(None),
+                    )
+                )
+            ).all()
+        newer = []
+        for tender_id, moment in rows:
+            if tender_id not in tender_ids:
+                continue
+            if moment.tzinfo is None:  # SQLite torna les dates sense zona (son UTC).
+                moment = moment.replace(tzinfo=UTC)
+            if moment > capture:
+                newer.append(moment)
+        if not newer:
+            return None
+        return {
+            "capture_rows_updated_at": capture.isoformat(),
+            "newest": max(newer).isoformat(),
+            "observations": len(newer),
+        }
 
     def _replay_info(self) -> dict[str, Any] | None:
         """El directori i el SHA-256 del manifest si el client es de rejoc (F-06e)."""
@@ -853,11 +903,7 @@ def _summarize(evaluations: list[g.TenderEvaluation]) -> dict[str, Any]:
                         "level": draft.level,
                         "amount_kind": draft.amount_kind.value,
                         "source_row_id": draft.source_row_id,
-                        "failed": draft.validation.get("failed")
-                        or sorted(
-                            set(draft.validation.get("expedient_failed", []))
-                            | {f"lot.{n}" for n in draft.validation.get("lot_failed", [])}
-                        ),
+                        **_failed_fields(draft.validation),
                     }
                 )
             if draft.validation.get("role") == "superseded_row":
@@ -911,6 +957,28 @@ def _summarize(evaluations: list[g.TenderEvaluation]) -> dict[str, Any]:
     }
 
 
+def _failed_fields(validation: dict[str, Any]) -> dict[str, list[str]]:
+    """Que ha fallat, per a l'informe i el CSV.
+
+    Les observacions de sempre: `failed` (expedient) o la unio d'`expedient_failed` i
+    `lot.<lot_failed>` (lot), com abans. Els imports de lot nous (F-06e): `failed` es el
+    que les ha bloquejat (`blocking_failed`) i `non_blocking_failed`, la resta.
+    """
+    if isinstance(validation.get("blocking_failed"), list):
+        blocking = list(validation["blocking_failed"])
+        everything = {f"expedient.{n}" for n in validation.get("expedient_failed", [])} | {
+            f"lot.{n}" for n in validation.get("lot_failed", [])
+        }
+        return {"failed": blocking, "non_blocking_failed": sorted(everything - set(blocking))}
+    failed = validation.get("failed")
+    if failed is None:
+        failed = sorted(
+            set(validation.get("expedient_failed", []))
+            | {f"lot.{n}" for n in validation.get("lot_failed", [])}
+        )
+    return {"failed": failed}
+
+
 def _write_observations_csv(path: Path, evaluations: list[g.TenderEvaluation]) -> None:
     columns = [
         "level",
@@ -928,6 +996,7 @@ def _write_observations_csv(path: Path, evaluations: list[g.TenderEvaluation]) -
         "failed",
         "phase",
         "amount_kind",
+        "non_blocking_failed",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
@@ -945,12 +1014,8 @@ def _write_observations_csv(path: Path, evaluations: list[g.TenderEvaluation]) -
                 )
             for draft in ev.all_drafts:
                 validation = draft.validation
-                failed = validation.get("failed")
-                if failed is None:
-                    failed = sorted(
-                        set(validation.get("expedient_failed", []))
-                        | {f"lot.{n}" for n in validation.get("lot_failed", [])}
-                    )
+                fields = _failed_fields(validation)
+                failed = fields["failed"]
                 writer.writerow(
                     {
                         "level": draft.level,
@@ -968,5 +1033,6 @@ def _write_observations_csv(path: Path, evaluations: list[g.TenderEvaluation]) -
                         "failed": "|".join(failed),
                         "phase": draft.source_phase or "",
                         "amount_kind": draft.amount_kind.value,
+                        "non_blocking_failed": "|".join(fields.get("non_blocking_failed", [])),
                     }
                 )

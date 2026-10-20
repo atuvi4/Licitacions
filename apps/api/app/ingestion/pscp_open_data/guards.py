@@ -71,7 +71,7 @@ ordre (el mateix ordre que el PBL amb IVA; Ronda 1, D3 del propietari):
    * les estructurals de l'expedient (`BLOCKING_EXPEDIENT_GUARDS`: identitat, organ,
      lots, coherencia, lectura, files) i el `match` del lot;
    * nomes les del SEU import:
-     - PBL sense IVA: `net` de l'expedient, el contrast `net` amb `tender_lots`,
+     - PBL sense IVA: `net` i `tax_order` de l'expedient, el contrast `net`,
        `tax_order` (PBL amb IVA del lot >= PBL sense IVA; no s'aplica si el lot no te PBL
        amb IVA > 0) i `lot_net_sum` (la suma dels PBL sense IVA de TOTS els lots = el de
        l'expedient, 0,01 EUR de tolerancia per lot; nomes si l'expedient i tots els lots
@@ -79,8 +79,9 @@ ordre (el mateix ordre que el PBL amb IVA; Ronda 1, D3 del propietari):
      - VEC (independent del PBL): `vec` de l'expedient, el contrast `vec`, `vec_order`
        (VEC del lot >= PBL sense IVA del lot - 0,01; no s'aplica si el lot no te PBL sense
        IVA > 0) i `lot_vec_sum` (com `lot_net_sum`, amb el VEC de l'expedient).
-   Les de l'altre import i les propies del PBL amb IVA (`tax_order` i `lot_sum` de
-   l'expedient) es desen a `expedient_guards` / `expedient_failed` pero no bloquegen.
+   Les de l'altre import i `lot_sum` de l'expedient (propia del PBL amb IVA) es desen a
+   `expedient_guards` / `expedient_failed` pero no bloquegen. Un import de lot no
+   representable fa fallar la suma del seu tipus (tots els lots en `conflict`).
    Regla estricta: cap arrodoniment especial (un expedient publicat sense decimals que
    no quadra amb els seus lots queda en `conflict`).
 4. `accepted`.
@@ -417,25 +418,32 @@ def _positive(amount: p.ParsedAmount) -> bool:
 def _positive_order(
     high: p.ParsedAmount, low: p.ParsedAmount, *, slack: Decimal = Decimal("0")
 ) -> dict[str, Any]:
-    """`high >= low - slack`; no s'aplica (`ok` None) si algun dels dos no es > 0."""
+    """`high >= low - slack`; no s'aplica (`ok` None) si algun dels dos no es > 0. Desa
+    els dos imports comparats (el resolutor en treu la incoherencia VEC < net)."""
     if not (_positive(high) and _positive(low)):
         return {"ok": None}
-    return {"ok": high.value >= low.value - slack}
+    return {
+        "ok": high.value >= low.value - slack,
+        "high": p.cents(high.value),
+        "low": p.cents(low.value),
+    }
 
 
 def _lot_total(expedient: p.ParsedAmount, lots: list[p.ParsedAmount]) -> dict[str, Any]:
     """La suma d'un import de TOTS els lots contra el de l'expedient (`lot_net_sum`,
     `lot_vec_sum`), amb 0,01 EUR de tolerancia per lot i sense cap altre arrodoniment.
 
-    Nomes s'avalua si l'expedient i tots els lots el publiquen > 0; si no, `ok` None i el
-    motiu a `skipped` (no fa fallar res).
+    Un import de lot NO REPRESENTABLE fa fallar la suma (`ok` False): tots els lots del
+    tipus queden en `conflict`, com el PBL amb IVA (I-2). Si no, nomes s'avalua si
+    l'expedient i tots els lots el publiquen > 0; si no, `ok` None i el motiu a `skipped`
+    (no fa fallar res).
     """
+    if any(amount.problem for amount in lots):
+        return {"ok": False, "problem": "lot_amount_unrepresentable"}
     if not _positive(expedient):
         return {"ok": None, "skipped": "expedient_amount_not_positive"}
     if not lots:
         return {"ok": None, "skipped": "no_lot_rows"}
-    if any(amount.problem for amount in lots):
-        return {"ok": None, "skipped": "lot_amount_unrepresentable"}
     if any(amount.value is None for amount in lots):
         return {"ok": None, "skipped": "lot_amount_not_published"}
     if any(amount.value <= 0 for amount in lots):
@@ -454,10 +462,11 @@ def _lot_total(expedient: p.ParsedAmount, lots: list[p.ParsedAmount]) -> dict[st
 
 #: Guardes d'expedient estructurals: bloquegen tots dos imports de lot nous (F-06e).
 BLOCKING_EXPEDIENT_GUARDS = frozenset({"identity", "organ", "lots", "consistent", "parse", "rows"})
-#: La guarda d'expedient del mateix import, que bloqueja nomes el seu tipus.
-OWN_EXPEDIENT_GUARD = {
-    TenderAmountKind.PBL_WITHOUT_TAX: "net",
-    TenderAmountKind.ESTIMATED_VALUE: "vec",
+#: Les guardes d'expedient del mateix import, que bloquegen nomes el seu tipus: el PBL
+#: net (i l'ordre PBL amb IVA >= PBL net de l'expedient) per al net; el VEC per al VEC.
+OWN_EXPEDIENT_GUARDS = {
+    TenderAmountKind.PBL_WITHOUT_TAX: frozenset({"net", "tax_order"}),
+    TenderAmountKind.ESTIMATED_VALUE: frozenset({"vec"}),
 }
 
 
@@ -467,11 +476,11 @@ def _blocking_failed(
     """Les guardes que fallen i bloquegen AQUEST tipus (`expedient.<g>` / `lot.<g>`): les
     estructurals de l'expedient, la del seu import i totes les del lot (que ja son
     nomes les del seu tipus)."""
-    own = OWN_EXPEDIENT_GUARD[kind]
+    own = OWN_EXPEDIENT_GUARDS[kind]
     return [
         f"expedient.{name}"
         for name in expedient_failed
-        if name in BLOCKING_EXPEDIENT_GUARDS or name == own
+        if name in BLOCKING_EXPEDIENT_GUARDS or name in own
     ] + [f"lot.{name}" for name in lot_failed]
 
 

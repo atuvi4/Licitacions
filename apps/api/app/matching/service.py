@@ -21,7 +21,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload, selectinload
 
-from app.matching.economic import reference_amount
+from app.matching.economic import AmountBasis, AmountReference, reference_amount
 from app.matching.engine import MatchOutcome, aggregate_lots, evaluate
 from app.matching.profile import CompanyMatchProfile, load_profile
 from app.matching.rules import RULES_VERSION
@@ -113,11 +113,17 @@ def evaluate_tender(
         resolved = lot_amounts.get(lot.id) if lot_amounts is not None else None
         if resolved is None:
             resolved = resolve(lot, {})
-        lot_amount = reference_amount(
-            resolved.estimated_value.value,
-            resolved.base_budget_without_tax.value,
-            resolved.base_budget.value,
-        )
+        if resolved.estimated_value.value is None and resolved.vec_incoherent is not None:
+            # La PSCP publica un VEC del lot inferior al seu PBL net (en `conflict` per
+            # `vec_order`): incoherent, com a l'expedient; mai el net com a cota inferior.
+            vec, net = resolved.vec_incoherent
+            lot_amount = AmountReference(vec, AmountBasis.VEC, incoherent_budget=net)
+        else:
+            lot_amount = reference_amount(
+                resolved.estimated_value.value,
+                resolved.base_budget_without_tax.value,
+                resolved.base_budget.value,
+            )
         lot_results.append(
             (
                 lot,
