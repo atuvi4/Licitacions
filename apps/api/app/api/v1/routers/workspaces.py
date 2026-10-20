@@ -13,6 +13,7 @@ deliberat: si l'aprovacio fos un camp mes d'un PATCH generic, qualsevol client
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -36,6 +37,7 @@ from app.models.workspace import (
     WorkspaceNote,
     WorkspaceTask,
 )
+from app.schemas.readiness import PreparationCount, PreparationCountsRead
 from app.schemas.tenders import TenderChangeEventRead
 from app.schemas.workspace import (
     ChecklistItemCreateRequest,
@@ -57,11 +59,13 @@ from app.schemas.workspace import (
     WorkspaceDetail,
     WorkspaceSummary,
 )
-from app.services import audit, workspace_dossier
+from app.services import audit, workspace_dossier, workspace_readiness
 from app.services import bid_workspace as service
 from app.services.workspace_gate import assert_workspace_go
 from app.tenders.visibility import visible_to_company
 from app.workspace.decision import nothing_to_do_reason
+
+logger = logging.getLogger(__name__)
 
 tender_router = APIRouter(prefix="/tenders/{tender_id}/workspace", tags=["candidatura"])
 router = APIRouter(prefix="/workspaces", tags=["candidatura"])
@@ -322,21 +326,108 @@ async def get_by_tender(
     return await _detail(session, ctx, workspace)
 
 
+def _list_summary(state: service.WorkspaceListState, analysis_state: str) -> WorkspaceSummary:
+    """La fila de `_summary`, a partir de la lectura per lots (mateixos camps i origen)."""
+    workspace = state.workspace
+    return WorkspaceSummary(
+        id=workspace.id,
+        company_id=workspace.company_id,
+        tender_id=workspace.tender_id,
+        tender_lot_id=workspace.tender_lot_id,
+        status=workspace.status,
+        tender_title=state.tender.title,
+        expediente_number=state.tender.expediente_number,
+        buyer_name=state.buyer_name,
+        deadline_at=state.deadline_at,
+        days_remaining=state.days_remaining,
+        deadline_passed=state.deadline_passed,
+        prefit_score=state.prefit_score,
+        eligibility=state.compliance_run.overall_result if state.compliance_run else None,
+        recommendation=state.compliance_run.recommendation if state.compliance_run else None,
+        human_decision=state.latest_decision.decision if state.latest_decision else None,
+        analysis_basis=state.analysis_basis,
+        analysis_outdated=state.analysis_outdated,
+        analysis_state=analysis_state,
+        created_at=workspace.created_at,
+    )
+
+
+async def _company_workspaces(
+    session: SessionDep, company_id: uuid.UUID, limit: int
+) -> list[BidWorkspace]:
+    """Les candidatures de l'empresa, de la mes nova a la mes antiga."""
+    return list(
+        (
+            await session.scalars(
+                sa.select(BidWorkspace)
+                .where(BidWorkspace.company_id == company_id)
+                .order_by(BidWorkspace.created_at.desc())
+                .limit(limit)
+            )
+        ).all()
+    )
+
+
 @router.get("", response_model=list[WorkspaceSummary], summary="Candidatures de l'empresa")
 async def list_workspaces(
     session: SessionDep,
     ctx: CompanyCtx,
     limit: int = Query(default=50, ge=1, le=200),
 ):
-    workspaces = (
-        await session.scalars(
-            sa.select(BidWorkspace)
-            .where(BidWorkspace.company_id == ctx.company_id)
-            .order_by(BidWorkspace.created_at.desc())
-            .limit(limit)
+    # Per lots (P2-09): un nombre fix de consultes per a tota la llista, amb la
+    # mateixa derivacio que `_summary`. Abans eren unes 20 per candidatura.
+    workspaces = await _company_workspaces(session, ctx.company_id, limit)
+    states = await service.load_list_states(session, ctx.company_id, workspaces)
+    analysis = await workspace_dossier.requirement_analysis_states(
+        session, [(state.workspace.tender_id, state.requirement_run) for state in states]
+    )
+    return [
+        _list_summary(
+            state,
+            analysis[
+                (
+                    state.workspace.tender_id,
+                    state.requirement_run.id if state.requirement_run else None,
+                )
+            ],
         )
-    ).all()
-    return [await _summary(session, workspace) for workspace in workspaces]
+        for state in states
+    ]
+
+
+@router.get(
+    "/preparation-counts",
+    response_model=PreparationCountsRead,
+    summary="Pendents de preparacio de les candidatures obertes",
+)
+async def preparation_counts(
+    session: SessionDep,
+    ctx: CompanyCtx,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """Els blocadors de `final-readiness` de cada candidatura oberta i dins de
+    termini, en una sola peticio. Nomes lectura.
+
+    L'abast es el de «Pendents de preparacio» d'Avui: de la mateixa pagina que
+    `GET /workspaces` (mateix ordre i `limit`), les que no estan tancades
+    (`CLOSED_WORKSPACE_STATUSES`) i amb `deadline_passed` fals. El recompte es
+    `FinalReadiness.blockers` de la mateixa lectura que `GET .../final-readiness`.
+    Si una candidatura falla, `pending` nul per a ella i les altres continuen: el
+    SAVEPOINT fa que un error de base de dades no deixi la sessio inservible.
+    """
+    workspaces = await _company_workspaces(session, ctx.company_id, limit)
+    in_scope = await service.open_within_deadline(session, workspaces)
+    items: list[PreparationCount] = []
+    for workspace in in_scope:
+        try:
+            async with session.begin_nested():
+                final = await workspace_readiness.final_readiness(session, workspace)
+            pending: int | None = len(final.blockers)
+        except Exception:  # noqa: BLE001 - un recompte que falla es «sense comptar», no un 500
+            logger.warning("preparation_count_failed workspace=%s", workspace.id, exc_info=True)
+            pending = None
+        items.append(PreparationCount(workspace_id=workspace.id, pending=pending))
+    return PreparationCountsRead(items=items)
 
 
 @router.get("/{workspace_id}", response_model=WorkspaceDetail, summary="Workspace")

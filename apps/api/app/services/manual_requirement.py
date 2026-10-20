@@ -175,27 +175,52 @@ async def effective_run(
     la canonica global (`is_current`). `company_id=None` es la vista global (la de
     l'operador i la del motor d'extraccio).
     """
+    return (await effective_runs(session, {tender_id}, company_id)).get(tender_id)
+
+
+async def effective_runs(
+    session: AsyncSession, tender_ids: set[uuid.UUID], company_id: uuid.UUID | None
+) -> dict[uuid.UUID, RequirementExtractionRun]:
+    """`effective_run` per a diverses licitacions de cop (les llistes): una sola regla.
+
+    Dues consultes com a molt, sigui quin sigui el nombre de licitacions: els
+    punters de l'empresa i, per a les que no en tenen, la canonica. Les que no
+    tenen cap run no hi son.
+    """
+    runs: dict[uuid.UUID, RequirementExtractionRun] = {}
+    if not tender_ids:
+        return runs
     if company_id is not None:
-        pointed = await session.scalar(
-            sa.select(RequirementExtractionRun)
-            .join(
-                CompanyTenderRequirementRun,
-                CompanyTenderRequirementRun.run_id == RequirementExtractionRun.id,
+        pointed = (
+            await session.execute(
+                sa.select(CompanyTenderRequirementRun.tender_id, RequirementExtractionRun)
+                .select_from(RequirementExtractionRun)
+                .join(
+                    CompanyTenderRequirementRun,
+                    CompanyTenderRequirementRun.run_id == RequirementExtractionRun.id,
+                )
+                .where(
+                    CompanyTenderRequirementRun.company_id == company_id,
+                    CompanyTenderRequirementRun.tender_id.in_(tender_ids),
+                    RequirementExtractionRun.tender_id == CompanyTenderRequirementRun.tender_id,
+                )
             )
-            .where(
-                CompanyTenderRequirementRun.company_id == company_id,
-                CompanyTenderRequirementRun.tender_id == tender_id,
-                RequirementExtractionRun.tender_id == tender_id,
+        ).all()
+        for tender_id, run in pointed:
+            # Com `session.scalar`: la primera fila si n'hi hagues mes d'una.
+            runs.setdefault(tender_id, run)
+    missing = set(tender_ids) - runs.keys()
+    if missing:
+        for run in (
+            await session.scalars(
+                sa.select(RequirementExtractionRun).where(
+                    RequirementExtractionRun.tender_id.in_(missing),
+                    RequirementExtractionRun.is_current.is_(True),
+                )
             )
-        )
-        if pointed is not None:
-            return pointed
-    return await session.scalar(
-        sa.select(RequirementExtractionRun).where(
-            RequirementExtractionRun.tender_id == tender_id,
-            RequirementExtractionRun.is_current.is_(True),
-        )
-    )
+        ).all():
+            runs.setdefault(run.tender_id, run)
+    return runs
 
 
 async def effective_requirements(

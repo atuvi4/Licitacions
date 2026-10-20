@@ -95,3 +95,19 @@ class FinalReadinessRead(BaseModel):
     documents: DocumentReviewRead
     technical: TechnicalReadinessRead
     economic: EconomicReadinessRead
+
+
+class PreparationCount(BaseModel):
+    """Pendents de preparacio d'una candidatura: els blocadors de `final-readiness`.
+
+    `pending` nul vol dir que no s'han pogut comptar, mai zero.
+    """
+
+    workspace_id: uuid.UUID
+    pending: int | None = None
+
+
+class PreparationCountsRead(BaseModel):
+    """Els pendents de preparacio de totes les candidatures obertes i dins de termini."""
+
+    items: list[PreparationCount] = Field(default_factory=list)

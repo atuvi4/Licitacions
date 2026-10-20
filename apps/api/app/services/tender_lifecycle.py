@@ -461,6 +461,67 @@ async def load_change_log(session: AsyncSession, tender_id: uuid.UUID) -> Change
     )
 
 
+async def load_change_logs(
+    session: AsyncSession, tender_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, ChangeLog]:
+    """`load_change_log` de cop per a diverses licitacions: dues consultes.
+
+    Mateixos events (materials, en ordre de revisio i de codi dins de cada
+    licitacio) i mateixa revisio vigent (la de numero mes alt). Totes les
+    licitacions demanades hi son, encara que no tinguin historia.
+    """
+    if not tender_ids:
+        return {}
+    rows = (
+        await session.execute(
+            sa.select(TenderRevision.revision_number, TenderChangeEvent)
+            .join(TenderRevision, TenderRevision.id == TenderChangeEvent.to_revision_id)
+            .where(
+                TenderChangeEvent.tender_id.in_(tender_ids),
+                TenderChangeEvent.is_material.is_(True),
+            )
+            .order_by(
+                TenderChangeEvent.tender_id,
+                TenderRevision.revision_number,
+                TenderChangeEvent.change_code,
+            )
+        )
+    ).all()
+    entries: dict[uuid.UUID, list[tuple[int, TenderChangeEvent]]] = {}
+    for number, event in rows:
+        entries.setdefault(event.tender_id, []).append((number, event))
+
+    highest = (
+        sa.select(
+            TenderRevision.tender_id,
+            sa.func.max(TenderRevision.revision_number).label("revision_number"),
+        )
+        .where(TenderRevision.tender_id.in_(tender_ids))
+        .group_by(TenderRevision.tender_id)
+        .subquery()
+    )
+    latest = {
+        revision.tender_id: revision
+        for revision in (
+            await session.scalars(
+                sa.select(TenderRevision).join(
+                    highest,
+                    sa.and_(
+                        TenderRevision.tender_id == highest.c.tender_id,
+                        TenderRevision.revision_number == highest.c.revision_number,
+                    ),
+                )
+            )
+        ).all()
+    }
+    return {
+        tender_id: ChangeLog(
+            latest=latest.get(tender_id), entries=tuple(entries.get(tender_id, ()))
+        )
+        for tender_id in tender_ids
+    }
+
+
 async def revision_of(
     session: AsyncSession, revision_id: uuid.UUID | None
 ) -> TenderRevision | None:

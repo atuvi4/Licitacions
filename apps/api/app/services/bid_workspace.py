@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import lazyload
 
 from app.core.errors import (
     ConflictError,
@@ -57,8 +58,10 @@ from app.models.workspace import (
 from app.services import audit
 from app.services.tender_analysis import AnalysisStatus, current_analysis, package_state
 from app.services.tender_lifecycle import (
+    ChangeLog,
     is_actionable,
     load_change_log,
+    load_change_logs,
     lot_is_gone,
     revision_of,
 )
@@ -76,6 +79,7 @@ from app.workspace.decision import (
     requires_reason,
 )
 from app.workspace.transitions import (
+    CLOSED_STATUSES,
     TransitionActor,
     WorkspaceTransitionError,
     apply_transition,
@@ -87,6 +91,10 @@ from app.workspace.transitions import (
 DECISION_ROLES = frozenset(
     {MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.BID_MANAGER}
 )
+
+#: Candidatura que ja no es oberta (`transitions.CLOSED_STATUSES`, el mateix
+#: conjunt que `isOpenWorkspace` del web).
+CLOSED_WORKSPACE_STATUSES = CLOSED_STATUSES
 
 
 class WorkspaceExistsError(ValidationError):
@@ -170,16 +178,43 @@ async def find_workspace(
     )
 
 
+def _current_compliance(company_id: uuid.UUID) -> tuple[sa.ColumnElement[bool], ...]:
+    """El compliment vigent d'una empresa. Un sol lloc ho defineix."""
+    return (
+        CompanyComplianceRun.company_id == company_id,
+        CompanyComplianceRun.is_current.is_(True),
+    )
+
+
 async def current_compliance_run(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
 ) -> CompanyComplianceRun | None:
     return await session.scalar(
         sa.select(CompanyComplianceRun).where(
-            CompanyComplianceRun.company_id == company_id,
+            *_current_compliance(company_id),
             CompanyComplianceRun.tender_id == tender_id,
-            CompanyComplianceRun.is_current.is_(True),
         )
     )
+
+
+async def current_compliance_runs(
+    session: AsyncSession, company_id: uuid.UUID, tender_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, CompanyComplianceRun]:
+    """`current_compliance_run` de cop per a diverses licitacions: una consulta."""
+    if not tender_ids:
+        return {}
+    runs: dict[uuid.UUID, CompanyComplianceRun] = {}
+    for run in (
+        await session.scalars(
+            sa.select(CompanyComplianceRun).where(
+                *_current_compliance(company_id),
+                CompanyComplianceRun.tender_id.in_(tender_ids),
+            )
+        )
+    ).all():
+        # Com `session.scalar`: si n'hi hagues mes d'un de vigent, el primer.
+        runs.setdefault(run.tender_id, run)
+    return runs
 
 
 async def current_requirement_run(
@@ -398,9 +433,7 @@ class WorkspaceState:
         Sense cap run de requisits no hi ha analisi de cap mena, i tampoc es
         pot dir que sigui de fiar: es tracta igual que una simulacio.
         """
-        if self.requirement_run is None:
-            return AnalysisBasis.PROVIDER_NOT_CONFIGURED
-        return AnalysisBasis.for_provider(self.requirement_run.provider)
+        return analysis_basis_of(self.requirement_run)
 
     @property
     def eligibility_undetermined(self) -> bool:
@@ -413,6 +446,83 @@ class WorkspaceState:
 def _days_remaining(deadline: datetime | None, now: datetime | None = None) -> int | None:
     """Dies fins al termini. Calculat, no persistit: dema seria mentida."""
     return days_until_deadline(deadline, now)
+
+
+# --------------------------------------------------------------------------- #
+# Derivacions pures: les comparteixen `load_state` i la lectura per lots         #
+# --------------------------------------------------------------------------- #
+
+
+def analysis_basis_of(run: RequirementExtractionRun | None) -> AnalysisBasis:
+    """Sobre que s'ha construit l'analisi: sense run, res de fiar (com una simulacio)."""
+    if run is None:
+        return AnalysisBasis.PROVIDER_NOT_CONFIGURED
+    return AnalysisBasis.for_provider(run.provider)
+
+
+def effective_deadline(tender: Tender, lot: TenderLot | None) -> datetime | None:
+    """El termini autoritatiu: el del lot si el workspace n'es d'un; si no, el
+    de l'expedient. El del workspace nomes es una fotografia."""
+    return (lot.deadline_at if lot and lot.deadline_at else None) or tender.deadline_at
+
+
+def prefit_score_of(match: CompanyTenderMatch | None, workspace: BidWorkspace) -> int | None:
+    """El pre-fit d'ara si n'hi ha; si no, el que es va capturar en obrir."""
+    return match.score if match else workspace.prefit_score
+
+
+def outdated_reasons(
+    workspace: BidWorkspace,
+    *,
+    tender: Tender,
+    lot: TenderLot | None,
+    compliance: CompanyComplianceRun | None,
+    requirements: RequirementExtractionRun | None,
+    match: CompanyTenderMatch | None,
+    log: ChangeLog,
+    prefit_basis: TenderRevision | None,
+    requirements_basis: TenderRevision | None,
+    compliance_basis: TenderRevision | None,
+) -> tuple[str, ...]:
+    """Per que el que ensenya la candidatura ja no es al dia. Buit = ho es.
+
+    Pura: les revisions de base (`*_basis`) son les dels identificadors que
+    porten el pre-fit, la run de requisits i el compliment, ja llegides.
+    """
+    reasons: list[str] = []
+    if requirements is not None and requirements.id != workspace.current_requirement_run_id:
+        reasons.append("requirement_run_changed")
+    if compliance is not None and compliance.id != workspace.current_compliance_run_id:
+        reasons.append("compliance_run_changed")
+    if compliance is None and workspace.current_compliance_run_id is not None:
+        reasons.append("compliance_run_missing")
+
+    # El pre-fit te component de calendari i d'import: el que el fa obsolet es
+    # exactament el que la matriu marca com a `prefit_affecting`.
+    if match is not None and log.is_outdated(prefit_basis, ChangeImpact.PREFIT_AFFECTING):
+        reasons.append("prefit_outdated")
+
+    # Els requisits surten dels PLECS. Que es mogui un import no els canvia:
+    # "el 50% del pressupost base" segueix dient el mateix. Nomes els
+    # `requirements_affecting` —documents— obliguen a tornar a llegir.
+    if requirements is not None and log.is_outdated(
+        requirements_basis, ChangeImpact.REQUIREMENTS_AFFECTING
+    ):
+        reasons.append("requirements_outdated")
+
+    # El compliment si que depen dels imports: els llindars percentuals es
+    # resolen contra el pressupost. Ni el perfil ni els requisits han canviat i
+    # tots dos fingerprints segueixen iguals, pero el veredicte pot ser un altre.
+    if compliance is not None and log.is_outdated(
+        compliance_basis, ChangeImpact.COMPLIANCE_AFFECTING
+    ):
+        reasons.append("compliance_outdated")
+
+    if not is_actionable(tender):
+        reasons.append("tender_not_actionable")
+    if lot_is_gone(lot):
+        reasons.append("lot_removed")
+    return tuple(reasons)
 
 
 async def load_state(
@@ -450,17 +560,9 @@ async def load_state(
         )
     )
 
-    reasons: list[str] = []
-    if requirements is not None and requirements.id != workspace.current_requirement_run_id:
-        reasons.append("requirement_run_changed")
-    if compliance is not None and compliance.id != workspace.current_compliance_run_id:
-        reasons.append("compliance_run_changed")
-    if compliance is None and workspace.current_compliance_run_id is not None:
-        reasons.append("compliance_run_missing")
-
     # El termini autoritatiu es el del lot si el workspace n'es d'un; si no, el
     # de l'expedient. El del workspace nomes es una fotografia.
-    deadline = (lot.deadline_at if lot and lot.deadline_at else None) or tender.deadline_at
+    deadline = effective_deadline(tender, lot)
     days = _days_remaining(deadline, now)
 
     # La historia material de la licitacio, llegida un sol cop. Cada artefacte
@@ -485,34 +587,28 @@ async def load_state(
         elif since:
             decision_reasons.append("tender_changed_since_decision")
 
-    # El pre-fit te component de calendari i d'import: el que el fa obsolet es
-    # exactament el que la matriu marca com a `prefit_affecting`.
-    prefit_basis = await revision_of(session, match.tender_revision_id if match else None)
-    if match is not None and log.is_outdated(prefit_basis, ChangeImpact.PREFIT_AFFECTING):
-        reasons.append("prefit_outdated")
-
-    # Els requisits surten dels PLECS. Que es mogui un import no els canvia:
-    # "el 50% del pressupost base" segueix dient el mateix. Nomes els
-    # `requirements_affecting` —documents— obliguen a tornar a llegir.
-    if requirements is not None and log.is_outdated(
-        await revision_of(session, requirements.tender_revision_id),
-        ChangeImpact.REQUIREMENTS_AFFECTING,
-    ):
-        reasons.append("requirements_outdated")
-
-    # El compliment si que depen dels imports: els llindars percentuals es
-    # resolen contra el pressupost. Ni el perfil ni els requisits han canviat i
-    # tots dos fingerprints segueixen iguals, pero el veredicte pot ser un altre.
-    if compliance is not None and log.is_outdated(
-        await revision_of(session, compliance.tender_revision_id),
-        ChangeImpact.COMPLIANCE_AFFECTING,
-    ):
-        reasons.append("compliance_outdated")
-
-    if not is_actionable(tender):
-        reasons.append("tender_not_actionable")
-    if lot_is_gone(lot):
-        reasons.append("lot_removed")
+    # Les bases de cada artefacte, i la derivacio pura (`outdated_reasons`), la
+    # mateixa que fa servir la lectura per lots de les llistes.
+    reasons = outdated_reasons(
+        workspace,
+        tender=tender,
+        lot=lot,
+        compliance=compliance,
+        requirements=requirements,
+        match=match,
+        log=log,
+        prefit_basis=await revision_of(session, match.tender_revision_id if match else None),
+        requirements_basis=(
+            await revision_of(session, requirements.tender_revision_id)
+            if requirements is not None
+            else None
+        ),
+        compliance_basis=(
+            await revision_of(session, compliance.tender_revision_id)
+            if compliance is not None
+            else None
+        ),
+    )
 
     deadline_passed = deadline_has_passed(deadline, now)
     analysis_status: AnalysisStatus | None = None
@@ -535,11 +631,11 @@ async def load_state(
         compliance_run=compliance,
         requirement_run=requirements,
         counters=counters,
-        prefit_score=match.score if match else workspace.prefit_score,
+        prefit_score=prefit_score_of(match, workspace),
         prefit_status=match.status.value if match else None,
         latest_decision=decision,
         analysis_outdated=bool(reasons),
-        outdated_reasons=tuple(reasons),
+        outdated_reasons=reasons,
         deadline_at=deadline,
         days_remaining=days,
         deadline_passed=deadline_passed,
@@ -548,15 +644,42 @@ async def load_state(
     )
 
 
+def _decision_order() -> tuple[sa.UnaryExpression, ...]:
+    """De la decisio mes recent a la mes antiga. Un sol lloc ho defineix."""
+    return (WorkspaceDecision.decided_at.desc(), WorkspaceDecision.id.desc())
+
+
 async def latest_decision(
     session: AsyncSession, workspace_id: uuid.UUID
 ) -> WorkspaceDecision | None:
     return await session.scalar(
         sa.select(WorkspaceDecision)
         .where(WorkspaceDecision.workspace_id == workspace_id)
-        .order_by(WorkspaceDecision.decided_at.desc(), WorkspaceDecision.id.desc())
+        .order_by(*_decision_order())
         .limit(1)
     )
+
+
+async def latest_decisions(
+    session: AsyncSession, workspace_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, WorkspaceDecision]:
+    """`latest_decision` de cop per a diverses candidatures: una consulta.
+
+    Amb el mateix ordre global, la primera de cada candidatura es la seva mes
+    recent, exactament la que tria `latest_decision`.
+    """
+    if not workspace_ids:
+        return {}
+    latest: dict[uuid.UUID, WorkspaceDecision] = {}
+    for decision in (
+        await session.scalars(
+            sa.select(WorkspaceDecision)
+            .where(WorkspaceDecision.workspace_id.in_(workspace_ids))
+            .order_by(*_decision_order())
+        )
+    ).all():
+        latest.setdefault(decision.workspace_id, decision)
+    return latest
 
 
 async def decision_history(
@@ -568,10 +691,223 @@ async def decision_history(
             await session.scalars(
                 sa.select(WorkspaceDecision)
                 .where(WorkspaceDecision.workspace_id == workspace_id)
-                .order_by(WorkspaceDecision.decided_at.desc(), WorkspaceDecision.id.desc())
+                .order_by(*_decision_order())
             )
         ).all()
     )
+
+
+# --------------------------------------------------------------------------- #
+# Lectura per lots: les llistes                                                 #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceListState:
+    """El que una fila de llistat necessita, llegit per lots.
+
+    Un subconjunt de `WorkspaceState` amb la MATEIXA derivacio (`effective_deadline`,
+    `outdated_reasons`, `analysis_basis_of`, `prefit_score_of`): el que no surt a
+    cap fila (comptadors, historia des de la decisio, analisi v3) no es llegeix.
+    """
+
+    workspace: BidWorkspace
+    tender: Tender
+    buyer_name: str | None
+    lot: TenderLot | None
+    compliance_run: CompanyComplianceRun | None
+    requirement_run: RequirementExtractionRun | None
+    prefit_score: int | None
+    latest_decision: WorkspaceDecision | None
+    outdated_reasons: tuple[str, ...]
+    deadline_at: datetime | None
+    days_remaining: int | None
+    deadline_passed: bool
+
+    @property
+    def analysis_outdated(self) -> bool:
+        return bool(self.outdated_reasons)
+
+    @property
+    def analysis_basis(self) -> AnalysisBasis:
+        return analysis_basis_of(self.requirement_run)
+
+
+async def load_list_states(
+    session: AsyncSession,
+    company_id: uuid.UUID,
+    workspaces: list[BidWorkspace],
+    *,
+    now: datetime | None = None,
+) -> list[WorkspaceListState]:
+    """Les files de `GET /workspaces` amb un nombre fix de consultes, sigui quin sigui N.
+
+    Cada peca es llegeix un sol cop per a totes les candidatures (`IN (...)`) i la
+    derivacio es la de `load_state`. Totes han de ser de `company_id`: el compliment,
+    la run de requisits efectiva i el pre-fit son de l'empresa.
+    """
+    from app.services import manual_requirement
+
+    if not workspaces:
+        return []
+    if any(workspace.company_id != company_id for workspace in workspaces):
+        raise ValueError("Totes les candidatures han de ser de la mateixa empresa.")
+
+    tender_ids = {workspace.tender_id for workspace in workspaces}
+    # `Tender.buyer` es `lazy="joined"`: el nom de l'organisme ve amb la licitacio.
+    tenders = {
+        tender.id: tender
+        for tender in (
+            await session.scalars(sa.select(Tender).where(Tender.id.in_(tender_ids)))
+        ).all()
+    }
+    lot_ids = {workspace.tender_lot_id for workspace in workspaces if workspace.tender_lot_id}
+    lots = (
+        {
+            lot.id: lot
+            for lot in (
+                await session.scalars(sa.select(TenderLot).where(TenderLot.id.in_(lot_ids)))
+            ).all()
+        }
+        if lot_ids
+        else {}
+    )
+    compliance = await current_compliance_runs(session, company_id, tender_ids)
+    requirements = await manual_requirement.effective_runs(session, tender_ids, company_id)
+    matches = {
+        match.tender_id: match
+        for match in (
+            await session.scalars(
+                sa.select(CompanyTenderMatch)
+                .where(
+                    CompanyTenderMatch.company_id == company_id,
+                    CompanyTenderMatch.tender_id.in_(tender_ids),
+                )
+                # La fila nomes en llegeix la puntuacio i la revisio de base: ni la
+                # licitacio (ja carregada) ni els lots del pre-fit no cal tornar-los
+                # a llegir. Si algu hi accedis, la licitacio surt del mapa d'identitat.
+                .options(
+                    lazyload(CompanyTenderMatch.tender),
+                    lazyload(CompanyTenderMatch.lot_matches),
+                )
+            )
+        ).all()
+    }
+    logs = await load_change_logs(session, tender_ids)
+    decisions = await latest_decisions(session, {workspace.id for workspace in workspaces})
+
+    # Les revisions de base del pre-fit, dels requisits i del compliment, d'un cop.
+    basis_ids = {
+        artefact.tender_revision_id
+        for artefact in (*matches.values(), *requirements.values(), *compliance.values())
+        if artefact.tender_revision_id is not None
+    }
+    revisions = (
+        {
+            revision.id: revision
+            for revision in (
+                await session.scalars(
+                    sa.select(TenderRevision).where(TenderRevision.id.in_(basis_ids))
+                )
+            ).all()
+        }
+        if basis_ids
+        else {}
+    )
+
+    def basis(artefact) -> TenderRevision | None:
+        if artefact is None or artefact.tender_revision_id is None:
+            return None
+        return revisions.get(artefact.tender_revision_id)
+
+    states: list[WorkspaceListState] = []
+    for workspace in workspaces:
+        tender = tenders.get(workspace.tender_id)
+        if tender is None:  # pragma: no cover - FK ON DELETE CASCADE ho impedeix
+            raise NotFoundError("Licitacio no trobada.")
+        lot = lots.get(workspace.tender_lot_id) if workspace.tender_lot_id else None
+        run = compliance.get(workspace.tender_id)
+        requirement_run = requirements.get(workspace.tender_id)
+        match = matches.get(workspace.tender_id)
+        deadline = effective_deadline(tender, lot)
+        states.append(
+            WorkspaceListState(
+                workspace=workspace,
+                tender=tender,
+                buyer_name=tender.buyer.name if tender.buyer_id and tender.buyer else None,
+                lot=lot,
+                compliance_run=run,
+                requirement_run=requirement_run,
+                prefit_score=prefit_score_of(match, workspace),
+                latest_decision=decisions.get(workspace.id),
+                outdated_reasons=outdated_reasons(
+                    workspace,
+                    tender=tender,
+                    lot=lot,
+                    compliance=run,
+                    requirements=requirement_run,
+                    match=match,
+                    log=logs[workspace.tender_id],
+                    prefit_basis=basis(match),
+                    requirements_basis=basis(requirement_run),
+                    compliance_basis=basis(run),
+                ),
+                deadline_at=deadline,
+                days_remaining=_days_remaining(deadline, now),
+                deadline_passed=deadline_has_passed(deadline, now),
+            )
+        )
+    return states
+
+
+async def open_within_deadline(
+    session: AsyncSession, workspaces: list[BidWorkspace], *, now: datetime | None = None
+) -> list[BidWorkspace]:
+    """Les candidatures obertes (no tancades) i amb `deadline_passed` fals, en l'ordre rebut.
+
+    El mateix termini que `WorkspaceSummary.deadline_passed` (`effective_deadline` +
+    `deadline_has_passed`), llegit amb dues consultes per a totes: nomes els terminis.
+    """
+    candidates = [w for w in workspaces if w.status not in CLOSED_WORKSPACE_STATUSES]
+    if not candidates:
+        return []
+    tenders = {
+        row.id: row
+        for row in (
+            await session.execute(
+                sa.select(Tender.id, Tender.deadline_at).where(
+                    Tender.id.in_({w.tender_id for w in candidates})
+                )
+            )
+        ).all()
+    }
+    lot_ids = {w.tender_lot_id for w in candidates if w.tender_lot_id}
+    lots = (
+        {
+            row.id: row
+            for row in (
+                await session.execute(
+                    sa.select(TenderLot.id, TenderLot.deadline_at).where(
+                        TenderLot.id.in_(lot_ids)
+                    )
+                )
+            ).all()
+        }
+        if lot_ids
+        else {}
+    )
+    return [
+        workspace
+        for workspace in candidates
+        if workspace.tender_id in tenders
+        and not deadline_has_passed(
+            effective_deadline(
+                tenders[workspace.tender_id],  # type: ignore[arg-type]
+                lots.get(workspace.tender_lot_id) if workspace.tender_lot_id else None,  # type: ignore[arg-type]
+            ),
+            now,
+        )
+    ]
 
 
 # --------------------------------------------------------------------------- #

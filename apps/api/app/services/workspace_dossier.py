@@ -569,13 +569,49 @@ async def requirement_analysis_state(
     tambe son una analisi: `current`. Sense res, `absent`. Amb run, `stale` si ja no
     parla dels plecs d'ara (`run_is_outdated`, la mateixa regla que el 409).
     """
+    states = await requirement_analysis_states(session, [(tender_id, run)])
+    return states[(tender_id, run.id if run is not None else None)]
+
+
+async def requirement_analysis_states(
+    session: AsyncSession,
+    entries: list[tuple[uuid.UUID, RequirementExtractionRun | None]],
+) -> dict[tuple[uuid.UUID, uuid.UUID | None], str]:
+    """`requirement_analysis_state` per a diverses licitacions: la mateixa regla.
+
+    Clau: `(tender_id, run.id o None)`. Les que no tenen run es resolen amb UNA
+    consulta (si tenen requisits manuals vius). Les que en tenen criden
+    `run_is_outdated` un cop per run diferent: l'empremta del corpus d'ara es
+    calcula document a document i no es pot llegir per lots sense reescriure-la.
+    """
+    from app.models.tenders import Tender
     from app.services.manual_requirement import manual_filter
     from app.services.requirement_analysis import run_is_outdated
 
-    if run is None:
-        manual = await session.scalar(sa.select(sa.exists().where(manual_filter(tender_id))))
-        return ANALYSIS_CURRENT if manual else ANALYSIS_ABSENT
-    return ANALYSIS_STALE if await run_is_outdated(session, run) else ANALYSIS_CURRENT
+    states: dict[tuple[uuid.UUID, uuid.UUID | None], str] = {}
+    without_run = {tender_id for tender_id, run in entries if run is None}
+    if without_run:
+        # `manual_filter` correlacionat amb cada licitacio: la mateixa definicio.
+        manual = set(
+            (
+                await session.scalars(
+                    sa.select(Tender.id).where(
+                        Tender.id.in_(without_run), sa.exists().where(manual_filter(Tender.id))
+                    )
+                )
+            ).all()
+        )
+        for tender_id in without_run:
+            states[(tender_id, None)] = ANALYSIS_CURRENT if tender_id in manual else ANALYSIS_ABSENT
+
+    outdated: dict[uuid.UUID, bool] = {}
+    for tender_id, run in entries:
+        if run is None:
+            continue
+        if run.id not in outdated:
+            outdated[run.id] = await run_is_outdated(session, run)
+        states[(tender_id, run.id)] = ANALYSIS_STALE if outdated[run.id] else ANALYSIS_CURRENT
+    return states
 
 
 # --------------------------------------------------------------------------- #

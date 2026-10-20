@@ -63,6 +63,11 @@ HUMAN_ONLY_STATUSES = frozenset(
 #: diferents, i tots dos demanen aquesta signatura.
 FINAL_APPROVAL_STATUSES = frozenset({S.APPROVED_FOR_SUBMISSION, S.SUBMITTED})
 
+#: Candidatura que ja no es oberta: presentada, retirada o amb un NO-GO aprovat.
+#: Nomes es llegeix (Avui, el Radar); no es cap transicio. El mateix conjunt que
+#: `isOpenWorkspace` del web (`components/shell/counts.ts`): si un canvia, l'altre tambe.
+CLOSED_STATUSES = frozenset({S.SUBMITTED, S.WITHDRAWN, S.NO_GO_APPROVED})
+
 #: Graf de transicions. Les autotransicions que hi son son deliberades: tornar a
 #: aprovar un GO (amb un motiu nou) o ajornar dues vegades son accions reals que
 #: han de deixar una entrada mes a l'historial, no un error.
