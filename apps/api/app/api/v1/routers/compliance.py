@@ -170,7 +170,12 @@ def _assessment_read(
     read.consolidation = _consolidation_read(assessment)
     normalization = (assessment.explanation_params or {}).get("normalization") or {}
     if normalization:
-        read.compared_value = normalization.get("value")
+        ens = normalization.get("ens")
+        # L'ENS no te valor v2: la lectura (categoria exigida, o cap) es el que s'ha
+        # comparat, i la web l'ha de poder dir.
+        read.compared_value = normalization.get("value") or (
+            {"kind": "ens", **ens} if ens is not None else None
+        )
         read.compared_provenance = list(normalization.get("provenance") or [])
         read.normalization_status = normalization.get("status")
         read.normalization_reason = normalization.get("reason")

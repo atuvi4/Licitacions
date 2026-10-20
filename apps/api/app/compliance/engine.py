@@ -64,6 +64,8 @@ class _AdaptedRequirement:
     _wrapped: Any
     value_json: dict[str, Any] | None
     value_schema: str | None = None
+    #: `normalize.NORMALIZED_ATTRIBUTE`: nomes aquest embolcall el porta a cert.
+    _v5_normalized: bool = True
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._wrapped, name)
@@ -131,6 +133,16 @@ def assess_requirement_traced(
             value_schema=normalization.value_schema,
         )
         outcome = _dispatch(adapted, snapshot, deadline=deadline, tender=tender)
+    elif (
+        normalization.reason == normalize.REASON_LIMIT_KIND_AMBIGUOUS
+        and requirement.category == RequirementCategory.INSURANCE
+    ):
+        # El plec SI dona un import, pero no se sap a quin limit correspon
+        # (sublimit sense base, «per ocurrència», value i cita contradictoris):
+        # revisio amb el motiu, no «el requisit no te valor».
+        outcome = needs_review(
+            RuleCode.INSURANCE_LIMITS, ExplanationCode.INSURANCE_LIMIT_KIND_AMBIGUOUS
+        )
     else:
         outcome = _dispatch(requirement, snapshot, deadline=deadline, tender=tender)
 

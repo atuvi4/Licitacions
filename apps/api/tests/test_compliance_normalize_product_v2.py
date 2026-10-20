@@ -384,7 +384,7 @@ def test_l_ens_amb_categoria_literal_s_avalua_amb_la_regla_de_certificacio():
         FakeEvidence(
             id="q",
             quote=(
-                "certificació de conformitat amb l'Esquema Nacional de Seguretat, categoria MITJANA"
+                "certificació de conformitat amb l'Esquema Nacional de Seguretat categoria MITJANA"
             ),
         )
     ]
@@ -684,7 +684,9 @@ class EnsCert:
         ("Certificat ENS categoria MEDIA", "mitjana"),
         ("Certificat ENS nivell MITJÀ", "mitjana"),
         ("Esquema Nacional de Seguretat de nivell bàsic", "basica"),
-        ("Esquema Nacional de Seguridad, categoría BÁSICA", "basica"),
+        ("Esquema Nacional de Seguridad categoría BÁSICA", "basica"),
+        # IR-1: una coma trenca el sintagma; cap categoria.
+        ("Esquema Nacional de Seguridad, categoría BÁSICA", None),
         ("ENS (RD 311/2022)", None),
         ("Aplicació de l'ENS i encàrrec de tractament", None),
     ],
@@ -943,3 +945,210 @@ def test_m2_la_cnmc_nomes_compta_si_ho_diu_el_text_literal():
     outcome = assess_requirement(requirement, empty(), profile=PV2)
     assert outcome.explanation_code == ExplanationCode.RULE_NOT_AUTOMATABLE
     assert outcome.params["normalization"]["reason"] == "registry_not_named_explicitly"
+
+
+# --------------------------------------------------------------------------- #
+# Ronda 2 de correccions (review/FIX_ROUND_2.md)                               #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("text", "level"),
+    [
+        # IR-1: la categoria ha d'anar LLIGADA a l'ENS en el mateix sintagma.
+        ("El sistema complirà l'ENS, alta disponibilitat i còpies diàries.", None),
+        ("El sistema complirà l'ENS alta disponibilitat i còpies diàries.", None),
+        ("Compliment de l'ENS i alta seguretat de les dades.", None),
+        ("Compliment de l'ENS. Incidències de categoria alta: 4 hores.", None),
+        ("ENS i nivell alt de servei", None),
+        # Positius:
+        ("Certificació ENS de categoria MITJANA", "mitjana"),
+        ("categoria alta de l'ENS", "alta"),
+        ("nivel medio del Esquema Nacional de Seguridad", "mitjana"),
+        ("ENS (categoria Alta) vigent", "alta"),
+        ("ENS Alta.", "alta"),
+    ],
+)
+def test_ir1_la_categoria_nomes_si_va_lligada_a_l_ens(text, level):
+    assert normalize.ens_level(text) == (level, False)
+
+
+def test_ir1_alta_disponibilitat_no_es_cap_categoria_ni_un_bloqueig():
+    requirement = mk(
+        RequirementCategory.TECHNICAL_REQUIREMENT,
+        None,
+        ["El sistema complirà l'ENS, alta disponibilitat i còpies diàries."],
+    )
+    profile = ProfileSnapshot(
+        company_id=uuid.uuid4(),
+        certifications=[EnsCert("ENS categoria Mitjana")],
+        section_ratio={"certifications": 1.0},
+    )
+    outcome = assess_requirement(requirement, profile, profile=PV2)
+    assert outcome.result == AssessmentResult.NEEDS_REVIEW
+    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_LEVEL_NOT_STATED
+
+
+@pytest.mark.parametrize(
+    ("text", "or_higher"),
+    [
+        ("ENS de categoria MITJANA o superior", True),
+        ("ENS com a mínim de categoria MITJANA", True),
+        ("categoria mitjana de l'ENS o superior", True),
+        # M-R1: un «mínim» alie a la categoria no compta.
+        ("ENS de categoria MITJANA. El termini mínim de resposta és de 4 hores.", False),
+        ("ENS de categoria MITJANA; superior a 4 hores de resposta.", False),
+    ],
+)
+def test_o_superior_nomes_dins_del_sintagma_de_la_categoria(text, or_higher):
+    level, ambiguous, found = normalize.ens_reading(text)
+    assert (level, ambiguous, found) == ("mitjana", False, or_higher)
+
+
+def test_un_minim_alie_no_converteix_una_categoria_superior_en_compleix():
+    requirement = mk(
+        RequirementCategory.TECHNICAL_REQUIREMENT,
+        None,
+        ["Certificació ENS de categoria MITJANA. El termini mínim de resposta és de 4 hores."],
+    )
+    profile = ProfileSnapshot(
+        company_id=uuid.uuid4(),
+        certifications=[EnsCert("ENS Alta")],
+        section_ratio={"certifications": 1.0},
+    )
+    outcome = assess_requirement(requirement, profile, profile=PV2)
+    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_LEVEL_HIGHER_REVIEW
+
+
+def test_categoria_inferior_amb_la_seccio_incompleta_es_sense_dades():
+    requirement = mk(
+        RequirementCategory.TECHNICAL_REQUIREMENT, None, ["Certificació ENS de categoria ALTA"]
+    )
+    incomplete = ProfileSnapshot(company_id=uuid.uuid4(), certifications=[EnsCert("ENS Mitjana")])
+    outcome = assess_requirement(requirement, incomplete, profile=PV2)
+    assert outcome.result == AssessmentResult.UNKNOWN
+    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_LEVEL_BELOW
+    complete = ProfileSnapshot(
+        company_id=uuid.uuid4(),
+        certifications=[EnsCert("ENS Mitjana")],
+        section_ratio={"certifications": 1.0},
+    )
+    assert assess_requirement(requirement, complete, profile=PV2).result == (
+        AssessmentResult.DOES_NOT_SATISFY
+    )
+
+
+def test_ir2_value_i_cita_contradictoris_no_es_normalitzen():
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        {"amount": "300.000 €", "unit": "per sinistre"},
+        [
+            "pòlissa de responsabilitat civil amb una cobertura mínima de "
+            "300.000 € per sinistre i any"
+        ],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert (result.status, result.reason) == ("not_normalized", "limit_kind_ambiguous")
+    policy = Policy(
+        limits=[
+            Limit(InsuranceLimitKind.PER_CLAIM, Decimal("300000")),
+            Limit(InsuranceLimitKind.ANNUAL_AGGREGATE, Decimal("200000")),
+        ]
+    )
+    outcome = assess_requirement(
+        requirement, ProfileSnapshot(company_id=uuid.uuid4(), insurances=[policy]), profile=PV2
+    )
+    assert outcome.result == AssessmentResult.NEEDS_REVIEW
+    assert outcome.explanation_code == ExplanationCode.INSURANCE_LIMIT_KIND_AMBIGUOUS
+
+
+def test_ir2_value_i_cita_que_coincideixen_es_normalitzen():
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        {"amount": "300.000 €", "unit": "per sinistre i any"},
+        [
+            "pòlissa de responsabilitat civil amb una cobertura mínima de "
+            "300.000 € per sinistre i any"
+        ],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert [limit["kind"] for limit in result.value_json["limits"]] == [
+        "per_claim",
+        "annual_aggregate",
+    ]
+
+
+def test_ir2_la_cita_que_no_diu_la_base_no_contradiu_el_value():
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        {"amount": "300.000 €", "unit": "per sinistre"},
+        ["pòlissa de responsabilitat civil amb una cobertura mínima de 300.000 €"],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert [limit["kind"] for limit in result.value_json["limits"]] == ["per_claim"]
+
+
+def test_m_r4_un_sublimit_ambigu_diu_el_motiu_a_la_ui():
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        {"amount": "300.000 €", "unit": "sublímit per ocurrència"},
+        [],
+    )
+    outcome = assess_requirement(requirement, empty(), profile=PV2)
+    assert outcome.explanation_code == ExplanationCode.INSURANCE_LIMIT_KIND_AMBIGUOUS
+
+
+def test_la_marca_no_viu_al_value_i_un_value_desat_que_la_porti_no_activa_res():
+    from app.ai.value_schemas import VALUE_SCHEMA_VERSION
+    from app.compliance.engine import _dispatch
+
+    result = normalize.normalize_requirement(req("8ce506d2"), PV2)
+    assert "_normalizer" not in result.value_json
+    # Un v2 desat amb una clau `_normalizer`: la regla de la v4, sense res de nou.
+    requirement = mk(
+        RequirementCategory.REGISTRATION,
+        {"_normalizer": "x", "type": "sector_operator_registry", "name": "Registre"},
+        [],
+    )
+    requirement.value_schema = VALUE_SCHEMA_VERSION
+    complete = ProfileSnapshot(company_id=uuid.uuid4(), section_ratio={"registrations": 1.0})
+    outcome = assess_requirement(requirement, complete, profile=PV2)
+    assert outcome == _dispatch(requirement, complete)
+    assert outcome.explanation_code == ExplanationCode.RULE_NOT_AUTOMATABLE
+    insurance = mk(
+        RequirementCategory.INSURANCE,
+        {
+            "_normalizer": "x",
+            "kind": "insurance",
+            "limits": [{"kind": "employer_per_victim", "amount": 150000}],
+        },
+        [],
+    )
+    insurance.value_schema = VALUE_SCHEMA_VERSION
+    total = ProfileSnapshot(
+        company_id=uuid.uuid4(),
+        insurances=[Policy(limits=[], coverage_amount=Decimal("2000000"))],
+    )
+    assert assess_requirement(insurance, total, profile=PV2) == _dispatch(insurance, total)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("32412000", ["32412000"]),
+        ("32412000-4; 64210000", ["32412000-4", "64210000"]),
+        (["32412000", "64210000-1"], ["32412000", "64210000-1"]),
+        ("telecomunicacions", None),
+    ],
+)
+def test_cpv_codes_en_text_no_es_parteixen_per_caracters(raw, expected):
+    requirement = mk(
+        RequirementCategory.EXPERIENCE,
+        {"minimum_amount": "42.888,88 €", "cpv_codes": raw},
+        [],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    if expected is None:
+        assert (result.status, result.reason) == ("not_normalized", "unmapped_conditions")
+    else:
+        assert result.value_json["cpv_codes"] == expected

@@ -384,7 +384,7 @@ def read_insurance(requirement: Any) -> InsuranceSpec:
             type_note=value.get("insurance_type_note"),
             additional_insured_required=value.get("additional_insured") is True,
             unchecked_conditions=_unchecked_insurance_conditions(value),
-            normalized=bool(value.get("_normalizer")),
+            normalized=getattr(requirement, "_v5_normalized", False) is True,
         )
 
     amount = to_decimal(value.get("coverage_amount") or value.get("amount"))

@@ -26,8 +26,8 @@ controlador, ronda 1):
 * **Ambiguitat = no es normalitza**, i el motiu queda escrit (`reason`).
 
 Les regles nomes apliquen comportaments nous (sublimit patronal estricte, registre
-d'operadors) sobre valors que porten la marca `NORMALIZED_MARKER`, que nomes posa
-aquest modul. Res no es desa: el valor viatja dins de l'avaluacio
+d'operadors) sobre requisits adaptats en memoria amb `NORMALIZED_ATTRIBUTE`, que
+nomes posa el motor amb un valor d'aqui. Res no es desa: el valor viatja dins de l'avaluacio
 (`explanation_params.normalization`), amb la procedencia de cada camp.
 
 Modul pur: ni base de dades ni model.
@@ -58,10 +58,16 @@ NORMALIZER_VERSION = "product-v2-normalizer-v2"
 #: L'UNIC perfil al qual s'aplica.
 NORMALIZED_PROFILE = "product-v2"
 
-#: Clau que marca un valor sortit d'aqui. Les regles nomes activen els
-#: comportaments nous de la v5 quan la porta; un valor de qualsevol altre cami no
-#: la pot tenir.
-NORMALIZED_MARKER = "_normalizer"
+#: Atribut del requisit ADAPTAT en memoria (`engine._AdaptedRequirement`) que
+#: activa els comportaments nous de la v5 a les regles. No viu mai dins de cap
+#: valor: un `value_json` desat o arribat de fora no pot activar res (ronda 2).
+NORMALIZED_ATTRIBUTE = "_v5_normalized"
+
+
+def is_normalized(requirement: object) -> bool:
+    """Cert NOMES per a un requisit adaptat pel complement `product-v2`."""
+    return getattr(requirement, NORMALIZED_ATTRIBUTE, False) is True
+
 
 # --------------------------------------------------------------------------- #
 # Resultat                                                                      #
@@ -127,7 +133,7 @@ class Normalization:
     #: `normalized` (hi ha valor), `not_normalized` (s'avalua com ara, amb el
     #: motiu) o `routed` (una ruta explicita).
     status: str
-    #: Valor amb la forma que llegeixen les regles, amb `NORMALIZED_MARKER`.
+    #: Valor amb la forma que llegeixen les regles.
     value_json: dict[str, Any] | None = None
     #: `value_schema` amb que s'ha de llegir `value_json` (v2 o `None` = lliure).
     value_schema: str | None = None
@@ -149,7 +155,7 @@ class Normalization:
             "status": self.status,
         }
         if self.value_json is not None:
-            data["value"] = {k: v for k, v in self.value_json.items() if k != NORMALIZED_MARKER}
+            data["value"] = dict(self.value_json)
         if self.provenance:
             data["provenance"] = [item.as_dict() for item in self.provenance]
         if self.reason:
@@ -759,7 +765,6 @@ def _economic(sources: _Sources, requirement: Any) -> Normalization:
         threshold["percentage"] = str(percentage)
         threshold["percentage_base"] = base.value
     value = {
-        NORMALIZED_MARKER: NORMALIZER_VERSION,
         "kind": "economic_solvency",
         "metric": EconomicMetric.ANNUAL_TURNOVER.value,
         "operator": str(operator) if operator else "gte",
@@ -844,6 +849,14 @@ def limit_kinds(text: str) -> tuple[tuple[InsuranceLimitKind, ...] | None, bool]
     return tuple(found), False
 
 
+def _base_of(kinds: tuple[InsuranceLimitKind, ...]) -> tuple[InsuranceLimitKind, ...]:
+    """La base d'un import, sense distingir «patronal» (que es decideix a part)."""
+    return tuple(
+        InsuranceLimitKind.PER_VICTIM if kind == InsuranceLimitKind.EMPLOYER_PER_VICTIM else kind
+        for kind in kinds
+    )
+
+
 def _insurance(sources: _Sources) -> Normalization:
     unmapped = _unmapped(sources.value, _INSURANCE_KEYS | _INSURANCE_CONDITIONS)
     if unmapped:
@@ -876,31 +889,37 @@ def _insurance(sources: _Sources) -> Normalization:
             if kinds is not None:
                 provenance.append(Provenance("limits.kind", "value_json", raw))
                 break
-    if kinds is None:
-        # El tipus, de la cita que DONA l'import (o, si l'import es del value, de
-        # les cites on aquell import es l'unic): el text que va just despres.
-        segments: list[tuple[str, _Quote]] = []
-        if quote is not None and candidate is not None:
-            segments.append((_flat(quote.text)[candidate.end :], quote))
-        else:
-            for item in sources.quotes:
-                found, _ratio = quote_amounts(item.text)
-                if len(found) == 1 and found[0].amount == amount:
-                    segments.append((_flat(item.text)[found[0].end :], item))
-                elif len(found) > 1 and any(c.amount == amount for c in found):
-                    return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
-        readings: dict[tuple[InsuranceLimitKind, ...], _Quote] = {}
-        for segment, item in segments:
-            read, ambiguous = limit_kinds(segment)
-            if ambiguous:
+
+    # El tipus que diuen les cites: el text just darrere de l'import a la cita que
+    # el DONA o, si l'import es del value, a les cites on aquell import es l'unic.
+    segments: list[tuple[str, _Quote]] = []
+    if quote is not None and candidate is not None:
+        segments.append((_flat(quote.text)[candidate.end :], quote))
+    else:
+        for item in sources.quotes:
+            found, _ratio = quote_amounts(item.text)
+            if len(found) == 1 and found[0].amount == amount:
+                segments.append((_flat(item.text)[found[0].end :], item))
+            elif len(found) > 1 and any(c.amount == amount for c in found):
                 return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
-            if read is not None:
-                readings.setdefault(read, item)
-        if len(readings) > 1:
+    readings: dict[tuple[InsuranceLimitKind, ...], _Quote] = {}
+    for segment, item in segments:
+        read, ambiguous = limit_kinds(segment)
+        if ambiguous:
             return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
-        if readings:
-            kinds, item = next(iter(readings.items()))
-            provenance.append(Provenance("limits.kind", "quote", item.text, item.evidence_id))
+        if read is not None:
+            readings.setdefault(read, item)
+    if len(readings) > 1:
+        return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
+    if readings:
+        quoted, item = next(iter(readings.items()))
+        if kinds is not None and _base_of(quoted) != _base_of(kinds):
+            # IR-2: el value diu una base i la cita una altra («per sinistre» contra
+            # «per sinistre i any»). Unitats contradictories: no es tria.
+            return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
+        if kinds is None:
+            kinds = quoted
+        provenance.append(Provenance("limits.kind", "quote", item.text, item.evidence_id))
     if kinds is not None and InsuranceLimitKind.PER_VICTIM in kinds:
         # «patronal» pot ser a la cita encara que la unitat digui nomes «per víctima».
         employer = sources.literal_flag(_EMPLOYER, "limits.kind")
@@ -919,7 +938,6 @@ def _insurance(sources: _Sources) -> Normalization:
         kinds = (InsuranceLimitKind.UNKNOWN,)
 
     value: dict[str, Any] = {
-        NORMALIZED_MARKER: NORMALIZER_VERSION,
         "kind": "insurance",
         "insurance_type": None,
         "limits": [
@@ -978,6 +996,30 @@ def _int_of(raw: Any) -> int | None:
     return None
 
 
+_CPV = re.compile(r"^\d{8}(?:-\d)?$")
+_LIST_SEPARATOR = re.compile(r"[,;\n]")
+
+
+def _text_list(raw: Any) -> list[str] | None:
+    """Una llista de textos. Un text sol es UN element (o diversos amb separador
+    explicit), mai una llista de caracters. `None` = forma desconeguda."""
+    if raw in (None, "", []):
+        return []
+    if isinstance(raw, str):
+        return [item.strip() for item in _LIST_SEPARATOR.split(raw) if item.strip()]
+    if isinstance(raw, list) and all(isinstance(item, str | int) for item in raw):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return None
+
+
+def _cpv_codes(raw: Any) -> list[str] | None:
+    """Els CPV del value, validats (8 xifres, amb digit de control opcional)."""
+    items = _text_list(raw)
+    if items is None or not all(_CPV.match(item) for item in items):
+        return None
+    return items
+
+
 def _experience(sources: _Sources) -> Normalization:
     value_in = sources.value
     unmapped = _unmapped(value_in, _EXPERIENCE_KEYS)
@@ -1018,6 +1060,11 @@ def _experience(sources: _Sources) -> Normalization:
             return _not_normalized(REASON_EXPERIENCE_BASIS_AMBIGUOUS)
         provenance.append(accumulated or individual)
 
+    cpv_codes = _cpv_codes(value_in.get("cpv_codes"))
+    services = _text_list(value_in.get("services"))
+    if cpv_codes is None or services is None:
+        return _not_normalized(REASON_UNMAPPED_CONDITIONS, keys=["cpv_codes/services"])
+
     years, aggregation, period_origin, reason = _period(sources)
     if reason:
         return _not_normalized(reason)
@@ -1037,7 +1084,6 @@ def _experience(sources: _Sources) -> Normalization:
         provenance.append(percentage_origin)
     provenance += period_origin
     value: dict[str, Any] = {
-        NORMALIZED_MARKER: NORMALIZER_VERSION,
         "kind": "experience",
         "reference_period": (
             {"type": "last_n_years", "years": years} if years else {"type": "unknown"}
@@ -1046,8 +1092,8 @@ def _experience(sources: _Sources) -> Normalization:
         "min_count": count,
         "min_individual_amount": money if individual else None,
         "min_accumulated_amount": money if accumulated else None,
-        "cpv_codes": [str(code) for code in value_in.get("cpv_codes") or []],
-        "categories": [str(item) for item in value_in.get("services") or []],
+        "cpv_codes": cpv_codes,
+        "categories": services,
     }
     if count is not None:
         provenance.append(Provenance("min_count", "value_json", str(value_in["minimum_projects"])))
@@ -1081,7 +1127,6 @@ def _personnel(sources: _Sources) -> Normalization | None:
             # Enriquir: es conserven totes les claus (un perfil concret continua
             # anant a la regla de titulacions).
             value = {**sources.value, "minimum_people": int(raw.strip())}
-            value[NORMALIZED_MARKER] = NORMALIZER_VERSION
             return Normalization(
                 status="normalized",
                 value_json=value,
@@ -1096,18 +1141,40 @@ def _personnel(sources: _Sources) -> Normalization | None:
 # --------------------------------------------------------------------------- #
 
 _ENS_STRICT = re.compile(r"\bENS\b|Esquema\s+Nacional\s+de\s+Segur(?:etat|idad)")
-_LEVEL_WORD = r"(basica|basico|basic|mitjana|mitja|media|medio|alta|alto|alt)"
-#: El nivell just despres de l'esquema («ENS Alta», «ENS (categoria Mitjana)»,
-#: «ENS - MEDIA», «Esquema Nacional de Seguretat de nivell bàsic») o darrere
-#: d'una paraula de categoria en un text que nomena l'ENS («categoria MITJANA»).
-_ENS_LEVEL_AFTER = re.compile(
-    r"(?:\bens\b|esquema nacional de segur(?:etat|idad))(?:\s*\(ens\))?"
-    r"[\s(:,\-–]*(?:(?:de\s+)?(?:la\s+)?(?:categoria|nivell|nivel)\s*:?\s*(?:de\s+)?)?"
-    + _LEVEL_WORD
-    + r"\b"
+_LEVEL = r"(?P<level>basica|basico|basic|mitjana|mitja|media|medio|alta|alto|alt)"
+_ENS_NAME = r"(?:\bens\b|esquema nacional de segur(?:etat|idad))(?:\s*\(ens\))?"
+#: Paraules que poden anar ENTRE l'esquema i la categoria sense trencar el
+#: sintagma: «de», «la», «categoria», «nivell», i les formes de «com a mínim».
+#: Cap coma ni cap altra paraula (IR-1: «l'ENS, alta disponibilitat» no diu cap
+#: categoria).
+_JOIN_WORD = (
+    r"(?:de|del|la|el|categoria|nivell|nivel|com a minim|como minimo|minim|minima|minimo"
+    r"|igual o superior a)"
 )
-_ENS_LEVEL_WORDED = re.compile(
-    r"\b(?:categoria|nivell|nivel)\s*:?\s*(?:de\s+)?" + _LEVEL_WORD + r"\b"
+#: «ENS Alta», «ENS (categoria Mitjana)», «ENS - MEDIA», «ENS nivell MITJÀ»,
+#: «Esquema Nacional de Seguretat de nivell bàsic», «ENS com a mínim de categoria
+#: MITJANA». La categoria ha d'acabar el sintagma: «alta disponibilitat» no ho fa.
+_ENS_LEVEL_AFTER = re.compile(
+    _ENS_NAME
+    + r"(?:\s*[(\-–:]\s*|\s+)(?P<join>(?:"
+    + _JOIN_WORD
+    + r"\s*:?\s+)*)"
+    + _LEVEL
+    + r"\b(?=\s*(?:$|[).;,:]|o\b|i\b|y\b|\())"
+)
+#: «categoria alta de l'ENS», «nivel medio del Esquema Nacional de Seguridad».
+_ENS_LEVEL_BEFORE = re.compile(
+    r"\b(?:categoria|nivell|nivel)\s*:?\s*"
+    + _LEVEL
+    + r"\s+(?:de|del)\s+(?:l'|la\s+|el\s+)?"
+    + _ENS_NAME
+)
+_OR_HIGHER_JOIN = re.compile(r"minim|como minimo|igual o superior")
+#: «o superior» just darrere de la categoria (o del sintagma «... de l'ENS»).
+_OR_HIGHER_AFTER = re.compile(r"^\s*\)?\s*,?\s*o\s+(?:una\s+)?(?:categoria\s+)?superior\b")
+#: «com a mínim (de) categoria alta de l'ENS» just davant del sintagma.
+_OR_HIGHER_BEFORE = re.compile(
+    r"(?:com a minim|como minimo|minim[ao]?|igual o superior a)\s*(?:de\s+)?(?:la\s+)?$"
 )
 ENS_LEVELS = {
     "basica": "basica", "basico": "basica", "basic": "basica",
@@ -1116,10 +1183,6 @@ ENS_LEVELS = {
 }  # fmt: skip
 #: Ordre de les categories de l'ENS (RD 311/2022).
 ENS_ORDER = {"basica": 1, "mitjana": 2, "alta": 3}
-_OR_HIGHER = re.compile(
-    r"o superior|o una categoria superior|o categoria superior|com a minim|como minimo"
-    r"|\bminim[ao]?\b|igual o superior"
-)
 
 
 def names_ens(text: str) -> bool:
@@ -1127,19 +1190,41 @@ def names_ens(text: str) -> bool:
     return bool(_ENS_STRICT.search(_flat(text or "")))
 
 
-def ens_level(text: str) -> tuple[str | None, bool]:
-    """La categoria de l'ENS que diu un text. `(categoria, ambigua)`.
+def ens_reading(text: str) -> tuple[str | None, bool, bool]:
+    """`(categoria, ambigua, o_superior)` de l'ENS que diu un text.
 
-    Nomes si el text nomena l'ENS. Dues categories diferents: ambigua.
+    Nomes una categoria LLIGADA a l'esquema en el mateix sintagma (vegeu
+    `_ENS_LEVEL_AFTER` i `_ENS_LEVEL_BEFORE`), i nomes si el text nomena l'ENS.
+    «O superior» / «com a mínim» nomes compten dins d'aquell sintagma.
     """
     if not names_ens(text):
-        return None, False
+        return None, False, False
     folded = _fold(text)
-    found = {ENS_LEVELS[m.group(1)] for m in _ENS_LEVEL_AFTER.finditer(folded)}
-    found |= {ENS_LEVELS[m.group(1)] for m in _ENS_LEVEL_WORDED.finditer(folded)}
+    found: set[str] = set()
+    or_higher = False
+    for match in _ENS_LEVEL_AFTER.finditer(folded):
+        found.add(ENS_LEVELS[match.group("level")])
+        if _OR_HIGHER_JOIN.search(match.group("join") or ""):
+            or_higher = True
+        if _OR_HIGHER_AFTER.search(folded[match.end() :]):
+            or_higher = True
+    for match in _ENS_LEVEL_BEFORE.finditer(folded):
+        found.add(ENS_LEVELS[match.group("level")])
+        if _OR_HIGHER_AFTER.search(folded[match.end() :]):
+            or_higher = True
+        if _OR_HIGHER_BEFORE.search(folded[max(0, match.start() - 30) : match.start()]):
+            or_higher = True
     if len(found) > 1:
-        return None, True
-    return (found.pop() if found else None), False
+        return None, True, False
+    if not found:
+        return None, False, False
+    return found.pop(), False, or_higher
+
+
+def ens_level(text: str) -> tuple[str | None, bool]:
+    """La categoria de l'ENS que diu un text. `(categoria, ambigua)`."""
+    level, ambiguous, _or_higher = ens_reading(text)
+    return level, ambiguous
 
 
 #: Categories on un requisit que NOMENA l'ENS es llegeix com a exigencia de
@@ -1173,19 +1258,21 @@ def _ens(sources: _Sources, requirement: Any) -> Normalization | None:
             return _not_normalized(REASON_UNMAPPED_CONDITIONS, keys=unmapped)
     provenance = [Provenance("certification.scheme", named[0], named[1], named[2])]
     levels: dict[str, tuple[str, str, str | None]] = {}
+    higher: dict[str, bool] = {}
     for source, text, evidence in sources.literal_texts():
-        level, ambiguous = ens_level(text)
+        level, ambiguous, text_or_higher = ens_reading(text)
         if ambiguous:
             levels = {}
             break
         if level is not None:
             levels.setdefault(level, (source, text, evidence))
+            higher[level] = higher.get(level, False) or text_or_higher
     level = None
     or_higher = False
     if len(levels) == 1:
         level, (source, text, evidence) = next(iter(levels.items()))
         provenance.append(Provenance("certification.level", source, text, evidence))
-        or_higher = bool(_OR_HIGHER.search(_fold(text)))
+        or_higher = higher[level]
         if or_higher:
             provenance.append(Provenance("certification.or_higher", source, text, evidence))
     value = sources.value if category == RequirementCategory.CERTIFICATION else {}
@@ -1261,11 +1348,7 @@ def _registration(sources: _Sources, requirement: Any) -> Normalization | None:
     if named is not None:
         if getattr(requirement, "obligation", None) != RequirementObligation.MANDATORY:
             return _not_normalized(REASON_NOT_MANDATORY)
-        value = {
-            **sources.value,
-            NORMALIZED_MARKER: NORMALIZER_VERSION,
-            "type": "sector_operator_registry",
-        }
+        value = {**sources.value, "type": "sector_operator_registry"}
         return Normalization(
             status="routed",
             route=ROUTE_SECTOR_OPERATOR_REGISTRY,
@@ -1333,7 +1416,8 @@ def canonical(value: Any) -> str:
 
 __all__ = [
     "ENS_ORDER",
-    "NORMALIZED_MARKER",
+    "NORMALIZED_ATTRIBUTE",
+    "is_normalized",
     "NORMALIZED_PROFILE",
     "NORMALIZER_VERSION",
     "EnsReading",

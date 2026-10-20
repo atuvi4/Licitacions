@@ -238,7 +238,10 @@ def assess_registration(
     value = requirement.value_json or {}
     required_name = (value.get("name") or requirement.title or "").strip()
     required_type = infer_registration_type(value.get("type") or required_name)
-    if value.get("_normalizer") and value.get("type") == "sector_operator_registry":
+    if (
+        getattr(requirement, "_v5_normalized", False) is True
+        and value.get("type") == "sector_operator_registry"
+    ):
         # v5, nomes per al complement `product-v2`: el plec nomena literalment el
         # registre d'operadors (CNMC). Cap altre cami no hi arriba.
         required_type = RegistrationType.SECTOR_OPERATOR_REGISTRY

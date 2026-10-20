@@ -319,6 +319,15 @@ def assess_ens(
             ExplanationCode.CERTIFICATION_EQUIVALENCE_REVIEW,
             **params,
         )
+    if not snapshot.is_section_complete("certifications"):
+        # Amb el perfil incomplet, l'empresa pot tenir una categoria superior que
+        # no ha declarat: com a la resta de regles, «sense dades», no «no compleix».
+        return unknown(
+            RuleCode.CERTIFICATION_EXACT,
+            ExplanationCode.CERTIFICATION_LEVEL_BELOW,
+            section_complete=False,
+            **params,
+        )
     return RuleOutcome(
         result=AssessmentResult.DOES_NOT_SATISFY,
         rule_code=RuleCode.CERTIFICATION_EXACT,
