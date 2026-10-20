@@ -154,7 +154,8 @@ function AssessmentRow({
   // L'avaluació que dona el resultat de la fila: la seva explicació i el seu valor
   // de l'empresa quadren amb la pastilla (en un grup divergent pot no ser el canònic).
   const deciding = row.deciding;
-  const decided = deciding.assessment_mode === "automatic" && DECIDED.includes(deciding.automatic_result);
+  // Una fila amb veredicte (de la regla o d'una revisió humana) mai no diu «no comparable».
+  const decided = DECIDED.includes(row.effectiveResult);
   // «Demana el plec»: el valor que la regla ha COMPARAT (amb la seva procedència) si
   // n'hi ha; si no, el cru extret.
   const compared = comparedLine(deciding.compared_value);

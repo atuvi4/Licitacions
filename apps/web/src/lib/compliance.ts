@@ -456,6 +456,8 @@ export function valueLine(value: Record<string, unknown> | null): { text: string
   return { text: "Valor no comparable automàticament", raw: JSON.stringify(value) };
 }
 
+const ENS_LEVEL_LABELS: Record<string, string> = { basica: "bàsica", mitjana: "mitjana", alta: "alta" };
+
 function yearsPhrase(period: unknown, aggregation: unknown, noun: string): string | null {
   const years = period && typeof period === "object" ? (period as Record<string, unknown>).years : null;
   if (typeof years !== "number") return null;
@@ -496,6 +498,9 @@ export function comparedLine(value: Record<string, unknown> | null | undefined):
     if (typeof value.min_count === "number") parts.push(`${value.min_count} contractes`);
     const years = yearsPhrase(value.reference_period, null, "any");
     if (years) parts.push(years);
+  } else if (value.kind === "ens") {
+    const level = typeof value.level === "string" ? ENS_LEVEL_LABELS[value.level] ?? value.level : null;
+    parts.push(level ? `ENS categoria ${level}${value.or_higher ? " o superior" : ""}` : "ENS · el plec no indica la categoria");
   } else if (typeof value.minimum_people === "number") {
     parts.push(`${value.minimum_people} persones`);
   } else if (value.type === "sector_operator_registry") {
@@ -509,7 +514,7 @@ export function provenanceLine(
   provenance: ComparedProvenance[] | undefined,
   citations: RequirementCitation[] | undefined,
 ): string | null {
-  const main = (provenance ?? []).find((item) => /amount|limits|threshold|minimum_people|min_count/.test(item.field)) ?? (provenance ?? [])[0];
+  const main = (provenance ?? []).find((item) => /amount|limits|threshold|minimum_people|min_count|certification.level/.test(item.field)) ?? (provenance ?? [])[0];
   if (!main) return null;
   if (main.source === "quote") {
     const page = (citations ?? []).find((citation) => citation.evidence_id === main.evidence_id)?.page_number;

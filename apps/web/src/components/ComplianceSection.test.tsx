@@ -406,3 +406,60 @@ describe("ComplianceSection · el valor que la regla ha comparat (I6)", () => {
     expect([...li.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Confirma")).toBe(false);
   });
 });
+
+describe("ComplianceSection · ronda 2", () => {
+  const ensRow = (compared: Record<string, unknown>, overrides: Partial<Assessment> = {}) =>
+    assessment({
+      id: "e1",
+      automatic_result: "does_not_satisfy",
+      effective_result: "does_not_satisfy",
+      blocker_status: "potential",
+      assessment_mode: "automatic",
+      rule_code: "certification_exact_v1",
+      explanation_code: "CERTIFICATION_LEVEL_BELOW",
+      requirement_value_json: null,
+      company_value_json: null,
+      evidence: [],
+      compared_value: compared,
+      compared_provenance: [{ field: "certification.level", source: "quote", raw: "ENS de categoria ALTA", evidence_id: "q1" }],
+      requirement: { requirement_id: "r1", title: "Aplicació de l'ENS", category: "technical_requirement", review_status: "unreviewed", tender_document_id: "d1", extraction_id: "ex1", extraction_revision: 1, page_number: 9, quote: "ENS de categoria ALTA", document_name: "Plec administratiu", citations: [{ evidence_id: "q1", tender_document_id: "d1", extraction_id: "ex1", extraction_revision: 1, page_number: 9, quote: "ENS de categoria ALTA", document_name: "Plec administratiu" }] },
+      ...overrides,
+    });
+
+  it("una fila d'ENS diu la categoria exigida i d'on surt", () => {
+    renderSection({ run: run(), assessments: [ensRow({ kind: "ens", level: "alta", or_higher: false })], is_stale: false });
+    const li = screen.getByText("Aplicació de l'ENS").closest("li")!;
+    expect(li.textContent).toContain("ENS categoria alta · de la cita, p. 9");
+    expect(li.textContent).not.toContain("Valor no comparable");
+  });
+
+  it("si el plec no diu la categoria, la fila ho diu", () => {
+    const row = ensRow(
+      { kind: "ens", level: null, or_higher: false },
+      { automatic_result: "needs_review", effective_result: "needs_review", blocker_status: "none", assessment_mode: "review_required", explanation_code: "CERTIFICATION_LEVEL_NOT_STATED", compared_provenance: [] },
+    );
+    renderSection({ run: run(), assessments: [row], is_stale: false });
+    const li = screen.getByText("Aplicació de l'ENS").closest("li")!;
+    expect(li.textContent).toContain("ENS · el plec no indica la categoria");
+  });
+
+  it("una fila revisada a mà amb veredicte no diu «Valor no comparable»", () => {
+    const row = assessment({
+      id: "m1",
+      automatic_result: "needs_review",
+      reviewed_result: "does_not_satisfy",
+      effective_result: "does_not_satisfy",
+      assessment_mode: "review_required",
+      review_status: "verified",
+      reviewed_by_name: "Anna Puig",
+      review_note: "No consta la pòlissa.",
+      requirement_value_json: { weird: true },
+      company_value_json: { odd: 1 },
+      evidence: [],
+    });
+    renderSection({ run: run(), assessments: [row], is_stale: false });
+    const li = screen.getByText("Certificat ISO 9001 en vigor").closest("li")!;
+    expect(li.textContent).not.toContain("Valor no comparable");
+    expect(li.textContent).toContain("No compleix");
+  });
+});
