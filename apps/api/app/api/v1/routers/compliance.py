@@ -18,6 +18,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CompanyCtx, SessionDep
+from app.compliance import consolidation
 from app.core.errors import NotFoundError
 from app.models.compliance import CompanyComplianceRun, CompanyRequirementAssessment
 from app.models.identity import Company, User
@@ -25,12 +26,15 @@ from app.models.requirements import Requirement, RequirementEvidence
 from app.models.tender_documents import TenderDocumentExtraction
 from app.models.tenders import Tender, TenderDocument
 from app.schemas.compliance import (
+    AssessmentGroupRead,
     AssessmentRead,
     AssessmentReviewRequest,
+    CitationRead,
     ComplianceRead,
     ComplianceRequest,
     ComplianceResult,
     ComplianceRunRead,
+    ConsolidationRead,
     RequirementSourceRead,
 )
 from app.services.compliance_analysis import (
@@ -113,6 +117,18 @@ async def _requirement_sources(
     sources: dict[uuid.UUID, RequirementSourceRead] = {}
     for requirement in requirements:
         primary: RequirementEvidence | None = next(iter(requirement.evidence), None)
+        citations = [
+            CitationRead(
+                evidence_id=evidence.id,
+                tender_document_id=evidence.tender_document_id,
+                extraction_id=evidence.extraction_id,
+                extraction_revision=revisions.get(evidence.extraction_id),
+                page_number=evidence.page_number,
+                quote=evidence.quote,
+                document_name=names.get(evidence.tender_document_id),
+            )
+            for evidence in requirement.evidence
+        ]
         sources[requirement.id] = RequirementSourceRead(
             requirement_id=requirement.id,
             title=requirement.title,
@@ -126,8 +142,21 @@ async def _requirement_sources(
             document_name=(
                 names.get(primary.tender_document_id) if primary else None
             ),
+            citations=citations,
         )
     return sources
+
+
+def _consolidation_read(assessment: CompanyRequirementAssessment) -> ConsolidationRead | None:
+    data = (assessment.explanation_params or {}).get(consolidation.PARAMS_KEY)
+    if not data:
+        return None
+    return ConsolidationRead(
+        canonical_requirement_id=data["canonical_requirement_id"],
+        is_canonical=bool(data.get("is_canonical")),
+        member_requirement_ids=data.get("member_requirement_ids") or [],
+        divergent=bool(data.get("divergent")),
+    )
 
 
 def _assessment_read(
@@ -138,9 +167,47 @@ def _assessment_read(
     # `effective_result` es una propietat del model: `from_attributes` la llegeix.
     read = AssessmentRead.model_validate(assessment)
     read.requirement = sources.get(assessment.requirement_id)
+    read.consolidation = _consolidation_read(assessment)
     if assessment.reviewed_by:
         read.reviewed_by_name = (reviewers or {}).get(assessment.reviewed_by)
     return read
+
+
+def _groups(assessments) -> list[AssessmentGroupRead]:
+    """Una entrada per exigencia amb duplicats, resolta com el recompte del run.
+
+    La resolucio es la de `consolidation.resolve` (el resultat mes prudent i el
+    bloqueig mes fort), i el canonic es el que va triar el calcul: aqui no es
+    torna a decidir res.
+    """
+    members: dict[str, list[CompanyRequirementAssessment]] = {}
+    for assessment in assessments:
+        if (assessment.explanation_params or {}).get(consolidation.PARAMS_KEY):
+            marker = consolidation.group_marker(
+                assessment.requirement_id, assessment.explanation_params
+            )
+            members.setdefault(marker, []).append(assessment)
+    groups = []
+    for marker, items in members.items():
+        canonical = next(
+            (a for a in items if str(a.requirement_id) == marker), items[0]
+        )
+        ordered = [canonical, *(a for a in items if a is not canonical)]
+        result, blocker = consolidation.resolve(
+            (a.effective_result, a.blocker_status) for a in ordered
+        )
+        groups.append(
+            AssessmentGroupRead(
+                canonical_assessment_id=canonical.id,
+                canonical_requirement_id=canonical.requirement_id,
+                member_assessment_ids=[a.id for a in ordered],
+                member_requirement_ids=[a.requirement_id for a in ordered],
+                effective_result=result,
+                blocker_status=blocker,
+                divergent=len({a.effective_result for a in ordered}) > 1,
+            )
+        )
+    return groups
 
 
 async def _reviewer_names(session, assessments) -> dict:
@@ -208,6 +275,7 @@ async def read_compliance(tender_id: uuid.UUID, session: SessionDep, ctx: Compan
         assessments=[
             _assessment_read(a, sources, reviewers) for a in assessments
         ],
+        groups=_groups(assessments),
         is_stale=stale,
     )
 

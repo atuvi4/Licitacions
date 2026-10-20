@@ -33,7 +33,16 @@ from app.models.enums import (
 #: (VEC o PBL) ja no es resol a 0 EUR (que qualsevol empresa compliria) sino a
 #: "base no disponible" -> revisar (`app.tenders.amounts`). Un run v3 deixa de
 #: ser vigent i no es reutilitza.
-RULES_VERSION = "company-compliance-v4"
+#: v5 (20-10-2026): els requisits de format lliure (v1 i product-v2) es llegeixen
+#: amb el normalitzador de lectura (`app.compliance.normalize`): imports en format
+#: local, bases d'assegurança (per sinistre i any, per victima, RC patronal),
+#: periodes i percentatges. L'ENS nomenat es llegeix com a certificacio (revisio si
+#: el plec no en diu la categoria) i la documentacio RELI/ROLECE de qui ja hi es
+#: inscrit no es avalua com l'exigencia d'estar-hi. El sublimit patronal per
+#: victima ja no el respon la xifra global de la polissa. El resum compta
+#: EXIGENCIES (grups de requisits duplicats, `app.compliance.consolidation`), no
+#: files. El pilot no tenia cap run de compliment: el canvi es segur.
+RULES_VERSION = "company-compliance-v5"
 
 
 class RuleCode:
@@ -86,12 +95,18 @@ class ExplanationCode:
     #: El plec admet equivalents, l'empresa no te l'exacta i en te d'altres:
     #: quina hi equival no ho decideix una regla.
     CERTIFICATION_EQUIVALENCE_REVIEW = "CERTIFICATION_EQUIVALENCE_REVIEW"
+    #: El plec nomena l'esquema (ENS) pero no en diu la categoria: no se'n suposa
+    #: cap (v5).
+    CERTIFICATION_LEVEL_NOT_STATED = "CERTIFICATION_LEVEL_NOT_STATED"
 
     REGISTRATION_FOUND_VALID = "REGISTRATION_FOUND_VALID"
     REGISTRATION_FOUND_EXPIRED = "REGISTRATION_FOUND_EXPIRED"
     REGISTRATION_NOT_FOUND_PROFILE_COMPLETE = "REGISTRATION_NOT_FOUND_PROFILE_COMPLETE"
     REGISTRATION_DATA_INCOMPLETE = "REGISTRATION_DATA_INCOMPLETE"
     REGISTRATION_CLASSIFICATION_REVIEW = "REGISTRATION_CLASSIFICATION_REVIEW"
+    #: Documentacio que aporta qui JA es inscrit (RELI/ROLECE): no exigeix
+    #: estar-hi inscrit (v5).
+    REGISTRATION_DOCUMENTATION_ONLY = "REGISTRATION_DOCUMENTATION_ONLY"
 
     INSURANCE_COVERAGE_MET = "INSURANCE_COVERAGE_MET"
     INSURANCE_COVERAGE_NOT_MET = "INSURANCE_COVERAGE_NOT_MET"

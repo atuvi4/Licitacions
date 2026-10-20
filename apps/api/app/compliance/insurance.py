@@ -71,6 +71,11 @@ _SUBLIMIT_KINDS = frozenset(
         InsuranceLimitKind.PER_VICTIM,
         InsuranceLimitKind.PER_CLAIM,
         InsuranceLimitKind.ANNUAL_AGGREGATE,
+        # v5: el sublimit patronal per victima (0052) i un sublimit generic
+        # tampoc no els respon mai la xifra global. Abans queien a la branca de
+        # «cobertura contra cobertura» i es comparaven amb el total.
+        InsuranceLimitKind.EMPLOYER_PER_VICTIM,
+        InsuranceLimitKind.SUBLIMIT,
     }
 )
 

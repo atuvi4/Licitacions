@@ -25,6 +25,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.ai.profiles import profile_for_run
+from app.compliance import consolidation
 from app.compliance.alternatives import (
     EXPLANATION_BY_OUTCOME,
     GroupResolution,
@@ -33,11 +35,12 @@ from app.compliance.alternatives import (
 )
 from app.compliance.engine import (
     applies_to_lot,
-    assess_requirement,
+    assess_requirement_traced,
     derive_blocker_status,
     not_applicable,
     summarise,
 )
+from app.compliance.normalize import Normalization, normalize_requirement
 from app.compliance.profile import compute_profile_fingerprint, load_profile_snapshot
 from app.compliance.rules import (
     RULES_VERSION,
@@ -195,17 +198,24 @@ async def analyze_company_compliance(
     rows: list[tuple] = []
     #: (requisit, veredicte propi) abans de resoldre les disjuncions.
     evaluated: list[tuple] = []
+    #: Normalitzacio de lectura de cada requisit (per agrupar-ne els duplicats).
+    normalizations: dict[uuid.UUID, Normalization | None] = {}
+    #: El perfil del run: decideix si el valor es de format lliure (v1,
+    #: product-v2) i s'ha de llegir amb el normalitzador. Els manuals, mai.
+    run_profile = profile_for_run(extraction_run.extractor_version).name
 
     for requirement in requirements:
         # Un requisit que una persona ha rebutjat no s'avalua.
         if requirement.review_status == ReviewStatus.REJECTED:
             continue
+        profile = run_profile if requirement.run_id == extraction_run.id else None
 
         applicable = applies_to_lot(
             requirement, tender_lot_id, tender_has_lots=tender_has_lots
         )
         if applicable is False:
             outcome = not_applicable()
+            normalizations[requirement.id] = normalize_requirement(requirement, profile)
         elif applicable is None:
             # Diu que aplica a un lot pero no sabem a quin: no s'endevina.
             outcome = needs_review(
@@ -213,9 +223,10 @@ async def analyze_company_compliance(
                 ExplanationCode.SCOPE_AMBIGUOUS,
                 scope=str(requirement.scope),
             )
+            normalizations[requirement.id] = normalize_requirement(requirement, profile)
         else:
-            outcome = assess_requirement(
-                requirement, snapshot, deadline=deadline, tender=tender
+            outcome, normalizations[requirement.id] = assess_requirement_traced(
+                requirement, snapshot, deadline=deadline, tender=tender, profile=profile
             )
 
         evaluated.append((requirement, outcome))
@@ -237,6 +248,7 @@ async def analyze_company_compliance(
         ]
     )
 
+    resolved: list[tuple] = []
     for requirement, outcome in evaluated:
         group_key = getattr(requirement, "alternative_group", None)
         resolution = groups.get(group_key) if group_key else None
@@ -251,6 +263,34 @@ async def analyze_company_compliance(
             assessment_reviewed=False,
             modality=getattr(requirement, "modality", None),
         )
+        resolved.append((requirement, outcome, blocker))
+
+    # Tercera passada: duplicats de la mateixa exigencia (`consolidation`). Cada
+    # requisit conserva la seva avaluacio; el grup nomes canvia el recompte i
+    # deixa escrit a quin canonic pertany cada membre.
+    duplicates = consolidation.build_groups(
+        (requirement, normalizations.get(requirement.id)) for requirement, _ in evaluated
+    )
+    results_by_group: dict[str, set] = {}
+    for requirement, outcome, _blocker in resolved:
+        group = duplicates.get(requirement.id)
+        if group is not None:
+            results_by_group.setdefault(group.key, set()).add(outcome.result)
+
+    for requirement, outcome, blocker in resolved:
+        group = duplicates.get(requirement.id)
+        if group is not None:
+            outcome = replace(
+                outcome,
+                params={
+                    **(outcome.params or {}),
+                    consolidation.PARAMS_KEY: consolidation.params_for(
+                        group,
+                        requirement.id,
+                        divergent=len(results_by_group[group.key]) > 1,
+                    ),
+                },
+            )
 
         assessment = CompanyRequirementAssessment(
             company_id=company.id,
@@ -282,11 +322,20 @@ async def analyze_company_compliance(
                     strength=ref.strength,
                 )
             )
-        rows.append((requirement.obligation, outcome.result, blocker))
+        rows.append(
+            (
+                consolidation.group_marker(requirement.id, outcome.params),
+                requirement.obligation,
+                outcome.result,
+                blocker,
+            )
+        )
 
-    summary = summarise(rows, prefit_score=prefit)
+    # Una exigencia = un recompte: els duplicats d'un grup en fan una sola fila.
+    summary_rows = consolidation.resolve_rows(rows)
+    summary = summarise(summary_rows, prefit_score=prefit)
 
-    run.requirements_total = len(rows)
+    run.requirements_total = len(summary_rows)
     run.mandatory_total = summary.mandatory_total
     run.satisfies_count = summary.satisfies
     run.does_not_satisfy_count = summary.does_not_satisfy
@@ -460,7 +509,16 @@ async def _recount_run(session: AsyncSession, run_id: uuid.UUID) -> None:
             )
         )
     ).all()
-    rows = [(a.obligation, a.effective_result, a.blocker_status) for a in assessments]
+    # Els duplicats d'una exigencia continuen sent una sola fila del recompte.
+    rows = consolidation.resolve_rows(
+        (
+            consolidation.group_marker(a.requirement_id, a.explanation_params),
+            a.obligation,
+            a.effective_result,
+            a.blocker_status,
+        )
+        for a in assessments
+    )
     summary = summarise(rows, prefit_score=run.prefit_score)
 
     run.satisfies_count = summary.satisfies

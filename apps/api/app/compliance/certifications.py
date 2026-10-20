@@ -17,6 +17,7 @@ import re
 from datetime import date
 from typing import Any
 
+from app.compliance.normalize import ens_level, names_ens
 from app.compliance.profile import ProfileSnapshot
 from app.compliance.rules import (
     EvidenceRef,
@@ -52,6 +53,11 @@ def normalize_certification_name(raw: str) -> str:
     if not raw:
         return ""
     text = raw.strip()
+    if names_ens(text):
+        # v5: l'ENS es compara per esquema i categoria («ENS categoria Mitjana» i
+        # «Esquema Nacional de Seguridad, categoría MEDIA» son la mateixa). Sense
+        # categoria, nomes l'esquema: no casa amb cap categoria concreta.
+        return f"ens:{ens_level(text) or ''}"
     iso = _ISO_PATTERN.search(text)
     if iso:
         return f"iso{iso.group(1)}"

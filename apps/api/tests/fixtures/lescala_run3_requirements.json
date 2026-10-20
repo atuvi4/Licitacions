@@ -1,0 +1,706 @@
+{
+ "_source": "Exportacio de lectura del run3 (6bc58f4b, product-v2) de L'Escala 2026/3964, 20-10-2026: text public del plec. Nomes els requisits avaluables i els que nomenen l'ENS.",
+ "run_id_prefix": "6bc58f4b",
+ "requirements": [
+  {
+   "id": "3662d496-43dc-4252-a383-217324e896ea",
+   "category": "business_classification",
+   "obligation": "informative",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "No cal classificació empresarial",
+   "description": "Per contractar no és necessari disposar de classificació empresarial.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "7a8564ea-f11e-42ad-bfd1-d57a250c3218",
+     "page": 6,
+     "quote": "per contractar no és necessari disposar de classificació\nempresarial.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "40d49f88-65dc-44c7-aaad-241e75b27a13",
+   "category": "business_classification",
+   "obligation": "informative",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Classificació empresarial no exigida",
+   "description": "El plec indica que no s'exigeix classificació empresarial.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "3a306a99-014f-4c9b-ae9b-749d92f4dbd7",
+     "page": 3,
+     "quote": "La classificació empresarial no s’exigeix.",
+     "role": "primary",
+     "section": null,
+     "document": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf"
+    }
+   ]
+  },
+  {
+   "id": "bceceeca-423e-49dd-a08c-c6df1002843b",
+   "category": "business_classification",
+   "obligation": "informative",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Classificació empresarial no exigida",
+   "description": "Per contractar no és necessari disposar de classificació empresarial.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "4d07cb1c-8994-4b15-b571-842148ea8770",
+     "page": 6,
+     "quote": "per contractar no és necessari disposar de classificació\nempresarial.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "29d298c5-2fa8-49eb-b207-f2a1476f5198",
+   "category": "economic_solvency",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Solvència econòmica: volum anual de negoci",
+   "description": "Volum anual de negoci del millor dels 3 últims exercicis ≥ 1,5 vegades l'anualitat mitjana del contracte (91.904,74 €). Acreditació amb comptes aprovats/dipositats o declaració segons LCSP.",
+   "value_json": {
+    "amount": "91.904,74 €",
+    "multiple": "1,5 vegades l'anualitat mitjana",
+    "period": "millor dels 3 últims exercicis"
+   },
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "ba1ba895-9b9b-4862-8c34-830ba9e2fe49",
+     "page": 3,
+     "quote": "Volum anual de negoci del millor dels 3 últims exercicis ≥ 1,5 vegades\nl’anualitat mitjana del contracte. És a dir, 91.904,74 €",
+     "role": "primary",
+     "section": null,
+     "document": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf"
+    }
+   ]
+  },
+  {
+   "id": "7e78ecdf-b177-4fab-9dac-f57f91d0e700",
+   "category": "economic_solvency",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Volum anual de negocis mínim",
+   "description": "Solvència econòmica i financera acreditada mitjançant el volum anual de negocis del millor exercici dels tres últims disponibles, igual o superior a 91.904,74 euros.",
+   "value_json": {
+    "amount": "91.904,74",
+    "currency": "EUR",
+    "period": "millor exercici dins dels tres (3) últims disponibles"
+   },
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "2acdec05-0273-40ac-a118-d1130e34ffa1",
+     "page": 6,
+     "quote": "La solvència econòmica i financera s'acreditarà mitjançant el volum anual de negocis, referit\nal millor exercici dins dels tres (3) últims disponibles, per un import igual o superior a 91.904,74\neuros.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "dc7f1e98-0148-4698-8751-0298a0d28fab",
+   "category": "economic_solvency",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Volum anual de negocis mínim de 91.904,74 euros",
+   "description": "La solvència econòmica i financera s'acredita amb el volum anual de negocis del millor exercici dels tres últims disponibles, igual o superior a 91.904,74 euros (1,5 vegades l'anualitat mitjana). S'acredita amb comptes anuals dipositats al Registre Mercantil o registre oficial corresponent.",
+   "value_json": {
+    "amount": "91.904,74",
+    "currency": "euros",
+    "period": "millor exercici dels tres (3) últims disponibles"
+   },
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "5ac74ad9-7cff-4a8c-9c34-202228db457f",
+     "page": 6,
+     "quote": "La solvència econòmica i financera s'acreditarà mitjançant el volum anual de negocis, referit\nal millor exercici dins dels tres (3) últims disponibles, per un import igual o superior a 91.904,74\neuros.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "667efae4-f5db-4e84-ad88-80e76a5aee43",
+   "category": "insurance",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Sublímit RC patronal mínim 150.000 € per víctima",
+   "description": null,
+   "value_json": {
+    "amount": "150.000 €",
+    "unit": "per víctima"
+   },
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "4d3b54e3-a69f-4ec3-8210-73b79e5fcabb",
+     "page": 8,
+     "quote": "La responsabilitat civil patronal tindrà un sublímit mínim\nde 150.000 € per víctima.",
+     "role": "primary",
+     "section": null,
+     "document": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf"
+    }
+   ]
+  },
+  {
+   "id": "825ca93c-686d-46f1-b0fa-b41f0d049bb0",
+   "category": "insurance",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Pòlissa de responsabilitat civil: cobertura mínima 300.000 euros per sinistre i any",
+   "description": "Cal acreditar, abans de la formalització, una pòlissa vigent de RC amb cobertura mínima de 300.000 euros per sinistre i any, amb pagament de la prima, i mantenir-la durant tota l'execució.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "70ce2c93-74f7-4a30-ac12-aa9e5176ca1e",
+     "page": 17,
+     "quote": "haurà d'acreditar que disposa d'una pòlissa de responsabilitat civil vigent amb una\ncobertura mínima de 300.000 euros per sinistre i any",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    },
+    {
+     "id": "e8571968-a972-47d0-9004-b4c122190159",
+     "page": 20,
+     "quote": "El contractista haurà de disposar i mantenir vigent durant tota l'execució del contracte\nuna pòlissa de responsabilitat civil amb una cobertura mínima de 300.000 euros per\nsinistre i any",
+     "role": "supporting",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "8ce506d2-6281-410f-bd16-116487cacb73",
+   "category": "insurance",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Pòlissa de responsabilitat civil mínima 300.000 € per sinistre i any",
+   "description": "L'adjudicatari ha de disposar i mantenir vigent durant tota l'execució una pòlissa de RC amb cobertura mínima de 300.000 € per sinistre i any, cobrint danys personals, materials i perjudicis conseqüencials.",
+   "value_json": {
+    "amount": "300.000 €",
+    "unit": "per sinistre i any"
+   },
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "6dc0eeb7-87b2-4352-bda3-6e8057f338ee",
+     "page": 8,
+     "quote": "una pòlissa\nde responsabilitat civil amb una cobertura mínima de 300.000 € per sinistre i any",
+     "role": "primary",
+     "section": null,
+     "document": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf"
+    }
+   ]
+  },
+  {
+   "id": "fdaecc32-aa35-4462-86af-6614a5c433a9",
+   "category": "insurance",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Responsabilitat civil patronal: sublímit mínim 150.000 euros per víctima",
+   "description": "La cobertura de RC patronal ha de tenir un sublímit mínim de 150.000 euros per víctima.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "c8df57b7-c79b-44d8-96eb-d4a9c0f9eba0",
+     "page": 17,
+     "quote": "així com d'una cobertura de responsabilitat civil patronal\namb un sublímit mínim de 150.000 euros per víctima.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "0a860458-f5fc-43eb-a11e-0911bc571fde",
+   "category": "personnel",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Adscripció i manteniment dels perfils clau durant tota l'execució",
+   "description": null,
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "77c7fd67-891e-418b-941c-055ca539accd",
+     "page": 9,
+     "quote": "Adscripció i manteniment durant tota l’execució dels perfils clau exigits, en els termes establerts a\nl’apartat D",
+     "role": "primary",
+     "section": null,
+     "document": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf"
+    }
+   ]
+  },
+  {
+   "id": "2501fdf1-ea0f-4cd3-a8c8-5075abd4bb79",
+   "category": "personnel",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Compromís d'adscripció de mitjans personals i materials",
+   "description": "Compromís d'adscriure com a mínim: cap de projecte, especialista de xarxa/seguretat, especialista VoIP, responsable de fibra/certificació, personal i equips OLTS/OTDR amb calibratge vigent i suport 24×7. Obligació contractual essencial.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "8dbe4728-b2f0-4b9e-961f-c8d7d5090177",
+     "page": 7,
+     "quote": "L'adscripció i el manteniment durant tota l'execució dels perfils mínims indicats tindran caràcter\nd'obligació contractual essencial.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    },
+    {
+     "id": "831722f8-8af5-44f1-8e52-fca7956e2752",
+     "page": 7,
+     "quote": "les empreses licitadores hauran de comprometre's a\nadscriure a l'execució del contracte els mitjans personals i materials mínims exigits al Plec de\nPrescripcions Tècniques Particulars.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "5f5d78d4-c006-4852-91d6-fd3c9978f39b",
+   "category": "personnel",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Designació d'un responsable de coordinació i interlocutor únic",
+   "description": "Abans de l'inici de l'execució s'ha de designar una persona responsable amb capacitat suficient per rebre instruccions i adoptar decisions.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "87b4af0a-cc45-42d5-993f-88fbdecea8e5",
+     "page": 20,
+     "quote": "El contractista haurà de designar, abans de l'inici de l'execució del contracte, una\npersona responsable de la coordinació i interlocució amb l'Ajuntament",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "7d830438-fedd-4186-9e5f-a52c127ab2df",
+   "category": "personnel",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Equip mínim adscrit",
+   "description": "Cap de projecte, especialista de xarxa/seguretat, especialista VoIP i responsable de fibra/certificació; acreditació amb relació nominal o perfils i compromís d'adscripció.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "17a29e48-a11d-4c2d-8d72-c73fef96ab37",
+     "page": 3,
+     "quote": "Cap de projecte, especialista de xarxa/seguretat, especialista VoIP i\nresponsable de fibra/certificació",
+     "role": "primary",
+     "section": null,
+     "document": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf"
+    }
+   ]
+  },
+  {
+   "id": "0a70dd0c-99c8-4eac-a45e-a1b998725c36",
+   "category": "registration",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Capacitat legal per prestar serveis de telecomunicacions durant tota l'execució",
+   "description": null,
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "2588a31f-107f-464e-aeda-376fc452b97a",
+     "page": 20,
+     "quote": "El contractista haurà de mantenir durant tota l'execució del contracte la capacitat legal\nnecessària per explotar o prestar els serveis de telecomunicacions inclosos en el\ncontracte.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "1739a725-58fe-4b38-a6cf-f26009395d20",
+   "category": "registration",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Capacitat legal per prestar serveis de telecomunicacions",
+   "description": "Acreditar la capacitat legal per explotar o prestar els serveis de telecomunicacions mitjançant inscripció o comunicació al registre corresponent.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "9ed6ba6e-c4b5-4709-8c70-9d267420369d",
+     "page": 7,
+     "quote": "Així mateix, l'empresa haurà d'acreditar la capacitat legal necessària per explotar o prestar els\nserveis de telecomunicacions inclosos en el contracte, mitjançant la inscripció o comunicació\nal registre que correspongui.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "73800ff7-2a4a-4ff5-b1e4-4b10b78c5746",
+   "category": "registration",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Manteniment de la capacitat legal d'operador",
+   "description": null,
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "b66df0e2-6715-460c-aba4-a2cd82d5daca",
+     "page": 9,
+     "quote": "manteniment de la capacitat legal d’operador i confidencialitat",
+     "role": "primary",
+     "section": null,
+     "document": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf"
+    }
+   ]
+  },
+  {
+   "id": "81bf423c-63c3-438e-bb1a-3e4fc2fe1ead",
+   "category": "registration",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Empreses inscrites a RELI o ROLECE: còpia d'inscripció i declaració de vigència",
+   "description": "Les empreses inscrites només aporten la documentació no inscrita o no actualitzada, una còpia de l'acreditació d'inscripció i declaració responsable de vigència de les dades.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "6d83f175-fcd2-4ec9-a437-d386574be54a",
+     "page": 6,
+     "quote": "hauran d’aportar una còpia del document acreditatiu d’inscripció juntament\namb una declaració responsable, signada pel representant de l’empresa, acreditativa de la\nvigència de les dades que hi consten.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "fb1fc201-49c1-4ce5-ad72-9c6d97ba6832",
+   "category": "registration",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Capacitat legal per prestar telecomunicacions",
+   "description": "Capacitat legal per explotar/prestar els serveis inclosos, acreditada amb inscripció o comunicació al registre que correspongui.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "708efaf6-c68d-48bc-9838-3d9abd720dfb",
+     "page": 3,
+     "quote": "Capacitat legal per explotar/prestar els serveis inclosos",
+     "role": "primary",
+     "section": null,
+     "document": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf"
+    }
+   ]
+  },
+  {
+   "id": "8710a5e9-e167-46e7-97ec-28170ff1784e",
+   "category": "technical_requirement",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Compliment normatiu de seguretat i protecció de dades",
+   "description": "Llei 11/2022, ENS (RD 311/2022), RGPD, LOPDGDD i política municipal; accés nominatiu, xifratge, còpies, notificació d'incidents, encàrrec de tractament si s'escau.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "73e56395-7cc4-4ac4-89db-abc9db30f220",
+     "page": 8,
+     "quote": "Compliment de Llei 11/2022, ENS (RD 311/2022), RGPD, LOPDGDD i política municipal.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de prescripcions tecniques"
+    }
+   ]
+  },
+  {
+   "id": "bda10f82-9557-4157-84ad-2d9c54578372",
+   "category": "technical_requirement",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Esquema Nacional de Seguretat, RGPD i LOPDGDD",
+   "description": "Compliment de l'ENS i, si hi ha accés a dades personals, encàrrec de tractament i compliment del RGPD i la LOPDGDD.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "8200a15f-9549-4191-aa8e-b1a547d25faa",
+     "page": 20,
+     "quote": "El contractista haurà de complir les obligacions derivades de l'Esquema Nacional de\nSeguretat i, quan l'execució del contracte impliqui accés a dades personals, haurà de\nformalitzar el corresponent encàrrec de tractament i complir el RGPD, la LOPDGDD",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "e48bb40a-6d1b-490e-a71e-83f12cf7b963",
+   "category": "technical_requirement",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Aplicació de l'ENS i encàrrec de tractament de dades",
+   "description": null,
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "4db74360-641e-4484-adf3-bda6fc8822ce",
+     "page": 9,
+     "quote": "Aplicació de l’ENS i formalització de l’encàrrec de tractament quan hi hagi accés a dades personals.",
+     "role": "primary",
+     "section": null,
+     "document": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf"
+    }
+   ]
+  },
+  {
+   "id": "29c336e8-5fe5-4b32-af72-7af15c71c0f9",
+   "category": "technical_solvency",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Solvència tècnica: serveis similars",
+   "description": "Serveis/subministraments similars dels darrers 3 anys; any de major execució ≥ 70% de l'anualitat mitjana (42.888,88 €). Acreditació amb certificats públics o privats.",
+   "value_json": {
+    "amount": "42.888,88 €",
+    "percent": "70%",
+    "period": "darrers 3 anys"
+   },
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "00c52db1-7479-42c5-8172-3b7076935277",
+     "page": 3,
+     "quote": "Serveis/subministraments similars dels darrers 3 anys; any de major\nexecució ≥ 70% de l’anualitat mitjana. És a dir 42.888,88 €",
+     "role": "primary",
+     "section": null,
+     "document": "03_Quadre_Caracteristiques_i_Clausules_Especifiques.pdf"
+    }
+   ]
+  },
+  {
+   "id": "5b830e1d-33b6-4e01-bf82-2d01d504f15f",
+   "category": "technical_solvency",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Relació de serveis o subministraments similars",
+   "description": "La solvència tècnica o professional s'acredita mitjançant una relació dels principals serveis o subministraments de naturalesa igual o similar a l'objecte; el text es talla a final de pàgina i no es detallen imports, anys ni nombre mínim.",
+   "value_json": null,
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "7a9468d4-399c-4f5a-8e12-b602d2227f2d",
+     "page": 6,
+     "quote": "Relació dels principals serveis o subministraments de naturalesa igual o similar a la",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  },
+  {
+   "id": "d5ea6b03-2958-42af-92b5-9e49ba935dea",
+   "category": "technical_solvency",
+   "obligation": "mandatory",
+   "scope": "tender",
+   "modality": "unknown",
+   "review_status": "unreviewed",
+   "title": "Relació de serveis similars: import anual acumulat mínim",
+   "description": "Relació dels principals serveis o subministraments de naturalesa igual o similar executats en els darrers tres anys; l'import anual acumulat de l'any de major execució ha de ser igual o superior a 42.888,88 euros. Cal indicar import, data, destinatari i descripció, i acreditar-ho amb certificats.",
+   "value_json": {
+    "amount": "42.888,88",
+    "currency": "EUR",
+    "period": "darrers tres (3) anys, any de major execució"
+   },
+   "value_schema": null,
+   "alternative_group": null,
+   "alternative_group_complete": null,
+   "tender_lot_id": null,
+   "created_at": "2026-10-14 15:01:40.869038+00:00",
+   "evidence": [
+    {
+     "id": "b33dc54a-2b91-4652-83cb-a71b28a3ff0c",
+     "page": 7,
+     "quote": "L'import anual acumulat en l'any de major execució haurà de ser igual o superior a\n42.888,88 euros.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    },
+    {
+     "id": "cf063795-be78-41c4-a042-45fa6e4290a0",
+     "page": 7,
+     "quote": "L'execució dels serveis o subministraments s'acreditarà mitjançant certificats expedits pels\ndestinataris públics o privats corresponents, en els termes previstos a la LCSP.",
+     "role": "primary",
+     "section": null,
+     "document": "Plec de clausules administratives"
+    }
+   ]
+  }
+ ]
+}

@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload
 
+from app.compliance import consolidation
 from app.core.errors import (
     ConflictError,
     NotFoundError,
@@ -281,22 +282,32 @@ async def compliance_counters(
             )
         )
 
-    rows = (
+    # Una fila per avaluacio i no un GROUP BY: els duplicats d'una mateixa
+    # exigencia (`app.compliance.consolidation`, marcats a `explanation_params`)
+    # compten un sol cop, igual que als comptadors del run.
+    assessed = (
         await session.execute(
             sa.select(
+                CompanyRequirementAssessment.requirement_id,
                 effective,
                 CompanyRequirementAssessment.obligation,
                 CompanyRequirementAssessment.blocker_status,
-                sa.func.count(),
-            )
-            .where(*conditions)
-            .group_by(
-                effective,
-                CompanyRequirementAssessment.obligation,
-                CompanyRequirementAssessment.blocker_status,
-            )
+                CompanyRequirementAssessment.explanation_params,
+            ).where(*conditions)
         )
     ).all()
+    rows = [
+        (result, obligation, blocker, 1)
+        for obligation, result, blocker in consolidation.resolve_rows(
+            (
+                consolidation.group_marker(requirement_id, params),
+                RequirementObligation(obligation),
+                AssessmentResult(result),
+                BlockerStatus(blocker),
+            )
+            for requirement_id, result, obligation, blocker, params in assessed
+        )
+    ]
 
     totals = dict.fromkeys(
         (

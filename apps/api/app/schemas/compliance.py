@@ -43,6 +43,18 @@ class CompanyEvidenceRead(ORMModel):
     strength: EvidenceStrength
 
 
+class CitationRead(BaseModel):
+    """Una cita verificada del plec d'un requisit."""
+
+    evidence_id: uuid.UUID
+    tender_document_id: uuid.UUID | None = None
+    extraction_id: uuid.UUID | None = None
+    extraction_revision: int | None = None
+    page_number: int | None = None
+    quote: str
+    document_name: str | None = None
+
+
 class RequirementSourceRead(BaseModel):
     """La cita del plec, per poder saltar-hi des de l'assessment."""
 
@@ -56,6 +68,31 @@ class RequirementSourceRead(BaseModel):
     page_number: int | None = None
     quote: str | None = None
     document_name: str | None = None
+    #: TOTES les cites del requisit (la primera es la de dalt). Un grup de
+    #: duplicats les ensenya totes: cap cita no es perd per consolidar.
+    citations: list[CitationRead] = Field(default_factory=list)
+
+
+class ConsolidationRead(BaseModel):
+    """A quin grup d'exigencia pertany l'avaluacio (`app.compliance.consolidation`)."""
+
+    canonical_requirement_id: uuid.UUID
+    is_canonical: bool
+    member_requirement_ids: list[uuid.UUID]
+    divergent: bool = False
+
+
+class AssessmentGroupRead(BaseModel):
+    """Una exigencia: el canonic i els seus duplicats, resolts com al recompte."""
+
+    canonical_assessment_id: uuid.UUID
+    canonical_requirement_id: uuid.UUID
+    member_assessment_ids: list[uuid.UUID]
+    member_requirement_ids: list[uuid.UUID]
+    #: El resultat del grup (el mes prudent dels membres), com al recompte del run.
+    effective_result: AssessmentResult
+    blocker_status: BlockerStatus
+    divergent: bool = False
 
 
 class AssessmentRead(ORMModel):
@@ -94,6 +131,8 @@ class AssessmentRead(ORMModel):
 
     evidence: list[CompanyEvidenceRead] = Field(default_factory=list)
     requirement: RequirementSourceRead | None = None
+    #: Nomes si el requisit te duplicats de la mateixa exigencia.
+    consolidation: ConsolidationRead | None = None
 
 
 class ComplianceRunRead(ORMModel):
@@ -147,6 +186,9 @@ class ComplianceRead(BaseModel):
 
     run: ComplianceRunRead | None = None
     assessments: list[AssessmentRead] = Field(default_factory=list)
+    #: Una entrada per EXIGENCIA amb mes d'un requisit (duplicats). Els requisits
+    #: sols no hi son: la seva avaluacio ja es l'exigencia.
+    groups: list[AssessmentGroupRead] = Field(default_factory=list)
     #: El perfil o els requisits han canviat des del calcul.
     is_stale: bool = False
 

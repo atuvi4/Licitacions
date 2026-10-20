@@ -218,6 +218,15 @@ def assess_personnel(requirement: Any, snapshot: ProfileSnapshot) -> RuleOutcome
 _REGISTRY_HINTS: tuple[tuple[re.Pattern[str], RegistrationType], ...] = (
     (re.compile(r"rolece", re.I), RegistrationType.ROLECE),
     (re.compile(r"\breli\b", re.I), RegistrationType.RELI),
+    # v5: el registre d'operadors (CNMC), nomes quan el plec el nomena. El
+    # normalitzador de format lliure hi arriba amb `type=sector_operator_registry`.
+    (
+        re.compile(
+            r"sector_operator_registry|\bCNMC\b|registre d.operadors|registro de operadores",
+            re.I,
+        ),
+        RegistrationType.SECTOR_OPERATOR_REGISTRY,
+    ),
     (re.compile(r"clasificaci[oó]n|classificaci[oó]", re.I),
      RegistrationType.BUSINESS_CLASSIFICATION),
 )
