@@ -37,8 +37,18 @@ fila (`id_intern = ...`) o de les files de lot de l'expedient (`starts_with(id_i
 referenciada per `evidence_sha256` (el seu cos original) i `raw_storage_key` (la resposta
 redactada), i la seva URL completa, un sol cop, a `fetch_log.json` i `raw_manifest.json`.
 
-Nomes s'escriu `amount_kind = pbl_with_tax`. El PBL sense IVA i el VEC publicats van a
-`validation` i a `provenance` com a evidencia de contrast. Mai no es toca cap altra taula.
+S'escriu `amount_kind = pbl_with_tax` (expedient i lots) i, des de F-06e, tambe el PBL
+sense IVA (`pbl_without_tax`) i el VEC (`estimated_value`) de cada fila de lot. Cada tipus
+es una serie independent: la clau d'una observacio inclou `amount_kind`, i les regles de
+tancament de dalt s'apliquen tipus per tipus (una observacio nova d'un tipus no tanca ni
+reassigna mai cap observacio d'un altre). Res de nou a nivell d'expedient. Mai no es
+toca cap altra taula.
+
+Rejoc (`--replay <dir>`, F-06e): el client de rejoc (`replay.ReplayClient`) serveix les
+respostes desades d'un run anterior, sense xarxa. Les observacions noves apunten a la
+captura original (clau d'emmagatzematge, SHA-256 del cos original, `retrieved_at`,
+`rowsUpdatedAt`) amb la marca `provenance.replay` (directori i SHA-256 del manifest), i
+l'informe diu `replay: true` i 0 peticions de xarxa. No es torna a desar cap resposta.
 """
 
 from __future__ import annotations
@@ -267,10 +277,16 @@ class PscpOpenDataService:
 
     async def _metadata(self, out_dir: Path, stamp: str, which: str, manifest: list) -> dict:
         fetched = await self._client.get(metadata_url(), purpose=f"metadata {which}")
-        key, entry = self._store(out_dir, stamp, f"metadata_{which}.json", fetched.body)
-        manifest.append(
-            {**entry, "url": fetched.url, "retrieved_at": fetched.retrieved_at.isoformat()}
-        )
+        if fetched.origins is not None:
+            # Rejoc: el fitxer original (ja verificat), no una copia nova.
+            [origin] = fetched.origins
+            key = origin["key"]
+            manifest.append({**origin, "replay": True})
+        else:
+            key, entry = self._store(out_dir, stamp, f"metadata_{which}.json", fetched.body)
+            manifest.append(
+                {**entry, "url": fetched.url, "retrieved_at": fetched.retrieved_at.isoformat()}
+            )
         document = json.loads(fetched.body)
         return {
             "rows_updated_at": p.rows_updated_at_iso(document.get("rowsUpdatedAt")),
@@ -295,6 +311,8 @@ class PscpOpenDataService:
         uuids = sorted({s.pscp_id for s in snapshots})
         by_uuid: dict[str, list[dict]] = {uid: [] for uid in uuids}
         row_page: dict[int, _Page] = {}
+        #: Rejoc: una sola `_Page` per fitxer original (clau d'emmagatzematge).
+        original_pages: dict[str, _Page] = {}
         unexpected = 0
         for batch_index in range(0, len(uuids), options.batch_size):
             batch = uuids[batch_index : batch_index + options.batch_size]
@@ -311,27 +329,50 @@ class PscpOpenDataService:
                 rows = json.loads(fetched.body)
                 if not isinstance(rows, list):
                     raise ValueError("La resposta de files no es una llista.")
-                key, entry = self._store(
-                    out_dir, stamp, f"batch_{number:03d}_off{offset}.json", fetched.body
-                )
-                page = _Page(
-                    number,
-                    offset,
-                    fetched.url,
-                    fetched.sha256,
-                    fetched.retrieved_at,
-                    key,
-                    len(rows),
-                )
-                manifest.append(
-                    {
-                        **entry,
-                        "url": fetched.url,
-                        "retrieved_at": fetched.retrieved_at.isoformat(),
-                        "rows": len(rows),
-                    }
-                )
-                for row in rows:
+                if fetched.origins is not None:
+                    # Rejoc: cada fila apunta al fitxer original d'on surt (clau, SHA-256
+                    # del cos original, `retrieved_at`); no es desa cap copia.
+                    if len(fetched.origins) != len(rows):
+                        raise ValueError("El rejoc no dona l'origen de cada fila.")
+                    pages = []
+                    for origin in fetched.origins:
+                        page = original_pages.get(origin["key"])
+                        if page is None:
+                            page = _Page(
+                                origin.get("batch", number),
+                                origin.get("offset", offset),
+                                origin["url"],
+                                origin["sha256_original"],
+                                datetime.fromisoformat(origin["retrieved_at"]),
+                                origin["key"],
+                                origin.get("rows", 0),
+                            )
+                            original_pages[origin["key"]] = page
+                            manifest.append({**origin, "replay": True})
+                        pages.append(page)
+                else:
+                    key, entry = self._store(
+                        out_dir, stamp, f"batch_{number:03d}_off{offset}.json", fetched.body
+                    )
+                    page = _Page(
+                        number,
+                        offset,
+                        fetched.url,
+                        fetched.sha256,
+                        fetched.retrieved_at,
+                        key,
+                        len(rows),
+                    )
+                    manifest.append(
+                        {
+                            **entry,
+                            "url": fetched.url,
+                            "retrieved_at": fetched.retrieved_at.isoformat(),
+                            "rows": len(rows),
+                        }
+                    )
+                    pages = [page] * len(rows)
+                for row, page in zip(rows, pages, strict=True):
                     identifier = str(row.get("id_intern") or "")
                     uid = identifier[:36].lower()
                     if uid in wanted and (len(identifier) == 36 or identifier[36:37] == "_"):
@@ -350,7 +391,9 @@ class PscpOpenDataService:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _provenance(draft: g.Draft, metadata: dict, pages: list[_Page]) -> dict[str, Any]:
+    def _provenance(
+        draft: g.Draft, metadata: dict, pages: list[_Page], replay: dict | None = None
+    ) -> dict[str, Any]:
         url_json: dict[str, set[str]] = {}
         rows = []
         for row in draft.rows:
@@ -390,6 +433,13 @@ class PscpOpenDataService:
             provenance["pages"] = [
                 {"sha256": page.sha256, "storage_key": page.storage_key} for page in pages
             ]
+        if replay is not None:
+            # Rejoc: no es una lectura nova de la font, sino la captura original
+            # (`raw_storage_key` es relatiu a `replay.dir`).
+            provenance["replay"] = {
+                "dir": replay["dir"],
+                "raw_manifest_sha256": replay["raw_manifest_sha256"],
+            }
         return provenance
 
     # ------------------------------------------------------------------ #
@@ -402,11 +452,13 @@ class PscpOpenDataService:
         out_dir = options.out_dir
         out_dir.mkdir(parents=True, exist_ok=True)
         manifest: list[dict] = []
+        replay = self._replay_info()
         report: dict[str, Any] = {
             "source_code": SOURCE_CODE,
             "dataset": DATASET_ID,
             "started_at": started.isoformat(),
             "dry_run": options.dry_run,
+            "replay": replay is not None,
             "options": {
                 "limit": options.limit,
                 "tender": options.tender,
@@ -414,6 +466,8 @@ class PscpOpenDataService:
                 "page_limit": options.page_limit,
             },
         }
+        if replay is not None:
+            report["replay_source"] = dict(replay)
         exit_code = EXIT_OK
         try:
             async with self._sessions() as session:
@@ -469,7 +523,12 @@ class PscpOpenDataService:
                 exit_code = EXIT_EVALUATION_ABORTED
             else:
                 report["writes"] = await self._write(
-                    evaluations, snapshots, row_page, meta_start, dry_run=options.dry_run
+                    evaluations,
+                    snapshots,
+                    row_page,
+                    meta_start,
+                    dry_run=options.dry_run,
+                    replay=replay,
                 )
                 if evaluation_errors:
                     exit_code = EXIT_EVALUATION_ERRORS
@@ -479,7 +538,11 @@ class PscpOpenDataService:
             report["error"] = f"{type(exc).__name__}: {exc}"[:500]
             exit_code = EXIT_FAILED
         finally:
+            # Peticions de XARXA (en rejoc, sempre 0).
             report["requests"] = self._client.requests_made
+            if replay is not None:
+                report["network_requests"] = self._client.requests_made
+                report["replayed_requests"] = getattr(self._client, "replayed", None)
             report["finished_at"] = self._clock().isoformat()
             report["exit_code"] = exit_code
             (out_dir / "report.json").write_text(
@@ -493,6 +556,11 @@ class PscpOpenDataService:
             )
         return exit_code, report
 
+    def _replay_info(self) -> dict[str, Any] | None:
+        """El directori i el SHA-256 del manifest si el client es de rejoc (F-06e)."""
+        info = getattr(self._client, "replay_info", None)
+        return dict(info) if isinstance(info, dict) else None
+
     async def _write(
         self,
         evaluations: list[g.TenderEvaluation],
@@ -501,21 +569,25 @@ class PscpOpenDataService:
         metadata: dict,
         *,
         dry_run: bool,
+        replay: dict | None = None,
     ) -> dict[str, Any]:
         tender_ids = {snap.id for snap in snapshots}
-        drafts = [draft for ev in evaluations for draft in ev.drafts]
+        drafts = [draft for ev in evaluations for draft in ev.all_drafts]
         dataset_updated = (
             datetime.fromisoformat(metadata["rows_updated_at"])
             if metadata.get("rows_updated_at")
             else None
         )
+        # (I-3, n-1) Una licitacio que la font publica pero que no s'ha pogut llegir del
+        # tot (error d'avaluacio, files no desables).
+        unverified = {ev.tender_id for ev in evaluations if ev.unverified}
         async with self._sessions() as session:
             current_rows = (
                 (
                     await session.execute(
                         sa.select(TenderAmountObservation).where(
                             TenderAmountObservation.source_code == SOURCE_CODE,
-                            TenderAmountObservation.amount_kind == TenderAmountKind.PBL_WITH_TAX,
+                            TenderAmountObservation.amount_kind.in_(WRITTEN_KINDS),
                             TenderAmountObservation.valid_to.is_(None),
                         )
                     )
@@ -523,87 +595,25 @@ class PscpOpenDataService:
                 .scalars()
                 .all()
             )
-            current = {
-                (obs.tender_id, obs.tender_lot_id, obs.source_row_id): obs
-                for obs in current_rows
-                if obs.tender_id in tender_ids
-            }
-            accepted_at = {
-                (obs.tender_id, obs.tender_lot_id): obs
-                for obs in current.values()
-                if obs.validation_status == AmountObservationStatus.ACCEPTED
-            }
+            # (F-06e) Cada tipus d'import es una serie independent, amb les mateixes
+            # regles: una observacio d'un tipus mai no tanca ni reassigna la d'un altre.
+            # Per al PBL amb IVA, el pla es exactament el d'abans de F-06e.
+            plans: dict[TenderAmountKind, _KindPlan] = {}
+            for kind in WRITTEN_KINDS:
+                plans[kind] = _plan_kind(
+                    [draft for draft in drafts if draft.amount_kind == kind],
+                    {
+                        (obs.tender_id, obs.tender_lot_id, obs.source_row_id): obs
+                        for obs in current_rows
+                        if obs.amount_kind == kind and obs.tender_id in tender_ids
+                    },
+                    unverified,
+                )
             to_close: dict[uuid.UUID, tuple[TenderAmountObservation, str]] = {}
             to_insert: list[g.Draft] = []
-            unchanged = 0
-            for draft in drafts:
-                existing = current.get(draft.key)
-                validation = _json_safe(draft.validation)
-                draft.validation = validation
-                if existing is not None and _same(existing, draft):
-                    unchanged += 1
-                    continue
-                if existing is not None:
-                    to_close[existing.id] = (existing, "changed")
-                to_insert.append(draft)
-            produced = {draft.key for draft in drafts}
-            # (I-1) La mateixa fila de la font llegida ara sota una altra clau (p. ex. el
-            # lot s'ha retirat i la fila ja no te lot nostre): la vigent de la clau antiga
-            # es tanca. Una fila que encara hi es mai no deixa una lectura antiga vigent.
-            produced_rows = {(draft.tender_id, draft.source_row_id) for draft in drafts}
-            for key, obs in current.items():
-                if (
-                    key not in produced
-                    and (obs.tender_id, obs.source_row_id) in produced_rows
-                    and obs.id not in to_close
-                ):
-                    to_close[obs.id] = (obs, "reassigned")
-            # (I-1) Una `accepted` vigent la fila de la qual no torna en aquest run, en un
-            # objectiu que si te lectura nova: si la nova es `accepted`, la desplaca
-            # (n'hi ha d'haver una sola); si no, la lectura d'ara no l'avala i es tanca
-            # igualment. Un objectiu sense cap lectura nova (la font ja no en publica res)
-            # es llista com a `disappeared` i no es tanca (regla del propietari).
-            # (I-3, n-1) Una licitacio que la font publica pero que no s'ha pogut llegir
-            # del tot (error d'avaluacio, files no desables): cap `accepted` vigent que
-            # aquesta lectura no torni a avalar no queda vigent (`unverifiable`).
-            unverified = {ev.tender_id for ev in evaluations if ev.unverified}
-            for key, obs in current.items():
-                if (
-                    obs.tender_id in unverified
-                    and obs.validation_status == AmountObservationStatus.ACCEPTED
-                    and key not in produced
-                    and obs.id not in to_close
-                ):
-                    to_close[obs.id] = (obs, "unverifiable")
-            readings: dict[tuple, list[g.Draft]] = {}
-            for draft in drafts:
-                readings.setdefault((draft.tender_id, draft.tender_lot_id), []).append(draft)
-            for target, holder in accepted_at.items():
-                holder_key = (holder.tender_id, holder.tender_lot_id, holder.source_row_id)
-                if holder.id in to_close or holder_key in produced or target not in readings:
-                    continue
-                accepted_now = any(
-                    draft.status == AmountObservationStatus.ACCEPTED for draft in readings[target]
-                )
-                to_close[holder.id] = (
-                    holder,
-                    "displaced" if accepted_now else "superseded_by_reading",
-                )
-            disappeared = sorted(
-                (
-                    {
-                        "tender_id": str(obs.tender_id),
-                        "tender_lot_id": None
-                        if obs.tender_lot_id is None
-                        else str(obs.tender_lot_id),
-                        "source_row_id": obs.source_row_id,
-                        "status": obs.validation_status.value,
-                    }
-                    for key, obs in current.items()
-                    if key not in produced and obs.id not in to_close
-                ),
-                key=lambda item: (item["tender_id"], item["source_row_id"]),
-            )
+            for plan in plans.values():
+                to_close.update(plan.to_close)
+                to_insert.extend(plan.to_insert)
 
             now = self._clock()
             closed_ids = list(to_close)
@@ -625,7 +635,7 @@ class PscpOpenDataService:
                     TenderAmountObservation(
                         tender_id=draft.tender_id,
                         tender_lot_id=draft.tender_lot_id,
-                        amount_kind=TenderAmountKind.PBL_WITH_TAX,
+                        amount_kind=draft.amount_kind,
                         amount=draft.amount,
                         currency="EUR",
                         source_code=SOURCE_CODE,
@@ -639,7 +649,7 @@ class PscpOpenDataService:
                         raw_storage_key=first.storage_key,
                         validation_status=draft.status,
                         validation=draft.validation,
-                        provenance=self._provenance(draft, metadata, pages),
+                        provenance=self._provenance(draft, metadata, pages, replay),
                         valid_from=now,
                     )
                 )
@@ -648,21 +658,144 @@ class PscpOpenDataService:
                 await session.rollback()
             else:
                 await session.commit()
-        reasons = Counter(reason for _, reason in to_close.values())
+        summary = _plan_summary(to_insert, to_close, sum(plan.unchanged for plan in plans.values()))
+        disappeared = sorted(
+            (item for plan in plans.values() for item in plan.disappeared),
+            key=lambda item: (item["amount_kind"], item["tender_id"], item["source_row_id"]),
+        )
         return {
             "dry_run": dry_run,
             "committed": not dry_run,
-            "inserted": len(to_insert),
-            "closed": len(to_close),
-            "closed_changed": reasons.get("changed", 0),
-            "closed_displaced": reasons.get("displaced", 0),
-            "closed_reassigned": reasons.get("reassigned", 0),
-            "closed_superseded_by_reading": reasons.get("superseded_by_reading", 0),
-            "closed_unverifiable": reasons.get("unverifiable", 0),
-            "unchanged": unchanged,
-            "inserted_by_status": dict(Counter(d.status.value for d in to_insert)),
+            **summary,
             "disappeared_not_closed": disappeared,
+            "by_kind": {
+                kind.value: {
+                    **_plan_summary(plan.to_insert, plan.to_close, plan.unchanged),
+                    "disappeared_not_closed": len(plan.disappeared),
+                }
+                for kind, plan in plans.items()
+            },
         }
+
+
+#: Els tipus d'import que escriu l'adaptador (F-06e: tambe el PBL sense IVA i el VEC de
+#: lot). Cadascun es planifica a part (`_plan_kind`).
+WRITTEN_KINDS: tuple[TenderAmountKind, ...] = (
+    TenderAmountKind.PBL_WITH_TAX,
+    TenderAmountKind.PBL_WITHOUT_TAX,
+    TenderAmountKind.ESTIMATED_VALUE,
+)
+
+
+@dataclass
+class _KindPlan:
+    to_close: dict[uuid.UUID, tuple[TenderAmountObservation, str]]
+    to_insert: list[g.Draft]
+    unchanged: int
+    disappeared: list[dict[str, Any]]
+
+
+def _plan_kind(
+    drafts: list[g.Draft],
+    current: dict[tuple, TenderAmountObservation],
+    unverified: set[uuid.UUID],
+) -> _KindPlan:
+    """Que s'insereix i que es tanca d'UN tipus d'import (les regles de sempre).
+
+    `current`: les vigents d'aquest tipus de les licitacions de l'univers, per (licitacio,
+    lot, `source_row_id`); `drafts`: les lectures d'ara d'aquest tipus.
+    """
+    accepted_at = {
+        (obs.tender_id, obs.tender_lot_id): obs
+        for obs in current.values()
+        if obs.validation_status == AmountObservationStatus.ACCEPTED
+    }
+    to_close: dict[uuid.UUID, tuple[TenderAmountObservation, str]] = {}
+    to_insert: list[g.Draft] = []
+    unchanged = 0
+    for draft in drafts:
+        existing = current.get(draft.key)
+        validation = _json_safe(draft.validation)
+        draft.validation = validation
+        if existing is not None and _same(existing, draft):
+            unchanged += 1
+            continue
+        if existing is not None:
+            to_close[existing.id] = (existing, "changed")
+        to_insert.append(draft)
+    produced = {draft.key for draft in drafts}
+    # (I-1) La mateixa fila de la font llegida ara sota una altra clau (p. ex. el lot
+    # s'ha retirat i la fila ja no te lot nostre): la vigent de la clau antiga es tanca.
+    # Una fila que encara hi es mai no deixa una lectura antiga vigent.
+    produced_rows = {(draft.tender_id, draft.source_row_id) for draft in drafts}
+    for key, obs in current.items():
+        if (
+            key not in produced
+            and (obs.tender_id, obs.source_row_id) in produced_rows
+            and obs.id not in to_close
+        ):
+            to_close[obs.id] = (obs, "reassigned")
+    # (I-1) Una `accepted` vigent la fila de la qual no torna en aquest run, en un
+    # objectiu que si te lectura nova: si la nova es `accepted`, la desplaca (n'hi ha
+    # d'haver una sola); si no, la lectura d'ara no l'avala i es tanca igualment. Un
+    # objectiu sense cap lectura nova (la font ja no en publica res) es llista com a
+    # `disappeared` i no es tanca (regla del propietari).
+    # (I-3, n-1) Una licitacio que la font publica pero que no s'ha pogut llegir del tot
+    # (error d'avaluacio, files no desables): cap `accepted` vigent que aquesta lectura
+    # no torni a avalar no queda vigent (`unverifiable`).
+    for key, obs in current.items():
+        if (
+            obs.tender_id in unverified
+            and obs.validation_status == AmountObservationStatus.ACCEPTED
+            and key not in produced
+            and obs.id not in to_close
+        ):
+            to_close[obs.id] = (obs, "unverifiable")
+    readings: dict[tuple, list[g.Draft]] = {}
+    for draft in drafts:
+        readings.setdefault((draft.tender_id, draft.tender_lot_id), []).append(draft)
+    for target, holder in accepted_at.items():
+        holder_key = (holder.tender_id, holder.tender_lot_id, holder.source_row_id)
+        if holder.id in to_close or holder_key in produced or target not in readings:
+            continue
+        accepted_now = any(
+            draft.status == AmountObservationStatus.ACCEPTED for draft in readings[target]
+        )
+        to_close[holder.id] = (
+            holder,
+            "displaced" if accepted_now else "superseded_by_reading",
+        )
+    disappeared = [
+        {
+            "tender_id": str(obs.tender_id),
+            "tender_lot_id": None if obs.tender_lot_id is None else str(obs.tender_lot_id),
+            "source_row_id": obs.source_row_id,
+            "status": obs.validation_status.value,
+            "amount_kind": obs.amount_kind.value,
+        }
+        for key, obs in current.items()
+        if key not in produced and obs.id not in to_close
+    ]
+    return _KindPlan(to_close, to_insert, unchanged, disappeared)
+
+
+def _plan_summary(
+    to_insert: list[g.Draft],
+    to_close: dict[uuid.UUID, tuple[TenderAmountObservation, str]],
+    unchanged: int,
+) -> dict[str, Any]:
+    reasons = Counter(reason for _, reason in to_close.values())
+    return {
+        "inserted": len(to_insert),
+        "closed": len(to_close),
+        "closed_changed": reasons.get("changed", 0),
+        "closed_displaced": reasons.get("displaced", 0),
+        "closed_reassigned": reasons.get("reassigned", 0),
+        "closed_superseded_by_reading": reasons.get("superseded_by_reading", 0),
+        "closed_unverifiable": reasons.get("unverifiable", 0),
+        "unchanged": unchanged,
+        "inserted_by_status": dict(Counter(d.status.value for d in to_insert)),
+    }
 
 
 def _evidence_url(draft: g.Draft) -> str:
@@ -688,6 +821,14 @@ def _same(existing: TenderAmountObservation, draft: g.Draft) -> bool:
     )
 
 
+def _label(draft: g.Draft) -> str:
+    """`expedient` / `lot` per al PBL amb IVA (com abans de F-06e); `lot.<tipus>` per als
+    imports de lot nous (`lot.pbl_without_tax`, `lot.estimated_value`)."""
+    if draft.amount_kind == TenderAmountKind.PBL_WITH_TAX:
+        return draft.level
+    return f"{draft.level}.{draft.amount_kind.value}"
+
+
 def _summarize(evaluations: list[g.TenderEvaluation]) -> dict[str, Any]:
     by_level_status: Counter = Counter()
     sums: dict[str, Decimal] = {"expedient": Decimal("0"), "lot": Decimal("0")}
@@ -697,18 +838,20 @@ def _summarize(evaluations: list[g.TenderEvaluation]) -> dict[str, Any]:
     unrepresentable = []
     shapes = Counter(ev.shape for ev in evaluations)
     for ev in evaluations:
-        for draft in ev.drafts:
-            by_level_status[f"{draft.level}:{draft.status.value}"] += 1
+        for draft in ev.all_drafts:
+            label = _label(draft)
+            by_level_status[f"{label}:{draft.status.value}"] += 1
             if draft.status == AmountObservationStatus.ACCEPTED:
-                sums[draft.level] += draft.amount
+                sums[label] = sums.get(label, Decimal("0")) + draft.amount
             if draft.status == AmountObservationStatus.NO_VALUE:
-                no_value[f"{draft.level}:{draft.validation.get('no_value_reason')}"] += 1
+                no_value[f"{label}:{draft.validation.get('no_value_reason')}"] += 1
             if draft.status == AmountObservationStatus.CONFLICT:
                 conflicts.append(
                     {
                         "tender_id": str(ev.tender_id),
                         "pscp_id": ev.pscp_id,
                         "level": draft.level,
+                        "amount_kind": draft.amount_kind.value,
                         "source_row_id": draft.source_row_id,
                         "failed": draft.validation.get("failed")
                         or sorted(
@@ -784,6 +927,7 @@ def _write_observations_csv(path: Path, evaluations: list[g.TenderEvaluation]) -
         "role",
         "failed",
         "phase",
+        "amount_kind",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
@@ -799,7 +943,7 @@ def _write_observations_csv(path: Path, evaluations: list[g.TenderEvaluation]) -
                         "status": ev.shape,
                     }
                 )
-            for draft in ev.drafts:
+            for draft in ev.all_drafts:
                 validation = draft.validation
                 failed = validation.get("failed")
                 if failed is None:
@@ -823,5 +967,6 @@ def _write_observations_csv(path: Path, evaluations: list[g.TenderEvaluation]) -
                         "role": validation.get("role") or "",
                         "failed": "|".join(failed),
                         "phase": draft.source_phase or "",
+                        "amount_kind": draft.amount_kind.value,
                     }
                 )

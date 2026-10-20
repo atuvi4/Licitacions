@@ -56,6 +56,29 @@ Convencions de les claus:
 * Lot: `source_entity_key = <uuid>#lot=<numero_lot>` (`#lot=null` si la font no en dona)
   i `source_row_id = <id_intern>` de la fila. Una fila de lot sense lot nostre
   identificable de manera unica es desa amb `tender_lot_id` NULL i en `conflict`.
+
+Imports de lot (F-06e): per a cada fila de lot, a mes del PBL amb IVA, el PBL sense IVA
+(`pressupost_licitacio_sense`, `pbl_without_tax`) i el VEC (`valor_estimat_contracte`,
+`estimated_value`), amb la mateixa clau, fila i procedencia
+(`TenderEvaluation.lot_amount_drafts`). Les observacions de sempre (expedient i PBL amb
+IVA de lot) NO canvien gens: les guardes noves nomes son a les drafts noves. Estat, per
+ordre:
+
+1. `conflict` si falla alguna guarda de l'expedient, el lot no te `match` o el valor no
+   es pot desar sense alterar-lo (`amount` NULL i el text publicat a la procedencia);
+2. `no_value` si no es publica (NULL) o es publica a 0 (tal com es publica);
+3. `conflict` si falla alguna guarda nova:
+   * PBL sense IVA: `tax_order` (PBL amb IVA del lot >= PBL sense IVA; no s'aplica si el
+     lot no te PBL amb IVA > 0) i `lot_net_sum` (la suma dels PBL sense IVA de TOTS els
+     lots = el de l'expedient, 0,01 EUR de tolerancia per lot; nomes si l'expedient i
+     tots els lots el tenen > 0; si falla, tots els lots en `conflict`);
+   * VEC (independent del PBL): `vec_order` (VEC del lot >= PBL sense IVA del lot - 0,01;
+     no s'aplica si el lot no te PBL sense IVA > 0) i `lot_vec_sum` (com `lot_net_sum`,
+     amb el VEC de l'expedient);
+   * el contrast amb `tender_lots` (`net` / `vec`), al centim, nomes si en tenim el valor.
+   Regla estricta: cap arrodoniment especial (un expedient publicat sense decimals que
+   no quadra amb els seus lots queda en `conflict`).
+4. `accepted`.
 """
 
 from __future__ import annotations
@@ -67,10 +90,11 @@ from decimal import Decimal
 from typing import Any
 
 from app.ingestion.pscp_open_data import parser as p
-from app.models.enums import AmountObservationStatus
+from app.models.enums import AmountObservationStatus, TenderAmountKind
 
 #: Versio de l'esquema de `validation` (canviar-la fa que totes les observacions es
-#: tornin a escriure al seguent run).
+#: tornin a escriure al seguent run). F-06e NO la canvia: les observacions de sempre
+#: han de sortir `unchanged`; les drafts noves porten `amount_kind` a la `validation`.
 VALIDATION_VERSION = 1
 CENT = Decimal("0.01")
 
@@ -102,7 +126,7 @@ class TenderSnapshot:
 
 @dataclass
 class Draft:
-    """Una observacio a desar (`amount_kind = pbl_with_tax`)."""
+    """Una observacio a desar (`amount_kind = pbl_with_tax`, o un import de lot F-06e)."""
 
     tender_id: uuid.UUID
     tender_lot_id: uuid.UUID | None
@@ -118,6 +142,8 @@ class Draft:
     rows: list[dict[str, Any]]
     #: Camps i valors publicats de contrast (no es desen com a import).
     cross_check: dict[str, Any] = field(default_factory=dict)
+    #: Tipus d'import. Per defecte el PBL amb IVA (les observacions de sempre).
+    amount_kind: TenderAmountKind = TenderAmountKind.PBL_WITH_TAX
 
     @property
     def key(self) -> tuple:
@@ -136,6 +162,13 @@ class TenderEvaluation:
     #: fila no desable, o una fallada en avaluar-la): cap `accepted` vigent que aquesta
     #: lectura no torni a avalar no pot quedar vigent (I-3, n-1).
     unverified: bool = False
+    #: (F-06e) El PBL sense IVA i el VEC de cada fila de lot. A part de `drafts` perque
+    #: les observacions de sempre no canviin gens.
+    lot_amount_drafts: list[Draft] = field(default_factory=list)
+
+    @property
+    def all_drafts(self) -> list[Draft]:
+        return [*self.drafts, *self.lot_amount_drafts]
 
 
 def error_evaluation(
@@ -365,6 +398,65 @@ def _expedient_value(rows: list[dict[str, Any]], name: str) -> tuple[p.ParsedAmo
         texts = sorted("" if value is None else str(value) for value in values)
         return p.ParsedAmount("|".join(texts), None, "inconsistent_across_rows"), False
     return p.parse_amount(values.pop()), True
+
+
+# --------------------------------------------------------------------------- #
+# Imports de lot (F-06e): nomes per a les drafts noves                          #
+# --------------------------------------------------------------------------- #
+
+
+def _positive(amount: p.ParsedAmount) -> bool:
+    return amount.usable and amount.value > 0
+
+
+def _positive_order(
+    high: p.ParsedAmount, low: p.ParsedAmount, *, slack: Decimal = Decimal("0")
+) -> dict[str, Any]:
+    """`high >= low - slack`; no s'aplica (`ok` None) si algun dels dos no es > 0."""
+    if not (_positive(high) and _positive(low)):
+        return {"ok": None}
+    return {"ok": high.value >= low.value - slack}
+
+
+def _lot_total(expedient: p.ParsedAmount, lots: list[p.ParsedAmount]) -> dict[str, Any]:
+    """La suma d'un import de TOTS els lots contra el de l'expedient (`lot_net_sum`,
+    `lot_vec_sum`), amb 0,01 EUR de tolerancia per lot i sense cap altre arrodoniment.
+
+    Nomes s'avalua si l'expedient i tots els lots el publiquen > 0; si no, `ok` None i el
+    motiu a `skipped` (no fa fallar res).
+    """
+    if not _positive(expedient):
+        return {"ok": None, "skipped": "expedient_amount_not_positive"}
+    if not lots:
+        return {"ok": None, "skipped": "no_lot_rows"}
+    if any(amount.problem for amount in lots):
+        return {"ok": None, "skipped": "lot_amount_unrepresentable"}
+    if any(amount.value is None for amount in lots):
+        return {"ok": None, "skipped": "lot_amount_not_published"}
+    if any(amount.value <= 0 for amount in lots):
+        return {"ok": None, "skipped": "lot_amount_zero"}
+    total = sum((amount.value for amount in lots), Decimal("0"))
+    difference = total - expedient.value
+    tolerance = CENT * len(lots)
+    return {
+        "ok": abs(difference) <= tolerance,
+        "sum": p.cents(total),
+        "expedient": p.cents(expedient.value),
+        "difference": p.cents(difference),
+        "tolerance": p.cents(tolerance),
+    }
+
+
+def _lot_amount_status(
+    amount: p.ParsedAmount, *, blocked: bool, failed: bool
+) -> AmountObservationStatus:
+    """L'ordre de F-06e: bloqueig (expedient, `match`, valor no desable) > `no_value` >
+    guardes noves > `accepted`."""
+    if blocked or amount.problem:
+        return CONFLICT
+    if _no_value_reason(amount):
+        return NO_VALUE
+    return CONFLICT if failed else ACCEPTED
 
 
 def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEvaluation:
@@ -603,6 +695,14 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
 
     # --- Observacions de lot ---------------------------------------------------- #
     expedient_guards = {name: guard.get("ok") for name, guard in guards.items()}
+    # (F-06e) Les sumes del PBL sense IVA i del VEC de tots els lots: nomes van a les
+    # drafts noves (mai a `guards` de l'expedient, que ha de quedar identic).
+    lot_net_sum = _lot_total(
+        without_tax, [p.parse_amount(row.get(p.LOT_WITHOUT_TAX)) for row in lot_rows]
+    )
+    lot_vec_sum = _lot_total(
+        estimated, [p.parse_amount(row.get(p.LOT_ESTIMATED)) for row in lot_rows]
+    )
     for row, number, amount in zip(lot_rows, source_numbers, lot_amounts, strict=True):
         row_id = str(row.get("id_intern"))
         matched = None
@@ -665,4 +765,72 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
                 cross_check={p.LOT_WITHOUT_TAX: lot_net.text, p.LOT_ESTIMATED: lot_vec.text},
             )
         )
+
+        # --- (F-06e) PBL sense IVA i VEC del lot: drafts noves, guardes propies --- #
+        blocked = bool(failed) or match.get("ok") is False
+        net_guards: dict[str, dict[str, Any]] = {
+            "match": match,
+            "amount": {"ok": lot_net.problem is None, "problem": lot_net.problem},
+            "net": _optional_equal_to_cent(lot_net, matched.net if matched else None),
+            "tax_order": _positive_order(amount, lot_net),
+            "lot_net_sum": lot_net_sum,
+        }
+        vec_guards: dict[str, dict[str, Any]] = {
+            "match": match,
+            "amount": {"ok": lot_vec.problem is None, "problem": lot_vec.problem},
+            "vec": _optional_equal_to_cent(lot_vec, matched.vec if matched else None),
+            "vec_order": _positive_order(lot_vec, lot_net, slack=CENT),
+            "lot_vec_sum": lot_vec_sum,
+        }
+        for kind, field_name, value, kind_guards, cross_check in (
+            (
+                TenderAmountKind.PBL_WITHOUT_TAX,
+                p.LOT_WITHOUT_TAX,
+                lot_net,
+                net_guards,
+                {p.LOT_WITH_TAX: amount.text, p.LOT_ESTIMATED: lot_vec.text},
+            ),
+            (
+                TenderAmountKind.ESTIMATED_VALUE,
+                p.LOT_ESTIMATED,
+                lot_vec,
+                vec_guards,
+                {p.LOT_WITH_TAX: amount.text, p.LOT_WITHOUT_TAX: lot_net.text},
+            ),
+        ):
+            kind_failed = sorted(
+                name for name, guard in kind_guards.items() if guard.get("ok") is False
+            )
+            evaluation.lot_amount_drafts.append(
+                Draft(
+                    tender_id=snapshot.id,
+                    tender_lot_id=matched.id if matched else None,
+                    level="lot",
+                    source_entity_key=f"{uid}#lot={number if number is not None else 'null'}",
+                    source_row_id=row_id,
+                    source_phase=_phase([row]),
+                    status=_lot_amount_status(value, blocked=blocked, failed=bool(kind_failed)),
+                    amount=value.value,
+                    field=field_name,
+                    published_text=value.text,
+                    validation={
+                        **common,
+                        "level": "lot",
+                        "amount_kind": kind.value,
+                        "numero_lot": None
+                        if row.get("numero_lot") is None
+                        else str(row["numero_lot"]),
+                        "no_value_reason": _no_value_reason(value),
+                        "amount_problem": value.problem,
+                        "lot_guards": kind_guards,
+                        "lot_failed": kind_failed,
+                        "expedient_guards": expedient_guards,
+                        "expedient_failed": failed,
+                        "rows": [row_id],
+                    },
+                    rows=[row],
+                    cross_check=cross_check,
+                    amount_kind=kind,
+                )
+            )
     return evaluation

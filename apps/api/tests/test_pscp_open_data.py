@@ -50,6 +50,7 @@ from app.ingestion.pscp_open_data.service import (
     too_many_evaluation_errors,
 )
 from app.models.enums import AmountObservationStatus as S
+from app.models.enums import TenderAmountKind as K
 from app.models.sources import Source
 from app.models.tender_amounts import TenderAmountObservation as Obs
 from app.models.tenders import Tender, TenderLot
@@ -58,6 +59,9 @@ FIXTURES = Path(__file__).parent / "fixtures" / "pscp_open_data" / "cases.json"
 DATA = json.loads(FIXTURES.read_text(encoding="utf-8"))
 CASES = DATA["cases"]
 ROWS_UPDATED_AT = DATA["rows_updated_at"]
+PBL = K.PBL_WITH_TAX
+#: F-06e: els imports de lot nous.
+NEW_KINDS = (K.PBL_WITHOUT_TAX, K.ESTIMATED_VALUE)
 
 
 def _utc(moment: datetime | None) -> datetime | None:
@@ -761,7 +765,7 @@ def _expected_statuses() -> dict[str, int]:
     counts: dict[str, int] = {}
     for name in ALL:
         ev = g.evaluate(_snapshot(name), _rows(name))
-        for draft in ev.drafts:
+        for draft in ev.all_drafts:  # F-06e: tambe el PBL sense IVA i el VEC de lot
             counts[draft.status.value] = counts.get(draft.status.value, 0) + 1
     return counts
 
@@ -793,7 +797,17 @@ async def test_run_real_desa_amb_procedencia_i_el_segon_no_escriu_res(
     for row in rows:
         counts[row.validation_status.value] = counts.get(row.validation_status.value, 0) + 1
     assert counts == _expected_statuses()
-    assert {row.amount_kind.value for row in rows} == {"pbl_with_tax"}
+    # F-06e: el PBL sense IVA i el VEC nomes de lot; l'expedient, nomes el PBL amb IVA.
+    assert {row.amount_kind.value for row in rows} == {
+        "pbl_with_tax",
+        "pbl_without_tax",
+        "estimated_value",
+    }
+    assert {
+        row.amount_kind.value
+        for row in rows
+        if row.tender_lot_id is None and "#lot=" not in row.source_entity_key
+    } == {"pbl_with_tax"}
     assert {row.source_code for row in rows} == {SOURCE_CODE}
 
     [escala] = [row for row in rows if row.tender_id == ids["lescala"]]
@@ -834,8 +848,18 @@ async def test_run_real_desa_amb_procedencia_i_el_segon_no_escriu_res(
     assert provenance["cross_check"]["pressupost_licitacio_sense_1"] == "204232.75"
 
     # Lots desats amb el seu tender_lot_id; el lot sense lot a la BD, sense.
-    lots = [row for row in rows if row.tender_id == ids["lots"] and row.tender_lot_id]
+    lots = [
+        row
+        for row in rows
+        if row.tender_id == ids["lots"] and row.tender_lot_id and row.amount_kind == PBL
+    ]
     assert len(lots) == 3 and {row.validation_status for row in lots} == {S.ACCEPTED}
+    for kind in NEW_KINDS:
+        same = [r for r in rows if r.tender_id == ids["lots"] and r.amount_kind == kind]
+        assert {r.validation_status for r in same} == {S.ACCEPTED}
+        assert {(r.tender_lot_id, r.source_row_id, r.source_entity_key) for r in same} == {
+            (r.tender_lot_id, r.source_row_id, r.source_entity_key) for r in lots
+        }
     orphans = [row for row in rows if row.tender_id == ids["lot_without_db_lot"]]
     assert {
         (row.tender_lot_id, row.validation_status)
@@ -925,13 +949,20 @@ async def test_una_altra_fila_acceptada_per_al_mateix_lot_desplaca_l_anterior(
     source[uid][0]["id_intern"] = uid + "_renumerada"
     code, report = await _run(session_factory, FakeSoda(source), tmp_path / "2")
     assert code == EXIT_OK, report.get("error")
-    assert report["writes"]["closed_displaced"] == 1
+    # Cada tipus es una serie a part: el lot desplaca la seva, tipus per tipus.
+    assert report["writes"]["by_kind"]["pbl_with_tax"]["closed_displaced"] == 1
+    assert report["writes"]["closed_displaced"] == 3
     current = [
         row for row in await _observations(db, current_only=True) if row.tender_id == ids["lots"]
     ]
     assert renamed not in {row.source_row_id for row in current}
-    accepted_lots = [r for r in current if r.tender_lot_id and r.validation_status == S.ACCEPTED]
-    assert len(accepted_lots) == 3
+    for kind in (PBL, *NEW_KINDS):
+        accepted_lots = [
+            r
+            for r in current
+            if r.tender_lot_id and r.validation_status == S.ACCEPTED and r.amount_kind == kind
+        ]
+        assert len(accepted_lots) == 3
 
 
 async def test_paginacio_i_cli_amb_tender_i_limit(db, session_factory, tmp_path):
@@ -1082,8 +1113,14 @@ async def test_una_forma_inesperada_no_atura_el_run(db, session_factory, tmp_pat
 # --------------------------------------------------------------------------- #
 
 
-def _current_accepted(rows, tender_id):
-    return [r for r in rows if r.tender_id == tender_id and r.validation_status == S.ACCEPTED]
+def _current_accepted(rows, tender_id, kind=None):
+    """Les `accepted` d'un tipus (per defecte el PBL amb IVA, el de sempre)."""
+    kind = kind or PBL
+    return [
+        r
+        for r in rows
+        if r.tender_id == tender_id and r.validation_status == S.ACCEPTED and r.amount_kind == kind
+    ]
 
 
 async def test_lot_retirat_tanca_l_accepted_de_la_clau_antiga(db, session_factory, tmp_path):
@@ -1110,13 +1147,15 @@ async def test_lot_retirat_tanca_l_accepted_de_la_clau_antiga(db, session_factor
 
     code, report = await _run(session_factory, FakeSoda(source), tmp_path / "2")
     assert code == EXIT_OK, report.get("error")
-    assert report["writes"]["closed_reassigned"] == 1
+    assert report["writes"]["by_kind"]["pbl_with_tax"]["closed_reassigned"] == 1
+    assert report["writes"]["closed_reassigned"] == 3  # un per tipus
     assert report["writes"]["disappeared_not_closed"] == []
     current = await _observations(db, current_only=True)
-    assert _current_accepted(current, ids["lots"]) == []
+    for kind in (PBL, *NEW_KINDS):
+        assert _current_accepted(current, ids["lots"], kind) == []
     assert removed_lot_id not in {r.tender_lot_id for r in current}
     orphans = [r for r in current if r.tender_lot_id is None and "#lot=" in r.source_entity_key]
-    assert [r.validation_status for r in orphans] == [S.CONFLICT]
+    assert [r.validation_status for r in orphans] == [S.CONFLICT] * 3
 
 
 async def test_accepted_passa_a_conflict_quan_canvia_el_valor(db, session_factory, tmp_path):
@@ -1227,7 +1266,10 @@ async def test_una_excepcio_en_avaluar_desa_conflict_i_tanca_l_accepted(
     assert conflict.validation["error"]["class"] == "ValueError"
     assert conflict.source_row_id == CASES["lots"]["ours"]["pscp_id_intern"] + "_*"
     assert report["writes"]["closed_changed"] == 1  # l'expedient (mateixa clau)
-    assert report["writes"]["closed_unverifiable"] == 3  # els tres lots
+    assert report["writes"]["by_kind"]["pbl_with_tax"]["closed_unverifiable"] == 3
+    assert report["writes"]["closed_unverifiable"] == 9  # els tres lots, de cada tipus
+    for kind in NEW_KINDS:
+        assert _current_accepted(current, ids["lots"], kind) == []
     # Les altres licitacions no en pateixen.
     assert len(_current_accepted(current, ids["lescala"])) == 1
     assert len(_current_accepted(current, ids["vat0"])) == 1
@@ -1270,7 +1312,9 @@ async def test_un_numero_de_lot_de_5000_digits_no_falla_i_no_deixa_accepted(
     assert report["evaluation"]["evaluation_errors"] == []
     current = await _observations(db, current_only=True)
     assert _current_accepted(current, ids["lots"]) == []
-    assert report["writes"]["closed_unverifiable"] == 1  # el lot de la fila no desable
+    # El lot de la fila no desable, de cada tipus.
+    assert report["writes"]["by_kind"]["pbl_with_tax"]["closed_unverifiable"] == 1
+    assert report["writes"]["closed_unverifiable"] == 3
     assert report["writes"]["disappeared_not_closed"] == []
 
 

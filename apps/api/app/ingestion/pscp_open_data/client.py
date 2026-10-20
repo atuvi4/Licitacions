@@ -79,6 +79,10 @@ class Fetched:
     sha256: str
     retrieved_at: datetime
     attempts: int
+    #: Nomes en rejoc (`replay.ReplayClient`, F-06e): d'on surt cada element de la
+    #: resposta a la captura original (una entrada del `raw_manifest.json` per fila, o la
+    #: de les metadades). `None` en una lectura de la font de debo.
+    origins: tuple[dict[str, Any], ...] | None = None
 
 
 def rows_url(
