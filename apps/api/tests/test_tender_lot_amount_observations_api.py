@@ -283,3 +283,27 @@ async def test_una_suma_calculada_que_no_quadra_continua_sent_lot_sum(db, client
     await db.commit()
     field = await _field(client_a, tender)
     assert field["lots_estimated_value"][str(lot.id)]["failed_checks"] == ["lot_sum"]
+
+
+async def test_un_match_fallit_amb_problem_continua_sent_lots(db, client_a):
+    """El filtre de N-1 nomes s'aplica a les guardes de suma: `match` porta `problem`
+    quan falla de debo i el motiu s'ha de continuar dient."""
+    tender, (lot,) = await _tender(db, lots=1)
+    db.add(
+        _lot_obs(
+            tender,
+            lot,
+            NET,
+            validation_status=CONFLICT,
+            validation={
+                "v": 1,
+                "level": "lot",
+                "amount_kind": "pbl_without_tax",
+                "lot_guards": {"match": {"ok": False, "problem": "ambiguous_in_ours"}},
+                "blocking_failed": ["lot.match"],
+            },
+        )
+    )
+    await db.commit()
+    field = await _field(client_a, tender)
+    assert field["lots_pbl_without_tax"][str(lot.id)]["failed_checks"] == ["lots"]

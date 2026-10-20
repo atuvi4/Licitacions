@@ -90,6 +90,7 @@ _LOT_GUARDS = {
     "lot_net_sum": "lot_sum",
     "lot_vec_sum": "lot_sum",
 }
+_SUM_GUARDS = frozenset({"lot_net_sum", "lot_vec_sum"})
 #: Tipus d'import de lot -> camp de `BudgetWithTaxObservations`.
 LOT_FIELDS: dict[TenderAmountKind, str] = {
     TenderAmountKind.PBL_WITH_TAX: "lots",
@@ -159,7 +160,8 @@ def failed_checks(observation: TenderAmountObservation) -> list[str]:
         for entry in _as_list(validation["blocking_failed"]):
             level, _, name = entry.partition(".")
             mapping = _EXPEDIENT_GUARDS if level == "expedient" else _LOT_GUARDS
-            guard = lot_guards.get(name) if level == "lot" else None
+            # Nomes les guardes de suma: `match` i la resta porten `problem` quan fallen de debo.
+            guard = lot_guards.get(name) if level == "lot" and name in _SUM_GUARDS else None
             if isinstance(guard, dict) and guard.get("problem"):
                 # La suma no s'ha pogut calcular (un import de lot germa no representable,
                 # `lot_amount_unrepresentable`): no es diu que no quadri. Sense codi, la
