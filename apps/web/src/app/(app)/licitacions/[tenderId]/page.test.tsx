@@ -973,16 +973,65 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
     // Lot dos: VEC i PBL amb IVA de la PSCP; el PBL net en conflicte per la suma dels lots (sense culpar la PLACSP).
     const second = cells("Lot dos");
     expect(second[0]).toEqual(["pscp", "36.190,00 € · PSCP ↗"]);
-    expect(second[1][1]).toBe(
-      "Pendent de verificació (discrepància entre fonts)La suma dels imports dels lots publicats a la PSCP no coincideix amb l'import total de l'expedient publicat per la mateixa PSCP. · Veure la publicació ↗",
+    // Conflicte només de suma: la cel·la diu només «Pendent…»; el motiu va a la indicació de la taula.
+    expect(second[1]).toEqual(["pscp", "Pendent de verificació (discrepància entre fonts)"]);
+    expect(text(document.querySelector("[data-lots-sum-conflict]"))).toBe(
+      "PBL sense IVA: la suma dels imports dels lots publicats a la PSCP no coincideix amb l'import total de l'expedient publicat per la mateixa PSCP. No es fa servir fins que es verifiqui. · Veure la publicació ↗",
     );
-    expect(second[1][1]).not.toContain("PLACSP");
     expect(second[2]).toEqual(["pscp", "43.789,90 € · PSCP ↗"]);
     expect(text(screen.getByText("Lot dos").closest("tr"))).not.toContain("36.190,00 € · PSCP ↗36.190");
     // Una sola indicació (n'hi ha de la PLACSP i de la PSCP) i una sola atribució.
     expect(document.querySelectorAll("[data-lots-pscp-note]").length).toBe(1);
-    expect(text(document.querySelector("[data-lots-pscp-note]"))).toBe("Els imports marcats «PSCP» són els que la PLACSP no publica per al lot.");
+    expect(text(document.querySelector("[data-lots-pscp-note]"))).toBe("Els imports sense font indicada són de la PLACSP; la resta, de la PSCP.");
     expect(document.querySelectorAll("[data-pscp-attribution]").length).toBe(1);
+  });
+
+  it("F-06e: un conflicte de suma a 7 lots diu el motiu i l'enllaç una sola vegada, a la indicació de la taula", async () => {
+    const ids = ["l1", "l2", "l3", "l4", "l5", "l6", "l7"];
+    const lots = ids.map((id, index) => lotOf(id, `Lot número ${index + 1}`));
+    const sum = (id: string) => [id, observation({ status: "conflict", amount: "28799.70", amount_kind: "pbl_without_tax", failed_checks: ["lot_sum"] })];
+    await renderWith(
+      {
+        ...field(null),
+        lots_pbl_without_tax: Object.fromEntries(ids.map(sum)),
+        lots_estimated_value: Object.fromEntries(ids.map((id) => [id, observation({ amount: "30000.00", amount_kind: "estimated_value" })])),
+      },
+      { lots, lot_count: 7 },
+    );
+    const body = text(document.body);
+    expect(body.split("la suma dels imports dels lots publicats a la PSCP").length - 1).toBe(1);
+    expect(document.querySelectorAll("[data-lots-sum-conflict]").length).toBe(1);
+    expect(text(document.querySelector("[data-lots-sum-conflict]"))).toContain("PBL sense IVA: la suma");
+    expect(document.querySelectorAll("[data-pscp-sum-conflict]").length).toBe(7);
+    for (const cell of Array.from(document.querySelectorAll("[data-pscp-sum-conflict]"))) {
+      expect(text(cell)).toBe("Pendent de verificació (discrepància entre fonts)");
+    }
+    // L'enllaç a la publicació: una sola vegada per al conflicte (els VEC accepted porten el seu).
+    expect(document.querySelector("[data-lots-sum-conflict]")?.querySelectorAll("a").length).toBe(1);
+    expect(screen.getAllByRole("link", { name: "Veure la publicació ↗" }).length).toBe(1);
+  });
+
+  it("F-06e: un conflicte propi del lot (no de suma) es queda a la cel·la, com ara", async () => {
+    await renderWith(
+      { ...field(null), lots_estimated_value: { l1: observation({ status: "conflict", amount_kind: "estimated_value", failed_checks: ["vec"] }) } },
+      { lots: [lotOf("l1", "Lot u")], lot_count: 1 },
+    );
+    const cell = screen.getByText("Lot u").closest("tr")!.querySelector("[data-pscp-lot]");
+    expect(text(cell?.querySelector("[data-pscp-notice]"))).toBe("No coincideix amb les dades de la PLACSP (VEC). · Veure la publicació ↗");
+    expect(document.querySelector("[data-lots-sum-conflict]")).toBeNull();
+  });
+
+  it("F-06e: lots sense cap import ni cap observació (fora de Catalunya): la taula com abans, una sola columna «Import»", async () => {
+    await renderWith(field(null), { lots: [lotOf("l1", "Lot u"), lotOf("l2", "Lot dos")], lot_count: 2 });
+    const table = screen.getByText("Lot u").closest("table")!;
+    const headers = Array.from(table.querySelectorAll("th")).map((th) => th.textContent);
+    expect(headers).toContain("Import");
+    expect(headers).not.toContain("VEC");
+    expect(headers).not.toContain("PBL sense IVA");
+    expect(table.querySelector("[data-lot-amount]")).toBeNull();
+    for (const title of ["Lot u", "Lot dos"]) expect(text(screen.getByText(title).closest("tr"))).toContain(NOT_PUBLISHED);
+    expect(document.querySelector("[data-lots-pscp-note]")).toBeNull();
+    expect(document.querySelector("[data-pscp-attribution]")).toBeNull();
   });
 
   it("F-06e: un VEC de lot publicat a 0 a la PSCP diu el zero, mai un import; un no_value nul no diu res", async () => {

@@ -8,6 +8,7 @@ import {
   PSCP_ZERO_TEXT,
   budgetWithTaxView,
   failedChecksText,
+  isSumOnlyConflict,
   isShownObservation,
   lotAmountCell,
   pscpAttribution,
@@ -228,6 +229,48 @@ describe("F-06e: imports de lot de la PSCP a la taula «Lots»", () => {
     expect(placsp.lotCells.l1.estimated_value).toEqual({ source: "placsp", value: "50000.00" });
     expect(placsp.lotsNote).toBeNull();
     expect(placsp.attribution).toBeNull();
+  });
+
+  it("conflicte de suma: un per columna, amb el primer enllaç; cap si no n'hi ha", () => {
+    const sum = (url: string | null) => net({ status: "conflict", failed_checks: ["lot_sum"], publication_url: url });
+    const view = budgetWithTaxView({
+      base_budget: null,
+      lots: [fullLot("l1"), fullLot("l2")],
+      budget_with_tax_observations: {
+        expedient: null,
+        lots: {},
+        lots_pbl_without_tax: { l1: sum(null), l2: sum("https://contractaciopublica.cat/ca/detall-publicacio/x/2") },
+        lots_estimated_value: { l1: vec({ status: "conflict", failed_checks: ["vec"] }) },
+        attribution: OFFICIAL,
+        source_updated_at: null,
+      },
+    });
+    expect(view.lotsSumConflicts).toEqual([
+      {
+        label: "PBL sense IVA",
+        text: "PBL sense IVA: la suma dels imports dels lots publicats a la PSCP no coincideix amb l'import total de l'expedient publicat per la mateixa PSCP.",
+        publication_url: "https://contractaciopublica.cat/ca/detall-publicacio/x/2",
+      },
+    ]);
+    expect(isSumOnlyConflict(sum(null))).toBe(true);
+    expect(isSumOnlyConflict(net({ status: "conflict", failed_checks: ["lots", "lot_sum"] }))).toBe(false);
+    expect(isSumOnlyConflict(net({ status: "conflict", failed_checks: ["lot_sum"], evaluation_error: true }))).toBe(false);
+    expect(view.lotsWithoutAmounts).toBe(false);
+  });
+
+  it("sense cap import útil ni cap observació a cap lot, la taula és la d'abans (`lotsWithoutAmounts`)", () => {
+    const empty = budgetWithTaxView({ base_budget: null, lots: [fullLot("l1", { estimated_value: "0.00" })], budget_with_tax_observations: null });
+    expect(empty.lotsWithoutAmounts).toBe(true);
+    expect(empty.lotsNote).toBeNull();
+    const withPlacsp = budgetWithTaxView({ base_budget: null, lots: [fullLot("l1", { estimated_value: "100.00" })] });
+    expect(withPlacsp.lotsWithoutAmounts).toBe(false);
+    const withObservation = budgetWithTaxView({
+      base_budget: null,
+      lots: [fullLot("l1")],
+      budget_with_tax_observations: { expedient: null, lots: {}, lots_estimated_value: { l1: vec({ status: "no_value", amount: null }) }, attribution: OFFICIAL, source_updated_at: null },
+    });
+    expect(withObservation.lotsWithoutAmounts).toBe(false);
+    expect(budgetWithTaxView({ base_budget: null, lots: [] }).lotsWithoutAmounts).toBe(false);
   });
 
   it("una resposta d'abans de F-06e (sense els camps nous) continua funcionant", () => {

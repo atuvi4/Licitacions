@@ -23,7 +23,7 @@
 
 import { usefulAmount } from "@/lib/amounts";
 import { formatAmount, formatDate } from "@/lib/format";
-import type { AmountBasis, AmountFailedCheck, AmountObservation, BudgetWithTaxObservations, TenderDetail, TenderLot } from "@/lib/tenders";
+import { AMOUNT_BASIS_SHORT, type AmountBasis, type AmountFailedCheck, type AmountObservation, type BudgetWithTaxObservations, type TenderDetail, type TenderLot } from "@/lib/tenders";
 
 export const PSCP_PENDING_TEXT = "Pendent de verificació (discrepància entre fonts)";
 export const PSCP_ZERO_TEXT =
@@ -122,8 +122,32 @@ export const PSCP_LOT_ZERO_TEXT = "Publicat a 0,00 € a la PSCP";
 /** Una sola indicació per a la taula: cap lot no té cap import a la PLACSP. */
 export const PLACSP_NO_LOT_AMOUNTS_TEXT = "Cap d'aquests lots no té imports a la PLACSP: els que es mostren són de la PSCP.";
 /** Una sola indicació per a la taula: alguns imports són de la PSCP i d'altres de la PLACSP. */
-export const PLACSP_SOME_LOT_AMOUNTS_TEXT = "Els imports marcats «PSCP» són els que la PLACSP no publica per al lot.";
+export const PLACSP_SOME_LOT_AMOUNTS_TEXT = "Els imports sense font indicada són de la PLACSP; la resta, de la PSCP.";
 export const PSCP_INCOHERENT_TEXT = "No ha superat les comprovacions de coherència de la font.";
+
+/**
+ * Un `conflict` que només és de la suma dels lots de la PSCP contra el seu total (`lot_sum`; a l'API,
+ * també `lot_net_sum` / `lot_vec_sum`). La guarda és única per a l'expedient i el tipus: el motiu va
+ * una sola vegada a la indicació de la taula, no a cada cel·la.
+ */
+export function isSumOnlyConflict(observation: AmountObservation): boolean {
+  return (
+    observation.status === "conflict" &&
+    !observation.evaluation_error &&
+    observation.failed_checks.length === 1 &&
+    observation.failed_checks[0] === "lot_sum"
+  );
+}
+
+/** Un conflicte de suma d'una columna de la taula «Lots»: el motiu, una sola vegada. */
+export interface LotsSumConflict {
+  /** La columna afectada («PBL sense IVA», «VEC», «PBL amb IVA»). */
+  label: string;
+  /** El text sencer: «<columna>: la suma dels imports…». */
+  text: string;
+  /** L'enllaç a la publicació (el primer dels lots afectats que en té). */
+  publication_url: string | null;
+}
 
 /**
  * El motiu d'un `conflict` d'un import de lot (la columna ja diu quin import és). Sense culpar mai la
@@ -156,6 +180,13 @@ export interface BudgetWithTaxView {
   lotCells: Record<string, LotAmountCells>;
   /** F-06e: la indicació única de la taula si algun import de lot és de la PSCP. */
   lotsNote: string | null;
+  /** F-06e: els conflictes de suma, un per columna afectada, per a la indicació de la taula. */
+  lotsSumConflicts: LotsSumConflict[];
+  /**
+   * F-06e: cap lot no té cap import útil ni cap observació de la PSCP de cap tipus (p. ex. fora de
+   * Catalunya): la taula es pinta com abans de F-06e, amb una sola columna «Import».
+   */
+  lotsWithoutAmounts: boolean;
   /** Text d'atribució, només si es mostra alguna observació de la PSCP. */
   attribution: string | null;
 }
@@ -207,13 +238,21 @@ export function budgetWithTaxView(
   const shownInLots: AmountObservation[] = [];
   let rowsWithPscp = 0;
   let rowsWithPlacsp = 0;
+  let anyObservation = false;
+  const sumConflicts = new Map<LotAmountKey, AmountObservation[]>();
   for (const lot of detail.lots) {
     const observation = observations?.lots?.[lot.id];
     if (!placspPublishes(lot.base_budget) && isShownObservation(observation)) lots[lot.id] = observation;
     const cells = {} as LotAmountCells;
     for (const column of LOT_AMOUNT_COLUMNS) {
       const byLot = observations?.[column.field] as Record<string, AmountObservation> | undefined;
-      cells[column.key] = lotAmountCell(lot[column.key], byLot?.[lot.id]);
+      const lotObservation = byLot?.[lot.id];
+      if (lotObservation) anyObservation = true;
+      const cell = lotAmountCell(lot[column.key], lotObservation);
+      cells[column.key] = cell;
+      if (cell.source === "pscp" && isSumOnlyConflict(cell.observation)) {
+        sumConflicts.set(column.key, [...(sumConflicts.get(column.key) ?? []), cell.observation]);
+      }
     }
     lotCells[lot.id] = cells;
     const values = Object.values(cells);
@@ -222,6 +261,15 @@ export function budgetWithTaxView(
     if (values.some((cell) => cell.source === "placsp")) rowsWithPlacsp += 1;
   }
   const lotsNote = rowsWithPscp ? (rowsWithPlacsp ? PLACSP_SOME_LOT_AMOUNTS_TEXT : PLACSP_NO_LOT_AMOUNTS_TEXT) : null;
+  const lotsSumConflicts: LotsSumConflict[] = LOT_AMOUNT_COLUMNS.filter((column) => sumConflicts.has(column.key)).map((column) => {
+    const label = AMOUNT_BASIS_SHORT[column.basis];
+    return {
+      label,
+      text: `${label}: l${PSCP_LOT_SUM_TEXT.slice(1)}`,
+      publication_url: sumConflicts.get(column.key)!.find((o) => o.publication_url)?.publication_url ?? null,
+    };
+  });
+  const lotsWithoutAmounts = detail.lots.length > 0 && !anyObservation && rowsWithPlacsp === 0;
   const shown = [...(expedient ? [expedient] : []), ...Object.values(lots), ...shownInLots];
   const date = latest(shown.map((o) => o.source_updated_at)) ?? observations?.source_updated_at ?? null;
   return {
@@ -229,6 +277,8 @@ export function budgetWithTaxView(
     lots,
     lotCells,
     lotsNote,
+    lotsSumConflicts,
+    lotsWithoutAmounts,
     attribution: shown.length && observations?.attribution ? pscpAttribution(observations.attribution, date) : null,
   };
 }

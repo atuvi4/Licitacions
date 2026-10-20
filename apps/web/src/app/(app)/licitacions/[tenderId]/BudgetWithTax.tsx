@@ -8,7 +8,10 @@
 import { formatAmount } from "@/lib/format";
 import {
   type LotAmountCellView,
+  type LotsSumConflict,
+  isSumOnlyConflict,
   PSCP_LINK_TEXT,
+  PSCP_NOT_USED_TEXT,
   PSCP_LOT_SOURCE_TEXT,
   PSCP_LOT_ZERO_TEXT,
   PSCP_PENDING_TEXT,
@@ -97,6 +100,15 @@ export function LotAmountValue({ cell, currency }: { cell: LotAmountCellView; cu
     );
   }
   const observation = cell.observation;
+  if (observation.status === "conflict" && isSumOnlyConflict(observation)) {
+    // El motiu (la suma dels lots de la PSCP) és el mateix a tots els lots: una sola vegada, a la
+    // indicació de la taula.
+    return (
+      <span className="block" data-lot-amount="pscp" data-pscp-lot="conflict" data-pscp-sum-conflict>
+        {PSCP_PENDING_TEXT}
+      </span>
+    );
+  }
   if (observation.status === "conflict") {
     return (
       <span className="block" data-lot-amount="pscp" data-pscp-lot="conflict">
@@ -137,13 +149,22 @@ export function LotAmountValue({ cell, currency }: { cell: LotAmountCellView; cu
   );
 }
 
-/** F-06e: la indicació única de la taula «Lots» quan algun import és de la PSCP. */
-export function LotsPscpNote({ text }: { text: string | null }) {
-  if (!text) return null;
+/**
+ * F-06e: la indicació única de la taula «Lots» quan algun import és de la PSCP i, si n'hi ha, el motiu
+ * dels conflictes de suma (un per columna afectada, amb l'enllaç a la publicació una sola vegada).
+ */
+export function LotsPscpNote({ text, sumConflicts = [] }: { text: string | null; sumConflicts?: LotsSumConflict[] }) {
+  if (!text && !sumConflicts.length) return null;
   return (
-    <p className="px-3.5 pt-3 text-caption text-muted" data-lots-pscp-note>
-      {text}
-    </p>
+    <div className="space-y-1 px-3.5 pt-3 text-caption text-muted">
+      {text && <p data-lots-pscp-note>{text}</p>}
+      {sumConflicts.map((conflict) => (
+        <p key={conflict.label} role="note" data-lots-sum-conflict>
+          {conflict.text} {PSCP_NOT_USED_TEXT}
+          <PublicationLink url={conflict.publication_url} />
+        </p>
+      ))}
+    </div>
   );
 }
 

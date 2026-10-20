@@ -32,6 +32,7 @@ import { ApiError, api } from "@/lib/api";
 import type { Compliance } from "@/lib/compliance";
 import { formatDate } from "@/lib/format";
 import { LOT_AMOUNT_COLUMNS, budgetWithTaxView } from "@/lib/pscpAmounts";
+import { AmountStack } from "@/components/AmountStack";
 import { useMutation, useResource } from "@/lib/hooks";
 import { type AnalysisLimits, jobErrorMessage, requestProcessing, useJobRequest } from "@/lib/jobs";
 import { jobErrorAction, shortSummary, tenderStatusView } from "@/lib/labels";
@@ -770,20 +771,32 @@ function TenderDetail() {
               <p className="px-3.5 py-3 text-[13px] text-muted">Aquest expedient no està dividit en lots.</p>
             ) : (
               <>
-                <LotsPscpNote text={budgetWithTax.lotsNote} />
+                <LotsPscpNote text={budgetWithTax.lotsNote} sumConflicts={budgetWithTax.lotsSumConflicts} />
                 <DataTable<TenderLot>
                   columns={[
                     { key: "lot", header: "Lot", width: "8%", cell: (lot) => <span className="font-medium tabular-nums">{lot.lot_number ?? lot.external_lot_id}</span> },
                     { key: "title", header: "Títol", cell: (lot) => <span>{lot.title ?? "—"}</span> },
                     // F-06e: VEC, PBL sense IVA i PBL amb IVA, cadascun a la seva columna: el de la PLACSP
                     // si n'hi ha; si no, el de la PSCP (accepted « · PSCP», conflict pendent, 0 publicat).
-                    ...LOT_AMOUNT_COLUMNS.map((column) => ({
-                      key: column.key,
-                      header: AMOUNT_BASIS_SHORT[column.basis],
-                      align: "right" as const,
-                      width: "12%",
-                      cell: (lot: TenderLot) => <LotAmountValue cell={budgetWithTax.lotCells[lot.id][column.key]} currency={lot.currency} />,
-                    })),
+                    // Sense cap import ni cap observació a cap lot (fora de Catalunya), com abans: una
+                    // sola columna «Import» (P2-06).
+                    ...(budgetWithTax.lotsWithoutAmounts
+                      ? [
+                          {
+                            key: "amount",
+                            header: "Import",
+                            align: "right" as const,
+                            width: "14%",
+                            cell: (lot: TenderLot) => <AmountStack item={lot} currency={lot.currency} />,
+                          },
+                        ]
+                      : LOT_AMOUNT_COLUMNS.map((column) => ({
+                          key: column.key,
+                          header: AMOUNT_BASIS_SHORT[column.basis],
+                          align: "right" as const,
+                          width: "12%",
+                          cell: (lot: TenderLot) => <LotAmountValue cell={budgetWithTax.lotCells[lot.id][column.key]} currency={lot.currency} />,
+                        }))),
                     {
                       key: "cpv",
                       header: "CPV",
