@@ -8,6 +8,7 @@ d'Empresa A no pot veure els resultats d'Empresa B.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -28,17 +29,22 @@ from app.core.errors import NotFoundError
 from app.matching.profile import load_profile
 from app.matching.rules import HIGH_FIT_THRESHOLD, RULES_VERSION
 from app.matching.service import MatchingService, is_stale
+from app.models.cpv import CompanyCPVPreference
 from app.models.enums import MatchStatus
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
+from app.models.profile import CompanyContractPreferences, CompanyTerritory
 from app.models.tenders import Tender
+from app.models.workspace import BidWorkspace
 from app.schemas.matching import (
     LotMatchRead,
     MatchSummary,
+    PrefitProfileCounts,
     RecalculationResult,
     TenderMatchListItem,
     TenderMatchRead,
 )
 from app.schemas.tenders import CataloguePage
+from app.services.bid_workspace import CLOSED_WORKSPACE_STATUSES
 from app.tenders.visibility import visible_to_company
 
 router = APIRouter(prefix="/companies/{company_id}/matches", tags=["pre-fit"])
@@ -90,6 +96,84 @@ def _to_read(match: CompanyTenderMatch, stale: bool) -> TenderMatchRead:
     )
 
 
+def _open_workspace_exists(company_id: uuid.UUID) -> sa.ColumnElement[bool]:
+    """La licitacio ja te una candidatura OBERTA d'aquesta empresa (no tancada)."""
+    return (
+        sa.select(BidWorkspace.id)
+        .where(
+            BidWorkspace.tender_id == Tender.id,
+            BidWorkspace.company_id == company_id,
+            BidWorkspace.status.not_in(CLOSED_WORKSPACE_STATUSES),
+        )
+        .exists()
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _FeedQuery:
+    """La definicio del feed amb pre-fit: un sol constructor per a la llista i el resum.
+
+    Els criteris sobre la licitacio son exactament els del cataleg public;
+    `view_filters` son els de la vista (estat i puntuacio del pre-fit, i
+    l'exclusio de les que ja tenen candidatura). Comptar i llistar parteixen
+    d'aqui perque la definicio no pugui divergir.
+    """
+
+    company_id: uuid.UUID
+    criteria: TenderFilters
+    view_filters: tuple[sa.ColumnElement[bool], ...]
+    status_view: bool
+
+    def where(self, *, without_amount: bool = False) -> list:
+        tender_criteria = (
+            self.criteria.without_amount_criteria() if without_amount else self.criteria.criteria()
+        )
+        return [visible_to_company(self.company_id), *tender_criteria, *self.view_filters]
+
+    def scoped(self, select: sa.Select) -> sa.Select:
+        same_company = sa.and_(
+            CompanyTenderMatch.tender_id == Tender.id,
+            CompanyTenderMatch.company_id == self.company_id,
+        )
+        select = select.select_from(Tender)
+        if self.status_view:
+            return select.join(CompanyTenderMatch, same_company)
+        return select.outerjoin(CompanyTenderMatch, same_company)
+
+
+def _feed_query(
+    company_id: uuid.UUID,
+    criteria: TenderFilters,
+    match_status: list[MatchStatus] | None,
+    min_score: int | None,
+    *,
+    exclude_open_workspaces: bool = False,
+) -> _FeedQuery:
+    # **«Totes» son les licitacions visibles, no els pre-fits.** Sense filtre de
+    # pre-fit, l'univers es el mateix que compta `summary.total_tenders`: cada
+    # licitacio visible per a l'empresa, amb el seu pre-fit AL COSTAT si n'hi ha
+    # (`match` nul si encara no s'ha calculat). Abans la llista partia dels
+    # pre-fits: una empresa sense cap pre-fit calculat veia «Totes 9» i una llista
+    # buida. Les vistes per estat o per puntuacio si que parteixen del pre-fit.
+    view_filters: list[sa.ColumnElement[bool]] = []
+    if match_status:
+        view_filters.append(CompanyTenderMatch.status.in_(match_status))
+    if min_score is not None:
+        view_filters.append(CompanyTenderMatch.score >= min_score)
+    if exclude_open_workspaces:
+        view_filters.append(sa.not_(_open_workspace_exists(company_id)))
+    return _FeedQuery(
+        company_id=company_id,
+        criteria=criteria,
+        view_filters=tuple(view_filters),
+        status_view=bool(match_status) or min_score is not None,
+    )
+
+
+#: El filtre de «Candidates del Radar» d'Avui: candidates amb termini obert.
+AVUI_CANDIDATE_STATUSES = [MatchStatus.CANDIDATE]
+
+
 @router.get(
     "", response_model=CataloguePage[TenderMatchListItem], summary="Feed amb pre-fit"
 )
@@ -101,37 +185,25 @@ async def list_matches(
         default=None, description="Estat del pre-fit (no de la licitacio)"
     ),
     min_score: int | None = Query(default=None, ge=0, le=100),
+    exclude_open_workspaces: bool = Query(
+        default=False,
+        description="Sense les licitacions que ja tenen una candidatura oberta de l'empresa",
+    ),
     sort: CatalogueSort = Query(default=DEFAULT_SORT),
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
     # Els criteris sobre la licitacio son exactament els del cataleg public:
     # canviar de vista no ha de canviar que es cerca.
-    #
-    # **«Totes» son les licitacions visibles, no els pre-fits.** Sense filtre de
-    # pre-fit, l'univers es el mateix que compta `summary.total_tenders`: cada
-    # licitacio visible per a l'empresa, amb el seu pre-fit AL COSTAT si n'hi ha
-    # (`match` nul si encara no s'ha calculat). Abans la llista partia dels
-    # pre-fits: una empresa sense cap pre-fit calculat veia «Totes 9» i una llista
-    # buida. Les vistes per estat o per puntuacio si que parteixen del pre-fit.
-    status_view = bool(match_status) or min_score is not None
-    same_company = sa.and_(
-        CompanyTenderMatch.tender_id == Tender.id,
-        CompanyTenderMatch.company_id == ctx.company_id,
+    feed = _feed_query(
+        ctx.company_id,
+        criteria,
+        match_status,
+        min_score,
+        exclude_open_workspaces=exclude_open_workspaces,
     )
-    visible = visible_to_company(ctx.company_id)
-    match_filters = []
-    if match_status:
-        match_filters.append(CompanyTenderMatch.status.in_(match_status))
-    if min_score is not None:
-        match_filters.append(CompanyTenderMatch.score >= min_score)
-    filters = [visible, *criteria.criteria(), *match_filters]
-
-    def scoped(select: sa.Select) -> sa.Select:
-        select = select.select_from(Tender)
-        if status_view:
-            return select.join(CompanyTenderMatch, same_company)
-        return select.outerjoin(CompanyTenderMatch, same_company)
+    scoped = feed.scoped
+    filters = feed.where()
 
     total = (
         await session.execute(scoped(sa.select(sa.func.count())).where(*filters))
@@ -140,7 +212,7 @@ async def list_matches(
     # mateixa vista de pre-fit), no es mostren nomes per no tenir import.
     excluded_without_amount = None
     if criteria.filters_amount:
-        without_amount = [visible, *criteria.without_amount_criteria(), *match_filters]
+        without_amount = feed.where(without_amount=True)
         excluded_without_amount = (
             await session.execute(scoped(sa.select(sa.func.count())).where(*without_amount))
         ).scalar_one()
@@ -267,6 +339,37 @@ async def match_summary(session: SessionDep, ctx: CompanyCtx):
             )
         ).scalar_one()
 
+    # Una sola sentencia per a la resta (P2-09). Els tres recomptes del perfil son
+    # la definicio de `build_summary` (`dashboard._count`): files de cada taula de
+    # l'empresa, sense cap altre filtre. Les candidates amb candidatura surten del
+    # MATEIX constructor que la llista d'Avui (`match_status=candidate`, `only_open`).
+    def company_rows(model) -> sa.ScalarSelect:
+        return (
+            sa.select(sa.func.count())
+            .select_from(model)
+            .where(model.company_id == ctx.company_id)
+            .scalar_subquery()
+        )
+
+    avui = _feed_query(
+        ctx.company_id, TenderFilters(only_open=True), AVUI_CANDIDATE_STATUSES, None
+    )
+    with_workspace = (
+        avui.scoped(sa.select(sa.func.count()))
+        .where(*avui.where(), _open_workspace_exists(ctx.company_id))
+        .scalar_subquery()
+    )
+    extra = (
+        await session.execute(
+            sa.select(
+                company_rows(CompanyCPVPreference).label("cpv_preferences"),
+                company_rows(CompanyTerritory).label("territories"),
+                company_rows(CompanyContractPreferences).label("contract_preferences"),
+                with_workspace.label("open_candidates_with_workspace"),
+            )
+        )
+    ).one()
+
     def count_of(status: MatchStatus) -> int:
         return int(counts.get(status, 0))
 
@@ -283,6 +386,12 @@ async def match_summary(session: SessionDep, ctx: CompanyCtx):
         stale=stale,
         rules_version=RULES_VERSION,
         last_calculated_at=last,
+        profile_counts=PrefitProfileCounts(
+            cpv_preferences=int(extra.cpv_preferences or 0),
+            territories=int(extra.territories or 0),
+            contract_preferences=int(extra.contract_preferences or 0),
+        ),
+        open_candidates_with_workspace=int(extra.open_candidates_with_workspace or 0),
     )
 
 

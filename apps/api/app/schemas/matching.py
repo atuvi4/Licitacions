@@ -71,6 +71,18 @@ class TenderMatchListItem(BaseModel):
     match: TenderMatchRead | None = None
 
 
+class PrefitProfileCounts(BaseModel):
+    """Els tres recomptes del perfil que fan possible el pre-fit.
+
+    Els mateixos valors que `GET /companies/{id}/summary` a `counts`: Avui els
+    llegeix d'aqui per no demanar el resum sencer del perfil (P2-09).
+    """
+
+    cpv_preferences: int
+    territories: int
+    contract_preferences: int
+
+
 class MatchSummary(BaseModel):
     """Metriques per al dashboard. Cap d'elles parla de guanyar ni de presentar."""
 
@@ -88,6 +100,11 @@ class MatchSummary(BaseModel):
     stale: int
     rules_version: str
     last_calculated_at: datetime | None = None
+    profile_counts: PrefitProfileCounts
+    #: Candidates obertes (el filtre d'Avui: `match_status=candidate`, `only_open`)
+    #: que ja tenen una candidatura oberta de l'empresa. Avui les treu de la
+    #: llista (`exclude_open_workspaces`) i les diu a part.
+    open_candidates_with_workspace: int
 
 
 class RecalculationResult(BaseModel):
