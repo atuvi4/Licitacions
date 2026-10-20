@@ -31,7 +31,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ApiError, api } from "@/lib/api";
 import type { Compliance } from "@/lib/compliance";
 import { formatDate } from "@/lib/format";
-import { budgetWithTaxView } from "@/lib/pscpAmounts";
+import { LOT_AMOUNT_COLUMNS, budgetWithTaxView } from "@/lib/pscpAmounts";
 import { useMutation, useResource } from "@/lib/hooks";
 import { type AnalysisLimits, jobErrorMessage, requestProcessing, useJobRequest } from "@/lib/jobs";
 import { jobErrorAction, shortSummary, tenderStatusView } from "@/lib/labels";
@@ -41,6 +41,7 @@ import type { DashboardSummary } from "@/lib/types";
 import { publicationStatusLabel, type TenderHistoryRevision } from "@/lib/tender-changes";
 import {
   AMOUNT_BASIS_LABEL,
+  AMOUNT_BASIS_SHORT,
   AMOUNT_HELP,
   CONTRACT_TYPE_LABELS,
   PROCEDURE_TYPE_LABELS,
@@ -61,7 +62,7 @@ import type { WorkspaceDetail } from "@/lib/workspace";
 
 import { extractedText, fileErrorText, isQueued, jobPill, readingLabel, readingSubtext, selectionLabel, versionText } from "./documents";
 import { topLevelDocuments } from "./package";
-import { LotAmountCell, PscpAttribution, PscpBudgetValue } from "./BudgetWithTax";
+import { LotAmountValue, LotsPscpNote, PscpAttribution, PscpBudgetValue } from "./BudgetWithTax";
 import { DocumentBadges, PackageNotice, PlecsReadingLine, RemovedDocuments } from "./PlecsOverview";
 import {
   amountFact,
@@ -768,46 +769,49 @@ function TenderDetail() {
             {data.lots.length === 0 ? (
               <p className="px-3.5 py-3 text-[13px] text-muted">Aquest expedient no està dividit en lots.</p>
             ) : (
-              <DataTable<TenderLot>
-                columns={[
-                  { key: "lot", header: "Lot", width: "8%", cell: (lot) => <span className="font-medium tabular-nums">{lot.lot_number ?? lot.external_lot_id}</span> },
-                  { key: "title", header: "Títol", cell: (lot) => <span>{lot.title ?? "—"}</span> },
-                  {
-                    key: "amount",
-                    header: "Import",
-                    align: "right",
-                    width: "14%",
-                    // P2-06: abans barrejava PBL i VEC sense dir-ho; ara, com a la taula d'oportunitats.
-                    // F-06a: i, a sota, el PBL amb IVA de la PSCP si n'hi ha (mai un conflicte com a import).
-                    cell: (lot) => <LotAmountCell lot={lot} observation={budgetWithTax.lots[lot.id]} />,
-                  },
-                  {
-                    key: "cpv",
-                    header: "CPV",
-                    hideBelow: "lg",
-                    cell: (lot) => (
-                      <div className="flex flex-wrap gap-1">
-                        {lot.cpvs.slice(0, 4).map((cpv) => (
-                          <span key={cpv.cpv_code} title={cpvDescription(cpv) ?? undefined} className="bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-muted">
-                            {cpv.cpv_code}
-                          </span>
-                        ))}
-                        {lot.cpvs.length > 4 && <span className="text-[11px] text-faint">+{lot.cpvs.length - 4}</span>}
-                      </div>
-                    ),
-                  },
-                  {
-                    key: "place",
-                    header: "Ubicació",
-                    hideBelow: "lg",
-                    cell: (lot) => <span className="text-muted">{[lot.place_of_execution, lot.nuts_code].filter(Boolean).join(" · ") || "—"}</span>,
-                  },
-                  { key: "deadline", header: "Termini", width: "12%", cell: (lot) => <span className="whitespace-nowrap text-muted">{lot.deadline_at ? formatDate(lot.deadline_at) : "—"}</span> },
-                ]}
-                rows={data.lots}
-                rowKey={(lot) => lot.id}
-                stackBelow="md"
-              />
+              <>
+                <LotsPscpNote text={budgetWithTax.lotsNote} />
+                <DataTable<TenderLot>
+                  columns={[
+                    { key: "lot", header: "Lot", width: "8%", cell: (lot) => <span className="font-medium tabular-nums">{lot.lot_number ?? lot.external_lot_id}</span> },
+                    { key: "title", header: "Títol", cell: (lot) => <span>{lot.title ?? "—"}</span> },
+                    // F-06e: VEC, PBL sense IVA i PBL amb IVA, cadascun a la seva columna: el de la PLACSP
+                    // si n'hi ha; si no, el de la PSCP (accepted « · PSCP», conflict pendent, 0 publicat).
+                    ...LOT_AMOUNT_COLUMNS.map((column) => ({
+                      key: column.key,
+                      header: AMOUNT_BASIS_SHORT[column.basis],
+                      align: "right" as const,
+                      width: "12%",
+                      cell: (lot: TenderLot) => <LotAmountValue cell={budgetWithTax.lotCells[lot.id][column.key]} currency={lot.currency} />,
+                    })),
+                    {
+                      key: "cpv",
+                      header: "CPV",
+                      hideBelow: "lg",
+                      cell: (lot) => (
+                        <div className="flex flex-wrap gap-1">
+                          {lot.cpvs.slice(0, 4).map((cpv) => (
+                            <span key={cpv.cpv_code} title={cpvDescription(cpv) ?? undefined} className="bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-muted">
+                              {cpv.cpv_code}
+                            </span>
+                          ))}
+                          {lot.cpvs.length > 4 && <span className="text-[11px] text-faint">+{lot.cpvs.length - 4}</span>}
+                        </div>
+                      ),
+                    },
+                    {
+                      key: "place",
+                      header: "Ubicació",
+                      hideBelow: "lg",
+                      cell: (lot) => <span className="text-muted">{[lot.place_of_execution, lot.nuts_code].filter(Boolean).join(" · ") || "—"}</span>,
+                    },
+                    { key: "deadline", header: "Termini", width: "12%", cell: (lot) => <span className="whitespace-nowrap text-muted">{lot.deadline_at ? formatDate(lot.deadline_at) : "—"}</span> },
+                  ]}
+                  rows={data.lots}
+                  rowKey={(lot) => lot.id}
+                  stackBelow="md"
+                />
+              </>
             )}
           </Card>
         </div>

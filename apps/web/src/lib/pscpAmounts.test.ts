@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { formatDate } from "@/lib/format";
 import {
+  PLACSP_NO_LOT_AMOUNTS_TEXT,
+  PLACSP_SOME_LOT_AMOUNTS_TEXT,
+  PSCP_INCOHERENT_TEXT,
   PSCP_ZERO_TEXT,
   budgetWithTaxView,
   failedChecksText,
   isShownObservation,
+  lotAmountCell,
   pscpAttribution,
   pscpConflictNotice,
-  pscpLotLine,
+  pscpLotConflictReason,
   pscpSourceLine,
 } from "@/lib/pscpAmounts";
 import type { AmountObservation, TenderLot } from "@/lib/tenders";
@@ -61,14 +65,6 @@ describe("PBL amb IVA de la PSCP (F-06a)", () => {
     expect(pscpConflictNotice(obs({ status: "conflict", amount: null, failed_checks: ["lots"] }))).toBe(
       "La PSCP no hi publica cap import vàlid com a pressupost base amb IVA, i les seves dades no coincideixen amb les de la PLACSP (lots). No es fa servir fins que es verifiqui.",
     );
-  });
-
-  it("la línia de lot: accepted amb import, conflict pendent, no_value a 0; un no_value nul no en té", () => {
-    expect(nbsp(pscpLotLine(obs({ amount: "32670.00" })))).toBe("PBL amb IVA: 32.670,00 € · PSCP");
-    expect(pscpLotLine(obs({ status: "conflict", amount: "32670.00" }))).toBe("PBL amb IVA: pendent de verificació (discrepància entre fonts)");
-    expect(pscpLotLine(obs({ status: "no_value", amount: "0.00", published_zero: true }))).toBe("PBL amb IVA: publicat a 0,00 € a la PSCP");
-    expect(pscpLotLine(obs({ status: "no_value", amount: null, published_zero: false }))).toBeNull();
-    expect(pscpLotLine(undefined)).toBeNull();
   });
 
   it("el text del no_value a 0 és l'exacte de la proposta", () => {
@@ -164,5 +160,84 @@ describe("PBL amb IVA de la PSCP (F-06a)", () => {
     const notice = pscpConflictNotice(obs({ status: "conflict", amount: null, evaluation_error: true }));
     expect(notice).toBe("No s'ha pogut verificar l'import publicat a la PSCP. No es fa servir fins que es verifiqui.");
     expect(notice).not.toContain("no hi publica");
+  });
+});
+
+describe("F-06e: imports de lot de la PSCP a la taula «Lots»", () => {
+  const net = (overrides: Partial<AmountObservation> = {}) => obs({ amount_kind: "pbl_without_tax", amount: "36190.00", ...overrides });
+  const vec = (overrides: Partial<AmountObservation> = {}) => obs({ amount_kind: "estimated_value", amount: "72380.00", ...overrides });
+  const fullLot = (id: string, values: Partial<TenderLot> = {}) =>
+    ({ id, base_budget: null, base_budget_without_tax: null, estimated_value: null, ...values }) as TenderLot;
+
+  it("la cel·la: la PLACSP útil mana; si no, la PSCP que es mostra; un 0,00 € de la PLACSP no és cap import", () => {
+    expect(lotAmountCell("1000.00", net())).toEqual({ source: "placsp", value: "1000.00" });
+    expect(lotAmountCell("0.00", net())).toEqual({ source: "pscp", observation: net() });
+    expect(lotAmountCell(null, net({ status: "conflict" }))).toEqual({ source: "pscp", observation: net({ status: "conflict" }) });
+    expect(lotAmountCell(null, net({ status: "no_value", amount: "0.00", published_zero: true })).source).toBe("pscp");
+    expect(lotAmountCell(null, net({ status: "no_value", amount: null }))).toEqual({ source: "none" });
+    expect(lotAmountCell(null, undefined)).toEqual({ source: "none" });
+  });
+
+  it("el motiu d'un conflicte de lot: la PLACSP només si hi ha discrepància amb la PLACSP", () => {
+    expect(pscpLotConflictReason(net({ status: "conflict", failed_checks: ["lot_sum"] }))).toBe(
+      "La suma dels imports dels lots publicats a la PSCP no coincideix amb l'import total de l'expedient publicat per la mateixa PSCP.",
+    );
+    expect(pscpLotConflictReason(net({ status: "conflict", failed_checks: ["organ", "lot_sum"] }))).toBe(
+      "No coincideix amb les dades de la PLACSP (òrgan). La suma dels imports dels lots publicats a la PSCP no coincideix amb l'import total de l'expedient publicat per la mateixa PSCP.",
+    );
+    expect(pscpLotConflictReason(vec({ status: "conflict", failed_checks: [] }))).toBe(PSCP_INCOHERENT_TEXT);
+    expect(pscpLotConflictReason(vec({ status: "conflict", evaluation_error: true }))).toBe("No s'ha pogut verificar l'import publicat a la PSCP.");
+  });
+
+  it("les tres cel·les de cada lot, una sola indicació per a la taula i l'atribució amb només imports nous", () => {
+    const view = budgetWithTaxView({
+      base_budget: null,
+      lots: [fullLot("l1"), fullLot("l2")],
+      budget_with_tax_observations: {
+        expedient: null,
+        lots: {},
+        lots_pbl_without_tax: { l1: net() },
+        lots_estimated_value: { l1: vec({ source_updated_at: "2026-10-19T08:00:20Z" }), l2: vec({ status: "no_value", amount: null }) },
+        attribution: OFFICIAL,
+        source_updated_at: null,
+      },
+    });
+    expect(view.lotCells.l1).toEqual({
+      estimated_value: { source: "pscp", observation: vec({ source_updated_at: "2026-10-19T08:00:20Z" }) },
+      base_budget_without_tax: { source: "pscp", observation: net() },
+      base_budget: { source: "none" },
+    });
+    expect(view.lotCells.l2).toEqual({ estimated_value: { source: "none" }, base_budget_without_tax: { source: "none" }, base_budget: { source: "none" } });
+    expect(view.lotsNote).toBe(PLACSP_NO_LOT_AMOUNTS_TEXT);
+    expect(view.lots).toEqual({});
+    expect(view.attribution).toBe(`${OFFICIAL} Darrera actualització: ${formatDate("2026-10-19T08:00:20Z")}.`);
+  });
+
+  it("amb algun import de la PLACSP, la indicació ho diu; tot de la PLACSP, cap indicació ni atribució", () => {
+    const mixed = budgetWithTaxView({
+      base_budget: null,
+      lots: [fullLot("l1", { estimated_value: "50000.00" }), fullLot("l2")],
+      budget_with_tax_observations: { expedient: null, lots: {}, lots_estimated_value: { l2: vec() }, attribution: OFFICIAL, source_updated_at: null },
+    });
+    expect(mixed.lotsNote).toBe(PLACSP_SOME_LOT_AMOUNTS_TEXT);
+    const placsp = budgetWithTaxView({
+      base_budget: null,
+      lots: [fullLot("l1", { estimated_value: "50000.00" })],
+      budget_with_tax_observations: { expedient: null, lots: {}, lots_estimated_value: { l1: vec() }, attribution: OFFICIAL, source_updated_at: null },
+    });
+    expect(placsp.lotCells.l1.estimated_value).toEqual({ source: "placsp", value: "50000.00" });
+    expect(placsp.lotsNote).toBeNull();
+    expect(placsp.attribution).toBeNull();
+  });
+
+  it("una resposta d'abans de F-06e (sense els camps nous) continua funcionant", () => {
+    const view = budgetWithTaxView({
+      base_budget: null,
+      lots: [lot("l1")],
+      budget_with_tax_observations: { expedient: null, lots: { l1: obs() }, attribution: OFFICIAL, source_updated_at: null },
+    });
+    expect(view.lotCells.l1.base_budget).toEqual({ source: "pscp", observation: obs() });
+    expect(view.lotCells.l1.estimated_value).toEqual({ source: "none" });
+    expect(view.lotsNote).toBe(PLACSP_NO_LOT_AMOUNTS_TEXT);
   });
 });

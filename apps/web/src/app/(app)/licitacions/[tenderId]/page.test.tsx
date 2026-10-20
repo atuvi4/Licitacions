@@ -733,7 +733,7 @@ describe("Fitxa de licitació", () => {
     expect(document.querySelector("[data-tender-header]")?.textContent).toContain("No consta a les dades de la font");
     expect(document.querySelector("[data-amount-budget]")).toBeNull();
   });
-  it("P2-06: un lot amb VEC i PBL diferents mostra totes dues xifres, cadascuna amb la seva base", async () => {
+  it("P2-06 / F-06e: un lot amb VEC i PBL diferents mostra cada xifra a la seva columna", async () => {
     const lot = {
       id: "l1", external_lot_id: "1", lot_number: 1, title: "Lot de connectivitat", description: null,
       estimated_value: "23456.50", base_budget: null, base_budget_without_tax: "19876.25", currency: "EUR",
@@ -744,10 +744,18 @@ describe("Fitxa de licitació", () => {
     await flush();
     const row = screen.getByText("Lot de connectivitat").closest("tr");
     const text = (node: Element | null | undefined) => node?.textContent?.replace(/\u00a0/g, " ");
-    expect(text(row)).toContain("23.456,50 € VEC");
-    // L'abreviatura visible i, per als lectors de pantalla, el nom sencer.
-    expect(text(row?.querySelector("[data-amount-budget]"))).toBe("PBL sense IVAPressupost base de licitació sense IVA (PBL) 19.876,25 €");
-    expect(row?.querySelector("abbr")?.getAttribute("title")).toBe("Valor estimat del contracte (VEC)");
+    // Cada xifra a la seva columna (la capçalera en diu la base): VEC, PBL sense IVA, PBL amb IVA.
+    const headers = Array.from(row!.closest("table")!.querySelectorAll("th")).map((th) => th.textContent);
+    expect(headers).toEqual(expect.arrayContaining(["VEC", "PBL sense IVA", "PBL amb IVA"]));
+    const cells = Array.from(row!.querySelectorAll("[data-lot-amount]")).map((cell) => [cell.getAttribute("data-lot-amount"), text(cell)]);
+    expect(cells).toEqual([
+      ["placsp", "23.456,50 €"],
+      ["placsp", "19.876,25 €"],
+      ["none", "—No consta a les dades de la font"],
+    ]);
+    // Tot de la PLACSP: cap indicació de la PSCP ni atribució.
+    expect(document.querySelector("[data-lots-pscp-note]")).toBeNull();
+    expect(document.querySelector("[data-pscp-attribution]")).toBeNull();
   });
 });
 
@@ -901,7 +909,7 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
     expect(document.querySelector("[data-pscp-attribution]")).toBeNull();
   });
 
-  it("lots: accepted, conflict i no_value a 0, cadascun amb la seva línia; mai un conflicte com a import", async () => {
+  it("lots: accepted, conflict i no_value a 0, cadascun a la seva cel·la; mai un conflicte com a import", async () => {
     const lots = [lotOf("l1", "Lot u"), lotOf("l2", "Lot dos"), lotOf("l3", "Lot tres"), lotOf("l4", "Lot quatre")];
     await renderWith(
       field(null, {
@@ -912,22 +920,84 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
       { lots, lot_count: 4 },
     );
     const row = (title: string) => screen.getByText(title).closest("tr");
-    expect(text(row("Lot u")?.querySelector("[data-pscp-lot]"))).toBe("PBL amb IVA: 32.670,00 € · PSCP");
-    expect(text(row("Lot dos")?.querySelector("[data-pscp-lot]"))).toBe("PBL amb IVA: pendent de verificació (discrepància entre fonts)");
+    expect(text(row("Lot u")?.querySelector("[data-pscp-lot]"))).toBe("32.670,00 € · PSCP ↗");
+    expect(row("Lot u")?.querySelector("[data-pscp-lot-link]")?.getAttribute("href")).toBe(LINK);
+    const conflict = row("Lot dos")?.querySelector("[data-pscp-lot]");
+    expect(conflict?.firstElementChild?.textContent).toBe("Pendent de verificació (discrepància entre fonts)");
+    expect(text(conflict?.querySelector("[data-pscp-notice]"))).toBe("No coincideix amb les dades de la PLACSP (òrgan). · Veure la publicació ↗");
     expect(text(row("Lot dos"))).not.toContain("1.000,00");
-    expect(text(row("Lot tres")?.querySelector("[data-pscp-lot]"))).toBe("PBL amb IVA: publicat a 0,00 € a la PSCP");
+    expect(text(row("Lot tres")?.querySelector("[data-pscp-lot]"))).toBe("Publicat a 0,00 € a la PSCP");
     expect(row("Lot quatre")?.querySelector("[data-pscp-lot]")).toBeNull();
-    // La part de la PLACSP no contradiu la línia de la PSCP: «Sense import a la PLACSP», no «No consta…».
-    for (const title of ["Lot u", "Lot dos", "Lot tres"]) {
-      expect(text(row(title)?.querySelector("[data-placsp-empty]"))).toBe("Sense import a la PLACSP");
-      expect(text(row(title))).not.toContain(NOT_PUBLISHED);
-    }
-    // Sense observació de la PSCP, com abans.
-    expect(row("Lot quatre")?.querySelector("[data-placsp-empty]")).toBeNull();
-    expect(text(row("Lot quatre"))).toContain(NOT_PUBLISHED);
-    // Només un lot amb observació ja porta l'atribució; el fet de l'expedient no canvia.
+    // Cap «Sense import a la PLACSP» a cada cel·la: una sola indicació per a la taula.
+    expect(document.body.textContent).not.toContain("Sense import a la PLACSP");
+    expect(document.querySelectorAll("[data-lots-pscp-note]").length).toBe(1);
+    expect(text(document.querySelector("[data-lots-pscp-note]"))).toBe(
+      "Cap d'aquests lots no té imports a la PLACSP: els que es mostren són de la PSCP.",
+    );
+    // Només un lot amb observació ja porta l'atribució (una sola); el fet de l'expedient no canvia.
+    expect(document.querySelectorAll("[data-pscp-attribution]").length).toBe(1);
     expect(text(document.querySelector("[data-pscp-attribution]"))).toBe(`${ATTRIBUTION_START}${formatDate(UPDATED)}.`);
     expect(text(amountFact())).toBe(`Pressupost base de licitació amb IVA${NOT_PUBLISHED}`);
+  });
+
+  it("F-06e: VEC i PBL sense IVA de la PSCP per lot; la PLACSP mana a cada cel·la", async () => {
+    const lots = [
+      { ...lotOf("l1", "Lot u"), estimated_value: "50000.00" },
+      lotOf("l2", "Lot dos"),
+    ];
+    await renderWith(
+      {
+        ...field(null, { l2: observation({ amount: "43789.90" }) }),
+        lots_estimated_value: {
+          l1: observation({ amount: "72380.00", amount_kind: "estimated_value" }),
+          l2: observation({ amount: "36190.00", amount_kind: "estimated_value" }),
+        },
+        lots_pbl_without_tax: {
+          l1: observation({ amount: "30000.00", amount_kind: "pbl_without_tax" }),
+          l2: observation({ status: "conflict", amount: "36190.00", amount_kind: "pbl_without_tax", failed_checks: ["lot_sum"] }),
+        },
+      },
+      { lots, lot_count: 2 },
+    );
+    const cells = (title: string) =>
+      Array.from(screen.getByText(title).closest("tr")!.querySelectorAll("[data-lot-amount]")).map((cell) => [
+        cell.getAttribute("data-lot-amount"),
+        text(cell),
+      ]);
+    // Lot u: el VEC de la PLACSP (50.000) guanya al de la PSCP; el PBL net, de la PSCP.
+    expect(cells("Lot u")).toEqual([
+      ["placsp", "50.000,00 €"],
+      ["pscp", "30.000,00 € · PSCP ↗"],
+      ["none", `—${NOT_PUBLISHED}`],
+    ]);
+    // Lot dos: VEC i PBL amb IVA de la PSCP; el PBL net en conflicte per la suma dels lots (sense culpar la PLACSP).
+    const second = cells("Lot dos");
+    expect(second[0]).toEqual(["pscp", "36.190,00 € · PSCP ↗"]);
+    expect(second[1][1]).toBe(
+      "Pendent de verificació (discrepància entre fonts)La suma dels imports dels lots publicats a la PSCP no coincideix amb l'import total de l'expedient publicat per la mateixa PSCP. · Veure la publicació ↗",
+    );
+    expect(second[1][1]).not.toContain("PLACSP");
+    expect(second[2]).toEqual(["pscp", "43.789,90 € · PSCP ↗"]);
+    expect(text(screen.getByText("Lot dos").closest("tr"))).not.toContain("36.190,00 € · PSCP ↗36.190");
+    // Una sola indicació (n'hi ha de la PLACSP i de la PSCP) i una sola atribució.
+    expect(document.querySelectorAll("[data-lots-pscp-note]").length).toBe(1);
+    expect(text(document.querySelector("[data-lots-pscp-note]"))).toBe("Els imports marcats «PSCP» són els que la PLACSP no publica per al lot.");
+    expect(document.querySelectorAll("[data-pscp-attribution]").length).toBe(1);
+  });
+
+  it("F-06e: un VEC de lot publicat a 0 a la PSCP diu el zero, mai un import; un no_value nul no diu res", async () => {
+    await renderWith(
+      {
+        ...field(null),
+        lots_estimated_value: { l1: observation({ status: "no_value", amount: "0.00", published_zero: true, amount_kind: "estimated_value" }) },
+        lots_pbl_without_tax: { l1: observation({ status: "no_value", amount: null, published_zero: false, amount_kind: "pbl_without_tax" }) },
+      },
+      { lots: [lotOf("l1", "Lot u")], lot_count: 1 },
+    );
+    const row = screen.getByText("Lot u").closest("tr");
+    const cells = Array.from(row!.querySelectorAll("[data-lot-amount]")).map((cell) => text(cell));
+    expect(cells).toEqual(["Publicat a 0,00 € a la PSCP", `—${NOT_PUBLISHED}`, `—${NOT_PUBLISHED}`]);
+    expect(document.querySelectorAll("[data-pscp-attribution]").length).toBe(1);
   });
 
   it("un lot amb PBL amb IVA de la PLACSP el conserva: cap segon «PBL amb IVA» de la PSCP ni atribució", async () => {
@@ -936,7 +1006,7 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
     const row = screen.getByText("Lot amb PLACSP").closest("tr");
     expect(text(row)).toContain("1.210,00 €");
     expect(row?.querySelector("[data-pscp-lot]")).toBeNull();
-    expect(row?.querySelector("[data-placsp-empty]")).toBeNull();
+    expect(document.querySelector("[data-lots-pscp-note]")).toBeNull();
     expect(text(row)).not.toContain("32.670,00");
     expect(document.querySelector("[data-pscp-attribution]")).toBeNull();
   });
@@ -951,9 +1021,10 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
     expect(text(fact)).toContain("247.121,63 €");
     expect(text(fact)).not.toContain("Publicat a 0,00 € a la PLACSP");
     const row = screen.getByText("Lot amb zero").closest("tr");
-    expect(text(row?.querySelector("[data-pscp-lot]"))).toBe("PBL amb IVA: 32.670,00 € · PSCP");
-    expect(text(row?.querySelector("[data-placsp-empty]"))).toBe("Sense import a la PLACSP");
-    expect(text(row)).not.toContain(NOT_PUBLISHED);
+    expect(text(row?.querySelector("[data-pscp-lot]"))).toBe("32.670,00 € · PSCP ↗");
+    expect(document.querySelector("[data-lots-pscp-note]")).not.toBeNull();
+    // El 0,00 € de la PLACSP no es mostra com a import de cap cel·la.
+    expect(row?.querySelector('[data-lot-amount="placsp"]')).toBeNull();
     expect(document.querySelector("[data-pscp-attribution]")).not.toBeNull();
   });
 });

@@ -1,21 +1,23 @@
 /**
  * F-06a: el PBL amb IVA segons la PSCP a la fitxa (fet «Pressupost base de licitació amb
- * IVA», línia de lot i atribució). Tot visible, no només en un `title` (patró P2-04/P2-06).
- * Els textos i les regles són a `lib/pscpAmounts`.
+ * IVA» i atribució). F-06e: les cel·les VEC, PBL sense IVA i PBL amb IVA de la taula «Lots».
+ * Tot visible, no només en un `title` (patró P2-04/P2-06). Els textos i les regles són a
+ * `lib/pscpAmounts`.
  */
 
-import { AmountStack } from "@/components/AmountStack";
 import { formatAmount } from "@/lib/format";
 import {
-  PLACSP_NO_AMOUNT_TEXT,
+  type LotAmountCellView,
   PSCP_LINK_TEXT,
+  PSCP_LOT_SOURCE_TEXT,
+  PSCP_LOT_ZERO_TEXT,
   PSCP_PENDING_TEXT,
   PSCP_ZERO_TEXT,
   pscpConflictNotice,
-  pscpLotLine,
+  pscpLotConflictReason,
   pscpSourceLine,
 } from "@/lib/pscpAmounts";
-import { type AmountObservation, type TenderLot, tenderAmounts } from "@/lib/tenders";
+import { AMOUNT_NOT_PUBLISHED, type AmountObservation } from "@/lib/tenders";
 
 const LINK = "text-brand-strong hover:text-accent-800";
 
@@ -69,36 +71,79 @@ export function PscpBudgetValue({ observation }: { observation: AmountObservatio
   );
 }
 
-/** La línia de la PSCP sota l'import d'un lot. */
-export function PscpLotLine({ observation }: { observation: AmountObservation | undefined }) {
-  const text = pscpLotLine(observation);
-  if (!text) return null;
+/**
+ * F-06e: una cel·la d'import d'un lot (VEC, PBL sense IVA o PBL amb IVA; la columna diu quin).
+ * - PLACSP (> 0): l'import, com sempre.
+ * - PSCP `accepted`: l'import « · PSCP», amb l'enllaç a la publicació si n'hi ha.
+ * - PSCP `conflict`: «Pendent de verificació…» i el motiu; mai l'import com a valor.
+ * - PSCP `no_value` a 0: «Publicat a 0,00 € a la PSCP».
+ * - Res: un guió (i «No consta…» per als lectors de pantalla). Cap «Sense import a la PLACSP» a
+ *   la cel·la: la taula ho diu una sola vegada.
+ */
+export function LotAmountValue({ cell, currency }: { cell: LotAmountCellView; currency: string }) {
+  if (cell.source === "placsp") {
+    return (
+      <span className="whitespace-nowrap tabular-nums" data-lot-amount="placsp">
+        {formatAmount(cell.value, currency)}
+      </span>
+    );
+  }
+  if (cell.source === "none") {
+    return (
+      <span className="text-muted" data-lot-amount="none">
+        <span aria-hidden="true">—</span>
+        <span className="sr-only">{AMOUNT_NOT_PUBLISHED}</span>
+      </span>
+    );
+  }
+  const observation = cell.observation;
+  if (observation.status === "conflict") {
+    return (
+      <span className="block" data-lot-amount="pscp" data-pscp-lot="conflict">
+        <span>{PSCP_PENDING_TEXT}</span>
+        <span className="mt-0.5 block text-caption text-muted" role="note" data-pscp-notice>
+          {pscpLotConflictReason(observation)}
+          <PublicationLink url={observation.publication_url} />
+        </span>
+      </span>
+    );
+  }
+  if (observation.status === "no_value") {
+    return (
+      <span className="text-muted" data-lot-amount="pscp" data-pscp-lot="no_value">
+        {PSCP_LOT_ZERO_TEXT}
+      </span>
+    );
+  }
   return (
-    <span className="block text-caption text-muted tabular-nums" data-pscp-lot={observation?.status}>
-      {text}
+    <span className="whitespace-nowrap tabular-nums" data-lot-amount="pscp" data-pscp-lot="accepted">
+      {formatAmount(observation.amount, observation.currency)}
+      {" · "}
+      {observation.publication_url ? (
+        <a
+          href={observation.publication_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={LINK}
+          title="Veure la publicació a la PSCP"
+          data-pscp-lot-link
+        >
+          {PSCP_LOT_SOURCE_TEXT} ↗
+        </a>
+      ) : (
+        PSCP_LOT_SOURCE_TEXT
+      )}
     </span>
   );
 }
 
-/**
- * La cel·la «Import» d'un lot: la part de la PLACSP (com abans) i, a sota, la línia de la PSCP.
- * Si la PSCP en diu alguna cosa i la PLACSP no hi té cap import, la part de la PLACSP diu
- * «Sense import a la PLACSP» i no «No consta a les dades de la font», que la contradiria.
- */
-export function LotAmountCell({ lot, observation }: { lot: TenderLot; observation: AmountObservation | undefined }) {
-  const pscpLine = pscpLotLine(observation);
-  const placspEmpty = tenderAmounts(lot).primary === null;
+/** F-06e: la indicació única de la taula «Lots» quan algun import és de la PSCP. */
+export function LotsPscpNote({ text }: { text: string | null }) {
+  if (!text) return null;
   return (
-    <>
-      {pscpLine && placspEmpty ? (
-        <span className="text-muted" data-placsp-empty>
-          {PLACSP_NO_AMOUNT_TEXT}
-        </span>
-      ) : (
-        <AmountStack item={lot} currency={lot.currency} />
-      )}
-      <PscpLotLine observation={observation} />
-    </>
+    <p className="px-3.5 pt-3 text-caption text-muted" data-lots-pscp-note>
+      {text}
+    </p>
   );
 }
 
