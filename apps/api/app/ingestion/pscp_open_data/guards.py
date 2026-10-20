@@ -62,20 +62,25 @@ Imports de lot (F-06e): per a cada fila de lot, a mes del PBL amb IVA, el PBL se
 `estimated_value`), amb la mateixa clau, fila i procedencia
 (`TenderEvaluation.lot_amount_drafts`). Les observacions de sempre (expedient i PBL amb
 IVA de lot) NO canvien gens: les guardes noves nomes son a les drafts noves. Estat, per
-ordre:
+ordre (el mateix ordre que el PBL amb IVA; Ronda 1, D3 del propietari):
 
-1. `conflict` si falla alguna guarda de l'expedient, el lot no te `match` o el valor no
-   es pot desar sense alterar-lo (`amount` NULL i el text publicat a la procedencia);
+1. `conflict` si el valor no es pot desar sense alterar-lo (`amount` NULL i el text
+   publicat a la procedencia);
 2. `no_value` si no es publica (NULL) o es publica a 0 (tal com es publica);
-3. `conflict` si falla alguna guarda nova:
-   * PBL sense IVA: `tax_order` (PBL amb IVA del lot >= PBL sense IVA; no s'aplica si el
-     lot no te PBL amb IVA > 0) i `lot_net_sum` (la suma dels PBL sense IVA de TOTS els
-     lots = el de l'expedient, 0,01 EUR de tolerancia per lot; nomes si l'expedient i
-     tots els lots el tenen > 0; si falla, tots els lots en `conflict`);
-   * VEC (independent del PBL): `vec_order` (VEC del lot >= PBL sense IVA del lot - 0,01;
-     no s'aplica si el lot no te PBL sense IVA > 0) i `lot_vec_sum` (com `lot_net_sum`,
-     amb el VEC de l'expedient);
-   * el contrast amb `tender_lots` (`net` / `vec`), al centim, nomes si en tenim el valor.
+3. `conflict` si falla alguna guarda BLOQUEJANT per a aquest tipus (`blocking_failed`):
+   * les estructurals de l'expedient (`BLOCKING_EXPEDIENT_GUARDS`: identitat, organ,
+     lots, coherencia, lectura, files) i el `match` del lot;
+   * nomes les del SEU import:
+     - PBL sense IVA: `net` de l'expedient, el contrast `net` amb `tender_lots`,
+       `tax_order` (PBL amb IVA del lot >= PBL sense IVA; no s'aplica si el lot no te PBL
+       amb IVA > 0) i `lot_net_sum` (la suma dels PBL sense IVA de TOTS els lots = el de
+       l'expedient, 0,01 EUR de tolerancia per lot; nomes si l'expedient i tots els lots
+       el tenen > 0; si falla, tots els lots en `conflict`);
+     - VEC (independent del PBL): `vec` de l'expedient, el contrast `vec`, `vec_order`
+       (VEC del lot >= PBL sense IVA del lot - 0,01; no s'aplica si el lot no te PBL sense
+       IVA > 0) i `lot_vec_sum` (com `lot_net_sum`, amb el VEC de l'expedient).
+   Les de l'altre import i les propies del PBL amb IVA (`tax_order` i `lot_sum` de
+   l'expedient) es desen a `expedient_guards` / `expedient_failed` pero no bloquegen.
    Regla estricta: cap arrodoniment especial (un expedient publicat sense decimals que
    no quadra amb els seus lots queda en `conflict`).
 4. `accepted`.
@@ -447,16 +452,37 @@ def _lot_total(expedient: p.ParsedAmount, lots: list[p.ParsedAmount]) -> dict[st
     }
 
 
-def _lot_amount_status(
-    amount: p.ParsedAmount, *, blocked: bool, failed: bool
-) -> AmountObservationStatus:
-    """L'ordre de F-06e: bloqueig (expedient, `match`, valor no desable) > `no_value` >
-    guardes noves > `accepted`."""
-    if blocked or amount.problem:
+#: Guardes d'expedient estructurals: bloquegen tots dos imports de lot nous (F-06e).
+BLOCKING_EXPEDIENT_GUARDS = frozenset({"identity", "organ", "lots", "consistent", "parse", "rows"})
+#: La guarda d'expedient del mateix import, que bloqueja nomes el seu tipus.
+OWN_EXPEDIENT_GUARD = {
+    TenderAmountKind.PBL_WITHOUT_TAX: "net",
+    TenderAmountKind.ESTIMATED_VALUE: "vec",
+}
+
+
+def _blocking_failed(
+    kind: TenderAmountKind, expedient_failed: list[str], lot_failed: list[str]
+) -> list[str]:
+    """Les guardes que fallen i bloquegen AQUEST tipus (`expedient.<g>` / `lot.<g>`): les
+    estructurals de l'expedient, la del seu import i totes les del lot (que ja son
+    nomes les del seu tipus)."""
+    own = OWN_EXPEDIENT_GUARD[kind]
+    return [
+        f"expedient.{name}"
+        for name in expedient_failed
+        if name in BLOCKING_EXPEDIENT_GUARDS or name == own
+    ] + [f"lot.{name}" for name in lot_failed]
+
+
+def _lot_amount_status(amount: p.ParsedAmount, *, blocked: bool) -> AmountObservationStatus:
+    """L'ordre de sempre (com el PBL amb IVA): valor no desable > `no_value` > guarda
+    bloquejant > `accepted`."""
+    if amount.problem:
         return CONFLICT
     if _no_value_reason(amount):
         return NO_VALUE
-    return CONFLICT if failed else ACCEPTED
+    return CONFLICT if blocked else ACCEPTED
 
 
 def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEvaluation:
@@ -767,7 +793,6 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
         )
 
         # --- (F-06e) PBL sense IVA i VEC del lot: drafts noves, guardes propies --- #
-        blocked = bool(failed) or match.get("ok") is False
         net_guards: dict[str, dict[str, Any]] = {
             "match": match,
             "amount": {"ok": lot_net.problem is None, "problem": lot_net.problem},
@@ -801,6 +826,7 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
             kind_failed = sorted(
                 name for name, guard in kind_guards.items() if guard.get("ok") is False
             )
+            blocking = _blocking_failed(kind, failed, kind_failed)
             evaluation.lot_amount_drafts.append(
                 Draft(
                     tender_id=snapshot.id,
@@ -809,7 +835,7 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
                     source_entity_key=f"{uid}#lot={number if number is not None else 'null'}",
                     source_row_id=row_id,
                     source_phase=_phase([row]),
-                    status=_lot_amount_status(value, blocked=blocked, failed=bool(kind_failed)),
+                    status=_lot_amount_status(value, blocked=bool(blocking)),
                     amount=value.value,
                     field=field_name,
                     published_text=value.text,
@@ -826,6 +852,7 @@ def evaluate(snapshot: TenderSnapshot, rows: list[dict[str, Any]]) -> TenderEval
                         "lot_failed": kind_failed,
                         "expedient_guards": expedient_guards,
                         "expedient_failed": failed,
+                        "blocking_failed": blocking,
                         "rows": [row_id],
                     },
                     rows=[row],

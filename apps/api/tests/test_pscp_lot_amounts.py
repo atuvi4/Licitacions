@@ -259,6 +259,8 @@ def test_la_suma_dels_pbl_nets_que_no_quadra_posa_tots_els_lots_en_conflict():
             "tolerance": "0.03",
         }
     assert set(_statuses(ev, VEC)) == {S.ACCEPTED}
+    for draft in _new(ev, NET):
+        assert draft.validation["blocking_failed"] == ["lot.lot_net_sum"]
     # L'expedient i el PBL amb IVA no canvien.
     assert {d.status for d in ev.drafts} == {S.ACCEPTED}
 
@@ -299,18 +301,90 @@ def test_la_suma_nomes_s_avalua_amb_tots_els_valors_positius(expedient, lot_valu
     assert guard == {"ok": None, "skipped": skipped}
 
 
-def test_una_guarda_d_expedient_que_falla_bloqueja_abans_que_no_value():
-    """Ordre: bloqueig (expedient) > `no_value`: un lot sense valor tambe queda en conflict."""
+def test_una_guarda_estructural_bloqueja_pero_no_value_passa_davant():
+    """Ronda 1 (D3): l'ordre del PBL amb IVA. Un `organ` diferent (estructural) bloqueja
+    tots dos tipus, pero un lot sense valor publicat es `no_value`, no `conflict`."""
     rows = _rows("lots")
     _lot_rows(rows)[0]["pressupost_licitacio_sense"] = None
     ev = g.evaluate(_snapshot("lots", organ_id="1"), rows)
     assert ev.failed == ["organ"]
+    [blank] = [d for d in _new(ev, NET) if d.amount is None]
+    assert blank.status == S.NO_VALUE
+    assert blank.validation["no_value_reason"] == "null_published"
+    others = [d for d in ev.lot_amount_drafts if d is not blank]
+    assert {d.status for d in others} == {S.CONFLICT}
+    for draft in others:
+        assert draft.validation["expedient_failed"] == ["organ"]
+        assert draft.validation["blocking_failed"] == ["expedient.organ"]
+
+
+def _no_expedient_net(rows: list[dict]) -> None:
+    """La forma dels 85 lots de `load_1`: la PSCP no publica el PBL sense IVA de
+    l'expedient ni del lot; el VEC del lot, si."""
+    for row in rows:
+        row[p.EXPEDIENT_WITHOUT_TAX] = None
+        if len(row["id_intern"]) > 36:
+            row[p.LOT_WITHOUT_TAX] = None
+
+
+def test_els_85_lots_expedient_sense_pbl_net_vec_accepted_i_net_no_value():
+    rows = _rows("lots")
+    _no_expedient_net(rows)
+    ev = g.evaluate(_snapshot("lots"), rows)
+    assert "net" in ev.failed  # la guarda d'expedient del PBL net falla (no publicat)
+    assert set(_statuses(ev, NET)) == {S.NO_VALUE}
+    assert set(_statuses(ev, VEC)) == {S.ACCEPTED}
+    for draft in _new(ev, VEC):
+        assert "net" in draft.validation["expedient_failed"]  # es desa, pero no bloqueja
+        assert draft.validation["blocking_failed"] == []
+    for draft in _new(ev, NET):
+        assert draft.validation["no_value_reason"] == "null_published"
+        assert draft.validation["blocking_failed"] == ["expedient.net"]
+    # Les drafts de sempre no canvien: amb el PBL amb IVA publicat, l'expedient i els lots
+    # queden en conflict per `net`, com abans de F-06e.
+    assert {d.status for d in ev.drafts} == {S.CONFLICT}
+
+
+def test_un_pbl_net_d_expedient_diferent_bloqueja_el_net_pero_no_el_vec():
+    snapshot = _snapshot("lots", net=Decimal("59509"))  # la nostra BD diu un altre net
+    ev = g.evaluate(snapshot, _rows("lots"))
+    assert ev.failed == ["net"]
+    assert set(_statuses(ev, NET)) == {S.CONFLICT}
+    assert set(_statuses(ev, VEC)) == {S.ACCEPTED}
+    for draft in _new(ev, NET):
+        assert draft.validation["blocking_failed"] == ["expedient.net"]
+
+
+def test_un_vec_d_expedient_diferent_bloqueja_el_vec_pero_no_el_net():
+    snapshot = _snapshot("lots", vec=Decimal("1"))
+    ev = g.evaluate(snapshot, _rows("lots"))
+    assert ev.failed == ["vec"]
+    assert set(_statuses(ev, VEC)) == {S.CONFLICT}
+    assert set(_statuses(ev, NET)) == {S.ACCEPTED}
+
+
+def test_com_679d3156_el_net_i_el_vec_de_l_expedient_fallen_tots_dos_en_conflict():
+    snapshot = _snapshot("lots", net=Decimal("1"), vec=Decimal("1"))
+    ev = g.evaluate(snapshot, _rows("lots"))
+    assert ev.failed == ["net", "vec"]
     assert set(_statuses(ev, NET)) == {S.CONFLICT}
     assert set(_statuses(ev, VEC)) == {S.CONFLICT}
-    for draft in ev.lot_amount_drafts:
-        assert draft.validation["expedient_failed"] == ["organ"]
-    [blank] = [d for d in _new(ev, NET) if d.amount is None]
-    assert blank.validation["no_value_reason"] == "null_published"
+    for draft in _new(ev, NET):
+        assert draft.validation["blocking_failed"] == ["expedient.net"]
+    for draft in _new(ev, VEC):
+        assert draft.validation["blocking_failed"] == ["expedient.vec"]
+
+
+def test_les_guardes_propies_del_pbl_amb_iva_no_bloquegen_els_nous():
+    """`lot_sum` (PBL amb IVA) falla: l'expedient i el PBL amb IVA en conflict; el PBL net
+    i el VEC, no (no son el seu import)."""
+    rows = _rows("rounding")
+    rows[0]["pressupost_licitacio_amb"] = str(Decimal(rows[0]["pressupost_licitacio_amb"]) + 1)
+    ev = g.evaluate(_snapshot("rounding"), rows)
+    assert ev.failed == ["lot_sum"]
+    assert {d.status for d in ev.drafts} == {S.CONFLICT}
+    assert {d.status for d in ev.lot_amount_drafts} == {S.ACCEPTED}
+    assert all(d.validation["expedient_failed"] == ["lot_sum"] for d in ev.lot_amount_drafts)
 
 
 def test_sense_lot_nostre_es_conflict_sense_lot():

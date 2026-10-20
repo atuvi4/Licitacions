@@ -151,6 +151,15 @@ def failed_checks(observation: TenderAmountObservation) -> list[str]:
         return []
     validation = observation.validation if isinstance(observation.validation, dict) else {}
     found: set[str] = set()
+    if isinstance(validation.get("blocking_failed"), list):
+        # F-06e (PBL sense IVA i VEC de lot): nomes les guardes que han bloquejat AQUEST
+        # tipus (`expedient.<g>` / `lot.<g>`); mai, p. ex., el PBL net per a un VEC.
+        for entry in _as_list(validation["blocking_failed"]):
+            level, _, name = entry.partition(".")
+            mapping = _EXPEDIENT_GUARDS if level == "expedient" else _LOT_GUARDS
+            if name in mapping:
+                found.add(mapping[name])
+        return [code for code in FAILED_CHECKS if code in found]
     for name in _as_list(validation.get("failed")) + _as_list(validation.get("expedient_failed")):
         if name in _EXPEDIENT_GUARDS:
             found.add(_EXPEDIENT_GUARDS[name])

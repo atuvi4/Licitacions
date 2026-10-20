@@ -187,3 +187,48 @@ async def test_una_sola_consulta_amb_els_tres_tipus(db):
         sa.event.remove(engine, "before_cursor_execute", count)
     assert len(result.lots_pbl_without_tax) == 3 and len(result.lots_estimated_value) == 3
     assert len([s for s in statements if "tender_amount_observations" in s]) == 1
+
+
+async def test_el_motiu_d_un_conflicte_nou_es_el_que_l_ha_bloquejat(db, client_a):
+    """Ronda 1: un VEC en conflict per la seva guarda no diu «PBL sense IVA», encara que la
+    guarda `net` de l'expedient tambe falli (es desa, pero no el bloqueja)."""
+    tender, (lot,) = await _tender(db, lots=1)
+    db.add_all(
+        [
+            _lot_obs(
+                tender,
+                lot,
+                VEC,
+                validation_status=CONFLICT,
+                validation={
+                    "v": 1,
+                    "level": "lot",
+                    "amount_kind": "estimated_value",
+                    "expedient_failed": ["net", "vec"],
+                    "lot_failed": [],
+                    "blocking_failed": ["expedient.vec"],
+                },
+            ),
+            _lot_obs(
+                tender,
+                lot,
+                NET,
+                validation_status=CONFLICT,
+                validation={
+                    "v": 1,
+                    "level": "lot",
+                    "amount_kind": "pbl_without_tax",
+                    "expedient_failed": ["lot_sum", "net"],
+                    "lot_failed": ["lot_net_sum"],
+                    "blocking_failed": ["expedient.net", "lot.lot_net_sum"],
+                },
+            ),
+        ]
+    )
+    await db.commit()
+    field = await _field(client_a, tender)
+    assert field["lots_estimated_value"][str(lot.id)]["failed_checks"] == ["vec"]
+    assert field["lots_pbl_without_tax"][str(lot.id)]["failed_checks"] == [
+        "pbl_without_tax",
+        "lot_sum",
+    ]
