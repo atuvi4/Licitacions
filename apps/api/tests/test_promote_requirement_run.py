@@ -323,7 +323,7 @@ async def test_el_dry_run_no_escriu_res(session, run3, operator):
     [
         ("", ops.REASON_TOO_SHORT),
         ("   massa curt   ", ops.REASON_TOO_SHORT),
-        ("x" * 300, ops.REASON_TOO_LONG),
+        ("x" * 201, ops.REASON_TOO_LONG),
     ],
 )
 async def test_sense_motiu_suficient_refusa(session, run3, operator, reason, code):
@@ -381,7 +381,7 @@ async def test_una_empremta_diferent_refusa(session, run3, operator, second_tend
     assert run3.is_current is False
 
 
-@pytest.mark.parametrize("kind", ["run", "job"])
+@pytest.mark.parametrize("kind", ["run", "job", "process"])
 async def test_una_analisi_en_curs_refusa(session, run3, operator, kind):
     if kind == "run":
         session.add(
@@ -400,8 +400,12 @@ async def test_una_analisi_en_curs_refusa(session, run3, operator, kind):
     else:
         session.add(
             WorkJob(
-                job_type=WorkJobType.ANALYZE_TENDER_REQUIREMENTS,
-                status=WorkJobStatus.QUEUED,
+                job_type=(
+                    WorkJobType.ANALYZE_TENDER_REQUIREMENTS
+                    if kind == "job"
+                    else WorkJobType.PROCESS_TENDER_DOCUMENTS
+                ),
+                status=WorkJobStatus.QUEUED if kind == "job" else WorkJobStatus.RUNNING,
                 tender_id=run3.tender_id,
                 parameters={},
                 dedupe_key=f"test-{uuid.uuid4().hex}",
@@ -630,3 +634,71 @@ async def test_compliment_normalitza_i_compta_exigencies(
     )
     assert economic_group["divergent"] is True
     assert economic_group["effective_result"] == "does_not_satisfy"
+    # La divergencia de cada avaluacio es la del grup ara, no la desada al calcul.
+    members = {m for m in economic_group["member_assessment_ids"]}
+    for read in response.json()["assessments"]:
+        if read["id"] in members:
+            assert read["consolidation"]["divergent"] is True
+            # I6: el valor comparat (normalitzat) i la seva procedencia, a banda del cru.
+            assert read["compared_value"]["threshold"]["amount"] == "91904.74"
+            assert read["requirement_value_json"]["amount"].startswith("91.904,74")
+            assert read["compared_provenance"][0]["source"] == "value_json"
+            assert read["normalization_status"] == "normalized"
+            assert "_normalizer" not in read["compared_value"]
+
+
+async def test_un_run_que_cita_un_document_retirat_refusa(session, run3, operator, monkeypatch):
+    """La branca de `run_includes_removed_document` (amb l'empremta igual)."""
+
+    async def cites_removed(_session, _run):
+        return True
+
+    monkeypatch.setattr(ops, "run_includes_removed_document", cites_removed)
+    result = await _promote(session, run3, actor=operator)
+    assert result.status == ops.RUN_CITES_REMOVED_DOCUMENT
+    await session.refresh(run3)
+    assert run3.is_current is False
+
+
+async def test_un_run_llancat_amb_force_en_una_licitacio_publica_refusa(session, run3, operator):
+    job = WorkJob(
+        job_type=WorkJobType.ANALYZE_TENDER_REQUIREMENTS,
+        status=WorkJobStatus.SUCCEEDED,
+        tender_id=run3.tender_id,
+        parameters={"force": True},
+        dedupe_key=f"test-{uuid.uuid4().hex}",
+    )
+    session.add(job)
+    await session.flush()
+    run3.work_job_id = job.id
+    await session.commit()
+    result = await _promote(session, run3, actor=operator)
+    assert (result.status, result.forced) == (ops.RUN_FORCED_NOT_CANONICAL, True)
+
+
+async def test_sense_feina_forced_es_desconegut_i_queda_a_l_auditoria(session, run3, operator):
+    result = await _promote(session, run3, actor=operator)
+    assert result.status == ops.PROMOTED and result.forced is None
+    [row] = await _audit_rows(session, run3.id)
+    assert "forced=-" in row.summary
+
+
+async def test_un_resum_que_no_cap_sencer_a_l_auditoria_refusa(session, run3, operator):
+    result = await ops.promote_requirement_run(
+        session,
+        run3.id,
+        reason="x" * 200,
+        actor_email=operator.email,
+        release="r" * 120,
+        apply=True,
+    )
+    assert result.status == ops.AUDIT_SUMMARY_TOO_LONG
+    assert await _audit_rows(session, run3.id) == []
+    # Amb un release normal, el motiu de 200 caracters hi cap sencer.
+    result = await ops.promote_requirement_run(
+        session, run3.id, reason="y" * 200, actor_email=operator.email, release="abc1234",
+        apply=True,
+    )  # fmt: skip
+    assert result.status == ops.PROMOTED
+    [row] = await _audit_rows(session, run3.id)
+    assert row.summary.endswith("y" * 200)

@@ -19,10 +19,19 @@ Condicions, totes obligatories (si en falla una, refusa i no toca res):
   porta un altre motiu de no-vigencia (`input_changed`...) no es promou;
 * l'empremta d'entrada del run es l'empremta d'ara (`analysis_input`, amb la seva
   seleccio) i no cita cap document retirat (`run_includes_removed_document`);
-* `--reason` te com a minim `MIN_REASON_CHARS` caracters;
+* `--reason` te de `MIN_REASON_CHARS` a `MAX_REASON_CHARS` caracters, i el
+  resum d'auditoria sencer (motiu inclos) cap a `audit_logs.summary` sense tallar;
 * `--actor` es un usuari actiu amb rol d'operador de plataforma (`is_superuser`);
+* el run no es va llancar amb `force` en una licitacio publica (ho diu la feina
+  que el va executar; sense feina, `forced` surt com a desconegut al resultat i a
+  l'auditoria);
 * no hi ha cap analisi en curs de la licitacio: ni un run `pending`/`running` ni
   una feina activa (analisi o processament de plecs, que canviaria l'empremta).
+
+Concurrencia: es bloqueja la fila del run (`FOR UPDATE`). Una feina que comenci
+entre la comprovacio i el commit no es veu; l'index unic parcial de `is_current`
+impedeix dues vigents, pero aquell conflicte sortiria com a excepcio i no com a
+codi de refus. Acceptable per a una ordre d'operador manual.
 
 Efecte (`--apply`), el mateix que fa `_finalise_run` quan un run passa a vigent i
 res mes: el vigent anterior (si n'hi ha) deixa de ser-ho i se'n porten les
@@ -55,6 +64,7 @@ from app.models.enums import AnalysisRunStatus, AuditAction, RequirementRunBasis
 from app.models.identity import User
 from app.models.jobs import ACTIVE_WORK_JOB_STATUSES, WorkJob
 from app.models.requirements import RequirementExtractionRun
+from app.models.tenders import Tender
 from app.services import audit
 from app.services.requirement_analysis import (
     EXPERIMENTAL_PROFILE_NOT_CURRENT,
@@ -70,7 +80,9 @@ from app.services.requirement_analysis import (
 ENTITY_TYPE = "requirement_extraction_run"
 #: Un motiu ha de dir alguna cosa: «ok» no es un motiu.
 MIN_REASON_CHARS = 20
-MAX_REASON_CHARS = 240
+MAX_REASON_CHARS = 200
+#: Mida maxima de `audit_logs.summary` (`services.audit` la talla en silenci).
+AUDIT_SUMMARY_MAX = 500
 
 #: Codis de refus. Tancats: l'informe i els tests en depenen.
 RUN_NOT_FOUND = "run_not_found"
@@ -84,6 +96,11 @@ REASON_TOO_SHORT = "reason_too_short"
 REASON_TOO_LONG = "reason_too_long"
 ACTOR_NOT_OPERATOR = "actor_not_operator"
 ANALYSIS_IN_PROGRESS = "analysis_in_progress"
+#: Run llancat amb `force` en una licitacio publica: mai no es canonic
+#: (`_may_become_current` en diria `forced_not_canonical`).
+RUN_FORCED_NOT_CANONICAL = "run_forced_not_canonical"
+#: L'auditoria no hi cabria sencera (motiu + release massa llargs).
+AUDIT_SUMMARY_TOO_LONG = "audit_summary_too_long"
 
 #: Resultats sense refus.
 WOULD_PROMOTE = "would_promote"
@@ -111,6 +128,9 @@ class PromotionResult:
     previous_current_run_id: str | None = None
     original_error_code: str | None = None
     release: str | None = None
+    #: Si el run es va llancar amb `force` (de la feina que el va executar).
+    #: `None` = no se sap (run sense feina: canari o script d'operador).
+    forced: bool | None = None
     detail: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -119,6 +139,18 @@ class PromotionResult:
 
     def as_json(self) -> str:
         return json.dumps({**asdict(self), "refused": self.refused}, ensure_ascii=False, indent=2)
+
+
+async def _was_forced(session: AsyncSession, run: RequirementExtractionRun) -> bool | None:
+    """`force` de la feina que va executar el run; `None` si no en va tenir cap."""
+    if run.work_job_id is None:
+        return None
+    parameters = await session.scalar(
+        sa.select(WorkJob.parameters).where(WorkJob.id == run.work_job_id)
+    )
+    if parameters is None:
+        return None
+    return bool((parameters or {}).get("force"))
 
 
 async def _analysis_in_progress(session: AsyncSession, tender_id: uuid.UUID) -> dict[str, Any]:
@@ -202,6 +234,13 @@ async def promote_requirement_run(
     if run.error_code not in (None, EXPERIMENTAL_PROFILE_NOT_CURRENT):
         return refuse(RUN_UNEXPECTED_ERROR_CODE, error_code=run.error_code)
 
+    result.forced = await _was_forced(session, run)
+    owner = await session.scalar(
+        sa.select(Tender.owner_company_id).where(Tender.id == run.tender_id)
+    )
+    if result.forced and owner is None:
+        return refuse(RUN_FORCED_NOT_CANONICAL)
+
     busy = await _analysis_in_progress(session, run.tender_id)
     if busy:
         return refuse(ANALYSIS_IN_PROGRESS, **busy)
@@ -216,6 +255,16 @@ async def promote_requirement_run(
 
     previous = await current_run_for(session, run.tender_id)
     result.previous_current_run_id = str(previous.id) if previous is not None else None
+    summary = (
+        f"promote_requirement_run profile={profile.name} tender={run.tender_id} "
+        f"fingerprint={run.input_fingerprint} previous={result.previous_current_run_id or '-'} "
+        f"original_error={result.original_error_code or '-'} "
+        f"forced={'-' if result.forced is None else str(result.forced).lower()} "
+        f"release={release or '-'} reason={text}"
+    )
+    if len(summary) > AUDIT_SUMMARY_MAX:
+        # Mai un motiu tallat en silenci a l'auditoria.
+        return refuse(AUDIT_SUMMARY_TOO_LONG, length=len(summary), maximum=AUDIT_SUMMARY_MAX)
     if not apply:
         # Cap escriptura: la sessio no ha modificat res i qui la tanca la descarta.
         result.status = WOULD_PROMOTE
@@ -235,12 +284,7 @@ async def promote_requirement_run(
         user_id=actor.id,
         entity_type=ENTITY_TYPE,
         entity_id=run.id,
-        summary=(
-            f"promote_requirement_run profile={profile.name} tender={run.tender_id} "
-            f"fingerprint={run.input_fingerprint} previous={result.previous_current_run_id or '-'} "
-            f"original_error={result.original_error_code or '-'} release={release or '-'} "
-            f"reason={text}"
-        ),
+        summary=summary,
     )
     await session.commit()
     result.status = PROMOTED
