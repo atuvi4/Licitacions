@@ -218,15 +218,6 @@ def assess_personnel(requirement: Any, snapshot: ProfileSnapshot) -> RuleOutcome
 _REGISTRY_HINTS: tuple[tuple[re.Pattern[str], RegistrationType], ...] = (
     (re.compile(r"rolece", re.I), RegistrationType.ROLECE),
     (re.compile(r"\breli\b", re.I), RegistrationType.RELI),
-    # v5: el registre d'operadors (CNMC), nomes quan el plec el nomena. El
-    # normalitzador de format lliure hi arriba amb `type=sector_operator_registry`.
-    (
-        re.compile(
-            r"sector_operator_registry|\bCNMC\b|registre d.operadors|registro de operadores",
-            re.I,
-        ),
-        RegistrationType.SECTOR_OPERATOR_REGISTRY,
-    ),
     (re.compile(r"clasificaci[oó]n|classificaci[oó]", re.I),
      RegistrationType.BUSINESS_CLASSIFICATION),
 )
@@ -247,6 +238,10 @@ def assess_registration(
     value = requirement.value_json or {}
     required_name = (value.get("name") or requirement.title or "").strip()
     required_type = infer_registration_type(value.get("type") or required_name)
+    if value.get("_normalizer") and value.get("type") == "sector_operator_registry":
+        # v5, nomes per al complement `product-v2`: el plec nomena literalment el
+        # registre d'operadors (CNMC). Cap altre cami no hi arriba.
+        required_type = RegistrationType.SECTOR_OPERATOR_REGISTRY
 
     # Grup / subgrup / categoria: comparar-ho demana camps estructurats que el
     # perfil encara no modela. Text lliure NO serveix per decidir classificacio.

@@ -25,22 +25,15 @@ from datetime import date
 from typing import Any
 
 from app.ai.contract_v3 import VALUE_SCHEMA_V3
-from app.ai.value_schemas import VALUE_SCHEMA_VERSION
 from app.compliance import normalize
-from app.compliance.certifications import assess_certification
+from app.compliance.certifications import assess_certification, assess_ens
 from app.compliance.economic import assess_economic_solvency
 from app.compliance.experience import assess_experience
 from app.compliance.insurance import assess_insurance
 from app.compliance.personnel import assess_personnel, assess_qualification, assess_registration
 from app.compliance.profile import ProfileSnapshot
 from app.compliance.rules import ExplanationCode, RuleCode, RuleOutcome, needs_review
-from app.compliance.specs import (
-    is_effectively_mandatory,
-    read_certification,
-    read_economic,
-    read_experience,
-    read_insurance,
-)
+from app.compliance.specs import is_effectively_mandatory
 from app.models.enums import (
     AssessmentMode,
     AssessmentResult,
@@ -63,52 +56,17 @@ class _AdaptedRequirement:
 
     Es un embolcall i no una copia del model: les regles nomes llegeixen uns
     quants atributs, i mutar el requisit real per adaptar-lo seria escriure a
-    l'objecte que despres es desa. El normalitzador de format lliure
-    (`app.compliance.normalize`) el fa servir per donar a les regles el valor v2
-    que ha llegit i, nomes per a l'ENS nomenat, la categoria amb que s'ha de
-    llegir; el requisit de la base de dades no es toca.
+    l'objecte que despres es desa. El complement `product-v2`
+    (`app.compliance.normalize`) el fa servir per donar a les regles el valor que
+    ha llegit; el requisit de la base de dades no es toca.
     """
 
     _wrapped: Any
     value_json: dict[str, Any] | None
     value_schema: str | None = None
-    category: Any = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._wrapped, name)
-
-
-def _has_string_amount(value: dict[str, Any] | None) -> bool:
-    """Cert si algun import del valor lliure es un text.
-
-    `to_decimal("300.000")` es 300 i no 300.000: un import escrit en format local
-    i llegit per la via lliure de la v1 es pot equivocar en silenci. Un text, per
-    tant, no compta mai com a llegible per aquella via.
-    """
-    value = value or {}
-    return any(
-        isinstance(value.get(key), str)
-        for key in ("amount", "coverage_amount", "minimum_amount", "minimum_amount_each")
-    )
-
-
-def _legacy_readable(requirement: Any) -> bool:
-    """Si la lectura lliure de sempre (`specs`) ja en treu un valor fiable."""
-    category = requirement.category
-    if _has_string_amount(getattr(requirement, "value_json", None)):
-        return False
-    if category == RequirementCategory.ECONOMIC_SOLVENCY:
-        return read_economic(requirement) is not None
-    if category == RequirementCategory.INSURANCE:
-        return not read_insurance(requirement).is_empty
-    if category in (RequirementCategory.EXPERIENCE, RequirementCategory.TECHNICAL_SOLVENCY):
-        return read_experience(requirement).has_threshold
-    if category == RequirementCategory.CERTIFICATION:
-        return bool(read_certification(requirement).names)
-    if category == RequirementCategory.PERSONNEL:
-        value = getattr(requirement, "value_json", None) or {}
-        return isinstance(value.get("minimum_people") or value.get("count"), int)
-    return True
 
 
 def assess_requirement(
@@ -134,41 +92,26 @@ def assess_requirement_traced(
     tender: Any = None,
     profile: str | None = None,
 ) -> tuple[RuleOutcome, normalize.Normalization | None]:
-    """Avalua un requisit i diu quina normalitzacio s'hi ha aplicat.
+    """Avalua un requisit i diu quina lectura complementaria s'hi ha aplicat.
 
     `profile` es el perfil d'extraccio del run del requisit (`None` per als
-    manuals i quan no es coneix). Per als de format lliure (`v1`, `product-v2`)
-    el valor passa pel normalitzador de lectura abans de les regles:
-
-    * **product-v2**: sempre. Si el normalitzador en treu un valor, les regles
-      llegeixen aquell; si no (ambiguitat, cap font), s'avalua com abans i el
-      motiu queda a `explanation_params.normalization.reason`.
-    * **v1**: nomes si la lectura de sempre no en treu res de fiable (cap valor,
-      o un import escrit com a text). Un v1 que ja es llegia es llegeix igual i
-      no porta cap rastre.
-
-    Les rutes explicites (ENS nomenat, documentacio RELI/ROLECE) valen per a tots
-    dos. Res d'aixo escriu al requisit.
+    manuals). El complement (`app.compliance.normalize`) NOMES s'aplica a un
+    requisit `product-v2` amb `value_schema` nul; per a tota la resta (v1, v2
+    tipat, v3, gold, manuals) aixo es exactament el `_dispatch` de la v4 i no
+    porta cap rastre. Res d'aixo escriu al requisit.
     """
     normalization = normalize.normalize_requirement(requirement, profile)
     if normalization is None:
         return _dispatch(requirement, snapshot, deadline=deadline, tender=tender), None
 
-    if normalization.route == normalize.ROUTE_ENS_LEVEL_NOT_STATED:
-        # El plec nomena l'ENS pero no en diu la categoria. Suposar-ne una
-        # («Mitjana») seria inventar el llindar: revisio, amb el que l'empresa te.
-        outcome = needs_review(
-            RuleCode.CERTIFICATION_EXACT,
-            ExplanationCode.CERTIFICATION_LEVEL_NOT_STATED,
-            scheme="ENS",
-            company_certifications=sorted(
-                cert.name for cert in snapshot.certifications if normalize.names_ens(cert.name)
-            ),
-        )
+    if normalization.route == normalize.ROUTE_ENS and normalization.ens is not None:
+        # L'ENS nomenat: per categories, i sense suposar-ne cap si el plec no la
+        # diu (`assess_ens`).
+        outcome = assess_ens(normalization.ens, snapshot, deadline)
     elif normalization.route == normalize.ROUTE_REGISTRY_DOCUMENTATION_ONLY:
-        # Documentacio que aporta qui JA es inscrit al RELI/ROLECE: no exigeix
-        # estar-hi, i avaluar-la com a exigencia demanaria un registre que el
-        # plec no demana.
+        # Sembla documentacio que aporta qui JA es inscrit al RELI/ROLECE:
+        # avaluar-la com a exigencia d'estar-hi demanaria un registre que potser el
+        # plec no demana. Revisio.
         outcome = needs_review(
             RuleCode.REGISTRATION_EXACT, ExplanationCode.REGISTRATION_DOCUMENTATION_ONLY
         )
@@ -181,16 +124,11 @@ def assess_requirement_traced(
             explanation_code=ExplanationCode.REQUIREMENT_NOT_REQUIRED,
             mode=AssessmentMode.AUTOMATIC,
         )
-    elif profile == "v1" and _legacy_readable(requirement) and normalization.route is None:
-        # La v1 ja es llegia amb fiabilitat: es llegeix igual, sense rastre.
-        return _dispatch(requirement, snapshot, deadline=deadline, tender=tender), None
     elif normalization.has_value:
-        value = normalization.value_json or {}
         adapted = _AdaptedRequirement(
             requirement,
-            value_json=value,
-            value_schema=VALUE_SCHEMA_VERSION if value.get("kind") else None,
-            category=normalization.read_as or requirement.category,
+            value_json=normalization.value_json,
+            value_schema=normalization.value_schema,
         )
         outcome = _dispatch(adapted, snapshot, deadline=deadline, tender=tender)
     else:

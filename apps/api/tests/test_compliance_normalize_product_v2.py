@@ -366,7 +366,9 @@ def test_l_ens_sense_categoria_va_a_revisio_i_no_se_suposa_mitjana(prefix):
     assert outcome.rule_code == RuleCode.CERTIFICATION_EXACT
     assert outcome.explanation_code == ExplanationCode.CERTIFICATION_LEVEL_NOT_STATED
     assert outcome.params["company_certifications"] == ["ENS categoria Mitjana"]
-    assert outcome.params["normalization"]["route"] == "ens_level_not_stated"
+    assert outcome.params["side"] == "tender"
+    assert outcome.params["normalization"]["route"] == "ens_certification"
+    assert outcome.params["normalization"]["ens"]["level"] is None
 
 
 def test_l_ens_amb_categoria_literal_s_avalua_amb_la_regla_de_certificacio():
@@ -382,27 +384,25 @@ def test_l_ens_amb_categoria_literal_s_avalua_amb_la_regla_de_certificacio():
         FakeEvidence(
             id="q",
             quote=(
-                "certificació de conformitat amb l'Esquema Nacional de Seguretat, "
-                "categoria MITJANA"
+                "certificació de conformitat amb l'Esquema Nacional de Seguretat, categoria MITJANA"
             ),
         )
     ]
     result = norm_of(requirement)
-    assert result.route == "ens_certification" and result.detail["level"] == "mitjana"
+    assert result.route == "ens_certification" and result.ens.level == "mitjana"
     profile = ProfileSnapshot(
         company_id=uuid.uuid4(), certifications=[Cert("ENS categoria Mitjana")]
     )
     outcome = assess_requirement(requirement, profile, profile=PV2)
     assert outcome.result == AssessmentResult.SATISFIES
     assert outcome.explanation_code == ExplanationCode.CERTIFICATION_FOUND_VALID
-    # Una categoria diferent no casa: alta no es mitjana.
+    # Una categoria superior sense «o superior» no casa sola: revisio, mai «no compleix».
     profile_alta = ProfileSnapshot(
         company_id=uuid.uuid4(), certifications=[Cert("ENS categoria Alta")]
     )
-    assert (
-        assess_requirement(requirement, profile_alta, profile=PV2).result
-        == AssessmentResult.UNKNOWN
-    )
+    outcome = assess_requirement(requirement, profile_alta, profile=PV2)
+    assert outcome.result == AssessmentResult.NEEDS_REVIEW
+    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_LEVEL_HIGHER_REVIEW
 
 
 def test_l_ens_informatiu_no_es_recategoritza():
@@ -525,7 +525,14 @@ def test_rc_abans_revisio_despres_compara_cada_limit():
         before = assess_requirement(req(prefix), covered, deadline=DEADLINE)
         assert before.explanation_code == ExplanationCode.REQUIREMENT_VALUE_MISSING, prefix
         after = assess_requirement(req(prefix), covered, deadline=DEADLINE, profile=PV2)
-        assert after.result == AssessmentResult.SATISFIES, prefix
+        if prefix == "825ca93c":
+            # La cita diu «mantenir vigent durant tota l'execució»: una condicio que
+            # cap regla no comprova. Com un v2 tipat: revisio, no «compleix».
+            assert after.result == AssessmentResult.NEEDS_REVIEW, prefix
+            assert after.explanation_code == ExplanationCode.INSURANCE_CONDITION_NOT_CHECKED
+            assert after.params["unchecked_conditions"] == ["valid_through_contract"]
+        else:
+            assert after.result == AssessmentResult.SATISFIES, prefix
 
 
 def test_el_sublimit_patronal_no_el_respon_la_xifra_global():
@@ -569,20 +576,23 @@ def test_la_normalitzacio_no_modifica_el_requisit():
         ) == snapshot_before, prefix
 
 
-def test_un_perfil_tipat_no_es_normalitza():
+@pytest.mark.parametrize("profile", ["v1", "v2", "v3", "gold", None])
+def test_fora_de_product_v2_no_es_normalitza_mai(profile):
     for prefix in ROWS:
-        assert normalize.normalize_requirement(req(prefix), "v2") is None
-        assert normalize.normalize_requirement(req(prefix), None) is None
+        assert normalize.normalize_requirement(req(prefix), profile) is None, prefix
 
 
-def test_un_v1_que_ja_es_llegia_es_llegeix_igual():
-    requirement = req("7e78ecdf", value_json={"amount": 91904.74, "currency": "EUR"})
-    outcome, applied = assess_requirement_traced(requirement, empty(), profile="v1")
-    assert applied is None and "normalization" not in outcome.params
-    # Pero un import en text (que `to_decimal` llegiria com 300 i no 300.000) si.
-    requirement = req("8ce506d2", value_json={"amount": "300.000", "unit": "per sinistre i any"})
-    _, applied = assess_requirement_traced(requirement, empty(), profile="v1")
-    assert applied is not None and applied.value_json["limits"][0]["amount"] == "300000"
+def test_un_requisit_amb_value_schema_no_es_normalitza_ni_en_product_v2():
+    from app.ai.contract_v3 import VALUE_SCHEMA_V3
+    from app.ai.value_schemas import VALUE_SCHEMA_VERSION
+
+    for schema in (VALUE_SCHEMA_VERSION, VALUE_SCHEMA_V3):
+        for prefix in ROWS:
+            assert normalize.normalize_requirement(req(prefix, value_schema=schema), PV2) is None
+
+
+def test_un_manual_no_es_normalitza():
+    assert normalize.normalize_requirement(req("8ce506d2", run_id=None), PV2) is None
 
 
 def test_cada_valor_porta_la_procedencia_als_params():
@@ -635,3 +645,301 @@ def test_un_obligatori_que_diu_no_s_exigeix_no_es_resol_sol():
     requirement = req("40d49f88", obligation=RequirementObligation.MANDATORY)
     outcome = assess_requirement(requirement, empty(), profile=PV2)
     assert outcome.explanation_code == ExplanationCode.REGISTRATION_DATA_INCOMPLETE
+
+
+# --------------------------------------------------------------------------- #
+# Ronda 1 de correccions (review/CODE_REVIEW.md)                               #
+# --------------------------------------------------------------------------- #
+
+
+def mk(category, value, quotes, title="t", obligation=RequirementObligation.MANDATORY):
+    return FakeRequirement(
+        id=uuid.uuid4(),
+        category=category,
+        obligation=obligation,
+        title=title,
+        description=None,
+        value_json=value,
+        evidence=[FakeEvidence(id=f"q{i}", quote=q) for i, q in enumerate(quotes)],
+    )
+
+
+@dataclass
+class EnsCert:
+    name: str
+    expires_at: date | None = None
+    verification_status: str = "verified"
+    id: uuid.UUID = field(default_factory=uuid.uuid4)
+
+
+@pytest.mark.parametrize(
+    ("text", "level"),
+    [
+        ("ENS Alta", "alta"),
+        ("ENS Mitjana", "mitjana"),
+        ("ENS Media", "mitjana"),
+        ("ENS (categoria Mitjana)", "mitjana"),
+        ("ENS (categoria: MEDIA)", "mitjana"),
+        ("ENS - MEDIA", "mitjana"),
+        ("Certificat ENS categoria MEDIA", "mitjana"),
+        ("Certificat ENS nivell MITJÀ", "mitjana"),
+        ("Esquema Nacional de Seguretat de nivell bàsic", "basica"),
+        ("Esquema Nacional de Seguridad, categoría BÁSICA", "basica"),
+        ("ENS (RD 311/2022)", None),
+        ("Aplicació de l'ENS i encàrrec de tractament", None),
+    ],
+)
+def test_c1_el_nivell_de_l_ens_amb_o_sense_categoria(text, level):
+    assert normalize.ens_level(text) == (level, False)
+
+
+def test_c1_dues_categories_son_ambigues():
+    assert normalize.ens_level("ENS Alta o ENS Mitjana") == (None, True)
+
+
+_ENS_CASES = [
+    ("categoria MITJANA", "ENS Mitjana", AssessmentResult.SATISFIES, "CERTIFICATION_FOUND_VALID"),
+    (
+        "categoria ALTA",
+        "ENS Mitjana",
+        AssessmentResult.DOES_NOT_SATISFY,
+        "CERTIFICATION_LEVEL_BELOW",
+    ),
+    (
+        "categoria MITJANA",
+        "ENS Alta",
+        AssessmentResult.NEEDS_REVIEW,
+        "CERTIFICATION_LEVEL_HIGHER_REVIEW",
+    ),
+    (
+        "categoria MITJANA o superior",
+        "ENS Alta",
+        AssessmentResult.SATISFIES,
+        "CERTIFICATION_FOUND_VALID",
+    ),
+    (
+        "com a mínim de categoria MITJANA",
+        "ENS Alta",
+        AssessmentResult.SATISFIES,
+        "CERTIFICATION_FOUND_VALID",
+    ),
+    # Una certificacio de l'empresa sense categoria llegible no casa amb cap.
+    ("categoria MITJANA", "ENS", AssessmentResult.NEEDS_REVIEW, "CERTIFICATION_LEVEL_NOT_STATED"),
+]
+
+
+@pytest.mark.parametrize(("required", "company", "result", "code"), _ENS_CASES)
+def test_c1_i4_comparacio_de_categories_de_l_ens(required, company, result, code):
+    requirement = mk(
+        RequirementCategory.TECHNICAL_REQUIREMENT,
+        None,
+        [f"Certificació de conformitat amb l'Esquema Nacional de Seguretat {required}"],
+    )
+    profile = ProfileSnapshot(
+        company_id=uuid.uuid4(),
+        certifications=[EnsCert(company)],
+        section_ratio={"certifications": 1.0},
+    )
+    outcome = assess_requirement(requirement, profile, profile=PV2)
+    assert (outcome.result, outcome.explanation_code) == (result, code)
+
+
+def test_c1_un_v2_tipat_que_demana_ens_alta_es_llegeix_com_a_la_v4():
+    """La comparacio de noms de sempre no es toca (cap `ens:` comu)."""
+    from app.ai.value_schemas import VALUE_SCHEMA_VERSION
+    from app.compliance.certifications import normalize_certification_name
+    from app.compliance.engine import _dispatch
+
+    assert normalize_certification_name("ENS Alta") != normalize_certification_name("ENS Mitjana")
+    requirement = mk(
+        RequirementCategory.CERTIFICATION, {"kind": "certification", "name": "ENS Alta"}, []
+    )
+    requirement.value_schema = VALUE_SCHEMA_VERSION
+    profile = ProfileSnapshot(
+        company_id=uuid.uuid4(),
+        certifications=[EnsCert("ENS Mitjana")],
+        section_ratio={"certifications": 1.0},
+    )
+    for name in ("v2", PV2, None):
+        outcome = assess_requirement(requirement, profile, profile=name)
+        assert outcome == _dispatch(requirement, profile)
+        assert outcome.result != AssessmentResult.SATISFIES
+
+
+def test_c2_l_ens_amb_condicions_que_no_es_saben_traslladar_no_es_normalitza():
+    requirement = mk(
+        RequirementCategory.CERTIFICATION, {"names": ["ENS categoria Mitjana", "ISO 27001"]}, []
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert (result.status, result.reason) == ("not_normalized", "unmapped_conditions")
+
+
+def test_c2_l_ens_conserva_la_validesa_al_termini():
+    requirement = mk(
+        RequirementCategory.CERTIFICATION,
+        {"name": "ENS categoria Mitjana", "valid_at_deadline": True},
+        [],
+    )
+    profile = ProfileSnapshot(
+        company_id=uuid.uuid4(),
+        certifications=[EnsCert("ENS categoria Mitjana", expires_at=date(2025, 1, 1))],
+        section_ratio={"certifications": 1.0},
+    )
+    outcome = assess_requirement(requirement, profile, deadline=DEADLINE, profile=PV2)
+    assert outcome.result == AssessmentResult.DOES_NOT_SATISFY
+    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_FOUND_EXPIRED
+
+
+@pytest.mark.parametrize(
+    "unit", ["sublímit per ocurrència", "per assegurat", "sublímit", "per sinistre i per víctima"]
+)
+def test_c3_i3_un_sublimit_o_una_base_ambigua_no_es_compara_mai(unit):
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        {"amount": "300.000 €", "unit": unit},
+        ["pòlissa de responsabilitat civil amb una cobertura mínima de 300.000 €"],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert (result.status, result.reason) == ("not_normalized", "limit_kind_ambiguous")
+    big = ProfileSnapshot(
+        company_id=uuid.uuid4(),
+        insurances=[Policy(limits=[], coverage_amount=Decimal("1000000"))],
+        section_ratio={"insurances": 1.0},
+    )
+    outcome = assess_requirement(requirement, big, deadline=DEADLINE, profile=PV2)
+    assert outcome.result == AssessmentResult.NEEDS_REVIEW
+
+
+def test_c3_cap_tipus_i_cap_marca_es_cobertura_contra_cobertura_com_la_v1():
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        {"amount": "300.000 €"},
+        ["pòlissa de responsabilitat civil amb una cobertura mínima de 300.000 €"],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert result.value_json["limits"] == [
+        {"kind": "unknown", "amount": "300000", "currency": "EUR"}
+    ]
+
+
+def test_i3_un_import_amb_dos_limits_diferents_a_la_cita_es_ambigu():
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        {"amount": "300.000 €"},
+        ["responsabilitat civil de 300.000 € per sinistre, amb sublímit de 150.000 per víctima"],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert (result.status, result.reason) == ("not_normalized", "limit_kind_ambiguous")
+
+
+def test_i2_un_import_unic_que_no_es_el_llindar_no_s_agafa():
+    requirement = mk(
+        RequirementCategory.ECONOMIC_SOLVENCY,
+        {"multiple": "1,5 vegades l'anualitat mitjana"},
+        [
+            "Volum anual de negoci del millor dels 3 últims exercicis ≥ 1,5 vegades "
+            "l’anualitat mitjana del contracte (61.269,83 €)"
+        ],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert (result.status, result.reason) == (
+        "not_normalized",
+        "quote_amount_not_in_threshold_context",
+    )
+
+
+def test_i2_dos_imports_a_la_cita_encara_que_un_no_porti_euro_es_ambigu():
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        None,
+        ["cobertura mínima de 300.000 € per sinistre i un sublímit de 150.000 per víctima"],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert (result.status, result.reason) == ("not_normalized", "amount_ambiguous")
+
+
+def test_i2_amb_marca_de_llindar_el_multiple_es_la_base_i_l_import_el_llindar():
+    requirement = mk(
+        RequirementCategory.ECONOMIC_SOLVENCY,
+        None,
+        [
+            "Volum anual de negoci del millor dels 3 últims exercicis ≥ 1,5 vegades "
+            "l’anualitat mitjana del contracte. És a dir, 91.904,74 €"
+        ],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert result.value_json["threshold"]["amount"] == "91904.74"
+
+
+def test_i1_l_experiencia_conserva_recompte_i_cpv():
+    requirement = mk(
+        RequirementCategory.EXPERIENCE,
+        {
+            "minimum_amount": "42.888,88 €",
+            "minimum_projects": 3,
+            "cpv_codes": ["32412000"],
+            "lookback_years": 3,
+        },
+        ["un mínim de tres contractes de com a mínim 42.888,88 € cadascun"],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    value = result.value_json
+    assert value["min_count"] == 3 and value["cpv_codes"] == ["32412000"]
+    assert value["min_individual_amount"]["amount"] == "42888.88"
+    assert value["reference_period"]["years"] == 3
+
+
+def test_i1_l_assegurança_conserva_l_assegurat_addicional():
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        {"amount": "300.000 €", "unit": "per sinistre", "additional_insured": True},
+        [],
+    )
+    policy = Policy(limits=[Limit(InsuranceLimitKind.PER_CLAIM, Decimal("600000"))])
+    profile = ProfileSnapshot(company_id=uuid.uuid4(), insurances=[policy])
+    outcome = assess_requirement(requirement, profile, deadline=DEADLINE, profile=PV2)
+    assert outcome.result == AssessmentResult.NEEDS_REVIEW
+    assert outcome.explanation_code == ExplanationCode.INSURANCE_ADDITIONAL_INSURED_UNKNOWN
+
+
+def test_i1_una_clau_que_no_se_sap_traslladar_impedeix_normalitzar():
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        {"amount": "300.000 €", "unit": "per sinistre", "franquicia": "3.000 €"},
+        [],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert (result.status, result.reason) == ("not_normalized", "unmapped_conditions")
+    assert result.detail == {"keys": ["franquicia"]}
+
+
+def test_m1_un_import_nul_al_value_es_busca_a_la_cita():
+    requirement = mk(
+        RequirementCategory.INSURANCE,
+        {"amount": None, "unit": "per sinistre"},
+        ["pòlissa de responsabilitat civil amb una cobertura mínima de 300.000 € per sinistre"],
+    )
+    result = normalize.normalize_requirement(requirement, PV2)
+    assert result.status == "normalized"
+    assert result.value_json["limits"][0]["amount"] == "300000"
+
+
+def test_m5_una_prima_anual_no_es_cap_limit():
+    assert normalize.limit_kinds("prima anual") == (None, False)
+
+
+def test_m7_igual_o_major_no_es_el_millor_exercici():
+    assert normalize.parse_aggregation(
+        "igual o major a 100.000 € en cadascun dels tres últims exercicis"
+    ) == (AggregationType.EACH_YEAR, False)
+    assert normalize.parse_aggregation("igual o major a 100.000 €") == (
+        AggregationType.UNKNOWN,
+        False,
+    )
+
+
+def test_m2_la_cnmc_nomes_compta_si_ho_diu_el_text_literal():
+    requirement = req("1739a725", title="Inscripció al registre de la CNMC")
+    outcome = assess_requirement(requirement, empty(), profile=PV2)
+    assert outcome.explanation_code == ExplanationCode.RULE_NOT_AUTOMATABLE
+    assert outcome.params["normalization"]["reason"] == "registry_not_named_explicitly"

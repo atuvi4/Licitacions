@@ -1,31 +1,34 @@
-"""Normalitzador de LECTURA per als valors en format lliure (v1 i product-v2).
+"""Complement de LECTURA per als requisits en format lliure del perfil `product-v2`.
 
-El perfil `product-v2` (com la v1) no produeix valors tipats: escriu el que diu el
-plec tal com el diu, `{"amount": "91.904,74 €", "period": "millor dels 3 últims
+El perfil `product-v2` no produeix valors tipats: escriu el que diu el plec tal
+com el diu, `{"amount": "91.904,74 €", "period": "millor dels 3 últims
 exercicis"}`. Les regles de 4C no ho saben llegir (`to_decimal("91.904,74")` no
 es cap nombre, i `to_decimal("300.000")` seria 300, no 300.000), i el requisit
 acaba en `REQUIREMENT_VALUE_MISSING` encara que el plec digui la xifra ben clara.
 
-Aquest modul tradueix, en el moment de llegir i SENSE escriure res, aquella forma
-lliure a l'estructura v2 (`app.ai.value_schemas`) que `specs` ja sap llegir. Res
-del que fa no es desa: `requirements.value_json` queda com el va escriure
-l'extractor, i el valor normalitzat viatja nomes dins de l'avaluacio
+Aquest modul es un **complement estret, no una relectura global** (decisio del
+controlador, ronda 1):
+
+* **Abast.** Nomes requisits d'un run `product-v2` amb `value_schema` NUL. Cap
+  `v1`, cap `v2` tipat, cap `v3`, cap `gold`, cap requisit amb `value_schema`: per
+  a tots ells `normalize_requirement` torna `None` i el motor fa exactament el que
+  feia a la v4. Ho verifica una prova diferencial contra el codi de `21d5f9e`.
+* **Enriquir, no reconstruir.** El valor normalitzat es construeix a sobre del
+  `value_json`: es tradueixen els camps en text i es TRASLLADEN les condicions que
+  ja hi eren (`minimum_projects`, `cpv_codes`, `additional_insured`, validesa...).
+  Una clau que no se sap traslladar fa que no es normalitzi (`unmapped_conditions`):
+  perdre una condicio en silenci podria fer passar a «compleix» una exigencia.
+* **Fonts.** Primer el `value_json`; si no hi es o es nul, el text LITERAL de les
+  cites verificades (localitzades caracter a caracter dins de la pagina), i nomes
+  si en surt UN sol valor inequivoc en un context de llindar. El titol i la
+  descripcio (text del model) no son mai font d'un valor; nomes poden fer el
+  resultat mes prudent (similitud, documentacio de qui ja es inscrit).
+* **Ambiguitat = no es normalitza**, i el motiu queda escrit (`reason`).
+
+Les regles nomes apliquen comportaments nous (sublimit patronal estricte, registre
+d'operadors) sobre valors que porten la marca `NORMALIZED_MARKER`, que nomes posa
+aquest modul. Res no es desa: el valor viatja dins de l'avaluacio
 (`explanation_params.normalization`), amb la procedencia de cada camp.
-
-Tres regles que el governen tot:
-
-* **Ordre de fonts.** Primer el `value_json` del requisit. Si no hi es o no te el
-  camp, el text LITERAL de les cites verificades del mateix requisit (la `quote`
-  de la seva evidencia, que la canonada ja ha localitzat caracter a caracter dins
-  de la pagina), i nomes si n'hi ha **un sol** valor inequivoc del tipus que la
-  regla necessita. El titol i la descripcio (text redactat pel model) NO son mai
-  font d'un valor; nomes poden fer el resultat mes prudent (p. ex. marcar que el
-  plec demana treballs «similars», cosa que porta a revisio).
-* **Ambiguitat = no es normalitza.** Mes d'un import possible, unitats
-  contradictories, un format numeric que admet dues lectures: el requisit queda
-  com ara i el motiu queda escrit (`reason`).
-* **Mai no s'inventa res.** Ni la base d'un percentatge, ni el nivell d'una
-  certificacio, ni un recompte de persones a partir d'una llista de perfils.
 
 Modul pur: ni base de dades ni model.
 """
@@ -39,7 +42,6 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.ai.value_schemas import VALUE_SCHEMA_VERSION
 from app.models.enums import (
     AggregationType,
     EconomicMetric,
@@ -50,38 +52,16 @@ from app.models.enums import (
     RequirementObligation,
 )
 
-#: Versio del normalitzador. Va a cada `explanation_params.normalization`: un
-#: canvi de criteri ha de ser visible a l'avaluacio que el va fer servir.
-NORMALIZER_VERSION = "free-format-normalizer-v1"
+#: Versio del normalitzador. Va a cada `explanation_params.normalization`.
+NORMALIZER_VERSION = "product-v2-normalizer-v2"
 
-#: Perfils amb valor lliure. Els altres (v2 tipat, v3 de claims) no es toquen.
-FREE_FORMAT_PROFILES = frozenset({"v1", "product-v2"})
+#: L'UNIC perfil al qual s'aplica.
+NORMALIZED_PROFILE = "product-v2"
 
-#: Categories el valor de les quals llegeix alguna regla. La resta no s'avalua
-#: comparant dades i no se'n normalitza res.
-_VALUE_CATEGORIES = frozenset(
-    {
-        RequirementCategory.ECONOMIC_SOLVENCY,
-        RequirementCategory.INSURANCE,
-        RequirementCategory.EXPERIENCE,
-        RequirementCategory.TECHNICAL_SOLVENCY,
-        RequirementCategory.PERSONNEL,
-        RequirementCategory.CERTIFICATION,
-        RequirementCategory.REGISTRATION,
-    }
-)
-
-#: Categories on un requisit que NOMENA l'ENS es llegeix com a exigencia de
-#: certificacio (brief pas 1, §1.3). Les tecniques i contractuals hi son perque
-#: a L'Escala l'ENS nomes hi apareix aixi; cap altra categoria es recategoritza.
-_ENS_CATEGORIES = frozenset(
-    {
-        RequirementCategory.CERTIFICATION,
-        RequirementCategory.TECHNICAL_REQUIREMENT,
-        RequirementCategory.CONTRACT_CONDITION,
-    }
-)
-
+#: Clau que marca un valor sortit d'aqui. Les regles nomes activen els
+#: comportaments nous de la v5 quan la porta; un valor de qualsevol altre cami no
+#: la pot tenir.
+NORMALIZED_MARKER = "_normalizer"
 
 # --------------------------------------------------------------------------- #
 # Resultat                                                                      #
@@ -91,21 +71,21 @@ _ENS_CATEGORIES = frozenset(
 REASON_NO_SOURCE = "no_value_in_value_json_or_quotes"
 REASON_AMOUNT_AMBIGUOUS = "amount_ambiguous"
 REASON_AMOUNT_UNPARSEABLE = "amount_unparseable"
+REASON_AMOUNT_NOT_THRESHOLD = "quote_amount_not_in_threshold_context"
 REASON_CURRENCY_CONFLICT = "currency_conflict"
 REASON_PERIOD_AMBIGUOUS = "period_ambiguous"
 REASON_METRIC_NOT_STATED = "metric_not_stated"
 REASON_LIMIT_KIND_AMBIGUOUS = "limit_kind_ambiguous"
 REASON_EXPERIENCE_BASIS_AMBIGUOUS = "experience_amount_basis_ambiguous"
 REASON_NO_COUNT = "no_count_stated"
-REASON_CERTIFICATION_NOT_NAMED = "certification_not_named"
 REASON_REGISTRY_NOT_NAMED = "registry_not_named_explicitly"
 REASON_NOT_MANDATORY = "not_mandatory"
-REASON_ENS_LEVEL_AMBIGUOUS = "ens_level_ambiguous"
+REASON_UNMAPPED_CONDITIONS = "unmapped_conditions"
+REASON_PERCENTAGE_BASE_AMBIGUOUS = "percentage_base_ambiguous"
 
-#: Rutes: el requisit es llegeix amb una regla diferent de la de la seva categoria
-#: o es resol directament amb revisio (sense reescriure la categoria).
-ROUTE_ENS_CERTIFICATION = "ens_certification"
-ROUTE_ENS_LEVEL_NOT_STATED = "ens_level_not_stated"
+#: Rutes: el requisit es resol amb una regla diferent de la de la seva categoria
+#: o directament amb revisio (sense reescriure la categoria).
+ROUTE_ENS = "ens_certification"
 ROUTE_REGISTRY_DOCUMENTATION_ONLY = "registry_documentation_only"
 ROUTE_SECTOR_OPERATOR_REGISTRY = "sector_operator_registry"
 ROUTE_NOT_REQUIRED = "not_required"
@@ -130,20 +110,31 @@ class Provenance:
 
 
 @dataclass(frozen=True, slots=True)
+class EnsReading:
+    """Que demana el plec de l'ENS. `level=None` = no se'n pot dir la categoria."""
+
+    level: str | None
+    #: El plec admet una categoria superior («o superior», «com a minim»...).
+    or_higher: bool = False
+    equivalence_allowed: bool = False
+    valid_at_deadline: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Normalization:
     """El que el normalitzador ha pogut llegir d'un requisit, i per que no."""
 
-    #: `normalized` (hi ha valor v2), `not_normalized` (s'avalua com ara, amb el
-    #: motiu) o `routed` (una ruta explicita, amb o sense valor).
+    #: `normalized` (hi ha valor), `not_normalized` (s'avalua com ara, amb el
+    #: motiu) o `routed` (una ruta explicita).
     status: str
-    #: Valor amb la forma de `app.ai.value_schemas` (v2). `None` si no n'hi ha.
+    #: Valor amb la forma que llegeixen les regles, amb `NORMALIZED_MARKER`.
     value_json: dict[str, Any] | None = None
+    #: `value_schema` amb que s'ha de llegir `value_json` (v2 o `None` = lliure).
+    value_schema: str | None = None
     provenance: tuple[Provenance, ...] = ()
     reason: str | None = None
     route: str | None = None
-    #: Categoria amb que s'ha de llegir, si no es la del requisit (ruta ENS).
-    read_as: RequirementCategory | None = None
-    #: Detall per a l'explicacio (p. ex. l'esquema nomenat).
+    ens: EnsReading | None = None
     detail: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -158,13 +149,18 @@ class Normalization:
             "status": self.status,
         }
         if self.value_json is not None:
-            data["value"] = self.value_json
+            data["value"] = {k: v for k, v in self.value_json.items() if k != NORMALIZED_MARKER}
         if self.provenance:
             data["provenance"] = [item.as_dict() for item in self.provenance]
         if self.reason:
             data["reason"] = self.reason
         if self.route:
             data["route"] = self.route
+        if self.ens is not None:
+            data["ens"] = {
+                "level": self.ens.level,
+                "or_higher": self.ens.or_higher,
+            }
         if self.detail:
             data["detail"] = self.detail
         return data
@@ -172,14 +168,15 @@ class Normalization:
     def consolidation_value(self) -> dict[str, Any] | None:
         """Les dades DECISIVES de l'exigencia, per agrupar duplicats.
 
-        Nomes el que decideix el veredicte: import, moneda, unitat del limit,
-        periode i agregacio. Un percentatge informatiu al costat d'un import (el
-        plec ja ha fet el calcul) i les marques de prudencia (similitud) no hi
-        entren: dues cites del mateix llindar no deixen de ser la mateixa
-        exigencia perque una digui tambe «el 70%».
+        Nomes el llindar: import, moneda, tipus de limit, periode i agregacio. Les
+        condicions (validesa, similitud) i un percentatge informatiu al costat d'un
+        import no hi entren: si dos duplicats en difereixen, el grup es resol pel
+        mes prudent i queda marcat com a divergent.
         """
         value = self.value_json
         if value is None:
+            if self.ens is not None and self.ens.level is not None:
+                return {"kind": "ens", "level": self.ens.level, "or_higher": self.ens.or_higher}
             return None
         kind = value.get("kind")
         if kind == "economic_solvency":
@@ -219,9 +216,8 @@ class Normalization:
                 "individual": amount(value.get("min_individual_amount")),
                 "accumulated": amount(value.get("min_accumulated_amount")),
                 "aggregation": value.get("aggregation"),
+                "cpv_codes": sorted(value.get("cpv_codes") or []),
             }
-        if kind == "certification":
-            return {"kind": kind, "name": (value.get("name") or "").casefold()}
         return None
 
 
@@ -245,11 +241,19 @@ def _fold(text: str) -> str:
 #: Un import en format local (punt de milers, coma decimal) o un enter.
 _LOCAL_NUMBER = r"\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+,\d+|\d+"
 _LOCAL_NUMBER_FULL = re.compile(rf"^(?:{_LOCAL_NUMBER})$")
-#: Marca de moneda. Nomes l'euro: cap altra moneda apareix als plecs del pilot, i
-#: una altra no es convertiria igualment.
+_THOUSANDS = re.compile(r"^\d{1,3}(?:\.\d{3})+(?:,\d+)?$")
+#: Marca de moneda. Nomes l'euro.
 _CURRENCY_TOKEN = re.compile(r"(?:€|\beur\b|\beuros?\b)", re.I)
-#: Un import seguit d'una marca d'euro, dins d'una cita.
-_AMOUNT_IN_TEXT = re.compile(rf"(?<![\d.,])({_LOCAL_NUMBER})\s*(?:€|euros?\b|EUR\b)", re.I)
+#: Qualsevol nombre d'una cita (per decidir si n'hi ha mes d'un).
+_ANY_NUMBER = re.compile(r"(?<![\w.,])(\d[\d.]*(?:,\d+)?)(?![\w])")
+_CURRENCY_AFTER = re.compile(r"^\s*(?:€|euros?\b|eur\b)", re.I)
+_RATIO_AFTER = re.compile(r"^\s*(?:%|per cent\b|vegades\b|veces\b)", re.I)
+#: Paraules que lliguen l'import d'una cita al llindar, just abans de l'import.
+_THRESHOLD_MARKER = re.compile(
+    r"(?:igual o superior a|superior a|no inferior a|es a dir,?|es decir,?|minim(?:a)? de"
+    r"|minimo de|al menys de|almenys|al menos|com a minim|como minimo|≥|>=|import minim de"
+    r"|import minim|per un import de)\s*$"
+)
 
 
 def _local_decimal(token: str) -> Decimal | None:
@@ -262,13 +266,13 @@ def _local_decimal(token: str) -> Decimal | None:
 
 
 def parse_amount(raw: Any) -> tuple[Decimal | None, str | None, str | None]:
-    """`(import, moneda, motiu)` d'un valor lliure.
+    """`(import, moneda, motiu)` d'un valor lliure del `value_json`.
 
     Accepta un nombre JSON, `"91.904,74"`, `"91.904,74 €"`, `"300.000 €"`,
     `"42.888,88 euros"`. Un text amb paraules (`"1,5 vegades l'anualitat"`) no es
     cap import. Un `"1.5"` o `"38326.08"` (punt decimal anglosaxo) tampoc: en
-    format local el punt es de milers i admetre totes dues lectures seria
-    triar-ne una a l'atzar.
+    format local el punt es de milers i admetre totes dues lectures seria triar-ne
+    una a l'atzar.
     """
     if raw is None or isinstance(raw, bool):
         return None, None, REASON_NO_SOURCE
@@ -298,14 +302,53 @@ def _currency_field(raw: Any) -> tuple[str | None, bool]:
     return text.upper()[:3] or None, False
 
 
-def amounts_in_text(text: str) -> list[Decimal]:
-    """Els imports amb marca d'euro d'un text literal, en ordre."""
-    found = []
-    for match in _AMOUNT_IN_TEXT.finditer(_flat(text)):
-        amount = _local_decimal(match.group(1))
-        if amount is not None:
-            found.append(amount)
-    return found
+@dataclass(frozen=True, slots=True)
+class _Candidate:
+    """Un nombre d'una cita que podria ser un import."""
+
+    amount: Decimal | None
+    start: int
+    end: int
+    marked: bool
+
+
+def quote_amounts(text: str) -> tuple[list[_Candidate], bool]:
+    """Els imports candidats d'una cita i si hi ha un multiple o un percentatge.
+
+    Compta TOTS els nombres que poden ser un import, portin «€» o no: amb punt de
+    milers, amb decimals i «€», o enters de 5 xifres o mes (un any, «3 últims» o
+    «RD 311/2022» no ho son). Un «1,5 vegades» o un «70%» no es import, pero diu
+    que el text parla d'una base.
+    """
+    flat = _flat(text)
+    folded = _fold(text)
+    candidates: list[_Candidate] = []
+    ratio = False
+    for match in _ANY_NUMBER.finditer(flat):
+        token = match.group(1).rstrip(".")
+        after = flat[match.end() : match.end() + 12]
+        if _RATIO_AFTER.match(after):
+            ratio = True
+            continue
+        with_currency = bool(_CURRENCY_AFTER.match(after))
+        amount_like = (
+            bool(_THOUSANDS.match(token))
+            or with_currency
+            or (token.isdigit() and len(token) >= 5)
+            or ("." in token and not _THOUSANDS.match(token))
+        )
+        if not amount_like:
+            continue
+        before = folded[max(0, match.start() - 40) : match.start()]
+        candidates.append(
+            _Candidate(
+                amount=_local_decimal(token),
+                start=match.start(),
+                end=match.end(),
+                marked=bool(_THRESHOLD_MARKER.search(before)),
+            )
+        )
+    return candidates, ratio
 
 
 def _number_word(token: str) -> int | None:
@@ -326,19 +369,19 @@ _YEARS_PATTERNS = (
     re.compile(rf"\b{_LAST}\s+{_N}(?!\w)"),
     re.compile(rf"\b{_N}\s+{_LAST}\b"),
 )
-_MAX_HINT = re.compile(r"\bmillor\b|\bmajor\b|\bmejor\b|\bmayor\b|\bmes alt")
+#: «El millor», «l'any de major execució», «el de major volum». NO «igual o
+#: major»: aixo es l'operador, no l'agregacio.
+_MAX_HINT = re.compile(
+    r"\bmillor\b|\bmejor\b|\bde major (?:volum|execucio|import)\b"
+    r"|\bde mayor (?:volumen|ejecucion|importe)\b|\bmes alt\b"
+)
 _EACH_HINT = re.compile(
     r"\bcadascun\b|\bcada un\b|\bcada any\b|\bcada exercici\b|\bcada ejercicio\b"
 )
 
 
 def parse_years(text: str) -> tuple[int | None, bool]:
-    """Quants anys mira un periode. `(anys, ambigu)`.
-
-    «dels 3 últims», «darrers tres (3) anys», «tres últims». Un «tres (3)» ha de
-    dir el mateix les dues vegades; dos recomptes diferents al mateix text son
-    ambiguitat, no una tria.
-    """
+    """Quants anys mira un periode. `(anys, ambigu)`."""
     folded = _fold(text)
     values: set[int] = set()
     for pattern in _YEARS_PATTERNS:
@@ -397,15 +440,20 @@ def parse_multiple(raw: Any) -> Decimal | None:
     return Decimal(match.group(1).replace(",", "."))
 
 
-def percentage_base(text: str) -> PercentageBase:
+_BASES = (
+    (("anualitat mitjana", "anualidad media"), PercentageBase.CONTRACT_ANNUITY),
+    (("pressupost base", "presupuesto base"), PercentageBase.BASE_BUDGET),
+    (("valor estimat", "valor estimado"), PercentageBase.ESTIMATED_VALUE),
+)
+
+
+def percentage_base(text: str) -> tuple[PercentageBase, bool]:
+    """La base d'un percentatge i si el text en nomena mes d'una (ambigu)."""
     folded = _fold(text)
-    if "anualitat mitjana" in folded or "anualidad media" in folded:
-        return PercentageBase.CONTRACT_ANNUITY
-    if "pressupost base" in folded or "presupuesto base" in folded:
-        return PercentageBase.BASE_BUDGET
-    if "valor estimat" in folded or "valor estimado" in folded:
-        return PercentageBase.ESTIMATED_VALUE
-    return PercentageBase.UNKNOWN
+    found = {base for words, base in _BASES if any(word in folded for word in words)}
+    if len(found) > 1:
+        return PercentageBase.UNKNOWN, True
+    return (found.pop() if found else PercentageBase.UNKNOWN), False
 
 
 # --------------------------------------------------------------------------- #
@@ -437,7 +485,7 @@ def verified_quotes(requirement: Any) -> list[_Quote]:
 
 
 def _value_texts(value: dict[str, Any] | None) -> list[tuple[str, str]]:
-    """Els textos del `value_json`, amb el seu camí."""
+    """Els textos del `value_json`, amb el seu cami."""
     texts: list[tuple[str, str]] = []
 
     def walk(node: Any, path: str) -> None:
@@ -465,91 +513,107 @@ class _Sources:
         self.title = getattr(requirement, "title", None) or ""
         self.description = getattr(requirement, "description", None) or ""
 
+    def literal_texts(self) -> list[tuple[str, str, str | None]]:
+        """`(font, text, evidencia)` del value i de les cites: les fonts d'un VALOR."""
+        return [("value_json", text, None) for _, text in self.value_texts] + [
+            ("quote", q.text, q.evidence_id) for q in self.quotes
+        ]
+
     def literal_text(self) -> str:
-        """Value + cites: les uniques fonts d'un VALOR."""
-        return " ".join([text for _, text in self.value_texts] + [q.text for q in self.quotes])
+        return " ".join(text for _, text, _ in self.literal_texts())
+
+    def literal_flag(self, pattern: re.Pattern[str], field_name: str) -> Provenance | None:
+        """Una marca en el text literal (value o cites)."""
+        for source, text, evidence in self.literal_texts():
+            if pattern.search(_fold(text)):
+                return Provenance(field_name, source, text, evidence)
+        return None
 
     def find_flag(self, pattern: re.Pattern[str], field_name: str) -> Provenance | None:
-        """Una marca de prudencia: value, cites, titol o descripcio, per aquest ordre."""
-        for _path, text in self.value_texts:
-            if pattern.search(_fold(text)):
-                return Provenance(field_name, "value_json", text, None)
-        for quote in self.quotes:
-            if pattern.search(_fold(quote.text)):
-                return Provenance(field_name, "quote", quote.text, quote.evidence_id)
+        """Com `literal_flag`, i tambe titol i descripcio: NOMES per a prudencia."""
+        found = self.literal_flag(pattern, field_name)
+        if found is not None:
+            return found
         for source, text in (("title", self.title), ("description", self.description)):
             if text and pattern.search(_fold(text)):
                 return Provenance(field_name, source, text, None)
         return None
 
-    def literal_flag(self, pattern: re.Pattern[str], field_name: str) -> Provenance | None:
-        """Com `find_flag`, pero nomes value i cites (text literal)."""
-        for _path, text in self.value_texts:
-            if pattern.search(_fold(text)):
-                return Provenance(field_name, "value_json", text, None)
-        for quote in self.quotes:
-            if pattern.search(_fold(quote.text)):
-                return Provenance(field_name, "quote", quote.text, quote.evidence_id)
-        return None
+
+def _unmapped(value: dict[str, Any], known: frozenset[str]) -> list[str]:
+    """Les claus del value que el normalitzador no sap ni traduir ni traslladar."""
+    return sorted(key for key, raw in value.items() if key not in known and raw not in (None, ""))
 
 
-_AMOUNT_KEYS = ("amount", "import", "minimum_amount", "coverage_amount", "threshold")
+def _value_amount(
+    sources: _Sources, keys: tuple[str, ...], field_name: str
+) -> tuple[Decimal | None, str | None, Provenance | None, str | None, bool]:
+    """L'import del `value_json`. `(import, moneda, procedencia, motiu, present)`.
 
-
-def _amount(
-    sources: _Sources, field_name: str
-) -> tuple[Decimal | None, str | None, Provenance | None, str | None]:
-    """L'import exigit: del `value_json` i, si no n'hi ha, d'una cita inequivoca.
-
-    Retorna `(import, moneda, procedencia, motiu)`.
+    `present` fals vol dir que el value no en porta cap (clau absent o nul·la): llavors
+    es poden mirar les cites.
     """
-    for key in _AMOUNT_KEYS:
-        if key not in sources.value or isinstance(sources.value.get(key), dict):
-            continue
+    for key in keys:
         raw = sources.value.get(key)
+        if raw is None or isinstance(raw, dict):
+            continue
         amount, currency, reason = parse_amount(raw)
         if amount is None:
-            return None, None, None, reason
+            return None, None, None, reason, True
         declared, known = _currency_field(sources.value.get("currency"))
-        if not known:
-            return None, None, None, REASON_CURRENCY_CONFLICT
-        if currency and declared and currency != declared:
-            return None, None, None, REASON_CURRENCY_CONFLICT
-        return (
-            amount,
-            currency or declared or "EUR",
-            Provenance(field_name, "value_json", str(raw)),
-            None,
-        )
+        if not known or (currency and declared and currency != declared):
+            return None, None, None, REASON_CURRENCY_CONFLICT, True
+        provenance = Provenance(field_name, "value_json", str(raw))
+        return amount, currency or declared or "EUR", provenance, None, True
+    return None, None, None, REASON_NO_SOURCE, False
 
-    found: dict[Decimal, _Quote] = {}
+
+def _quote_amount(
+    sources: _Sources, field_name: str
+) -> tuple[Decimal | None, Provenance | None, _Quote | None, _Candidate | None, str | None]:
+    """L'import de llindar de les cites. `(import, procedencia, cita, candidat, motiu)`.
+
+    Nomes si cada cita que en porta en te UN sol (comptant els que no porten «€»),
+    precedit d'una marca de llindar («igual o superior a», «és a dir», «mínima
+    de»...), i totes diuen el mateix. Si una cita en te mes d'un, o parla d'un
+    multiple o percentatge sense lligar l'import al llindar, no se n'agafa cap.
+    """
+    found: dict[Decimal, tuple[_Quote, _Candidate]] = {}
     for quote in sources.quotes:
-        for amount in amounts_in_text(quote.text):
-            found.setdefault(amount, quote)
+        candidates, _ratio = quote_amounts(quote.text)
+        if not candidates:
+            continue
+        if len(candidates) > 1:
+            return None, None, None, None, REASON_AMOUNT_AMBIGUOUS
+        candidate = candidates[0]
+        if candidate.amount is None:
+            return None, None, None, None, REASON_AMOUNT_AMBIGUOUS
+        if not candidate.marked:
+            # Sense marca, un import al costat d'un multiple o d'un percentatge pot
+            # ser la BASE (l'anualitat), no el llindar. Ni amb ni sense multiple
+            # s'agafa: el context ha de dir que es el llindar.
+            return None, None, None, None, REASON_AMOUNT_NOT_THRESHOLD
+        found.setdefault(candidate.amount, (quote, candidate))
     if not found:
-        return None, None, None, REASON_NO_SOURCE
+        return None, None, None, None, REASON_NO_SOURCE
     if len(found) > 1:
-        return None, None, None, REASON_AMOUNT_AMBIGUOUS
-    amount, quote = next(iter(found.items()))
-    return amount, "EUR", Provenance(field_name, "quote", quote.text, quote.evidence_id), None
+        return None, None, None, None, REASON_AMOUNT_AMBIGUOUS
+    amount, (quote, candidate) = next(iter(found.items()))
+    origin = Provenance(field_name, "quote", quote.text, quote.evidence_id)
+    return amount, origin, quote, candidate, None
 
 
-def _text_for(sources: _Sources, key: str) -> tuple[str | None, Provenance | None]:
-    """Un camp textual del value (p. ex. `period`)."""
+def _text_for(sources: _Sources, key: str) -> str | None:
     raw = sources.value.get(key)
     if isinstance(raw, str) and raw.strip():
-        return raw, Provenance(key, "value_json", raw)
-    return None, None
+        return raw
+    return None
 
 
 def _from_quotes(
     sources: _Sources, parse: Any, field_name: str
 ) -> tuple[Any, Provenance | None, bool]:
-    """Un valor que nomes es pot llegir de les cites: unic, o res.
-
-    `parse(text) -> (valor | None, ambigu)`. Cites que diuen valors diferents son
-    ambiguitat; cites que diuen el mateix, una sola lectura.
-    """
+    """Un valor que nomes es pot llegir de les cites: unic, o res."""
     values: dict[Any, _Quote] = {}
     for quote in sources.quotes:
         value, ambiguous = parse(quote.text)
@@ -568,19 +632,24 @@ def _from_quotes(
 def _period(
     sources: _Sources,
 ) -> tuple[int | None, AggregationType, list[Provenance], str | None]:
-    """Anys i agregacio: del `period` del value i, el que hi falti, de les cites."""
+    """Anys i agregacio: del `period` (o `years`) del value i, el que hi falti, de les cites."""
     provenance: list[Provenance] = []
     years: int | None = None
     aggregation = AggregationType.UNKNOWN
-    text, origin = _text_for(sources, "period")
+    raw_years = sources.value.get("years")
+    if isinstance(raw_years, int) and not isinstance(raw_years, bool) and raw_years > 0:
+        years = raw_years
+        provenance.append(Provenance("reference_period.years", "value_json", str(raw_years)))
+    text = _text_for(sources, "period")
     if text is not None:
-        years, ambiguous = parse_years(text)
-        if ambiguous:
+        parsed_years, ambiguous = parse_years(text)
+        if ambiguous or (years is not None and parsed_years not in (None, years)):
             return None, AggregationType.UNKNOWN, [], REASON_PERIOD_AMBIGUOUS
         aggregation, ambiguous = parse_aggregation(text)
         if ambiguous:
             return None, AggregationType.UNKNOWN, [], REASON_PERIOD_AMBIGUOUS
-        if years is not None:
+        if years is None and parsed_years is not None:
+            years = parsed_years
             provenance.append(Provenance("reference_period.years", "value_json", text))
         if aggregation != AggregationType.UNKNOWN:
             provenance.append(Provenance("aggregation", "value_json", text))
@@ -607,62 +676,90 @@ def _period(
     return years, aggregation, provenance, None
 
 
-def _percentage(sources: _Sources) -> tuple[Decimal | None, PercentageBase, Provenance | None]:
-    """Un percentatge (`percent`) o un multiple (`multiple`) del value, i la seva base."""
+def _percentage(
+    sources: _Sources,
+) -> tuple[Decimal | None, PercentageBase, Provenance | None, bool]:
+    """Un percentatge o un multiple del value i la seva base. `(..., ambigu)`."""
     for key in ("percent", "percentage"):
-        if key in sources.value:
+        if sources.value.get(key) is not None:
             value = parse_percentage(sources.value.get(key))
             if value is not None:
+                base, ambiguous = percentage_base(sources.literal_text())
                 return (
                     value,
-                    percentage_base(sources.literal_text()),
+                    base,
                     Provenance("threshold.percentage", "value_json", str(sources.value[key])),
+                    ambiguous,
                 )
     raw = sources.value.get("multiple")
     multiple = parse_multiple(raw)
     if multiple is not None:
+        base, ambiguous = percentage_base(str(raw))
         return (
             multiple * Decimal(100),
-            percentage_base(str(raw)),
+            base,
             Provenance("threshold.percentage", "value_json", str(raw)),
+            ambiguous,
         )
-    return None, PercentageBase.UNKNOWN, None
+    return None, PercentageBase.UNKNOWN, None, False
 
 
 def _money(amount: Decimal | None, currency: str | None) -> dict[str, Any]:
     return {"amount": None if amount is None else str(amount), "currency": currency or "EUR"}
 
 
+def _not_normalized(reason: str, **detail: Any) -> Normalization:
+    return Normalization(status="not_normalized", reason=reason, detail=detail)
+
+
 # --------------------------------------------------------------------------- #
-# Per categoria                                                                 #
+# Solvencia economica                                                           #
 # --------------------------------------------------------------------------- #
 
 _TURNOVER = re.compile(
     r"volum anual de negoci|volum de negoci|xifra anual de negoci|xifra de negoci"
     r"|volumen anual de negocio|volumen de negocio|cifra anual de negocio"
 )
+_ECONOMIC_KEYS = frozenset(
+    {"amount", "import", "currency", "period", "years", "multiple", "percent", "percentage"}
+)
 
 
 def _economic(sources: _Sources, requirement: Any) -> Normalization:
-    amount, currency, origin, reason = _amount(sources, "threshold.amount")
-    percentage, base, percentage_origin = _percentage(sources)
+    unmapped = _unmapped(sources.value, _ECONOMIC_KEYS)
+    if unmapped:
+        return _not_normalized(REASON_UNMAPPED_CONDITIONS, keys=unmapped)
+    amount, currency, origin, reason, present = _value_amount(
+        sources, ("amount", "import"), "threshold.amount"
+    )
+    if present and amount is None:
+        # Hi ha un import pero no es llegible: no es substitueix per res.
+        return _not_normalized(reason or REASON_AMOUNT_UNPARSEABLE)
+    if not present:
+        amount, origin, _quote, _candidate, quote_reason = _quote_amount(
+            sources, "threshold.amount"
+        )
+        currency = "EUR" if amount is not None else None
+        if amount is None and quote_reason not in (None, REASON_NO_SOURCE):
+            return _not_normalized(quote_reason)
+    percentage, base, percentage_origin, base_ambiguous = _percentage(sources)
+    if base_ambiguous:
+        return _not_normalized(REASON_PERCENTAGE_BASE_AMBIGUOUS)
     if amount is None and percentage is None:
-        return Normalization(status="not_normalized", reason=reason or REASON_NO_SOURCE)
-    if amount is None and reason not in (None, REASON_NO_SOURCE):
-        # Hi ha un import pero no es llegible: no es substitueix per un percentatge.
-        return Normalization(status="not_normalized", reason=reason)
+        return _not_normalized(REASON_NO_SOURCE)
     metric_origin = sources.literal_flag(_TURNOVER, "metric")
     if metric_origin is None:
-        return Normalization(status="not_normalized", reason=REASON_METRIC_NOT_STATED)
+        return _not_normalized(REASON_METRIC_NOT_STATED)
     years, aggregation, period_origin, reason = _period(sources)
     if reason:
-        return Normalization(status="not_normalized", reason=reason)
+        return _not_normalized(reason)
     operator = getattr(requirement, "operator", None)
     threshold = _money(amount, currency)
     if percentage is not None:
         threshold["percentage"] = str(percentage)
         threshold["percentage_base"] = base.value
     value = {
+        NORMALIZED_MARKER: NORMALIZER_VERSION,
         "kind": "economic_solvency",
         "metric": EconomicMetric.ANNUAL_TURNOVER.value,
         "operator": str(operator) if operator else "gte",
@@ -673,30 +770,62 @@ def _economic(sources: _Sources, requirement: Any) -> Normalization:
         "aggregation": aggregation.value,
     }
     provenance = [p for p in (origin, percentage_origin, metric_origin) if p] + period_origin
-    return Normalization(status="normalized", value_json=value, provenance=tuple(provenance))
+    return Normalization(
+        status="normalized", value_json=value, value_schema=_V2, provenance=tuple(provenance)
+    )
 
 
-_PER_CLAIM_AND_YEAR = re.compile(r"per sinistre i (?:per )?any|por siniestro y (?:por )?ano")
+# --------------------------------------------------------------------------- #
+# Assegurances                                                                  #
+# --------------------------------------------------------------------------- #
+
+_PER_CLAIM_AND_YEAR = re.compile(r"per sinistre i (?:per )?any\b|por siniestro y (?:por )?ano\b")
 _PER_CLAIM = re.compile(r"per sinistre|por siniestro")
 _PER_VICTIM = re.compile(r"per victima|por victima")
-_ANNUAL = re.compile(r"agregat anual|agregado anual|\bper any\b|\bpor ano\b|\banual\b")
-_TOTAL = re.compile(r"limit total|limite total|\btotal\b")
+#: Nomes «agregat anual» o «per any»: «prima anual» no es cap limit.
+_ANNUAL = re.compile(r"agregat anual|agregado anual|\bper any\b|\bpor ano\b")
+_TOTAL = re.compile(r"limit total|limite total|cobertura total")
 _EMPLOYER = re.compile(r"patronal")
 _CIVIL_LIABILITY = re.compile(r"responsabilitat civil|responsabilidad civil")
+#: Bases de sublimit que la v2 no sap representar: si el text en parla, no es
+#: compara res (la mateixa guarda que `specs._SUBLIMIT_HINT`).
+_UNMAPPED_BASE = re.compile(
+    r"\bper (?:cada )?(?:ocurrencia|assegurat|occurrence)\b"
+    r"|\bpor (?:cada )?(?:ocurrencia|asegurado)\b"
+)
+_SUBLIMIT_WORD = re.compile(r"sub[\s_-]*limit|sublimite")
+#: «mantenir vigent durant tota l'execució»: la condicio que una regla no comprova.
+_VALID_THROUGH = re.compile(
+    r"durant tota l'execucio|durant tota la (?:vigencia|durada|execucio) del contracte"
+    r"|durante toda la (?:ejecucion|vigencia|duracion)|mantenir(?:-la)? vigent|mantener vigente"
+)
+_INSURANCE_KEYS = frozenset(
+    {"amount", "coverage_amount", "currency", "unit", "limit_kind", "kind", "type", "basis"}
+)
+#: Condicions que es TRASLLADEN tal qual al camp v2 equivalent.
+_INSURANCE_CONDITIONS = frozenset(
+    {"additional_insured", "must_be_valid_through_contract", "validity_note", "proof"}
+)
 
 
 def limit_kinds(text: str) -> tuple[tuple[InsuranceLimitKind, ...] | None, bool]:
     """Quins limits nomena un text. `(tipus, ambigu)`; `None` si no en nomena cap.
 
     «per sinistre i any» son DOS limits (per sinistre i agregat anual) del mateix
-    import: es la lectura habitual de «por siniestro y año». «per víctima» de la
-    RC patronal es el sublimit patronal, diferent del general per victima.
+    import: es l'unica combinacio en que un import val per a dos limits. Qualsevol
+    altra combinacio, un sublimit que no se sap mapar («sublímit», «per
+    ocurrència», «per assegurat») o un «sublímit» sense base: ambigu.
     """
     folded = _fold(text)
-    found: list[InsuranceLimitKind] = []
+    if _UNMAPPED_BASE.search(folded):
+        return None, True
     if _PER_CLAIM_AND_YEAR.search(folded):
-        found += [InsuranceLimitKind.PER_CLAIM, InsuranceLimitKind.ANNUAL_AGGREGATE]
-    elif _PER_CLAIM.search(folded):
+        rest = _PER_CLAIM_AND_YEAR.sub(" ", folded)
+        if _PER_CLAIM.search(rest) or _PER_VICTIM.search(rest) or _ANNUAL.search(rest):
+            return None, True
+        return (InsuranceLimitKind.PER_CLAIM, InsuranceLimitKind.ANNUAL_AGGREGATE), False
+    found: list[InsuranceLimitKind] = []
+    if _PER_CLAIM.search(folded):
         found.append(InsuranceLimitKind.PER_CLAIM)
     if _PER_VICTIM.search(folded):
         found.append(
@@ -704,22 +833,37 @@ def limit_kinds(text: str) -> tuple[tuple[InsuranceLimitKind, ...] | None, bool]
             if _EMPLOYER.search(folded)
             else InsuranceLimitKind.PER_VICTIM
         )
-    if not found and _ANNUAL.search(folded):
+    if _ANNUAL.search(folded):
         found.append(InsuranceLimitKind.ANNUAL_AGGREGATE)
-    if not found and _TOTAL.search(folded):
+    if _TOTAL.search(folded):
         found.append(InsuranceLimitKind.TOTAL)
-    if not found:
-        return None, False
-    if InsuranceLimitKind.PER_CLAIM in found and len(found) > 2:
-        # Un sol import i tres unitats: no es diu a quina correspon.
+    if len(found) > 1:
         return None, True
+    if not found:
+        return (None, True) if _SUBLIMIT_WORD.search(folded) else (None, False)
     return tuple(found), False
 
 
 def _insurance(sources: _Sources) -> Normalization:
-    amount, currency, origin, reason = _amount(sources, "limits.amount")
-    if amount is None:
-        return Normalization(status="not_normalized", reason=reason)
+    unmapped = _unmapped(sources.value, _INSURANCE_KEYS | _INSURANCE_CONDITIONS)
+    if unmapped:
+        return _not_normalized(REASON_UNMAPPED_CONDITIONS, keys=unmapped)
+    # Cap cita del requisit pot parlar d'un sublimit que no se sap mapar.
+    for _source, text, _evidence in sources.literal_texts():
+        if _UNMAPPED_BASE.search(_fold(text)):
+            return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
+
+    amount, currency, origin, reason, present = _value_amount(
+        sources, ("amount", "coverage_amount"), "limits.amount"
+    )
+    quote = candidate = None
+    if present and amount is None:
+        return _not_normalized(reason or REASON_AMOUNT_UNPARSEABLE)
+    if not present:
+        amount, origin, quote, candidate, quote_reason = _quote_amount(sources, "limits.amount")
+        currency = "EUR"
+        if amount is None:
+            return _not_normalized(quote_reason or REASON_NO_SOURCE)
 
     provenance = [origin]
     kinds: tuple[InsuranceLimitKind, ...] | None = None
@@ -728,13 +872,37 @@ def _insurance(sources: _Sources) -> Normalization:
         if isinstance(raw, str) and raw.strip():
             kinds, ambiguous = limit_kinds(raw)
             if ambiguous:
-                return Normalization(status="not_normalized", reason=REASON_LIMIT_KIND_AMBIGUOUS)
+                return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
             if kinds is not None:
                 provenance.append(Provenance("limits.kind", "value_json", raw))
                 break
-    # «patronal» pot ser a la cita encara que la unitat del value digui només
-    # «per víctima»: el sublimit patronal es una condicio diferent.
-    if kinds and InsuranceLimitKind.PER_VICTIM in kinds:
+    if kinds is None:
+        # El tipus, de la cita que DONA l'import (o, si l'import es del value, de
+        # les cites on aquell import es l'unic): el text que va just despres.
+        segments: list[tuple[str, _Quote]] = []
+        if quote is not None and candidate is not None:
+            segments.append((_flat(quote.text)[candidate.end :], quote))
+        else:
+            for item in sources.quotes:
+                found, _ratio = quote_amounts(item.text)
+                if len(found) == 1 and found[0].amount == amount:
+                    segments.append((_flat(item.text)[found[0].end :], item))
+                elif len(found) > 1 and any(c.amount == amount for c in found):
+                    return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
+        readings: dict[tuple[InsuranceLimitKind, ...], _Quote] = {}
+        for segment, item in segments:
+            read, ambiguous = limit_kinds(segment)
+            if ambiguous:
+                return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
+            if read is not None:
+                readings.setdefault(read, item)
+        if len(readings) > 1:
+            return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
+        if readings:
+            kinds, item = next(iter(readings.items()))
+            provenance.append(Provenance("limits.kind", "quote", item.text, item.evidence_id))
+    if kinds is not None and InsuranceLimitKind.PER_VICTIM in kinds:
+        # «patronal» pot ser a la cita encara que la unitat digui nomes «per víctima».
         employer = sources.literal_flag(_EMPLOYER, "limits.kind")
         if employer is not None:
             kinds = tuple(
@@ -745,29 +913,43 @@ def _insurance(sources: _Sources) -> Normalization:
             )
             provenance.append(employer)
     if kinds is None:
-        kinds, origin_quote, ambiguous = _from_quotes(sources, limit_kinds, "limits.kind")
-        if ambiguous:
-            return Normalization(status="not_normalized", reason=REASON_LIMIT_KIND_AMBIGUOUS)
-        if origin_quote is not None:
-            provenance.append(origin_quote)
-    kinds = kinds or (InsuranceLimitKind.UNKNOWN,)
+        # Cap tipus i cap marca de sublimit: cobertura contra cobertura, com la v1.
+        if any(_SUBLIMIT_WORD.search(_fold(text)) for _, text, _ in sources.literal_texts()):
+            return _not_normalized(REASON_LIMIT_KIND_AMBIGUOUS)
+        kinds = (InsuranceLimitKind.UNKNOWN,)
 
-    insurance_type = None
-    type_origin = sources.literal_flag(_CIVIL_LIABILITY, "insurance_type")
-    if type_origin is not None:
-        insurance_type = InsuranceType.CIVIL_LIABILITY.value
-        provenance.append(type_origin)
-
-    value = {
+    value: dict[str, Any] = {
+        NORMALIZED_MARKER: NORMALIZER_VERSION,
         "kind": "insurance",
-        "insurance_type": insurance_type,
+        "insurance_type": None,
         "limits": [
             {"kind": kind.value, "amount": str(amount), "currency": currency or "EUR"}
             for kind in kinds
         ],
     }
-    return Normalization(status="normalized", value_json=value, provenance=tuple(provenance))
+    type_origin = sources.literal_flag(_CIVIL_LIABILITY, "insurance_type")
+    if type_origin is not None:
+        value["insurance_type"] = InsuranceType.CIVIL_LIABILITY.value
+        provenance.append(type_origin)
+    for key in _INSURANCE_CONDITIONS:
+        if sources.value.get(key) not in (None, ""):
+            value[key] = sources.value[key]
+            provenance.append(Provenance(key, "value_json", str(sources.value[key])))
+    if not value.get("must_be_valid_through_contract"):
+        through = sources.literal_flag(_VALID_THROUGH, "must_be_valid_through_contract")
+        if through is not None:
+            # Com faria un requisit v2 tipat: una condicio que cap regla no
+            # comprova i que impedeix `satisfies` (INSURANCE_CONDITION_NOT_CHECKED).
+            value["must_be_valid_through_contract"] = True
+            provenance.append(through)
+    return Normalization(
+        status="normalized", value_json=value, value_schema=_V2, provenance=tuple(provenance)
+    )
 
+
+# --------------------------------------------------------------------------- #
+# Experiencia                                                                   #
+# --------------------------------------------------------------------------- #
 
 _SIMILAR = re.compile(
     r"similar|semblant|naturalesa igual|mateixa naturalesa|igual naturaleza|analog"
@@ -776,136 +958,259 @@ _ACCUMULATED = re.compile(r"acumulat|acumulado|any de major execucio|ano de mayo
 _INDIVIDUAL = re.compile(
     r"cada contracte|cadascun dels contractes|per contracte|cada contrato|por contrato"
 )
+_EXPERIENCE_KEYS = frozenset(
+    {
+        "amount", "minimum_amount", "minimum_amount_each", "currency", "period", "years",
+        "percent", "percentage", "multiple",
+        # Condicions que es traslladen:
+        "minimum_projects", "cpv_codes", "services", "similarity_condition", "lookback_years",
+    }
+)  # fmt: skip
+
+
+def _int_of(raw: Any) -> int | None:
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int) and raw > 0:
+        return raw
+    if isinstance(raw, str) and raw.strip().isdigit() and int(raw.strip()) > 0:
+        return int(raw.strip())
+    return None
 
 
 def _experience(sources: _Sources) -> Normalization:
-    amount, currency, origin, reason = _amount(sources, "amount")
-    if amount is None:
-        return Normalization(status="not_normalized", reason=reason)
-    accumulated = sources.literal_flag(_ACCUMULATED, "amount_basis")
-    individual = sources.literal_flag(_INDIVIDUAL, "amount_basis")
-    if (accumulated is None) == (individual is None):
-        # Ni l'un ni l'altre, o tots dos: no es pot saber si l'import es de cada
-        # contracte o de la suma, i confondre'ls canvia el veredicte.
-        return Normalization(status="not_normalized", reason=REASON_EXPERIENCE_BASIS_AMBIGUOUS)
+    value_in = sources.value
+    unmapped = _unmapped(value_in, _EXPERIENCE_KEYS)
+    if unmapped:
+        return _not_normalized(REASON_UNMAPPED_CONDITIONS, keys=unmapped)
+    for key in ("minimum_projects", "lookback_years"):
+        if value_in.get(key) is not None and _int_of(value_in.get(key)) is None:
+            return _not_normalized(REASON_UNMAPPED_CONDITIONS, keys=[key])
+
+    # `minimum_amount(_each)` es, a la lectura de sempre, l'import de CADA contracte.
+    each_key = next(
+        (key for key in ("minimum_amount_each", "minimum_amount") if value_in.get(key) is not None),
+        None,
+    )
+    amount_keys = (each_key,) if each_key else ("amount",)
+    amount, currency, origin, reason, present = _value_amount(sources, amount_keys, "amount")
+    if present and amount is None:
+        return _not_normalized(reason or REASON_AMOUNT_UNPARSEABLE)
+    if not present:
+        amount, origin, _quote, _candidate, quote_reason = _quote_amount(sources, "amount")
+        currency = "EUR" if amount is not None else None
+        if amount is None and quote_reason not in (None, REASON_NO_SOURCE):
+            return _not_normalized(quote_reason)
+    count = _int_of(value_in.get("minimum_projects"))
+    if amount is None and count is None:
+        return _not_normalized(REASON_NO_SOURCE)
+
+    provenance = [p for p in (origin,) if p]
+    individual = accumulated = None
+    if amount is not None:
+        accumulated = sources.literal_flag(_ACCUMULATED, "amount_basis")
+        individual = sources.literal_flag(_INDIVIDUAL, "amount_basis")
+        if each_key and accumulated is None:
+            individual = individual or Provenance("amount_basis", "value_json", each_key)
+        if (accumulated is None) == (individual is None):
+            # Ni l'un ni l'altre, o tots dos: no se sap si l'import es de cada
+            # contracte o de la suma, i confondre'ls canvia el veredicte.
+            return _not_normalized(REASON_EXPERIENCE_BASIS_AMBIGUOUS)
+        provenance.append(accumulated or individual)
+
     years, aggregation, period_origin, reason = _period(sources)
     if reason:
-        return Normalization(status="not_normalized", reason=reason)
-    percentage, base, percentage_origin = _percentage(sources)
-    money = _money(amount, currency)
-    if percentage is not None:
+        return _not_normalized(reason)
+    lookback = _int_of(value_in.get("lookback_years"))
+    if lookback is not None:
+        if years not in (None, lookback):
+            return _not_normalized(REASON_PERIOD_AMBIGUOUS)
+        years = lookback
+        provenance.append(Provenance("reference_period.years", "value_json", str(lookback)))
+    percentage, base, percentage_origin, base_ambiguous = _percentage(sources)
+    if base_ambiguous:
+        return _not_normalized(REASON_PERCENTAGE_BASE_AMBIGUOUS)
+    money = _money(amount, currency) if amount is not None else None
+    if money is not None and percentage is not None:
         money["percentage"] = str(percentage)
         money["percentage_base"] = base.value
-    provenance = [p for p in (origin, accumulated or individual, percentage_origin) if p]
+        provenance.append(percentage_origin)
     provenance += period_origin
     value: dict[str, Any] = {
+        NORMALIZED_MARKER: NORMALIZER_VERSION,
         "kind": "experience",
         "reference_period": (
             {"type": "last_n_years", "years": years} if years else {"type": "unknown"}
         ),
         "aggregation": aggregation.value,
+        "min_count": count,
         "min_individual_amount": money if individual else None,
         "min_accumulated_amount": money if accumulated else None,
+        "cpv_codes": [str(code) for code in value_in.get("cpv_codes") or []],
+        "categories": [str(item) for item in value_in.get("services") or []],
     }
-    similar = sources.find_flag(_SIMILAR, "similarity_note")
-    if similar is not None:
-        # Marca de prudencia: «serveis similars» sense criteri objectiu (CPV) ho
-        # ha de valorar una persona (`EXPERIENCE_SIMILARITY_REVIEW`).
-        value["similarity_note"] = _flat(similar.raw)[:300]
-        provenance.append(similar)
-    return Normalization(status="normalized", value_json=value, provenance=tuple(provenance))
+    if count is not None:
+        provenance.append(Provenance("min_count", "value_json", str(value_in["minimum_projects"])))
+    note = value_in.get("similarity_condition")
+    if note:
+        value["similarity_note"] = str(note)[:300]
+        provenance.append(Provenance("similarity_note", "value_json", str(note)))
+    else:
+        similar = sources.find_flag(_SIMILAR, "similarity_note")
+        if similar is not None:
+            # Marca de prudencia: «serveis similars» sense criteri objectiu ho ha de
+            # valorar una persona (`EXPERIENCE_SIMILARITY_REVIEW`).
+            value["similarity_note"] = _flat(similar.raw)[:300]
+            provenance.append(similar)
+    return Normalization(
+        status="normalized", value_json=value, value_schema=_V2, provenance=tuple(provenance)
+    )
 
 
-def _personnel(sources: _Sources) -> Normalization:
-    for key in ("minimum_people", "count", "min_people"):
+# --------------------------------------------------------------------------- #
+# Personal                                                                      #
+# --------------------------------------------------------------------------- #
+
+
+def _personnel(sources: _Sources) -> Normalization | None:
+    for key in ("minimum_people", "count"):
         raw = sources.value.get(key)
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            return None  # la lectura de sempre ja el llegeix
         if isinstance(raw, str) and raw.strip().isdigit():
+            # Enriquir: es conserven totes les claus (un perfil concret continua
+            # anant a la regla de titulacions).
+            value = {**sources.value, "minimum_people": int(raw.strip())}
+            value[NORMALIZED_MARKER] = NORMALIZER_VERSION
             return Normalization(
                 status="normalized",
-                value_json={"minimum_people": int(raw.strip())},
+                value_json=value,
                 provenance=(Provenance("minimum_people", "value_json", raw),),
             )
-    # Una llista de perfils («cap de projecte, especialista...») no es un
-    # recompte: comptar-ne els elements seria inventar el minim.
-    return Normalization(status="not_normalized", reason=REASON_NO_COUNT)
+    # Una llista de perfils («cap de projecte, especialista...») no es un recompte.
+    return _not_normalized(REASON_NO_COUNT)
 
 
-# --- ENS ------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# ENS                                                                           #
+# --------------------------------------------------------------------------- #
 
-_ENS = re.compile(r"\bENS\b|Esquema\s+Nacional\s+de\s+Segur(?:etat|idad)", re.I)
 _ENS_STRICT = re.compile(r"\bENS\b|Esquema\s+Nacional\s+de\s+Segur(?:etat|idad)")
-_ENS_LEVEL = re.compile(
-    r"(?:categoria|nivell|nivel)\s+(basica|basic|mitjana|mitja|media|medio|alta|alt)\b"
+_LEVEL_WORD = r"(basica|basico|basic|mitjana|mitja|media|medio|alta|alto|alt)"
+#: El nivell just despres de l'esquema («ENS Alta», «ENS (categoria Mitjana)»,
+#: «ENS - MEDIA», «Esquema Nacional de Seguretat de nivell bàsic») o darrere
+#: d'una paraula de categoria en un text que nomena l'ENS («categoria MITJANA»).
+_ENS_LEVEL_AFTER = re.compile(
+    r"(?:\bens\b|esquema nacional de segur(?:etat|idad))(?:\s*\(ens\))?"
+    r"[\s(:,\-–]*(?:(?:de\s+)?(?:la\s+)?(?:categoria|nivell|nivel)\s*:?\s*(?:de\s+)?)?"
+    + _LEVEL_WORD
+    + r"\b"
+)
+_ENS_LEVEL_WORDED = re.compile(
+    r"\b(?:categoria|nivell|nivel)\s*:?\s*(?:de\s+)?" + _LEVEL_WORD + r"\b"
 )
 ENS_LEVELS = {
-    "basica": "bàsica", "basic": "bàsica",
+    "basica": "basica", "basico": "basica", "basic": "basica",
     "mitjana": "mitjana", "mitja": "mitjana", "media": "mitjana", "medio": "mitjana",
-    "alta": "alta", "alt": "alta",
+    "alta": "alta", "alto": "alta", "alt": "alta",
 }  # fmt: skip
+#: Ordre de les categories de l'ENS (RD 311/2022).
+ENS_ORDER = {"basica": 1, "mitjana": 2, "alta": 3}
+_OR_HIGHER = re.compile(
+    r"o superior|o una categoria superior|o categoria superior|com a minim|como minimo"
+    r"|\bminim[ao]?\b|igual o superior"
+)
 
 
 def names_ens(text: str) -> bool:
     """Cert si el text NOMENA l'ENS (sigla en majuscules o el nom sencer)."""
-    return bool(_ENS_STRICT.search(_flat(text)))
+    return bool(_ENS_STRICT.search(_flat(text or "")))
 
 
-def ens_level(text: str) -> str | None:
-    match = _ENS_LEVEL.search(_fold(text))
-    return ENS_LEVELS.get(match.group(1)) if match else None
+def ens_level(text: str) -> tuple[str | None, bool]:
+    """La categoria de l'ENS que diu un text. `(categoria, ambigua)`.
+
+    Nomes si el text nomena l'ENS. Dues categories diferents: ambigua.
+    """
+    if not names_ens(text):
+        return None, False
+    folded = _fold(text)
+    found = {ENS_LEVELS[m.group(1)] for m in _ENS_LEVEL_AFTER.finditer(folded)}
+    found |= {ENS_LEVELS[m.group(1)] for m in _ENS_LEVEL_WORDED.finditer(folded)}
+    if len(found) > 1:
+        return None, True
+    return (found.pop() if found else None), False
+
+
+#: Categories on un requisit que NOMENA l'ENS es llegeix com a exigencia de
+#: certificacio. A L'Escala l'ENS nomes hi apareix com a requisit tecnic.
+_ENS_CATEGORIES = frozenset(
+    {
+        RequirementCategory.CERTIFICATION,
+        RequirementCategory.TECHNICAL_REQUIREMENT,
+        RequirementCategory.CONTRACT_CONDITION,
+    }
+)
+_ENS_CERTIFICATION_KEYS = frozenset(
+    {"name", "valid_at_deadline", "equivalents_allowed", "equivalence_allowed"}
+)
 
 
 def _ens(sources: _Sources, requirement: Any) -> Normalization | None:
-    """L'ENS nomenat explicitament: certificacio, amb nivell nomes si el plec el diu."""
+    """L'ENS nomenat explicitament: certificacio, amb categoria nomes si el plec la diu."""
     texts = [("title", sources.title, None), ("description", sources.description, None)]
-    texts += [("value_json", text, None) for _, text in sources.value_texts]
-    texts += [("quote", q.text, q.evidence_id) for q in sources.quotes]
+    texts += sources.literal_texts()
     named = next(((s, t, e) for s, t, e in texts if t and names_ens(t)), None)
     if named is None:
         return None
     if getattr(requirement, "obligation", None) != RequirementObligation.MANDATORY:
-        return Normalization(status="not_normalized", reason=REASON_NOT_MANDATORY)
-    origin = Provenance("certification.scheme", named[0], named[1], named[2])
-    # El nivell, NOMES del text literal (value o cites).
-    levels = {
-        ens_level(text): (source, text, evidence)
-        for source, text, evidence in texts
-        # Una cita compta si nomena l'ENS: «categoria alta» d'una altra cosa no
-        # es el nivell de l'esquema.
-        if (source == "value_json" or (source == "quote" and names_ens(text))) and ens_level(text)
-    }
-    if len(levels) > 1:
-        return Normalization(
-            status="routed",
-            route=ROUTE_ENS_LEVEL_NOT_STATED,
-            reason=REASON_ENS_LEVEL_AMBIGUOUS,
-            read_as=RequirementCategory.CERTIFICATION,
-            provenance=(origin,),
-            detail={"scheme": "ENS", "levels": sorted(levels)},
-        )
-    if not levels:
-        return Normalization(
-            status="routed",
-            route=ROUTE_ENS_LEVEL_NOT_STATED,
-            read_as=RequirementCategory.CERTIFICATION,
-            provenance=(origin,),
-            detail={"scheme": "ENS"},
-        )
-    level, (source, text, evidence) = next(iter(levels.items()))
+        return _not_normalized(REASON_NOT_MANDATORY)
+    category = getattr(requirement, "category", None)
+    if category == RequirementCategory.CERTIFICATION:
+        unmapped = _unmapped(sources.value, _ENS_CERTIFICATION_KEYS)
+        if unmapped:
+            # `names` (una de diverses), etc.: la regla de sempre en sap mes.
+            return _not_normalized(REASON_UNMAPPED_CONDITIONS, keys=unmapped)
+    provenance = [Provenance("certification.scheme", named[0], named[1], named[2])]
+    levels: dict[str, tuple[str, str, str | None]] = {}
+    for source, text, evidence in sources.literal_texts():
+        level, ambiguous = ens_level(text)
+        if ambiguous:
+            levels = {}
+            break
+        if level is not None:
+            levels.setdefault(level, (source, text, evidence))
+    level = None
+    or_higher = False
+    if len(levels) == 1:
+        level, (source, text, evidence) = next(iter(levels.items()))
+        provenance.append(Provenance("certification.level", source, text, evidence))
+        or_higher = bool(_OR_HIGHER.search(_fold(text)))
+        if or_higher:
+            provenance.append(Provenance("certification.or_higher", source, text, evidence))
+    value = sources.value if category == RequirementCategory.CERTIFICATION else {}
+    reading = EnsReading(
+        level=level,
+        or_higher=or_higher,
+        equivalence_allowed=bool(
+            value.get("equivalents_allowed")
+            or value.get("equivalence_allowed")
+            or getattr(requirement, "equivalence_allowed", False)
+        ),
+        valid_at_deadline=bool(value.get("valid_at_deadline")),
+    )
     return Normalization(
         status="routed",
-        route=ROUTE_ENS_CERTIFICATION,
-        read_as=RequirementCategory.CERTIFICATION,
-        value_json={
-            "kind": "certification",
-            "name": f"ENS categoria {level}",
-            "equivalence_allowed": False,
-        },
-        provenance=(origin, Provenance("certification.level", source, text, evidence)),
-        detail={"scheme": "ENS", "level": level},
+        route=ROUTE_ENS,
+        ens=reading,
+        provenance=tuple(provenance),
+        detail={"scheme": "ENS", "levels_found": sorted(levels)} if len(levels) > 1 else {},
     )
 
 
-# --- Registres -------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Registres i classificacio                                                     #
+# --------------------------------------------------------------------------- #
 
 _RELI_ROLECE = re.compile(r"\breli\b|\brolece\b")
 #: «les empreses inscrites», «licitadors inscrits»: la clausula parla de QUI ja hi
@@ -918,37 +1223,7 @@ _SECTOR_OPERATOR = re.compile(
     r"\bcnmc\b|comissio nacional dels mercats|comision nacional de los mercados"
     r"|registre d'operadors|registro de operadores"
 )
-
-
-def _registration(sources: _Sources, requirement: Any) -> Normalization | None:
-    if sources.find_flag(_RELI_ROLECE, "registry") is not None:
-        subject = sources.find_flag(_REGISTERED_SUBJECT, "registry.subject")
-        if subject is not None:
-            # Documentacio que aporta qui JA hi es inscrit. No es l'exigencia
-            # d'estar-hi: avaluar-la com a tal demanaria un ROLECE que el plec no
-            # exigeix.
-            return Normalization(
-                status="routed",
-                route=ROUTE_REGISTRY_DOCUMENTATION_ONLY,
-                provenance=(subject,),
-            )
-        return None
-    named = sources.find_flag(_SECTOR_OPERATOR, "registry")
-    if named is not None:
-        if getattr(requirement, "obligation", None) != RequirementObligation.MANDATORY:
-            return Normalization(status="not_normalized", reason=REASON_NOT_MANDATORY)
-        return Normalization(
-            status="routed",
-            route=ROUTE_SECTOR_OPERATOR_REGISTRY,
-            value_json={"type": "sector_operator_registry", "name": _flat(named.raw)[:200]},
-            provenance=(named,),
-        )
-    return Normalization(status="not_normalized", reason=REASON_REGISTRY_NOT_NAMED)
-
-
-#: «no és necessari disposar de classificació», «la classificació no s'exigeix»:
-#: el plec diu que NO s'exigeix. Avaluar-lo com si l'exigis faria dir «sense dades»
-#: o, amb el perfil complet, «no compleix» a una cosa que el plec no demana.
+#: «no és necessari disposar de classificació», «la classificació no s'exigeix».
 _NOT_REQUIRED = re.compile(
     r"\bno es necessari\b|\bno s'exigeix\b|\bno s'exigira\b|\bno es requereix\b"
     r"|\bno se exige\b|\bno es necesari[oa]\b|\bno sera exigible\b|\bno es exigible\b"
@@ -961,9 +1236,7 @@ _NOT_REQUIRED_CATEGORIES = frozenset(
 def _not_required(sources: _Sources, requirement: Any) -> Normalization | None:
     """El plec diu, literalment, que aquest registre o classificacio NO s'exigeix.
 
-    Nomes amb text literal (value o cita) i mai per a un requisit `mandatory`: un
-    obligatori que digues «no s'exigeix» es una contradiccio de l'extraccio, i
-    aquella la resol una persona.
+    Nomes amb text literal (value o cita) i mai per a un requisit `mandatory`.
     """
     if getattr(requirement, "obligation", None) == RequirementObligation.MANDATORY:
         return None
@@ -973,45 +1246,72 @@ def _not_required(sources: _Sources, requirement: Any) -> Normalization | None:
     return Normalization(status="routed", route=ROUTE_NOT_REQUIRED, provenance=(origin,))
 
 
-def _certification(sources: _Sources) -> Normalization:
-    for key in ("name", "certification", "standard"):
-        raw = sources.value.get(key)
-        if isinstance(raw, str) and raw.strip():
+def _registration(sources: _Sources, requirement: Any) -> Normalization | None:
+    if sources.find_flag(_RELI_ROLECE, "registry") is not None:
+        subject = sources.find_flag(_REGISTERED_SUBJECT, "registry.subject")
+        if subject is not None:
+            # Documentacio que aporta qui JA hi es inscrit: no es l'exigencia
+            # d'estar-hi. Marca de prudencia (porta a revisio), pot venir del titol.
             return Normalization(
-                status="normalized",
-                value_json={"kind": "certification", "name": raw.strip()},
-                provenance=(Provenance("certification.name", "value_json", raw),),
+                status="routed", route=ROUTE_REGISTRY_DOCUMENTATION_ONLY, provenance=(subject,)
             )
-    return Normalization(status="not_normalized", reason=REASON_CERTIFICATION_NOT_NAMED)
+        return None
+    # La CNMC nomes compta si ho diu el text LITERAL (mai el titol del model).
+    named = sources.literal_flag(_SECTOR_OPERATOR, "registry")
+    if named is not None:
+        if getattr(requirement, "obligation", None) != RequirementObligation.MANDATORY:
+            return _not_normalized(REASON_NOT_MANDATORY)
+        value = {
+            **sources.value,
+            NORMALIZED_MARKER: NORMALIZER_VERSION,
+            "type": "sector_operator_registry",
+        }
+        return Normalization(
+            status="routed",
+            route=ROUTE_SECTOR_OPERATOR_REGISTRY,
+            value_json=value,
+            provenance=(named,),
+        )
+    return _not_normalized(REASON_REGISTRY_NOT_NAMED)
 
 
 # --------------------------------------------------------------------------- #
 # Porta d'entrada                                                               #
 # --------------------------------------------------------------------------- #
 
+_V2 = "requirements-value-v2"
+
+
+def applies(requirement: Any, profile: str | None) -> bool:
+    """El complement s'aplica? Nomes product-v2 i nomes valor lliure (sense esquema)."""
+    return (
+        profile == NORMALIZED_PROFILE
+        and getattr(requirement, "value_schema", None) is None
+        and getattr(requirement, "run_id", None) is not None
+    )
+
 
 def normalize_requirement(requirement: Any, profile: str | None) -> Normalization | None:
-    """El valor normalitzat d'un requisit d'un perfil de format lliure.
+    """La lectura complementaria d'un requisit `product-v2` de format lliure.
 
-    `None` vol dir "aquest requisit no te res a normalitzar" (perfil tipat,
-    categoria que cap regla llegeix): s'avalua exactament com abans i no porta
-    cap rastre de normalitzacio.
+    `None` vol dir "aquest requisit no es toca": fora d'abast (`applies`) o
+    categoria que cap regla llegeix. S'avalua exactament com a la v4.
     """
-    if profile not in FREE_FORMAT_PROFILES:
+    if not applies(requirement, profile):
         return None
     category = getattr(requirement, "category", None)
     sources = _Sources(requirement)
 
     if category in _ENS_CATEGORIES:
         routed = _ens(sources, requirement)
-        if routed is not None and (routed.status == "routed" or category in _VALUE_CATEGORIES):
+        if routed is not None and (
+            routed.status == "routed" or category == RequirementCategory.CERTIFICATION
+        ):
             return routed
     if category in _NOT_REQUIRED_CATEGORIES:
         not_required = _not_required(sources, requirement)
         if not_required is not None:
             return not_required
-    if category not in _VALUE_CATEGORIES:
-        return None
 
     if category == RequirementCategory.REGISTRATION:
         return _registration(sources, requirement)
@@ -1023,9 +1323,7 @@ def normalize_requirement(requirement: Any, profile: str | None) -> Normalizatio
         return _experience(sources)
     if category == RequirementCategory.PERSONNEL:
         return _personnel(sources)
-    if category == RequirementCategory.CERTIFICATION:
-        return _certification(sources)
-    return None  # pragma: no cover - `_VALUE_CATEGORIES` es tancat
+    return None
 
 
 def canonical(value: Any) -> str:
@@ -1034,12 +1332,14 @@ def canonical(value: Any) -> str:
 
 
 __all__ = [
-    "FREE_FORMAT_PROFILES",
+    "ENS_ORDER",
+    "NORMALIZED_MARKER",
+    "NORMALIZED_PROFILE",
     "NORMALIZER_VERSION",
+    "EnsReading",
     "Normalization",
     "Provenance",
-    "VALUE_SCHEMA_VERSION",
-    "amounts_in_text",
+    "applies",
     "canonical",
     "ens_level",
     "limit_kinds",
@@ -1048,4 +1348,5 @@ __all__ = [
     "parse_aggregation",
     "parse_amount",
     "parse_years",
+    "quote_amounts",
 ]

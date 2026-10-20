@@ -33,16 +33,14 @@ from app.models.enums import (
 #: (VEC o PBL) ja no es resol a 0 EUR (que qualsevol empresa compliria) sino a
 #: "base no disponible" -> revisar (`app.tenders.amounts`). Un run v3 deixa de
 #: ser vigent i no es reutilitza.
-#: v5 (20-10-2026): els requisits de format lliure (v1 i product-v2) es llegeixen
-#: amb el normalitzador de lectura (`app.compliance.normalize`): imports en format
-#: local, bases d'assegurança (per sinistre i any, per victima, RC patronal),
-#: periodes i percentatges. L'ENS nomenat es llegeix com a certificacio (revisio si
-#: el plec no en diu la categoria) i la documentacio RELI/ROLECE de qui ja hi es
-#: inscrit no es avalua com l'exigencia d'estar-hi; una classificacio o un registre
-#: que el plec diu literalment que NO s'exigeix (i no es obligatori) no aplica. El
-#: sublimit patronal per victima ja no el respon la xifra global de la polissa.
-#: El resum compta
-#: EXIGENCIES (grups de requisits duplicats, `app.compliance.consolidation`), no
+#: v5 (20-10-2026): complement de lectura NOMES per als requisits `product-v2`
+#: amb `value_schema` nul (`app.compliance.normalize`): imports en format local,
+#: bases d'assegurança (per sinistre i any, RC patronal per victima), periodes,
+#: percentatges i condicions; l'ENS nomenat per categories; la documentacio
+#: RELI/ROLECE de qui ja hi es inscrit; una classificacio que el plec diu que no
+#: s'exigeix. Tot el que la v4 llegia (v1, v2 tipat, v3, gold, manuals) dona el
+#: mateix resultat: ho verifica una prova diferencial contra `21d5f9e`. El resum
+#: compta EXIGENCIES (grups de duplicats, `app.compliance.consolidation`), no
 #: files. El pilot no tenia cap run de compliment: el canvi es segur.
 RULES_VERSION = "company-compliance-v5"
 
@@ -97,9 +95,14 @@ class ExplanationCode:
     #: El plec admet equivalents, l'empresa no te l'exacta i en te d'altres:
     #: quina hi equival no ho decideix una regla.
     CERTIFICATION_EQUIVALENCE_REVIEW = "CERTIFICATION_EQUIVALENCE_REVIEW"
-    #: El plec nomena l'esquema (ENS) pero no en diu la categoria: no se'n suposa
-    #: cap (v5).
+    #: No consta la categoria de l'ENS (al plec, `side=tender`, o a la
+    #: certificacio de l'empresa, `side=company`): no se'n suposa cap (v5).
     CERTIFICATION_LEVEL_NOT_STATED = "CERTIFICATION_LEVEL_NOT_STATED"
+    #: L'empresa te l'ENS en una categoria inferior a l'exigida (v5).
+    CERTIFICATION_LEVEL_BELOW = "CERTIFICATION_LEVEL_BELOW"
+    #: L'empresa el te en una categoria superior i el plec no diu «o superior»:
+    #: si hi equival ho decideix una persona (v5).
+    CERTIFICATION_LEVEL_HIGHER_REVIEW = "CERTIFICATION_LEVEL_HIGHER_REVIEW"
 
     REGISTRATION_FOUND_VALID = "REGISTRATION_FOUND_VALID"
     REGISTRATION_FOUND_EXPIRED = "REGISTRATION_FOUND_EXPIRED"

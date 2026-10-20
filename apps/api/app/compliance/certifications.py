@@ -17,7 +17,6 @@ import re
 from datetime import date
 from typing import Any
 
-from app.compliance.normalize import ens_level, names_ens
 from app.compliance.profile import ProfileSnapshot
 from app.compliance.rules import (
     EvidenceRef,
@@ -53,11 +52,6 @@ def normalize_certification_name(raw: str) -> str:
     if not raw:
         return ""
     text = raw.strip()
-    if names_ens(text):
-        # v5: l'ENS es compara per esquema i categoria («ENS categoria Mitjana» i
-        # «Esquema Nacional de Seguridad, categoría MEDIA» son la mateixa). Sense
-        # categoria, nomes l'esquema: no casa amb cap categoria concreta.
-        return f"ens:{ens_level(text) or ''}"
     iso = _ISO_PATTERN.search(text)
     if iso:
         return f"iso{iso.group(1)}"
@@ -228,6 +222,164 @@ def assess_certification(
             "deadline": str(deadline) if deadline else None,
         },
         mode=AssessmentMode.AUTOMATIC,
+        company_value=company_value,
+        evidence=evidence,
+        strength=strength,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# ENS (nomes per al complement product-v2, v5)                                  #
+# --------------------------------------------------------------------------- #
+
+
+def assess_ens(
+    reading: Any,
+    snapshot: ProfileSnapshot,
+    deadline: date | None = None,
+) -> RuleOutcome:
+    """L'ENS que nomena un requisit `product-v2`, per categories (RD 311/2022).
+
+    Nomes hi arriba el complement `app.compliance.normalize`: la comparacio de
+    noms de sempre (`normalize_certification_name`) no es toca. Les regles:
+
+    * categoria del plec desconeguda -> revisio (`CERTIFICATION_LEVEL_NOT_STATED`),
+      mai una suposicio;
+    * una certificacio de l'empresa sense categoria llegible no casa amb cap altra;
+    * mateixa categoria -> compleix;
+    * l'empresa en te una d'inferior -> no compleix;
+    * l'empresa en te una de superior -> compleix nomes si el plec diu «o
+      superior» / «com a mínim»; si no, revisio (mai «no compleix»).
+    """
+    from app.compliance.normalize import ENS_ORDER, ens_level, names_ens
+
+    certificates = [cert for cert in snapshot.certifications if names_ens(cert.name)]
+    names = sorted(cert.name for cert in certificates)
+    if reading.level is None:
+        return needs_review(
+            RuleCode.CERTIFICATION_EXACT,
+            ExplanationCode.CERTIFICATION_LEVEL_NOT_STATED,
+            scheme="ENS",
+            side="tender",
+            company_certifications=names,
+        )
+    required = ENS_ORDER[reading.level]
+    params: dict[str, Any] = {
+        "scheme": "ENS",
+        "required_level": reading.level,
+        "or_higher": reading.or_higher,
+        "company_certifications": names,
+    }
+    if not certificates:
+        if reading.equivalence_allowed:
+            return unknown(
+                RuleCode.CERTIFICATION_EXACT,
+                ExplanationCode.CERTIFICATION_EQUIVALENCE_REVIEW,
+                **params,
+            )
+        if snapshot.is_section_complete("certifications"):
+            return RuleOutcome(
+                result=AssessmentResult.DOES_NOT_SATISFY,
+                rule_code=RuleCode.CERTIFICATION_EXACT,
+                explanation_code=ExplanationCode.CERTIFICATION_NOT_FOUND_PROFILE_COMPLETE,
+                params=params,
+                mode=AssessmentMode.AUTOMATIC,
+            )
+        return unknown(
+            RuleCode.CERTIFICATION_EXACT, ExplanationCode.CERTIFICATION_DATA_INCOMPLETE, **params
+        )
+
+    levels = []
+    for cert in certificates:
+        level, _ambiguous = ens_level(cert.name)
+        levels.append((cert, ENS_ORDER.get(level) if level else None))
+    known = [(cert, order) for cert, order in levels if order is not None]
+    matching = [cert for cert, order in known if order == required]
+    higher = [cert for cert, order in known if order > required]
+    if matching or (higher and reading.or_higher):
+        best = (matching or higher)[0]
+        return _ens_found(best, snapshot, deadline, reading, params)
+    if higher:
+        return needs_review(
+            RuleCode.CERTIFICATION_EXACT,
+            ExplanationCode.CERTIFICATION_LEVEL_HIGHER_REVIEW,
+            **params,
+        )
+    if any(order is None for _, order in levels):
+        # Una certificacio sense categoria llegible pot ser la que acredita.
+        return needs_review(
+            RuleCode.CERTIFICATION_EXACT,
+            ExplanationCode.CERTIFICATION_LEVEL_NOT_STATED,
+            side="company",
+            **params,
+        )
+    if reading.equivalence_allowed:
+        return needs_review(
+            RuleCode.CERTIFICATION_EXACT,
+            ExplanationCode.CERTIFICATION_EQUIVALENCE_REVIEW,
+            **params,
+        )
+    return RuleOutcome(
+        result=AssessmentResult.DOES_NOT_SATISFY,
+        rule_code=RuleCode.CERTIFICATION_EXACT,
+        explanation_code=ExplanationCode.CERTIFICATION_LEVEL_BELOW,
+        params=params,
+        mode=AssessmentMode.AUTOMATIC,
+    )
+
+
+def _ens_found(
+    best: Any, snapshot: ProfileSnapshot, deadline: date | None, reading: Any, params: dict
+) -> RuleOutcome:
+    documents = snapshot.documents_for(LinkedEntityType.COMPANY_CERTIFICATION, best.id)
+    certificate = next(
+        (d for d in documents if d.category == DocumentCategory.CERTIFICATION), None
+    )
+    best_document = certificate or (documents[0] if documents else None)
+    strength = (
+        EvidenceStrength.STRONG
+        if certificate
+        else (EvidenceStrength.SUPPORTING if best_document else EvidenceStrength.MISSING)
+    )
+    evidence = (
+        EvidenceRef(
+            kind=CompanyEvidenceKind.CERTIFICATION,
+            entity_id=best.id,
+            label=f"{best.name}" + (f" (caduca {best.expires_at})" if best.expires_at else ""),
+            strength=strength,
+            document_id=best_document.id if best_document else None,
+        ),
+    )
+    company_value = {
+        "name": best.name,
+        "expires_at": str(best.expires_at) if best.expires_at else None,
+        "verification_status": str(getattr(best, "verification_status", None)),
+    }
+    params = {**params, "found": best.name}
+    result, explanation, mode = (
+        AssessmentResult.SATISFIES,
+        ExplanationCode.CERTIFICATION_FOUND_VALID,
+        AssessmentMode.AUTOMATIC,
+    )
+    if reading.valid_at_deadline:
+        valid = _is_valid_at(best.expires_at, deadline)
+        if valid is None:
+            result, explanation, mode = (
+                AssessmentResult.NEEDS_REVIEW,
+                ExplanationCode.CERTIFICATION_FOUND_NO_EXPIRY,
+                AssessmentMode.REVIEW_REQUIRED,
+            )
+        elif not valid:
+            result, explanation = (
+                AssessmentResult.DOES_NOT_SATISFY,
+                ExplanationCode.CERTIFICATION_FOUND_EXPIRED,
+            )
+    return RuleOutcome(
+        result=result,
+        rule_code=RuleCode.CERTIFICATION_EXACT,
+        explanation_code=explanation,
+        params=params,
+        mode=mode,
         company_value=company_value,
         evidence=evidence,
         strength=strength,

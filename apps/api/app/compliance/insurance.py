@@ -71,11 +71,6 @@ _SUBLIMIT_KINDS = frozenset(
         InsuranceLimitKind.PER_VICTIM,
         InsuranceLimitKind.PER_CLAIM,
         InsuranceLimitKind.ANNUAL_AGGREGATE,
-        # v5: el sublimit patronal per victima (0052) i un sublimit generic
-        # tampoc no els respon mai la xifra global. Abans queien a la branca de
-        # «cobertura contra cobertura» i es comparaven amb el total.
-        InsuranceLimitKind.EMPLOYER_PER_VICTIM,
-        InsuranceLimitKind.SUBLIMIT,
     }
 )
 
@@ -119,8 +114,18 @@ class _Match:
         self.currency = currency
 
 
+#: Sublimits que, NOMES per a un valor del complement `product-v2`, tampoc no els
+#: respon la xifra global (v5). La regla de la v4 no es toca per a cap altre cami.
+_NORMALIZED_SUBLIMIT_KINDS = frozenset(
+    {InsuranceLimitKind.EMPLOYER_PER_VICTIM, InsuranceLimitKind.SUBLIMIT}
+)
+
+
 def _find(
-    declared: dict[InsuranceLimitKind, tuple[Decimal, str]], required: LimitSpec
+    declared: dict[InsuranceLimitKind, tuple[Decimal, str]],
+    required: LimitSpec,
+    *,
+    normalized: bool = False,
 ) -> _Match:
     """El limit declarat que respon a un limit exigit, si n'hi ha cap.
 
@@ -144,7 +149,9 @@ def _find(
         # proposit: coincidir en "no ho sabem" no es coincidir.
         amount, currency = declared[required.kind]
         return _Match(amount, currency)
-    if required.kind in _SUBLIMIT_KINDS:
+    if required.kind in _SUBLIMIT_KINDS or (
+        normalized and required.kind in _NORMALIZED_SUBLIMIT_KINDS
+    ):
         # Un sublimit exigit no el respon mai un import global.
         return _Match(None)
     if required.kind in _ANSWERABLE_BY_UNTYPED:
@@ -254,7 +261,7 @@ def _evaluate(policy: Any, spec: InsuranceSpec, deadline: date | None) -> _Verdi
     verdict = _Verdict()
 
     for required in spec.limits:
-        found = _find(declared, required)
+        found = _find(declared, required, normalized=spec.normalized)
         entry: dict[str, Any] = {
             "kind": str(required.kind),
             "required": float(required.amount),

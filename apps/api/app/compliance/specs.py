@@ -350,6 +350,10 @@ class InsuranceSpec:
     #: cap limit declarat, i convertir-ho en cobertura generica seria justament
     #: l'aplanament que aquest modul existeix per evitar.
     ambiguous_limit: str | None = None
+    #: El valor surt del complement `product-v2` (`app.compliance.normalize`). Nomes
+    #: llavors el sublimit patronal i el generic tampoc no els respon la xifra
+    #: global (v5); per a tot altre cami, la regla de la v4 sense canvis.
+    normalized: bool = False
 
     @property
     def is_empty(self) -> bool:
@@ -380,6 +384,7 @@ def read_insurance(requirement: Any) -> InsuranceSpec:
             type_note=value.get("insurance_type_note"),
             additional_insured_required=value.get("additional_insured") is True,
             unchecked_conditions=_unchecked_insurance_conditions(value),
+            normalized=bool(value.get("_normalizer")),
         )
 
     amount = to_decimal(value.get("coverage_amount") or value.get("amount"))

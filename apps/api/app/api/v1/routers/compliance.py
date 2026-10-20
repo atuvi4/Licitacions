@@ -168,6 +168,12 @@ def _assessment_read(
     read = AssessmentRead.model_validate(assessment)
     read.requirement = sources.get(assessment.requirement_id)
     read.consolidation = _consolidation_read(assessment)
+    normalization = (assessment.explanation_params or {}).get("normalization") or {}
+    if normalization:
+        read.compared_value = normalization.get("value")
+        read.compared_provenance = list(normalization.get("provenance") or [])
+        read.normalization_status = normalization.get("status")
+        read.normalization_reason = normalization.get("reason")
     if assessment.reviewed_by:
         read.reviewed_by_name = (reviewers or {}).get(assessment.reviewed_by)
     return read
@@ -270,12 +276,20 @@ async def read_compliance(tender_id: uuid.UUID, session: SessionDep, ctx: Compan
     company = await session.get(Company, ctx.company_id)
     stale = await is_run_stale(session, run, company)
 
+    groups = _groups(assessments)
+    reads = [_assessment_read(a, sources, reviewers) for a in assessments]
+    # `divergent` es del grup i es calcula ara: el desat al calcul pot haver quedat
+    # desfasat per una revisio humana posterior.
+    divergent = {
+        member: group.divergent for group in groups for member in group.member_assessment_ids
+    }
+    for read in reads:
+        if read.consolidation is not None:
+            read.consolidation.divergent = divergent.get(read.id, False)
     return ComplianceRead(
         run=ComplianceRunRead.model_validate(run),
-        assessments=[
-            _assessment_read(a, sources, reviewers) for a in assessments
-        ],
-        groups=_groups(assessments),
+        assessments=reads,
+        groups=groups,
         is_stale=stale,
     )
 

@@ -133,6 +133,14 @@ class AssessmentRead(ORMModel):
     requirement: RequirementSourceRead | None = None
     #: Nomes si el requisit te duplicats de la mateixa exigencia.
     consolidation: ConsolidationRead | None = None
+    #: El valor que la regla ha COMPARAT quan el requisit `product-v2` s'ha llegit
+    #: amb el complement (`explanation_params.normalization.value`), amb la seva
+    #: procedencia. `requirement_value_json` continua sent el valor cru extret.
+    compared_value: dict[str, Any] | None = None
+    compared_provenance: list[dict[str, Any]] = Field(default_factory=list)
+    #: `normalized` / `not_normalized` / `routed`, i per que no, si no.
+    normalization_status: str | None = None
+    normalization_reason: str | None = None
 
 
 class ComplianceRunRead(ORMModel):
