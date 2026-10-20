@@ -22,7 +22,7 @@ import { useState } from "react";
 import { ScoreValue } from "@/components/PreFit";
 import { Attribution, Banner, Button, Card, CardHeader, ErrorNotice, EvidenceRef, StatusPill } from "@/components/ui";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { evidenceLabel, valueLine } from "@/lib/compliance";
+import { consolidateAssessments, evidenceLabel, valueLine } from "@/lib/compliance";
 import { INSURANCE_LIMIT_KIND_LABELS, INSURANCE_TYPE_LABELS } from "@/lib/format";
 import { api } from "@/lib/api";
 import {
@@ -40,7 +40,7 @@ import {
   STRENGTH_LABELS,
   STRENGTH_LEVEL,
 } from "@/lib/labels";
-import type { Assessment, AssessmentResult, Compliance } from "@/lib/compliance";
+import type { AssessmentDisplay, AssessmentResult, Compliance } from "@/lib/compliance";
 import type { RequirementAnalysisState } from "@/lib/requirements";
 
 const EVIDENCE_DICTIONARIES = { types: INSURANCE_TYPE_LABELS as Record<string, string>, kinds: INSURANCE_LIMIT_KIND_LABELS };
@@ -65,32 +65,80 @@ const GROUPS: Array<{ key: GroupKey; label: string; hint?: string; collapsible?:
   { key: "not_applicable", label: "No aplica", collapsible: true },
 ];
 
-function groupOf(assessment: Assessment): GroupKey {
-  if (assessment.blocker_status === "confirmed" || assessment.effective_result === "does_not_satisfy") return "blockers";
-  if (assessment.blocker_status === "potential") return "potential";
-  if (assessment.effective_result === "needs_review") return "review";
-  if (assessment.effective_result === "unknown") return "unknown";
-  if (assessment.effective_result === "not_applicable") return "not_applicable";
+function groupOf(row: AssessmentDisplay): GroupKey {
+  if (row.blockerStatus === "confirmed" || row.effectiveResult === "does_not_satisfy") return "blockers";
+  if (row.blockerStatus === "potential") return "potential";
+  if (row.effectiveResult === "needs_review") return "review";
+  if (row.effectiveResult === "unknown") return "unknown";
+  if (row.effectiveResult === "not_applicable") return "not_applicable";
   return "satisfies";
+}
+
+function citationHref(tenderId: string, citation: { tender_document_id: string | null; page_number: number | null; extraction_id: string | null }) {
+  return citation.tender_document_id && citation.page_number
+    ? `/licitacions/${tenderId}/documents/${citation.tender_document_id}?page=${citation.page_number}&extraction=${citation.extraction_id}`
+    : null;
+}
+
+/**
+ * Els duplicats d'una exigència (el plec la repeteix a diversos llocs): «també a»
+ * cada requisit, amb TOTES les seves cites, i les cites addicionals del canònic.
+ * Consolidar no amaga res: cap cita no es perd.
+ */
+function GroupCitations({ tenderId, row }: { tenderId: string; row: AssessmentDisplay }) {
+  const extra = (row.assessment.requirement?.citations ?? []).slice(1);
+  if (row.members.length === 0 && extra.length === 0) return null;
+  const memberCitations = row.members.reduce((total, member) => total + (member.requirement?.citations?.length ?? 0), 0);
+  return (
+    <details className="mt-1.5 text-caption text-muted" data-group-citations>
+      <summary className="cursor-pointer">
+        {row.members.length > 0
+          ? `També a ${row.members.length} requisit${row.members.length === 1 ? "" : "s"} més · ${memberCitations + extra.length} cites addicionals`
+          : `${extra.length} cites addicionals`}
+      </summary>
+      <ul className="mt-1 space-y-1.5">
+        {extra.map((citation) => (
+          <li key={citation.evidence_id}>
+            <EvidenceRef compact documentName={citation.document_name} pageNumber={citation.page_number} extractionRevision={citation.extraction_revision} href={citationHref(tenderId, citation)} />
+            <blockquote className="mt-0.5 border-l-2 border-accent-500 pl-2.5 text-[13px] leading-relaxed text-ink italic">«{citation.quote}»</blockquote>
+          </li>
+        ))}
+        {row.members.map((member) => (
+          <li key={member.id} data-group-member={member.requirement_id}>
+            <p className="text-ink">També a: {member.requirement?.title ?? "Requisit"}</p>
+            {(member.requirement?.citations ?? []).map((citation) => (
+              <div key={citation.evidence_id} className="mt-0.5">
+                <EvidenceRef compact documentName={citation.document_name} pageNumber={citation.page_number} extractionRevision={citation.extraction_revision} href={citationHref(tenderId, citation)} />
+                <blockquote className="mt-0.5 border-l-2 border-accent-500 pl-2.5 text-[13px] leading-relaxed text-ink italic">«{citation.quote}»</blockquote>
+              </div>
+            ))}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 function AssessmentRow({
   tenderId,
-  assessment,
+  row,
   onReview,
   busy,
   failure,
 }: {
   tenderId: string;
-  assessment: Assessment;
-  onReview: (id: string, result: AssessmentResult | null, note: string | null) => Promise<boolean>;
+  row: AssessmentDisplay;
+  onReview: (ids: string[], result: AssessmentResult | null, note: string | null) => Promise<boolean>;
   busy: boolean;
   failure: string | null;
 }) {
+  const assessment = row.assessment;
   const source = assessment.requirement;
-  const result = assessment.effective_result;
-  const blocked = assessment.blocker_status !== "none";
-  const blockerLevel = BLOCKER_LEVEL[assessment.blocker_status];
+  // El resultat de la FILA és el del grup (el més prudent dels duplicats).
+  const result = row.effectiveResult;
+  const blocked = row.blockerStatus !== "none";
+  const blockerLevel = BLOCKER_LEVEL[row.blockerStatus];
+  const reviewIds = [assessment.id, ...row.members.map((member) => member.id)];
   //: `undefined` = cap revisió a mig escriure; `null` = confirmar el que ja deia
   //: el sistema; un resultat = contradir-lo, i llavors cal motiu.
   const [pending, setPending] = useState<AssessmentResult | null | undefined>(undefined);
@@ -137,6 +185,12 @@ function AssessmentRow({
               <EvidenceRef documentName={null} pageNumber={null} href={null} />
             )}
           </div>
+          <GroupCitations tenderId={tenderId} row={row} />
+          {row.divergent && (
+            <p className="mt-1 text-caption text-muted" data-group-divergent>
+              Els requisits duplicats no diuen el mateix: mana el resultat més prudent.
+            </p>
+          )}
         </div>
 
         {/* Demana el plec. */}
@@ -188,7 +242,7 @@ function AssessmentRow({
             <StatusPill level={RESULT_LEVEL[result]}>{RESULT_LABELS[result]}</StatusPill>
             {blocked && blockerLevel && (
               <StatusPill level={blockerLevel} size="sm">
-                {BLOCKER_LABELS[assessment.blocker_status]}
+                {BLOCKER_LABELS[row.blockerStatus]}
               </StatusPill>
             )}
           </div>
@@ -267,7 +321,7 @@ function AssessmentRow({
               disabled={busy || (pending !== null && !note.trim())}
               loading={busy}
               onClick={() => {
-                void onReview(assessment.id, pending, note.trim() || null).then((saved) => {
+                void onReview(reviewIds, pending, note.trim() || null).then((saved) => {
                   if (!saved) return;
                   setPending(undefined);
                   setNote("");
@@ -342,22 +396,31 @@ export function ComplianceSection({
     }
   }
 
-  async function review(id: string, result: AssessmentResult | null, note: string | null): Promise<boolean> {
+  // Una revisió s'aplica a TOTS els requisits de l'exigència (el canònic i els
+  // duplicats): si no, el grup quedaria divergent i el recompte no canviaria.
+  async function review(ids: string[], result: AssessmentResult | null, note: string | null): Promise<boolean> {
     if (!companyId) return false;
+    const [id] = ids;
     setReviewing(id);
     setActionError(null);
     setFailedReview(null);
+    let applied = 0;
     try {
-      await api.post(`/companies/${companyId}/assessments/${id}/review`, {
-        review_status: "verified",
-        reviewed_result: result,
-        note,
-      });
+      for (const target of ids) {
+        await api.post(`/companies/${companyId}/assessments/${target}/review`, {
+          review_status: "verified",
+          reviewed_result: result,
+          note,
+        });
+        applied += 1;
+      }
       await onReload();
       return true;
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : "No s'ha pogut desar la revisió.");
       setFailedReview(id);
+      // Si una part del grup ja s'ha desat, la pantalla ha d'ensenyar-ho.
+      if (applied > 0) await onReload();
       return false;
     } finally {
       setReviewing(null);
@@ -367,10 +430,12 @@ export function ComplianceSection({
   if (!companyId) return null;
 
   const assessments = compliance?.assessments ?? [];
+  // Una fila per exigència: els duplicats del plec van dins de la fila del canònic.
+  const rows = consolidateAssessments(assessments, compliance?.groups ?? []);
   const undetermined = run?.overall_result === "undetermined";
   const groups = GROUPS.map((group) => ({
     ...group,
-    items: assessments.filter((assessment) => groupOf(assessment) === group.key),
+    items: rows.filter((row) => groupOf(row) === group.key),
   })).filter((group) => group.items.length > 0);
   const hasAttention = groups.some((group) => !group.collapsible);
   const analyseLabel = run ? "Recalcula" : "Analitza compliment";
@@ -512,7 +577,7 @@ export function ComplianceSection({
       {assessments.length > 0 && (
         <Card>
           <CardHeader
-            title={`Requisits avaluats (${assessments.length})`}
+            title={`Requisits avaluats (${rows.length})`}
             description="Primer el que bloqueja o demana una persona; els acreditats, plegats a sota."
           />
           {groups.map((group) => {
@@ -537,13 +602,13 @@ export function ComplianceSection({
                 </div>
                 {!collapsed && (
                   <ul className="divide-y divide-border">
-                    {group.items.map((assessment) => (
+                    {group.items.map((row) => (
                       <AssessmentRow
-                        key={assessment.id}
+                        key={row.assessment.id}
                         tenderId={tenderId}
-                        assessment={assessment}
-                        busy={reviewing === assessment.id}
-                        failure={failedReview === assessment.id ? actionError : null}
+                        row={row}
+                        busy={reviewing === row.assessment.id}
+                        failure={failedReview === row.assessment.id ? actionError : null}
                         onReview={review}
                       />
                     ))}

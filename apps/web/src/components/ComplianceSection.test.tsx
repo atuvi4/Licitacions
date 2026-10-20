@@ -216,3 +216,90 @@ describe("ComplianceSection", () => {
     expect(row.querySelector("[title='civil_liability: unknown 1000000.00 EUR']")).not.toBeNull();
   });
 });
+
+describe("ComplianceSection · duplicats d'una mateixa exigència", () => {
+  beforeEach(() => {
+    post.mockReset();
+    reload.mockClear();
+  });
+
+  const econ = (id: string, requirementId: string, title: string, page: number, quote: string, canonical: boolean) =>
+    assessment({
+      id,
+      requirement_id: requirementId,
+      automatic_result: "unknown",
+      effective_result: "unknown",
+      rule_code: "economic_turnover_aggregate_v2",
+      explanation_code: "ECONOMIC_DATA_INCOMPLETE",
+      company_value_json: null,
+      requirement_value_json: { amount: "91.904,74 €" },
+      evidence: [],
+      evidence_strength: "missing",
+      consolidation: { canonical_requirement_id: "rA", is_canonical: canonical, member_requirement_ids: ["rA", "rB"], divergent: false },
+      requirement: {
+        requirement_id: requirementId,
+        title,
+        category: "economic_solvency",
+        review_status: "unreviewed",
+        tender_document_id: "d1",
+        extraction_id: "ex1",
+        extraction_revision: 1,
+        page_number: page,
+        quote,
+        document_name: "Plec administratiu",
+        citations: [{ evidence_id: `e-${id}`, tender_document_id: "d1", extraction_id: "ex1", extraction_revision: 1, page_number: page, quote, document_name: "Plec administratiu" }],
+      },
+    });
+
+  const grouped: Compliance = {
+    run: run({ requirements_total: 1, unknown_count: 1, satisfies_count: 0, does_not_satisfy_count: 0, needs_review_count: 0, confirmed_blockers_count: 0, overall_result: "review_required", recommendation: "review" }),
+    assessments: [
+      econ("a1", "rA", "Solvència econòmica: volum anual de negoci", 3, "Volum anual de negoci del millor dels 3 últims exercicis", true),
+      econ("a2", "rB", "Volum anual de negocis mínim", 6, "per un import igual o superior a 91.904,74 euros", false),
+    ],
+    groups: [{ canonical_assessment_id: "a1", canonical_requirement_id: "rA", member_assessment_ids: ["a1", "a2"], member_requirement_ids: ["rA", "rB"], effective_result: "unknown", blocker_status: "none", divergent: false }],
+    is_stale: false,
+  };
+
+  it("una fila per exigència, amb «també a» i totes les cites dels duplicats", () => {
+    const { container } = renderSection(grouped);
+    expect(container.textContent).toContain("Requisits avaluats (1)");
+    expect(screen.queryByText("Volum anual de negocis mínim")).toBeNull();
+    const row = screen.getByText("Solvència econòmica: volum anual de negoci").closest("li")!;
+    const details = row.querySelector("[data-group-citations]")!;
+    expect(details.textContent).toContain("També a 1 requisit més · 1 cites addicionals");
+    expect(details.textContent).toContain("També a: Volum anual de negocis mínim");
+    expect(details.textContent).toContain("per un import igual o superior a 91.904,74 euros");
+    expect(row.textContent).toContain("Volum anual de negoci del millor dels 3 últims exercicis");
+  });
+
+  it("el resultat de la fila és el del grup, i un grup divergent ho diu", () => {
+    renderSection({
+      ...grouped,
+      groups: [{ ...grouped.groups![0], effective_result: "does_not_satisfy", blocker_status: "potential", divergent: true }],
+    });
+    const row = screen.getByText("Solvència econòmica: volum anual de negoci").closest("li")!;
+    const pills = [...row.querySelectorAll("[data-level]")].map((p) => p.textContent?.trim());
+    expect(pills).toContain("No compleix");
+    expect(pills).toContain("Possible bloqueig");
+    expect(row.querySelector("[data-group-divergent]")).not.toBeNull();
+  });
+
+  it("revisar una exigència revisa tots els seus requisits", async () => {
+    post.mockResolvedValue({});
+    renderSection(grouped);
+    const row = screen.getByText("Solvència econòmica: volum anual de negoci").closest("li")!;
+    fireEvent.click([...row.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Confirma")!);
+    fireEvent.click([...row.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Desa la revisió")!);
+    await flush();
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post).toHaveBeenNthCalledWith(1, "/companies/c1/assessments/a1/review", { review_status: "verified", reviewed_result: null, note: null });
+    expect(post).toHaveBeenNthCalledWith(2, "/companies/c1/assessments/a2/review", { review_status: "verified", reviewed_result: null, note: null });
+    expect(reload).toHaveBeenCalled();
+  });
+
+  it("sense grups de l'API, cada avaluació és una fila (com abans)", () => {
+    const { container } = renderSection({ ...grouped, groups: undefined });
+    expect(container.textContent).toContain("Requisits avaluats (2)");
+  });
+});

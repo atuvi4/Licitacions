@@ -51,6 +51,17 @@ export interface CompanyEvidence {
   strength: EvidenceStrength;
 }
 
+/** Una cita verificada del plec. */
+export interface RequirementCitation {
+  evidence_id: string;
+  tender_document_id: string | null;
+  extraction_id: string | null;
+  extraction_revision: number | null;
+  page_number: number | null;
+  quote: string;
+  document_name: string | null;
+}
+
 export interface RequirementSource {
   requirement_id: string;
   title: string;
@@ -62,6 +73,27 @@ export interface RequirementSource {
   page_number: number | null;
   quote: string | null;
   document_name: string | null;
+  /** Totes les cites del requisit (la primera és la de dalt). */
+  citations?: RequirementCitation[];
+}
+
+/** A quina exigència pertany una avaluació quan el plec la repeteix (duplicats). */
+export interface AssessmentConsolidation {
+  canonical_requirement_id: string;
+  is_canonical: boolean;
+  member_requirement_ids: string[];
+  divergent: boolean;
+}
+
+/** Una exigència amb duplicats, resolta com el recompte del càlcul (el més prudent). */
+export interface AssessmentGroup {
+  canonical_assessment_id: string;
+  canonical_requirement_id: string;
+  member_assessment_ids: string[];
+  member_requirement_ids: string[];
+  effective_result: AssessmentResult;
+  blocker_status: BlockerStatus;
+  divergent: boolean;
 }
 
 export interface Assessment {
@@ -91,6 +123,7 @@ export interface Assessment {
   calculated_at: string;
   evidence: CompanyEvidence[];
   requirement: RequirementSource | null;
+  consolidation?: AssessmentConsolidation | null;
 }
 
 export interface ComplianceRun {
@@ -124,7 +157,54 @@ export interface ComplianceRun {
 export interface Compliance {
   run: ComplianceRun | null;
   assessments: Assessment[];
+  /** Una entrada per exigència amb duplicats. Els requisits sols no hi són. */
+  groups?: AssessmentGroup[];
   is_stale: boolean;
+}
+
+/** El que la llista pinta: una fila per EXIGÈNCIA. */
+export interface AssessmentDisplay {
+  /** L'avaluació del requisit canònic (o la del requisit sol). */
+  assessment: Assessment;
+  /** Les avaluacions dels altres requisits que diuen la mateixa exigència. */
+  members: Assessment[];
+  effectiveResult: AssessmentResult;
+  blockerStatus: BlockerStatus;
+  /** Els membres no diuen el mateix: mana el més prudent. */
+  divergent: boolean;
+}
+
+/**
+ * Una fila per exigència. Els duplicats d'un grup no es perden: viatgen com a
+ * `members`, amb les seves cites, i el resultat de la fila és el del grup (el més
+ * prudent, com el recompte del càlcul). L'ordre és el de l'API.
+ */
+export function consolidateAssessments(
+  assessments: Assessment[],
+  groups: AssessmentGroup[] = [],
+): AssessmentDisplay[] {
+  const byId = new Map(assessments.map((item) => [item.id, item]));
+  const groupOf = new Map<string, AssessmentGroup>();
+  for (const group of groups) for (const id of group.member_assessment_ids) groupOf.set(id, group);
+  const done = new Set<string>();
+  const rows: AssessmentDisplay[] = [];
+  for (const item of assessments) {
+    if (done.has(item.id)) continue;
+    const group = groupOf.get(item.id);
+    if (!group) {
+      done.add(item.id);
+      rows.push({ assessment: item, members: [], effectiveResult: item.effective_result, blockerStatus: item.blocker_status, divergent: false });
+      continue;
+    }
+    const canonical = byId.get(group.canonical_assessment_id) ?? item;
+    const members = group.member_assessment_ids
+      .filter((id) => id !== canonical.id)
+      .map((id) => byId.get(id))
+      .filter((member): member is Assessment => Boolean(member));
+    for (const id of group.member_assessment_ids) done.add(id);
+    rows.push({ assessment: canonical, members, effectiveResult: group.effective_result, blockerStatus: group.blocker_status, divergent: group.divergent });
+  }
+  return rows;
 }
 
 export const RESULT_LABELS: Record<AssessmentResult, string> = {
@@ -210,6 +290,8 @@ export const EXPLANATION_LABELS: Record<string, string> = {
     "El perfil de certificacions és complet i no conté aquesta certificació.",
   CERTIFICATION_DATA_INCOMPLETE:
     "El perfil de certificacions és incomplet: no consta, però això no vol dir que no la tingueu.",
+  CERTIFICATION_LEVEL_NOT_STATED:
+    "El plec exigeix l'esquema (ENS) però no n'indica la categoria: no se'n suposa cap. Cal revisar-ho.",
   REGISTRATION_FOUND_VALID: "El registre consta al perfil i és vigent.",
   REGISTRATION_FOUND_EXPIRED: "El registre caduca abans del termini.",
   REGISTRATION_NOT_FOUND_PROFILE_COMPLETE:
@@ -217,6 +299,15 @@ export const EXPLANATION_LABELS: Record<string, string> = {
   REGISTRATION_DATA_INCOMPLETE: "El perfil de registres és incomplet.",
   REGISTRATION_CLASSIFICATION_REVIEW:
     "La classificació empresarial (grup, subgrup, categoria) s'ha de revisar a mà.",
+  REGISTRATION_DOCUMENTATION_ONLY:
+    "Documentació que aporta qui ja és inscrit al RELI o al ROLECE: el plec no exigeix estar-hi inscrit.",
+  ECONOMIC_PERIOD_INCOMPLETE: "Falten exercicis del període que demana el plec per poder-ho afirmar.",
+  PERCENTAGE_BASE_UNAVAILABLE:
+    "El llindar és un percentatge d'una base que no consta a l'expedient: cal revisar-ho.",
+  INSURANCE_LIMITS_MET: "La pòlissa cobreix cadascun dels límits exigits.",
+  INSURANCE_LIMIT_BELOW: "Un dels límits de la pòlissa és inferior al que exigeix el plec.",
+  INSURANCE_LIMIT_UNKNOWN:
+    "La pòlissa no declara un dels límits que exigeix el plec (per sinistre, anual, per víctima…).",
   INSURANCE_COVERAGE_MET: "La pòlissa cobreix l'import exigit.",
   INSURANCE_COVERAGE_NOT_MET: "La cobertura de la pòlissa no arriba a l'import exigit.",
   INSURANCE_EXPIRED: "La pòlissa caduca abans del termini.",
