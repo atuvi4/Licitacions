@@ -1034,6 +1034,34 @@ describe("Fitxa de licitació: PBL amb IVA de la PSCP (F-06a)", () => {
     expect(document.querySelector("[data-pscp-attribution]")).toBeNull();
   });
 
+  it("F-06e: només observacions no_value nul·les: la taula d'abans, sense les tres columnes buides", async () => {
+    await renderWith(
+      {
+        ...field(null, { l1: observation({ status: "no_value", amount: null, published_zero: false }) }),
+        lots_estimated_value: { l1: observation({ status: "no_value", amount: null, published_zero: false, amount_kind: "estimated_value" }) },
+      },
+      { lots: [lotOf("l1", "Lot u")], lot_count: 1 },
+    );
+    const table = screen.getByText("Lot u").closest("table")!;
+    const headers = Array.from(table.querySelectorAll("th")).map((th) => th.textContent);
+    expect(headers).toContain("Import");
+    expect(headers).not.toContain("VEC");
+    expect(table.querySelector("[data-lot-amount]")).toBeNull();
+    expect(text(screen.getByText("Lot u").closest("tr"))).toContain(NOT_PUBLISHED);
+  });
+
+  it("F-06e: un conflicte per un import germà no representable no diu que la suma no quadri", async () => {
+    // L'API no dona `lot_sum` quan la guarda de suma porta `problem` (N-1): `failed_checks` buit.
+    await renderWith(
+      { ...field(null), lots_pbl_without_tax: { l1: observation({ status: "conflict", amount_kind: "pbl_without_tax", failed_checks: [] }) } },
+      { lots: [lotOf("l1", "Lot u")], lot_count: 1 },
+    );
+    const cell = screen.getByText("Lot u").closest("tr")!.querySelector("[data-pscp-lot]");
+    expect(text(cell?.querySelector("[data-pscp-notice]"))).toBe("No ha superat les comprovacions de coherència de la font. · Veure la publicació ↗");
+    expect(text(document.body)).not.toContain("la suma dels imports");
+    expect(document.querySelector("[data-lots-sum-conflict]")).toBeNull();
+  });
+
   it("F-06e: un VEC de lot publicat a 0 a la PSCP diu el zero, mai un import; un no_value nul no diu res", async () => {
     await renderWith(
       {

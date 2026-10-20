@@ -269,7 +269,14 @@ describe("F-06e: imports de lot de la PSCP a la taula «Lots»", () => {
       lots: [fullLot("l1")],
       budget_with_tax_observations: { expedient: null, lots: {}, lots_estimated_value: { l1: vec({ status: "no_value", amount: null }) }, attribution: OFFICIAL, source_updated_at: null },
     });
-    expect(withObservation.lotsWithoutAmounts).toBe(false);
+    // Un `no_value` nul no es mostra: la taula continua sent la d'abans (N-3).
+    expect(withObservation.lotsWithoutAmounts).toBe(true);
+    const withShown = budgetWithTaxView({
+      base_budget: null,
+      lots: [fullLot("l1")],
+      budget_with_tax_observations: { expedient: null, lots: {}, lots_estimated_value: { l1: vec({ status: "no_value", amount: "0.00", published_zero: true }) }, attribution: OFFICIAL, source_updated_at: null },
+    });
+    expect(withShown.lotsWithoutAmounts).toBe(false);
     expect(budgetWithTaxView({ base_budget: null, lots: [] }).lotsWithoutAmounts).toBe(false);
   });
 

@@ -154,9 +154,17 @@ def failed_checks(observation: TenderAmountObservation) -> list[str]:
     if isinstance(validation.get("blocking_failed"), list):
         # F-06e (PBL sense IVA i VEC de lot): nomes les guardes que han bloquejat AQUEST
         # tipus (`expedient.<g>` / `lot.<g>`); mai, p. ex., el PBL net per a un VEC.
+        lot_guards = validation.get("lot_guards")
+        lot_guards = lot_guards if isinstance(lot_guards, dict) else {}
         for entry in _as_list(validation["blocking_failed"]):
             level, _, name = entry.partition(".")
             mapping = _EXPEDIENT_GUARDS if level == "expedient" else _LOT_GUARDS
+            guard = lot_guards.get(name) if level == "lot" else None
+            if isinstance(guard, dict) and guard.get("problem"):
+                # La suma no s'ha pogut calcular (un import de lot germa no representable,
+                # `lot_amount_unrepresentable`): no es diu que no quadri. Sense codi, la
+                # fitxa diu que no ha superat les comprovacions de coherencia de la font.
+                continue
             if name in mapping:
                 found.add(mapping[name])
         return [code for code in FAILED_CHECKS if code in found]

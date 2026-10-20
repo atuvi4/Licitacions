@@ -232,3 +232,54 @@ async def test_el_motiu_d_un_conflicte_nou_es_el_que_l_ha_bloquejat(db, client_a
         "pbl_without_tax",
         "lot_sum",
     ]
+
+
+async def test_una_suma_no_calculada_per_un_lot_germa_illegible_no_es_lot_sum(db, client_a):
+    """N-1: si la guarda de suma porta `problem` (un import de lot germa no
+    representable, sense suma calculada), la fitxa no diu que la suma no quadri."""
+    tender, (lot,) = await _tender(db, lots=1)
+    db.add(
+        _lot_obs(
+            tender,
+            lot,
+            NET,
+            validation_status=CONFLICT,
+            validation={
+                "v": 1,
+                "level": "lot",
+                "amount_kind": "pbl_without_tax",
+                "expedient_failed": [],
+                "lot_failed": ["lot_net_sum"],
+                "lot_guards": {
+                    "lot_net_sum": {"ok": False, "problem": "lot_amount_unrepresentable"}
+                },
+                "blocking_failed": ["lot.lot_net_sum"],
+            },
+        )
+    )
+    await db.commit()
+    field = await _field(client_a, tender)
+    assert field["lots_pbl_without_tax"][str(lot.id)]["failed_checks"] == []
+    assert field["lots_pbl_without_tax"][str(lot.id)]["status"] == "conflict"
+
+
+async def test_una_suma_calculada_que_no_quadra_continua_sent_lot_sum(db, client_a):
+    tender, (lot,) = await _tender(db, lots=1)
+    db.add(
+        _lot_obs(
+            tender,
+            lot,
+            VEC,
+            validation_status=CONFLICT,
+            validation={
+                "v": 1,
+                "level": "lot",
+                "amount_kind": "estimated_value",
+                "lot_guards": {"lot_vec_sum": {"ok": False, "sum": "2.00", "expedient": "3.00"}},
+                "blocking_failed": ["lot.lot_vec_sum"],
+            },
+        )
+    )
+    await db.commit()
+    field = await _field(client_a, tender)
+    assert field["lots_estimated_value"][str(lot.id)]["failed_checks"] == ["lot_sum"]

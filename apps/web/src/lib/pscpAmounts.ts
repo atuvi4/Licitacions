@@ -183,7 +183,7 @@ export interface BudgetWithTaxView {
   /** F-06e: els conflictes de suma, un per columna afectada, per a la indicació de la taula. */
   lotsSumConflicts: LotsSumConflict[];
   /**
-   * F-06e: cap lot no té cap import útil ni cap observació de la PSCP de cap tipus (p. ex. fora de
+   * F-06e: cap lot no té cap import útil ni cap observació de la PSCP que es mostri, de cap tipus (p. ex. fora de
    * Catalunya): la taula es pinta com abans de F-06e, amb una sola columna «Import».
    */
   lotsWithoutAmounts: boolean;
@@ -247,7 +247,8 @@ export function budgetWithTaxView(
     for (const column of LOT_AMOUNT_COLUMNS) {
       const byLot = observations?.[column.field] as Record<string, AmountObservation> | undefined;
       const lotObservation = byLot?.[lot.id];
-      if (lotObservation) anyObservation = true;
+      // Només les que es mostren: un `no_value` nul no ha d'encendre les tres columnes buides.
+      if (isShownObservation(lotObservation)) anyObservation = true;
       const cell = lotAmountCell(lot[column.key], lotObservation);
       cells[column.key] = cell;
       if (cell.source === "pscp" && isSumOnlyConflict(cell.observation)) {
