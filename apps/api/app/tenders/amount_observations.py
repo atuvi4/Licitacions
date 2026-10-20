@@ -1,14 +1,17 @@
-"""El PBL amb IVA de la PSCP a la fitxa (F-06a, fase 3). Nomes lectura.
+"""Els imports de la PSCP a la fitxa (F-06a fase 3, F-06e). Nomes lectura.
 
 Llegeix `tender_amount_observations` (0063) i en treu, per a la fitxa d'una licitacio,
-l'observacio que s'ha d'ensenyar per a l'expedient i per a cada lot vigent. **No calcula
-res ni toca cap altre import**: el cataleg, els filtres, l'ordenacio, el pre-fit i
-l'oferta continuen llegint nomes `tenders`.
+l'observacio que s'ha d'ensenyar per a l'expedient (PBL amb IVA) i per a cada lot vigent
+(PBL amb IVA i, des de F-06e, PBL sense IVA i VEC). **No calcula res ni toca cap altre
+import**: el cataleg, els filtres i l'ordenacio continuen llegint nomes `tenders`; el
+pre-fit i l'oferta per lot fan servir el resolutor comu (`app.tenders.lot_amounts`).
 
 Que s'ensenya:
 
-* Nomes observacions vigents (`valid_to IS NULL`), de tipus `pbl_with_tax` i de la font
-  PSCP (`SOURCE_CODE`): la fitxa ho presenta com a "segons la PSCP".
+* Nomes observacions vigents (`valid_to IS NULL`) de la font PSCP (`SOURCE_CODE`): la
+  fitxa ho presenta com a "segons la PSCP". Expedient: nomes `pbl_with_tax`. Lots: els
+  tres tipus, cadascun al seu diccionari (`lots`, `lots_pbl_without_tax`,
+  `lots_estimated_value`), amb la mateixa regla de seleccio.
 * Estats `accepted`, `conflict` i `no_value`. Una `superseded` **no surt mai**, ni com a
   valor ni com a avis: nomes en queda la traca a la taula.
 * Expedient: `tender_lot_id` NULL i que no sigui una fila de LOT de la font sense lot
@@ -82,6 +85,16 @@ _LOT_GUARDS = {
     "net": "pbl_without_tax",
     "vec": "vec",
     "match": "lots",
+    # F-06e: la suma dels PBL sense IVA (o dels VEC) dels lots de la PSCP contra el seu
+    # total de l'expedient. Interna de la PSCP, com `lot_sum`: el mateix codi.
+    "lot_net_sum": "lot_sum",
+    "lot_vec_sum": "lot_sum",
+}
+#: Tipus d'import de lot -> camp de `BudgetWithTaxObservations`.
+LOT_FIELDS: dict[TenderAmountKind, str] = {
+    TenderAmountKind.PBL_WITH_TAX: "lots",
+    TenderAmountKind.PBL_WITHOUT_TAX: "lots_pbl_without_tax",
+    TenderAmountKind.ESTIMATED_VALUE: "lots_estimated_value",
 }
 
 LOT_KEY_MARKER = "#lot="
@@ -195,6 +208,7 @@ def observation_read(observation: TenderAmountObservation) -> AmountObservationR
     status = observation.validation_status
     amount = observation.amount
     return AmountObservationRead(
+        amount_kind=observation.amount_kind.value,
         status=status.value,
         amount=amount,
         currency=observation.currency,
@@ -211,27 +225,40 @@ def observation_read(observation: TenderAmountObservation) -> AmountObservationR
 def build(
     observations: Iterable[TenderAmountObservation], active_lot_ids: set[uuid.UUID]
 ) -> BudgetWithTaxObservations:
-    """Agrupa per objectiu i tria (funcio pura: la consulta es a `load`)."""
+    """Agrupa per objectiu i tipus i tria (funcio pura: la consulta es a `load`).
+
+    L'expedient, nomes el PBL amb IVA; cada lot vigent, els tres tipus per separat.
+    """
     expedient: list[TenderAmountObservation] = []
-    by_lot: dict[uuid.UUID, list[TenderAmountObservation]] = {}
+    by_lot: dict[TenderAmountKind, dict[uuid.UUID, list[TenderAmountObservation]]] = {
+        kind: {} for kind in LOT_FIELDS
+    }
     for observation in observations:
+        kind = observation.amount_kind
         if observation.tender_lot_id is None:
-            if not is_unmapped_lot_row(observation):
+            if kind == TenderAmountKind.PBL_WITH_TAX and not is_unmapped_lot_row(observation):
                 expedient.append(observation)
-        elif observation.tender_lot_id in active_lot_ids:
-            by_lot.setdefault(observation.tender_lot_id, []).append(observation)
+        elif observation.tender_lot_id in active_lot_ids and kind in by_lot:
+            by_lot[kind].setdefault(observation.tender_lot_id, []).append(observation)
 
     chosen = select_observation(expedient)
-    lots = {}
-    for lot_id in sorted(by_lot, key=str):
-        selected = select_observation(by_lot[lot_id])
-        if selected is not None:
-            lots[lot_id] = selected
-    shown = ([chosen] if chosen is not None else []) + list(lots.values())
+    lots: dict[TenderAmountKind, dict[uuid.UUID, TenderAmountObservation]] = {}
+    for kind, grouped in by_lot.items():
+        lots[kind] = {}
+        for lot_id in sorted(grouped, key=str):
+            selected = select_observation(grouped[lot_id])
+            if selected is not None:
+                lots[kind][lot_id] = selected
+    shown = ([chosen] if chosen is not None else []) + [
+        o for selected in lots.values() for o in selected.values()
+    ]
     dates = [moment for moment in (source_updated_at(o) for o in shown) if moment is not None]
     return BudgetWithTaxObservations(
         expedient=observation_read(chosen) if chosen is not None else None,
-        lots={lot_id: observation_read(o) for lot_id, o in lots.items()},
+        **{
+            LOT_FIELDS[kind]: {lot_id: observation_read(o) for lot_id, o in selected.items()}
+            for kind, selected in lots.items()
+        },
         attribution=OFFICIAL_ATTRIBUTION if shown else None,
         source_updated_at=max(dates) if dates else None,
     )
@@ -240,12 +267,13 @@ def build(
 async def load(
     session, tender_id: uuid.UUID, active_lot_ids: set[uuid.UUID]
 ) -> BudgetWithTaxObservations:
-    """Una sola consulta: totes les vigents ensenyables de la licitacio (expedient i lots)."""
+    """Una sola consulta: totes les vigents ensenyables de la licitacio (expedient i lots,
+    els tres tipus)."""
     result = await session.execute(
         sa.select(TenderAmountObservation).where(
             TenderAmountObservation.tender_id == tender_id,
             TenderAmountObservation.valid_to.is_(None),
-            TenderAmountObservation.amount_kind == TenderAmountKind.PBL_WITH_TAX,
+            TenderAmountObservation.amount_kind.in_(tuple(LOT_FIELDS)),
             TenderAmountObservation.source_code == SOURCE_CODE,
             TenderAmountObservation.validation_status.in_(SHOWN_STATUSES),
         )

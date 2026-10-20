@@ -120,6 +120,8 @@ async def test_sense_observacions_el_camp_es_buit(db, client_a):
     assert await _field(client_a, tender) == {
         "expedient": None,
         "lots": {},
+        "lots_pbl_without_tax": {},
+        "lots_estimated_value": {},
         "attribution": None,
         "source_updated_at": None,
     }
@@ -132,6 +134,7 @@ async def test_accepted_d_expedient(db, client_a):
 
     field = await _field(client_a, tender)
     assert field["expedient"] == {
+        "amount_kind": "pbl_with_tax",
         "status": "accepted",
         "amount": "247121.63",
         "currency": "EUR",
@@ -282,6 +285,8 @@ async def test_superseded_no_surt_mai(db, client_a):
     assert await _field(client_a, tender) == {
         "expedient": None,
         "lots": {},
+        "lots_pbl_without_tax": {},
+        "lots_estimated_value": {},
         "attribution": None,
         "source_updated_at": None,
     }
@@ -442,6 +447,8 @@ async def test_una_fila_de_lot_es_reconeix_tambe_nomes_per_la_clau(db, client_a)
     assert await _field(client_a, tender) == {
         "expedient": None,
         "lots": {},
+        "lots_pbl_without_tax": {},
+        "lots_estimated_value": {},
         "attribution": None,
         "source_updated_at": None,
     }

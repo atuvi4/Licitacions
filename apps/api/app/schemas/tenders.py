@@ -360,7 +360,8 @@ AmountFailedCheck = Literal["organ", "pbl_without_tax", "vec", "lots", "lot_sum"
 
 
 class AmountObservationRead(ORMModel):
-    """El PBL amb IVA que publica una font externa (F-06a): nomes el que ensenya la fitxa.
+    """Un import que publica una font externa (F-06a; F-06e per lot): nomes el que ensenya
+    la fitxa.
 
     `status` mai no es `superseded` (no es mostra). `amount` es l'import tal com es
     publica (NULL si no es publica); amb `no_value`, `published_zero` diu si es va
@@ -368,6 +369,8 @@ class AmountObservationRead(ORMModel):
     com a context de l'avis: mai no es el valor del fet.
     """
 
+    #: Quin import: el PBL amb IVA (el de sempre) o, per lot, el PBL sense IVA o el VEC.
+    amount_kind: Literal["pbl_with_tax", "pbl_without_tax", "estimated_value"] = "pbl_with_tax"
     status: Literal["accepted", "conflict", "no_value"]
     amount: Decimal | None = None
     currency: str = "EUR"
@@ -386,17 +389,21 @@ class AmountObservationRead(ORMModel):
 
 
 class BudgetWithTaxObservations(ORMModel):
-    """Observacions vigents del PBL amb IVA de la PSCP per a la fitxa (F-06a, fase 3).
+    """Observacions vigents dels imports de la PSCP per a la fitxa (F-06a fase 3, F-06e).
 
-    `expedient`: la de l'expedient, o NULL. `lots`: per lot vigent d'aquesta licitacio
-    (`tender_lot_id` -> observacio); una fila de lot de la font sense lot nostre no hi
-    es (ni a `expedient`). `attribution` (el text oficial de la llicencia tal com l'ensenya
-    la fitxa, sense data: la web el pinta tal qual) i `source_updated_at` (la data del
-    dataset mes recent de les retornades) nomes quan se'n retorna alguna.
+    `expedient`: la del PBL amb IVA de l'expedient, o NULL. `lots`: el PBL amb IVA per lot
+    vigent d'aquesta licitacio (`tender_lot_id` -> observacio); `lots_pbl_without_tax` i
+    `lots_estimated_value` (F-06e): el PBL sense IVA i el VEC per lot, amb la mateixa
+    regla. Una fila de lot de la font sense lot nostre no hi es (ni a `expedient`).
+    `attribution` (el text oficial de la llicencia tal com l'ensenya la fitxa, sense data:
+    la web el pinta tal qual) i `source_updated_at` (la data del dataset mes recent de les
+    retornades) nomes quan se'n retorna alguna.
     """
 
     expedient: AmountObservationRead | None = None
     lots: dict[uuid.UUID, AmountObservationRead] = {}
+    lots_pbl_without_tax: dict[uuid.UUID, AmountObservationRead] = {}
+    lots_estimated_value: dict[uuid.UUID, AmountObservationRead] = {}
     attribution: str | None = None
     source_updated_at: datetime | None = None
 

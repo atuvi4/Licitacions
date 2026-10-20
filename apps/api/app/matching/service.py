@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -27,6 +28,7 @@ from app.matching.rules import RULES_VERSION
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
 from app.models.tender_lifecycle import TenderRevision
 from app.models.tenders import Tender, TenderLot
+from app.tenders.lot_amounts import LotAmounts, load_lot_amounts, resolve
 from app.tenders.visibility import visible_to_company
 
 logger = logging.getLogger("app.matching")
@@ -61,9 +63,17 @@ class RecalculationSummary:
 
 
 def evaluate_tender(
-    profile: CompanyMatchProfile, tender: Tender, now: datetime | None = None
+    profile: CompanyMatchProfile,
+    tender: Tender,
+    now: datetime | None = None,
+    lot_amounts: Mapping[uuid.UUID, LotAmounts] | None = None,
 ) -> tuple[MatchOutcome, list[tuple[TenderLot, MatchOutcome]]]:
-    """Puntua un expedient i, si en te, cadascun dels seus lots."""
+    """Puntua un expedient i, si en te, cadascun dels seus lots.
+
+    `lot_amounts` (F-06e): els imports RESOLTS de cada lot (`app.tenders.lot_amounts`:
+    PLACSP > 0, si no la PSCP `accepted`). Un lot que no hi es es resol nomes amb les
+    seves columnes (el mateix que abans de F-06e).
+    """
     tender_cpvs = [item.cpv_code for item in tender.cpvs]
     # v2 (F-06b): VEC → PBL sense IVA → PBL amb IVA, amb la base identificada.
     tender_amount = reference_amount(
@@ -97,9 +107,16 @@ def evaluate_tender(
         lot_nuts = lot.nuts_code or tender.nuts_code
         lot_place = lot.place_of_execution or tender.place_of_execution
         # Import: NOMES el del lot. No es reparteix ni s'hereta el total de
-        # l'expedient, que donaria una xifra falsa per a cada lot.
+        # l'expedient, que donaria una xifra falsa per a cada lot. (F-06e) Els imports
+        # resolts del lot: PLACSP > 0 i, si no, la PSCP `accepted`, amb la mateixa
+        # `reference_amount` (VEC principal, PBL net cota inferior, R1, brut sol).
+        resolved = lot_amounts.get(lot.id) if lot_amounts is not None else None
+        if resolved is None:
+            resolved = resolve(lot, {})
         lot_amount = reference_amount(
-            lot.estimated_value, lot.base_budget_without_tax, lot.base_budget
+            resolved.estimated_value.value,
+            resolved.base_budget_without_tax.value,
+            resolved.base_budget.value,
         )
         lot_results.append(
             (
@@ -206,6 +223,12 @@ class MatchingService:
         profile = await load_profile(self.session, company_id)
         tenders = await self._tenders(tender_ids, company_id=company_id)
         revisions = await self._current_revisions(tenders)
+        # (F-06e) Imports resolts de tots els lots vigents, en bloc (mai una consulta
+        # per lot).
+        lot_amounts = await load_lot_amounts(
+            self.session,
+            [lot for tender in tenders for lot in tender.lots if lot.removed_at is None],
+        )
 
         existing = {
             match.tender_id: match
@@ -219,7 +242,7 @@ class MatchingService:
         }
 
         for tender in tenders:
-            outcome, lot_results = evaluate_tender(profile, tender, moment)
+            outcome, lot_results = evaluate_tender(profile, tender, moment, lot_amounts)
             summary.tenders_evaluated += 1
             summary.lots_evaluated += len(lot_results)
 

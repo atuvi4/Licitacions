@@ -57,6 +57,7 @@ from app.offer.pricing import (
 )
 from app.offer.pricing import unit_amount as _unit_amount
 from app.tenders.amounts import useful_amount
+from app.tenders.lot_amounts import LotAmounts, load_lot_amounts
 from app.workspace.checklist import applies_to_workspace_lot
 
 
@@ -373,30 +374,33 @@ def _row_of(view):
 async def _lot_maximums(
     session: AsyncSession, workspace: BidWorkspace, offer: EconomicOffer
 ) -> dict[uuid.UUID, Decimal | None]:
-    """El maxim de cada lot: el pressupost base SENSE IVA que publica la font.
+    """El maxim de cada lot: el pressupost base SENSE IVA.
 
-    Amb lot del plec, el del lot; sense lot, el de la licitacio. Si no el
-    publiquen, es queda a `None` i S1 deixa el limit indeterminat: dir que
-    l'oferta hi cap seria afirmar-ho sobre un pressupost que no coneixem. Un
-    `0.00` publicat tampoc no es un maxim (`app.tenders.amounts`): `None`, mai
-    «qualsevol oferta positiva supera el maxim».
+    Amb lot del plec, el PBL sense IVA RESOLT del lot (F-06e,
+    `app.tenders.lot_amounts`: el de la PLACSP si es > 0 i, si no, el de la PSCP
+    `accepted`); sense lot, el de la licitacio, com sempre. Si no n'hi ha cap (o
+    la PSCP el te en `conflict` o `no_value`), es queda a `None` i S1 deixa el
+    limit indeterminat: dir que l'oferta hi cap seria afirmar-ho sobre un
+    pressupost que no coneixem. Un `0.00` publicat tampoc no es un maxim
+    (`app.tenders.amounts`): `None`, mai «qualsevol oferta positiva supera el
+    maxim».
     """
     tender_lot_ids = {lot.tender_lot_id for lot in offer.lots if lot.tender_lot_id}
-    lots: dict[uuid.UUID, TenderLot] = {}
+    resolved: dict[uuid.UUID, LotAmounts] = {}
     if tender_lot_ids:
         rows = await session.scalars(
             sa.select(TenderLot).where(TenderLot.id.in_(tender_lot_ids))
         )
-        lots = {row.id: row for row in rows.all()}
+        resolved = await load_lot_amounts(session, rows.all())
     tender = await session.get(Tender, workspace.tender_id)
 
     maximums: dict[uuid.UUID, Decimal | None] = {}
     for lot in offer.lots:
         if lot.tender_lot_id is not None:
-            source = lots.get(lot.tender_lot_id)
+            amounts = resolved.get(lot.tender_lot_id)
+            maximums[lot.id] = amounts.base_budget_without_tax.value if amounts else None
         else:
-            source = tender
-        maximums[lot.id] = useful_amount(getattr(source, "base_budget_without_tax", None))
+            maximums[lot.id] = useful_amount(getattr(tender, "base_budget_without_tax", None))
     return maximums
 
 
