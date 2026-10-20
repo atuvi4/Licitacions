@@ -1162,9 +1162,11 @@ _ENS_LEVEL_AFTER = re.compile(
     + _LEVEL
     + r"\b(?=\s*(?:$|[).;,:]|o\b|i\b|y\b|\())"
 )
-#: «categoria alta de l'ENS», «nivel medio del Esquema Nacional de Seguridad».
+#: «categoria alta de l'ENS», «categoría media del Esquema Nacional de Seguridad».
+#: Nomes «categoria»: «nivell alt de l'ENS» es el nivell d'un incident, d'unes
+#: dades o de la seguretat, no la categoria del sistema (ronda 3, M2-1).
 _ENS_LEVEL_BEFORE = re.compile(
-    r"\b(?:categoria|nivell|nivel)\s*:?\s*"
+    r"\bcategoria\s*:?\s*"
     + _LEVEL
     + r"\s+(?:de|del)\s+(?:l'|la\s+|el\s+)?"
     + _ENS_NAME

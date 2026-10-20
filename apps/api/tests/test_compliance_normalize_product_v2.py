@@ -961,10 +961,17 @@ def test_m2_la_cnmc_nomes_compta_si_ho_diu_el_text_literal():
         ("Compliment de l'ENS i alta seguretat de les dades.", None),
         ("Compliment de l'ENS. Incidències de categoria alta: 4 hores.", None),
         ("ENS i nivell alt de servei", None),
+        # Ronda 3 (M2-1): «nivell X de l'ENS» no es la categoria del sistema.
+        ("Incidents de nivell alt de l'ENS", None),
+        ("Mesures de nivell alt de seguretat segons l'ENS", None),
+        ("Tractament de dades de nivell alt de l'ENS", None),
+        ("nivel medio del Esquema Nacional de Seguridad", None),
         # Positius:
         ("Certificació ENS de categoria MITJANA", "mitjana"),
         ("categoria alta de l'ENS", "alta"),
-        ("nivel medio del Esquema Nacional de Seguridad", "mitjana"),
+        ("categoria alta de l'Esquema Nacional de Seguretat", "alta"),
+        ("categoría media del ENS", "mitjana"),
+        ("Esquema Nacional de Seguretat de nivell bàsic", "basica"),
         ("ENS (categoria Alta) vigent", "alta"),
         ("ENS Alta.", "alta"),
     ],

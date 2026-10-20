@@ -461,5 +461,28 @@ describe("ComplianceSection · ronda 2", () => {
     const li = screen.getByText("Certificat ISO 9001 en vigor").closest("li")!;
     expect(li.textContent).not.toContain("Valor no comparable");
     expect(li.textContent).toContain("No compleix");
+    // Ronda 3 (M2-2): la regla no ha comparat res; el veredicte és d'una persona.
+    expect(li.textContent).not.toContain("Comparat per la regla");
+    expect(li.textContent).toContain("Revisat per una persona");
+  });
+
+  it("una fila decidida per la regla i després revisada continua dient que la regla ha comparat", () => {
+    const row = assessment({
+      id: "m2",
+      automatic_result: "satisfies",
+      reviewed_result: "does_not_satisfy",
+      effective_result: "does_not_satisfy",
+      assessment_mode: "automatic",
+      review_status: "verified",
+      reviewed_by_name: "Anna Puig",
+      review_note: "La pòlissa ha caducat.",
+      requirement_value_json: { weird: true },
+      company_value_json: { odd: 1 },
+      evidence: [],
+    });
+    renderSection({ run: run(), assessments: [row], is_stale: false });
+    const li = screen.getByText("Certificat ISO 9001 en vigor").closest("li")!;
+    expect(li.textContent).toContain("Comparat per la regla");
+    expect(li.textContent).not.toContain("Valor no comparable");
   });
 });

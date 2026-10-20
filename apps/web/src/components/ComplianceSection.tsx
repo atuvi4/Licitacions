@@ -92,6 +92,7 @@ function citationsLabel(count: number): string {
 /** Resultats que la regla ha decidit sola: la fila no pot dir «no comparable». */
 const DECIDED: AssessmentResult[] = ["satisfies", "does_not_satisfy"];
 const COMPARED_BY_RULE = "Comparat per la regla: vegeu l'explicació";
+const REVIEWED_BY_PERSON = "Revisat per una persona: vegeu el motiu de la revisió";
 
 function GroupCitations({ tenderId, row }: { tenderId: string; row: AssessmentDisplay }) {
   const extra = (row.assessment.requirement?.citations ?? []).slice(1);
@@ -160,14 +161,20 @@ function AssessmentRow({
   // n'hi ha; si no, el cru extret.
   const compared = comparedLine(deciding.compared_value);
   const comparedFrom = compared ? provenanceLine(deciding.compared_provenance, deciding.requirement?.citations) : null;
+  // Qui ha donat el veredicte: si l'automàtic no era decisiu i el veredicte és d'una
+  // revisió humana, la regla NO ha comparat res i no es pot dir que sí.
+  const decidedBy =
+    deciding.assessment_mode === "automatic" && DECIDED.includes(deciding.automatic_result)
+      ? COMPARED_BY_RULE
+      : REVIEWED_BY_PERSON;
   const rawAsks = valueLine(assessment.requirement_value_json);
   const asks = compared
     ? { text: comparedFrom ? `${compared} · ${comparedFrom}` : compared, raw: JSON.stringify(assessment.requirement_value_json) }
     : rawAsks.raw && decided
-      ? { text: COMPARED_BY_RULE, raw: rawAsks.raw }
+      ? { text: decidedBy, raw: rawAsks.raw }
       : rawAsks;
   const rawHave = valueLine(deciding.company_value_json);
-  const have = rawHave.raw && decided ? { text: COMPARED_BY_RULE, raw: rawHave.raw } : rawHave;
+  const have = rawHave.raw && decided ? { text: decidedBy, raw: rawHave.raw } : rawHave;
   const automatic = explanation(deciding.explanation_code);
   const sourceHref =
     source?.tender_document_id && source.page_number
