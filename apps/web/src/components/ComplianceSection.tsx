@@ -22,7 +22,7 @@ import { useState } from "react";
 import { ScoreValue } from "@/components/PreFit";
 import { Attribution, Banner, Button, Card, CardHeader, ErrorNotice, EvidenceRef, StatusPill } from "@/components/ui";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { consolidateAssessments, evidenceLabel, valueLine } from "@/lib/compliance";
+import { comparedLine, consolidateAssessments, evidenceLabel, provenanceLine, valueLine } from "@/lib/compliance";
 import { INSURANCE_LIMIT_KIND_LABELS, INSURANCE_TYPE_LABELS } from "@/lib/format";
 import { api } from "@/lib/api";
 import {
@@ -85,6 +85,14 @@ function citationHref(tenderId: string, citation: { tender_document_id: string |
  * cada requisit, amb TOTES les seves cites, i les cites addicionals del canònic.
  * Consolidar no amaga res: cap cita no es perd.
  */
+function citationsLabel(count: number): string {
+  return count === 1 ? "1 cita addicional" : `${count} cites addicionals`;
+}
+
+/** Resultats que la regla ha decidit sola: la fila no pot dir «no comparable». */
+const DECIDED: AssessmentResult[] = ["satisfies", "does_not_satisfy"];
+const COMPARED_BY_RULE = "Comparat per la regla: vegeu l'explicació";
+
 function GroupCitations({ tenderId, row }: { tenderId: string; row: AssessmentDisplay }) {
   const extra = (row.assessment.requirement?.citations ?? []).slice(1);
   if (row.members.length === 0 && extra.length === 0) return null;
@@ -93,8 +101,8 @@ function GroupCitations({ tenderId, row }: { tenderId: string; row: AssessmentDi
     <details className="mt-1.5 text-caption text-muted" data-group-citations>
       <summary className="cursor-pointer">
         {row.members.length > 0
-          ? `També a ${row.members.length} requisit${row.members.length === 1 ? "" : "s"} més · ${memberCitations + extra.length} cites addicionals`
-          : `${extra.length} cites addicionals`}
+          ? `També a ${row.members.length} requisit${row.members.length === 1 ? "" : "s"} més · ${citationsLabel(memberCitations + extra.length)}`
+          : citationsLabel(extra.length)}
       </summary>
       <ul className="mt-1 space-y-1.5">
         {extra.map((citation) => (
@@ -143,9 +151,23 @@ function AssessmentRow({
   //: el sistema; un resultat = contradir-lo, i llavors cal motiu.
   const [pending, setPending] = useState<AssessmentResult | null | undefined>(undefined);
   const [note, setNote] = useState("");
-  const asks = valueLine(assessment.requirement_value_json);
-  const have = valueLine(assessment.company_value_json);
-  const automatic = explanation(assessment.explanation_code);
+  // L'avaluació que dona el resultat de la fila: la seva explicació i el seu valor
+  // de l'empresa quadren amb la pastilla (en un grup divergent pot no ser el canònic).
+  const deciding = row.deciding;
+  const decided = deciding.assessment_mode === "automatic" && DECIDED.includes(deciding.automatic_result);
+  // «Demana el plec»: el valor que la regla ha COMPARAT (amb la seva procedència) si
+  // n'hi ha; si no, el cru extret.
+  const compared = comparedLine(deciding.compared_value);
+  const comparedFrom = compared ? provenanceLine(deciding.compared_provenance, deciding.requirement?.citations) : null;
+  const rawAsks = valueLine(assessment.requirement_value_json);
+  const asks = compared
+    ? { text: comparedFrom ? `${compared} · ${comparedFrom}` : compared, raw: JSON.stringify(assessment.requirement_value_json) }
+    : rawAsks.raw && decided
+      ? { text: COMPARED_BY_RULE, raw: rawAsks.raw }
+      : rawAsks;
+  const rawHave = valueLine(deciding.company_value_json);
+  const have = rawHave.raw && decided ? { text: COMPARED_BY_RULE, raw: rawHave.raw } : rawHave;
+  const automatic = explanation(deciding.explanation_code);
   const sourceHref =
     source?.tender_document_id && source.page_number
       ? `/licitacions/${tenderId}/documents/${source.tender_document_id}?page=${source.page_number}&extraction=${source.extraction_id}`
@@ -207,9 +229,9 @@ function AssessmentRow({
           <p className={`text-[13px] ${result === "does_not_satisfy" ? "font-medium text-danger" : "text-ink"}`} title={have.raw ?? undefined}>
             {have.text}
           </p>
-          {assessment.evidence.length > 0 && (
+          {deciding.evidence.length > 0 && (
             <ul className="mt-1 space-y-0.5">
-              {assessment.evidence.map((evidence) => (
+              {deciding.evidence.map((evidence) => (
                 <li key={evidence.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted">
                   <span className="text-ink" title={evidenceLabel(evidence.label, EVIDENCE_DICTIONARIES).raw ?? undefined}>
                     {evidenceLabel(evidence.label, EVIDENCE_DICTIONARIES).text}
@@ -226,7 +248,7 @@ function AssessmentRow({
               ))}
             </ul>
           )}
-          {assessment.evidence.length === 0 && result === "unknown" && (
+          {deciding.evidence.length === 0 && result === "unknown" && (
             // Cap verb d'onboarding (addendum 3B-2, B1): la dada que falta es declara al coneixement.
             <p className="mt-1 text-caption">
               <Link href="/empresa/coneixement" className={LINK}>
@@ -272,13 +294,13 @@ function AssessmentRow({
               </StatusPill>
               <Attribution kind="rule" />
             </p>
-            <p className="mt-1 text-caption text-muted" title={automatic.known ? undefined : assessment.explanation_code}>
+            <p className="mt-1 text-caption text-muted" title={automatic.known ? undefined : deciding.explanation_code}>
               {automatic.text}
             </p>
           </div>
         </div>
       ) : (
-        <p className="mt-2 text-[13px] text-muted" title={automatic.known ? assessment.rule_code : `${assessment.rule_code} · ${assessment.explanation_code}`}>
+        <p className="mt-2 text-[13px] text-muted" title={automatic.known ? deciding.rule_code : `${deciding.rule_code} · ${deciding.explanation_code}`}>
           {automatic.text}
         </p>
       )}
@@ -290,9 +312,12 @@ function AssessmentRow({
       {pending === undefined ? (
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
           <span className={KICKER}>La teva revisió</span>
-          <button type="button" disabled={busy} onClick={() => openReview(null)} className={`${LINK} min-h-11 md:min-h-0`}>
-            Confirma
-          </button>
+          {/* En un grup divergent, «confirmar» no diria quin dels resultats: cal triar-ne un. */}
+          {!row.divergent && (
+            <button type="button" disabled={busy} onClick={() => openReview(null)} className={`${LINK} min-h-11 md:min-h-0`}>
+              Confirma
+            </button>
+          )}
           <button type="button" disabled={busy} onClick={() => openReview("satisfies")} className={`${LINK} min-h-11 md:min-h-0`}>
             Marca compleix
           </button>

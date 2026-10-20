@@ -267,7 +267,7 @@ describe("ComplianceSection · duplicats d'una mateixa exigència", () => {
     expect(screen.queryByText("Volum anual de negocis mínim")).toBeNull();
     const row = screen.getByText("Solvència econòmica: volum anual de negoci").closest("li")!;
     const details = row.querySelector("[data-group-citations]")!;
-    expect(details.textContent).toContain("També a 1 requisit més · 1 cites addicionals");
+    expect(details.textContent).toContain("També a 1 requisit més · 1 cita addicional");
     expect(details.textContent).toContain("També a: Volum anual de negocis mínim");
     expect(details.textContent).toContain("per un import igual o superior a 91.904,74 euros");
     expect(row.textContent).toContain("Volum anual de negoci del millor dels 3 últims exercicis");
@@ -301,5 +301,108 @@ describe("ComplianceSection · duplicats d'una mateixa exigència", () => {
   it("sense grups de l'API, cada avaluació és una fila (com abans)", () => {
     const { container } = renderSection({ ...grouped, groups: undefined });
     expect(container.textContent).toContain("Requisits avaluats (2)");
+  });
+});
+
+describe("ComplianceSection · el valor que la regla ha comparat (I6)", () => {
+  beforeEach(() => {
+    post.mockReset();
+    reload.mockClear();
+  });
+
+  const citation = (id: string, page: number, quote: string) => ({
+    evidence_id: id, tender_document_id: "d1", extraction_id: "ex1", extraction_revision: 1, page_number: page, quote, document_name: "Plec administratiu",
+  });
+
+  function decided(overrides: Partial<Assessment>): Assessment {
+    return assessment({
+      automatic_result: "does_not_satisfy",
+      effective_result: "does_not_satisfy",
+      blocker_status: "potential",
+      assessment_mode: "automatic",
+      evidence: [],
+      evidence_strength: "missing",
+      ...overrides,
+    });
+  }
+
+  it("RC patronal per víctima: el llindar normalitzat, la procedència i el valor de l'empresa", () => {
+    const row = decided({
+      id: "p1",
+      rule_code: "insurance_limits_v2",
+      explanation_code: "INSURANCE_LIMIT_BELOW",
+      requirement_value_json: { amount: "150.000 €", unit: "per víctima" },
+      compared_value: { kind: "insurance", insurance_type: "civil_liability", limits: [{ kind: "employer_per_victim", amount: "150000", currency: "EUR" }] },
+      compared_provenance: [{ field: "limits.amount", source: "value_json", raw: "150.000 €" }],
+      normalization_status: "normalized",
+      company_value_json: { type: "civil_liability", limits: [{ kind: "per_claim", amount: 200000, currency: "EUR" }, { kind: "employer_per_victim", amount: 100000, currency: "EUR" }] },
+      requirement: { requirement_id: "r1", title: "Sublímit RC patronal mínim 150.000 € per víctima", category: "insurance", review_status: "unreviewed", tender_document_id: "d1", extraction_id: "ex1", extraction_revision: 1, page_number: 8, quote: "sublímit mínim de 150.000 € per víctima", document_name: "Plec administratiu", citations: [citation("e1", 8, "sublímit mínim de 150.000 € per víctima")] },
+    });
+    renderSection({ run: run(), assessments: [row], is_stale: false });
+    const li = screen.getByText("Sublímit RC patronal mínim 150.000 € per víctima").closest("li")!;
+    expect(li.textContent).toMatch(/150\.000,00\s€ RC patronal per víctima · del valor extret/);
+    expect(li.textContent).toMatch(/100\.000,00\s€ RC patronal per víctima/);
+    expect(li.textContent).not.toContain("Valor no comparable");
+    expect(li.textContent).toContain("No compleix");
+  });
+
+  it("RC per sinistre i any llegida de la cita: diu la pàgina", () => {
+    const row = decided({
+      id: "p2",
+      automatic_result: "satisfies",
+      effective_result: "satisfies",
+      blocker_status: "none",
+      rule_code: "insurance_limits_v2",
+      explanation_code: "INSURANCE_LIMITS_MET",
+      requirement_value_json: null,
+      compared_value: { kind: "insurance", limits: [{ kind: "per_claim", amount: "300000", currency: "EUR" }, { kind: "annual_aggregate", amount: "300000", currency: "EUR" }] },
+      compared_provenance: [{ field: "limits.amount", source: "quote", raw: "cobertura mínima de 300.000 euros", evidence_id: "e17" }],
+      company_value_json: { type: "civil_liability", limits: [{ kind: "per_claim", amount: 600000, currency: "EUR" }, { kind: "annual_aggregate", amount: 600000, currency: "EUR" }] },
+      requirement: { requirement_id: "r2", title: "Pòlissa de RC: 300.000 euros per sinistre i any", category: "insurance", review_status: "unreviewed", tender_document_id: "d1", extraction_id: "ex1", extraction_revision: 1, page_number: 17, quote: "cobertura mínima de 300.000 euros", document_name: "Plec administratiu", citations: [citation("e17", 17, "cobertura mínima de 300.000 euros per sinistre i any")] },
+    });
+    renderSection({ run: run(), assessments: [row], is_stale: false });
+    const li = screen.getByText("Pòlissa de RC: 300.000 euros per sinistre i any").closest("li")!;
+    expect(li.textContent).toMatch(/300\.000,00\s€ per sinistre · 300\.000,00\s€ agregat anual · de la cita, p\. 17/);
+    expect(li.textContent).not.toContain("Valor no comparable");
+  });
+
+  it("solvència econòmica: llindar, període i la facturació de l'empresa", () => {
+    const row = decided({
+      id: "p3",
+      rule_code: "economic_turnover_aggregate_v2",
+      explanation_code: "ECONOMIC_THRESHOLD_NOT_MET",
+      requirement_value_json: { amount: "91.904,74 €", period: "millor dels 3 últims exercicis" },
+      compared_value: { kind: "economic_solvency", threshold: { amount: "91904.74", currency: "EUR" }, reference_period: { type: "last_n_years", years: 3 }, aggregation: "max" },
+      compared_provenance: [{ field: "threshold.amount", source: "value_json", raw: "91.904,74 €" }],
+      company_value_json: { amount: 71000, currency: "EUR", aggregation: "max" },
+      requirement: { requirement_id: "r3", title: "Solvència econòmica: volum anual de negoci", category: "economic_solvency", review_status: "unreviewed", tender_document_id: "d1", extraction_id: "ex1", extraction_revision: 1, page_number: 3, quote: null, document_name: "Plec administratiu", citations: [] },
+    });
+    renderSection({ run: run(), assessments: [row], is_stale: false });
+    const li = screen.getByText("Solvència econòmica: volum anual de negoci").closest("li")!;
+    expect(li.textContent).toMatch(/≥ 91\.904,74\s€ · millor exercici dels 3 últims · del valor extret/);
+    expect(li.textContent).toContain("71.000 EUR");
+    expect(li.textContent).not.toContain("Valor no comparable");
+  });
+
+  it("una fila decidida per la regla mai no diu «Valor no comparable»", () => {
+    const row = decided({ id: "p4", requirement_value_json: { weird: true }, company_value_json: { odd: 1 } });
+    renderSection({ run: run(), assessments: [row], is_stale: false });
+    const li = screen.getByText("Certificat ISO 9001 en vigor").closest("li")!;
+    expect(li.textContent).not.toContain("Valor no comparable");
+    expect(li.textContent).toContain("Comparat per la regla");
+  });
+
+  it("un grup divergent ensenya l'explicació del membre que decideix i no ofereix «Confirma»", () => {
+    const canonical = assessment({ id: "g1", requirement_id: "rA", automatic_result: "satisfies", effective_result: "satisfies", explanation_code: "ECONOMIC_THRESHOLD_MET", evidence: [] });
+    const member = assessment({ id: "g2", requirement_id: "rB", automatic_result: "satisfies", reviewed_result: "does_not_satisfy", effective_result: "does_not_satisfy", explanation_code: "ECONOMIC_THRESHOLD_NOT_MET", evidence: [], requirement: { requirement_id: "rB", title: "Volum anual de negocis mínim", category: "economic_solvency", review_status: "unreviewed", tender_document_id: null, extraction_id: null, extraction_revision: null, page_number: null, quote: null, document_name: null, citations: [] } });
+    renderSection({
+      run: run(),
+      assessments: [canonical, member],
+      groups: [{ canonical_assessment_id: "g1", canonical_requirement_id: "rA", member_assessment_ids: ["g1", "g2"], member_requirement_ids: ["rA", "rB"], effective_result: "does_not_satisfy", blocker_status: "potential", divergent: true }],
+      is_stale: false,
+    });
+    const li = screen.getByText("Certificat ISO 9001 en vigor").closest("li")!;
+    expect(li.textContent).toContain("La facturació registrada no arriba al llindar exigit.");
+    expect([...li.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Confirma")).toBe(false);
   });
 });

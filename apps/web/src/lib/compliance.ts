@@ -77,6 +77,14 @@ export interface RequirementSource {
   citations?: RequirementCitation[];
 }
 
+/** D'on surt un camp del valor comparat: el valor extret o una cita verificada. */
+export interface ComparedProvenance {
+  field: string;
+  source: "value_json" | "quote" | "title" | "description" | string;
+  raw: string;
+  evidence_id?: string;
+}
+
 /** A quina exigència pertany una avaluació quan el plec la repeteix (duplicats). */
 export interface AssessmentConsolidation {
   canonical_requirement_id: string;
@@ -124,6 +132,11 @@ export interface Assessment {
   evidence: CompanyEvidence[];
   requirement: RequirementSource | null;
   consolidation?: AssessmentConsolidation | null;
+  /** El valor que la regla ha COMPARAT (complement product-v2), amb procedència. El cru és `requirement_value_json`. */
+  compared_value?: Record<string, unknown> | null;
+  compared_provenance?: ComparedProvenance[];
+  normalization_status?: string | null;
+  normalization_reason?: string | null;
 }
 
 export interface ComplianceRun {
@@ -172,7 +185,18 @@ export interface AssessmentDisplay {
   blockerStatus: BlockerStatus;
   /** Els membres no diuen el mateix: mana el més prudent. */
   divergent: boolean;
+  /** L'avaluació que dona el resultat de la fila (la més prudent del grup): la seva
+   *  explicació i el seu valor de l'empresa són els que quadren amb la pastilla. */
+  deciding: Assessment;
 }
+
+const SEVERITY: Record<AssessmentResult, number> = {
+  does_not_satisfy: 4,
+  needs_review: 3,
+  unknown: 2,
+  satisfies: 1,
+  not_applicable: 0,
+};
 
 /**
  * Una fila per exigència. Els duplicats d'un grup no es perden: viatgen com a
@@ -193,7 +217,7 @@ export function consolidateAssessments(
     const group = groupOf.get(item.id);
     if (!group) {
       done.add(item.id);
-      rows.push({ assessment: item, members: [], effectiveResult: item.effective_result, blockerStatus: item.blocker_status, divergent: false });
+      rows.push({ assessment: item, members: [], effectiveResult: item.effective_result, blockerStatus: item.blocker_status, divergent: false, deciding: item });
       continue;
     }
     const canonical = byId.get(group.canonical_assessment_id) ?? item;
@@ -202,7 +226,13 @@ export function consolidateAssessments(
       .map((id) => byId.get(id))
       .filter((member): member is Assessment => Boolean(member));
     for (const id of group.member_assessment_ids) done.add(id);
-    rows.push({ assessment: canonical, members, effectiveResult: group.effective_result, blockerStatus: group.blocker_status, divergent: group.divergent });
+    const all = [canonical, ...members];
+    const deciding =
+      canonical.effective_result === group.effective_result
+        ? canonical
+        : (all.find((member) => member.effective_result === group.effective_result) ??
+          all.reduce((worst, member) => (SEVERITY[member.effective_result] > SEVERITY[worst.effective_result] ? member : worst)));
+    rows.push({ assessment: canonical, members, effectiveResult: group.effective_result, blockerStatus: group.blocker_status, divergent: group.divergent, deciding });
   }
   return rows;
 }
@@ -291,7 +321,12 @@ export const EXPLANATION_LABELS: Record<string, string> = {
   CERTIFICATION_DATA_INCOMPLETE:
     "El perfil de certificacions és incomplet: no consta, però això no vol dir que no la tingueu.",
   CERTIFICATION_LEVEL_NOT_STATED:
-    "El plec exigeix l'esquema (ENS) però no n'indica la categoria: no se'n suposa cap. Cal revisar-ho.",
+    "No consta la categoria de l'ENS (al plec o a la certificació de l'empresa): no se'n suposa cap. Cal revisar-ho.",
+  CERTIFICATION_LEVEL_BELOW: "La categoria de l'ENS de l'empresa és inferior a la que exigeix el plec.",
+  CERTIFICATION_LEVEL_HIGHER_REVIEW:
+    "L'empresa té l'ENS en una categoria superior a la demanada i el plec no diu «o superior»: cal revisar-ho.",
+  CERTIFICATION_EQUIVALENCE_REVIEW:
+    "El plec admet equivalents: quina certificació hi equival ho ha de decidir una persona.",
   REGISTRATION_FOUND_VALID: "El registre consta al perfil i és vigent.",
   REGISTRATION_FOUND_EXPIRED: "El registre caduca abans del termini.",
   REGISTRATION_NOT_FOUND_PROFILE_COMPLETE:
@@ -300,12 +335,16 @@ export const EXPLANATION_LABELS: Record<string, string> = {
   REGISTRATION_CLASSIFICATION_REVIEW:
     "La classificació empresarial (grup, subgrup, categoria) s'ha de revisar a mà.",
   REGISTRATION_DOCUMENTATION_ONLY:
-    "Documentació que aporta qui ja és inscrit al RELI o al ROLECE: el plec no exigeix estar-hi inscrit.",
+    "Sembla documentació per a qui ja és inscrit al RELI/ROLECE; comprova al plec si cal estar-hi inscrit.",
   ECONOMIC_PERIOD_INCOMPLETE: "Falten exercicis del període que demana el plec per poder-ho afirmar.",
   PERCENTAGE_BASE_UNAVAILABLE:
     "El llindar és un percentatge d'una base que no consta a l'expedient: cal revisar-ho.",
   INSURANCE_LIMITS_MET: "La pòlissa cobreix cadascun dels límits exigits.",
   INSURANCE_LIMIT_BELOW: "Un dels límits de la pòlissa és inferior al que exigeix el plec.",
+  INSURANCE_LIMIT_KIND_AMBIGUOUS: "El plec parla d'un sublímit que no se sap a quin límit correspon: cal revisar-ho.",
+  INSURANCE_CONDITION_NOT_CHECKED:
+    "Els imports encaixen, però el plec imposa una condició que no es comprova automàticament (p. ex. mantenir la pòlissa durant tota l'execució).",
+  INSURANCE_ADDITIONAL_INSURED_UNKNOWN: "El plec exigeix l'òrgan com a assegurat addicional i la pòlissa no ho declara.",
   INSURANCE_LIMIT_UNKNOWN:
     "La pòlissa no declara un dels límits que exigeix el plec (per sinistre, anual, per víctima…).",
   INSURANCE_COVERAGE_MET: "La pòlissa cobreix l'import exigit.",
@@ -347,17 +386,63 @@ export const COMPLIANCE_DISCLAIMER =
   "L'anàlisi de compliment compara dades estructurades. Revisa l'evidència del plec i la del " +
   "perfil abans de decidir si us hi presenteu.";
 
+const LIMIT_KIND_LABELS: Record<string, string> = {
+  total: "cobertura total",
+  per_claim: "per sinistre",
+  per_victim: "per víctima",
+  annual_aggregate: "agregat anual",
+  sublimit: "sublímit",
+  employer_per_victim: "RC patronal per víctima",
+  unknown: "sense especificar",
+};
+
+function toNumber(raw: unknown): number | null {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === "string" && /^-?\d+(?:\.\d+)?$/.test(raw.trim())) return Number(raw);
+  return null;
+}
+
+/** «91.904,74 €». Només per a imports que ja són un nombre (o el text d'un `Decimal`). */
+export function formatAmount(raw: unknown, currency: unknown = "EUR"): string | null {
+  const amount = toNumber(raw);
+  if (amount === null) return null;
+  const code = typeof currency === "string" && /^[A-Z]{3}$/.test(currency) ? currency : "EUR";
+  return new Intl.NumberFormat("ca-ES", { style: "currency", currency: code, maximumFractionDigits: 2 }).format(amount);
+}
+
+function limitsLine(limits: unknown): string | null {
+  if (!Array.isArray(limits) || limits.length === 0) return null;
+  const parts = limits
+    .map((limit) => {
+      if (!limit || typeof limit !== "object") return null;
+      const item = limit as Record<string, unknown>;
+      const amount = formatAmount(item.amount, item.currency);
+      if (!amount) return null;
+      return `${amount} ${LIMIT_KIND_LABELS[String(item.kind)] ?? "límit sense etiqueta"}`;
+    })
+    .filter((part): part is string => Boolean(part));
+  return parts.length ? parts.join(" · ") : null;
+}
+
 /** Un valor estructurat, en text. Sense fallback a JSON: el JSON va al `title`. */
 export function valueLine(value: Record<string, unknown> | null): { text: string; raw: string | null } {
   if (!value) return { text: "—", raw: null };
   const parts: string[] = [];
   if (typeof value.amount === "number") {
     parts.push(`${value.amount.toLocaleString("ca-ES")} ${value.currency ?? ""}`.trim());
+  } else if (typeof value.amount === "string" && value.amount.trim()) {
+    // El text tal com el va escriure l'extractor (p. ex. «150.000 €»).
+    parts.push(value.amount.trim());
   }
   if (typeof value.year === "number") parts.push(`(${value.year})`);
   if (typeof value.name === "string") parts.push(value.name);
   if (typeof value.coverage_amount === "number") {
     parts.push(`${value.coverage_amount.toLocaleString("ca-ES")} ${value.currency ?? ""}`.trim());
+  }
+  const limits = limitsLine(value.limits);
+  if (limits) parts.push(limits);
+  if (typeof value.accumulated === "number") {
+    parts.push(`${formatAmount(value.accumulated, value.currency) ?? value.accumulated} acumulats`);
   }
   if (typeof value.accredited_projects === "number") {
     parts.push(`${value.accredited_projects} de ${value.required_projects} projectes`);
@@ -366,8 +451,72 @@ export function valueLine(value: Record<string, unknown> | null): { text: string
     parts.push(`${value.minimum_projects} projectes`);
   }
   if (typeof value.holders === "number") parts.push(`${value.holders} persona(es)`);
+  if (typeof value.unit === "string" && parts.length > 0) parts.push(value.unit);
   if (parts.length > 0) return { text: parts.join(" "), raw: null };
   return { text: "Valor no comparable automàticament", raw: JSON.stringify(value) };
+}
+
+function yearsPhrase(period: unknown, aggregation: unknown, noun: string): string | null {
+  const years = period && typeof period === "object" ? (period as Record<string, unknown>).years : null;
+  if (typeof years !== "number") return null;
+  if (aggregation === "max") return `millor ${noun} dels ${years} últims`;
+  if (aggregation === "each_year") return `cada un dels ${years} últims ${noun === "any" ? "anys" : "exercicis"}`;
+  return `darrers ${years} ${noun === "any" ? "anys" : "exercicis"}`;
+}
+
+/**
+ * El valor que la regla ha COMPARAT (el normalitzat del complement product-v2), en
+ * text: «≥ 91.904,74 € · millor exercici dels 3 últims». `null` si no n'hi ha o si
+ * la forma no es coneix (llavors es mostra el cru).
+ */
+export function comparedLine(value: Record<string, unknown> | null | undefined): string | null {
+  if (!value) return null;
+  const parts: string[] = [];
+  if (value.kind === "economic_solvency") {
+    const threshold = (value.threshold ?? {}) as Record<string, unknown>;
+    const amount = formatAmount(threshold.amount, threshold.currency);
+    if (amount) parts.push(`≥ ${amount}`);
+    else if (threshold.percentage) parts.push(`${threshold.percentage} % d'una base del contracte`);
+    const years = yearsPhrase(value.reference_period, value.aggregation, "exercici");
+    if (years) parts.push(years);
+  } else if (value.kind === "insurance") {
+    const limits = limitsLine(value.limits);
+    if (limits) parts.push(limits);
+  } else if (value.kind === "experience") {
+    const accumulated = value.min_accumulated_amount as Record<string, unknown> | null;
+    const individual = value.min_individual_amount as Record<string, unknown> | null;
+    if (accumulated) {
+      const amount = formatAmount(accumulated.amount, accumulated.currency);
+      if (amount) parts.push(value.aggregation === "max" ? `≥ ${amount} acumulats l'any de major execució` : `≥ ${amount} acumulats`);
+    }
+    if (individual) {
+      const amount = formatAmount(individual.amount, individual.currency);
+      if (amount) parts.push(`≥ ${amount} per contracte`);
+    }
+    if (typeof value.min_count === "number") parts.push(`${value.min_count} contractes`);
+    const years = yearsPhrase(value.reference_period, null, "any");
+    if (years) parts.push(years);
+  } else if (typeof value.minimum_people === "number") {
+    parts.push(`${value.minimum_people} persones`);
+  } else if (value.type === "sector_operator_registry") {
+    parts.push("Registre d'operadors (CNMC)");
+  }
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** D'on surt el valor comparat: «de la cita, p. 17» o «del valor extret». */
+export function provenanceLine(
+  provenance: ComparedProvenance[] | undefined,
+  citations: RequirementCitation[] | undefined,
+): string | null {
+  const main = (provenance ?? []).find((item) => /amount|limits|threshold|minimum_people|min_count/.test(item.field)) ?? (provenance ?? [])[0];
+  if (!main) return null;
+  if (main.source === "quote") {
+    const page = (citations ?? []).find((citation) => citation.evidence_id === main.evidence_id)?.page_number;
+    return page ? `de la cita, p. ${page}` : "d'una cita verificada";
+  }
+  if (main.source === "value_json") return "del valor extret";
+  return null;
 }
 
 const ENUM_TOKEN = /^[a-z]+(?:_[a-z]+)+$/;
