@@ -572,8 +572,10 @@ async def test_0060_round_trip_real_a_postgres(engine):
         functions = (
             await conn.execute(
                 sa.text(
-                    "SELECT count(*) FROM pg_proc "
-                    "WHERE proname = 'tender_structure_proposals_immutable'"
+                    "SELECT count(*) FROM pg_proc p "
+                    "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname = current_schema() "
+                    "AND p.proname = 'tender_structure_proposals_immutable'"
                 )
             )
         ).scalar_one()
