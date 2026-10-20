@@ -183,8 +183,16 @@ async def test_exclude_open_workspaces_treu_nomes_les_que_tenen_candidatura_ober
 
 async def test_sense_el_parametre_el_feed_es_el_d_abans(db, client_a, tenant_a, tenant_b):
     _, company = tenant_a
-    await _radar_with_workspaces(db, tenant_a, tenant_b)
+    tenders = await _radar_with_workspaces(db, tenant_a, tenant_b)
     url = MATCHES.format(company=company.id)
+
+    # Un cas conegut: sense el parametre, la crida d'Avui torna les quatre candidates
+    # obertes per termini, INCLOSA la que ja te candidatura oberta d'A.
+    avui = await _json(client_a, url, **AVUI)
+    assert avui["total"] == 4
+    assert [item["tender"]["id"] for item in avui["items"]] == [
+        str(tenders[name].id) for name in ("open_ws", "closed_ws", "other_ws", "plain")
+    ]
 
     for params in (AVUI, {}, {"match_status": "candidate"}, {"min_score": 1}):
         omitted = await _json(client_a, url, **params)

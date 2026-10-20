@@ -266,16 +266,13 @@ def counting(engine):
 
 
 async def reference(session_factory, company_id, *, limit=50) -> list[dict]:
-    """El cami antic: `_summary` (`load_state`) candidatura a candidatura, sessio nova."""
+    """El cami antic: `_summary` (`load_state`) candidatura a candidatura, sessio nova.
+
+    Sobre la mateixa pagina que l'endpoint (`_company_workspaces`, amb el desempat
+    per `id`): el que es compara es la derivacio de cada fila, no l'ordre.
+    """
     async with session_factory() as session:
-        workspaces = (
-            await session.scalars(
-                sa.select(BidWorkspace)
-                .where(BidWorkspace.company_id == company_id)
-                .order_by(BidWorkspace.created_at.desc())
-                .limit(limit)
-            )
-        ).all()
+        workspaces = await workspaces_router._company_workspaces(session, company_id, limit)
         return [
             (await workspaces_router._summary(session, workspace)).model_dump(mode="json")
             for workspace in workspaces

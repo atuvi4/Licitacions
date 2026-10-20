@@ -463,7 +463,14 @@ def analysis_basis_of(run: RequirementExtractionRun | None) -> AnalysisBasis:
 def effective_deadline(tender: Tender, lot: TenderLot | None) -> datetime | None:
     """El termini autoritatiu: el del lot si el workspace n'es d'un; si no, el
     de l'expedient. El del workspace nomes es una fotografia."""
-    return (lot.deadline_at if lot and lot.deadline_at else None) or tender.deadline_at
+    return effective_deadline_of(tender.deadline_at, lot.deadline_at if lot else None)
+
+
+def effective_deadline_of(
+    tender_deadline: datetime | None, lot_deadline: datetime | None
+) -> datetime | None:
+    """`effective_deadline` a partir dels dos terminis, per a qui nomes llegeix columnes."""
+    return lot_deadline or tender_deadline
 
 
 def prefit_score_of(match: CompanyTenderMatch | None, workspace: BidWorkspace) -> int | None:
@@ -871,8 +878,8 @@ async def open_within_deadline(
     candidates = [w for w in workspaces if w.status not in CLOSED_WORKSPACE_STATUSES]
     if not candidates:
         return []
-    tenders = {
-        row.id: row
+    tender_deadlines = {
+        row.id: row.deadline_at
         for row in (
             await session.execute(
                 sa.select(Tender.id, Tender.deadline_at).where(
@@ -882,9 +889,9 @@ async def open_within_deadline(
         ).all()
     }
     lot_ids = {w.tender_lot_id for w in candidates if w.tender_lot_id}
-    lots = (
+    lot_deadlines = (
         {
-            row.id: row
+            row.id: row.deadline_at
             for row in (
                 await session.execute(
                     sa.select(TenderLot.id, TenderLot.deadline_at).where(
@@ -899,11 +906,11 @@ async def open_within_deadline(
     return [
         workspace
         for workspace in candidates
-        if workspace.tender_id in tenders
+        if workspace.tender_id in tender_deadlines
         and not deadline_has_passed(
-            effective_deadline(
-                tenders[workspace.tender_id],  # type: ignore[arg-type]
-                lots.get(workspace.tender_lot_id) if workspace.tender_lot_id else None,  # type: ignore[arg-type]
+            effective_deadline_of(
+                tender_deadlines[workspace.tender_id],
+                lot_deadlines.get(workspace.tender_lot_id) if workspace.tender_lot_id else None,
             ),
             now,
         )

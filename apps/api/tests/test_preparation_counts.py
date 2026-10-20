@@ -159,3 +159,11 @@ async def test_la_ruta_no_col_lideix_amb_la_d_un_workspace(db, client_a, tenant_
     assert detail.status_code == 200
     unknown = await client_a.get(f"/api/v1/companies/{company.id}/workspaces/{uuid.uuid4()}")
     assert unknown.status_code == 404
+
+
+async def test_el_limit_de_la_fase_1_es_50(client_a, tenant_a):
+    """Cada candidatura fa la seva lectura sencera en serie: com a molt la pagina d'Avui."""
+    _, company = tenant_a
+    url = COUNTS.format(company=company.id)
+    assert (await client_a.get(url, params={"limit": 50})).status_code == 200
+    assert (await client_a.get(url, params={"limit": 51})).status_code == 422

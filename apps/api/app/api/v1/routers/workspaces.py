@@ -17,13 +17,16 @@ import logging
 import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
+from typing import Protocol
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Query
 
 from app.api.deps import CompanyCtx, SessionDep
 from app.core.errors import NotFoundError
+from app.models.compliance import CompanyComplianceRun
 from app.models.enums import (
+    AnalysisBasis,
     AuditAction,
     ChecklistItemSource,
     ChecklistItemStatus,
@@ -34,6 +37,7 @@ from app.models.tenders import Buyer, Tender
 from app.models.workspace import (
     BidWorkspace,
     WorkspaceChecklistItem,
+    WorkspaceDecision,
     WorkspaceNote,
     WorkspaceTask,
 )
@@ -117,14 +121,33 @@ def _note_read(note: WorkspaceNote, names: dict[uuid.UUID, str | None]) -> NoteR
     return read
 
 
-async def _summary(session: SessionDep, workspace: BidWorkspace) -> WorkspaceSummary:
-    # Sense analisi v3: les llistes no paguen `is_stale` per a cada candidatura.
-    state = await service.load_state(session, workspace)
-    buyer_name = None
-    if state.tender.buyer_id:
-        buyer_name = await session.scalar(
-            sa.select(Buyer.name).where(Buyer.id == state.tender.buyer_id)
-        )
+class _SummarySource(Protocol):
+    """El que una fila de llistat llegeix de l'estat: `WorkspaceState` (`load_state`)
+    i `WorkspaceListState` (`load_list_states`) ho tenen tots dos."""
+
+    tender: Tender
+    deadline_at: datetime | None
+    days_remaining: int | None
+    deadline_passed: bool
+    prefit_score: int | None
+    compliance_run: CompanyComplianceRun | None
+    latest_decision: WorkspaceDecision | None
+
+    @property
+    def analysis_basis(self) -> AnalysisBasis: ...
+
+    @property
+    def analysis_outdated(self) -> bool: ...
+
+
+def _summary_of(
+    workspace: BidWorkspace,
+    state: _SummarySource,
+    *,
+    buyer_name: str | None,
+    analysis_state: str,
+) -> WorkspaceSummary:
+    """L'unic constructor de `WorkspaceSummary`: el comparteixen `_summary` i la llista."""
     return WorkspaceSummary(
         id=workspace.id,
         company_id=workspace.company_id,
@@ -143,11 +166,23 @@ async def _summary(session: SessionDep, workspace: BidWorkspace) -> WorkspaceSum
         human_decision=state.latest_decision.decision if state.latest_decision else None,
         analysis_basis=state.analysis_basis,
         analysis_outdated=state.analysis_outdated,
-        analysis_state=await workspace_dossier.requirement_analysis_state(
-            session, workspace.tender_id, state.requirement_run
-        ),
+        analysis_state=analysis_state,
         created_at=workspace.created_at,
     )
+
+
+async def _summary(session: SessionDep, workspace: BidWorkspace) -> WorkspaceSummary:
+    # Sense analisi v3: les llistes no paguen `is_stale` per a cada candidatura.
+    state = await service.load_state(session, workspace)
+    buyer_name = None
+    if state.tender.buyer_id:
+        buyer_name = await session.scalar(
+            sa.select(Buyer.name).where(Buyer.id == state.tender.buyer_id)
+        )
+    analysis_state = await workspace_dossier.requirement_analysis_state(
+        session, workspace.tender_id, state.requirement_run
+    )
+    return _summary_of(workspace, state, buyer_name=buyer_name, analysis_state=analysis_state)
 
 
 async def _detail(
@@ -327,41 +362,27 @@ async def get_by_tender(
 
 
 def _list_summary(state: service.WorkspaceListState, analysis_state: str) -> WorkspaceSummary:
-    """La fila de `_summary`, a partir de la lectura per lots (mateixos camps i origen)."""
-    workspace = state.workspace
-    return WorkspaceSummary(
-        id=workspace.id,
-        company_id=workspace.company_id,
-        tender_id=workspace.tender_id,
-        tender_lot_id=workspace.tender_lot_id,
-        status=workspace.status,
-        tender_title=state.tender.title,
-        expediente_number=state.tender.expediente_number,
-        buyer_name=state.buyer_name,
-        deadline_at=state.deadline_at,
-        days_remaining=state.days_remaining,
-        deadline_passed=state.deadline_passed,
-        prefit_score=state.prefit_score,
-        eligibility=state.compliance_run.overall_result if state.compliance_run else None,
-        recommendation=state.compliance_run.recommendation if state.compliance_run else None,
-        human_decision=state.latest_decision.decision if state.latest_decision else None,
-        analysis_basis=state.analysis_basis,
-        analysis_outdated=state.analysis_outdated,
-        analysis_state=analysis_state,
-        created_at=workspace.created_at,
+    """La fila de `_summary`, a partir de la lectura per lots (mateix constructor)."""
+    return _summary_of(
+        state.workspace, state, buyer_name=state.buyer_name, analysis_state=analysis_state
     )
 
 
 async def _company_workspaces(
     session: SessionDep, company_id: uuid.UUID, limit: int
 ) -> list[BidWorkspace]:
-    """Les candidatures de l'empresa, de la mes nova a la mes antiga."""
+    """Les candidatures de l'empresa, de la mes nova a la mes antiga.
+
+    L'`id` desempata: `/workspaces` i `/preparation-counts` paginen per separat, i
+    amb empats de `created_at` a la frontera del `limit` (a PostgreSQL `now()` es
+    constant dins d'una transaccio) totes dues han de tallar pel mateix lloc.
+    """
     return list(
         (
             await session.scalars(
                 sa.select(BidWorkspace)
                 .where(BidWorkspace.company_id == company_id)
-                .order_by(BidWorkspace.created_at.desc())
+                .order_by(BidWorkspace.created_at.desc(), BidWorkspace.id.desc())
                 .limit(limit)
             )
         ).all()
@@ -403,7 +424,7 @@ async def list_workspaces(
 async def preparation_counts(
     session: SessionDep,
     ctx: CompanyCtx,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=50),
 ):
     """Els blocadors de `final-readiness` de cada candidatura oberta i dins de
     termini, en una sola peticio. Nomes lectura.
@@ -414,6 +435,10 @@ async def preparation_counts(
     `FinalReadiness.blockers` de la mateixa lectura que `GET .../final-readiness`.
     Si una candidatura falla, `pending` nul per a ella i les altres continuen: el
     SAVEPOINT fa que un error de base de dades no deixi la sessio inservible.
+
+    Limit de la fase 1: `limit` com a molt 50 (la pagina d'Avui). Cada candidatura
+    fa la seva lectura sencera (unes 62 sentencies) en serie dins de la peticio;
+    llegir-les per lots es la fase 2.
     """
     workspaces = await _company_workspaces(session, ctx.company_id, limit)
     in_scope = await service.open_within_deadline(session, workspaces)
