@@ -90,6 +90,10 @@ export interface MatchSummary {
   stale: number;
   rules_version: string;
   last_calculated_at: string | null;
+  /** Els recomptes del perfil de `/summary` (P2-09): Avui ja no demana el resum del perfil. */
+  profile_counts?: PrefitProfileCounts;
+  /** Candidates obertes que ja tenen una candidatura oberta de l'empresa (fora de la llista d'Avui). */
+  open_candidates_with_workspace?: number;
 }
 
 export interface RecalculationResult {

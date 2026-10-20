@@ -4,16 +4,21 @@ import type { WorkspaceSummary } from "@/lib/workspace";
 
 import {
   RADAR_NOTE,
+  assignQueue,
   blockerReasons,
   candidatesCause,
   candidatesEmptyLine,
   candidatesLine,
+  decisionsAboveLine,
   openBlockers,
   isUnevaluated,
   pendingDecisions,
+  preparationAboveLine,
   preparationRows,
   unevaluatedWorkspaces,
   todayLine,
+  withWorkspaceLine,
+  type QueueAssignment,
 } from "./queue";
 
 function workspace(overrides: Partial<WorkspaceSummary>): WorkspaceSummary {
@@ -212,5 +217,102 @@ describe("bloquejos, sense avaluar i pendents de preparació (auditoria UI P1-04
     });
     expect(line).toContain("0 bloquejos detectats, 1 candidatura sense avaluar");
     expect(line).not.toMatch(/avisos/);
+  });
+});
+
+describe("assignQueue: cada candidatura una sola vegada (auditoria UI P2-05)", () => {
+  const ids = (rows: { workspace: WorkspaceSummary }[] | null) => rows?.map((row) => row.workspace.id) ?? null;
+  const tags = (assignment: QueueAssignment, id: string) =>
+    [
+      ...assignment.blockers,
+      ...assignment.decisions,
+      ...assignment.unevaluated,
+      ...(assignment.preparation ?? []),
+    ]
+      .find((row) => row.workspace.id === id)
+      ?.tags.map((tag) => tag.label);
+
+  // L'Escala: oberta, sense decisió, sense anàlisi, 4 pendents de preparació.
+  const lescala = workspace({ id: "lescala", status: "analysis", analysis_state: "absent", days_remaining: 1 });
+
+  it("L'Escala va a «Decisions pendents» amb «Sense avaluar · 4 pendents», i enlloc més", () => {
+    const queue = assignQueue([lescala], { lescala: 4 });
+    expect(ids(queue.decisions)).toEqual(["lescala"]);
+    expect(ids(queue.blockers)).toEqual([]);
+    expect(ids(queue.unevaluated)).toEqual([]);
+    expect(ids(queue.preparation)).toEqual([]);
+    expect(tags(queue, "lescala")).toEqual(["Sense avaluar", "4 pendents de preparació (totes les àrees)"]);
+    expect(queue.unevaluatedTotal).toBe(1);
+    expect(queue.preparationAbove).toBe(1);
+    expect(queue.decisionsAbove).toBe(0);
+  });
+
+  it("l'ordre de prioritat és bloqueig, decisió, sense avaluar, preparació; dins de cada secció, per termini", () => {
+    const rows = [
+      workspace({ id: "prep-late", human_decision: "go", status: "preparing_bid", analysis_state: "current", days_remaining: 9 }),
+      workspace({ id: "blocker", eligibility: "no_go", analysis_state: "absent", days_remaining: 4 }),
+      workspace({ id: "decision", analysis_state: "current", days_remaining: 5 }),
+      workspace({ id: "unevaluated", human_decision: "go", status: "preparing_bid", analysis_state: "absent", days_remaining: 6 }),
+      workspace({ id: "prep-soon", human_decision: "go", status: "preparing_bid", analysis_state: "current", days_remaining: 2 }),
+      workspace({ id: "nothing", human_decision: "go", status: "preparing_bid", analysis_state: "current", days_remaining: 3 }),
+      workspace({ id: "closed", human_decision: "go", status: "submitted", analysis_state: "absent", days_remaining: 1 }),
+    ];
+    const queue = assignQueue(rows, { "prep-late": 2, blocker: 1, decision: 0, unevaluated: 3, "prep-soon": null, nothing: 0 });
+    expect(ids(queue.blockers)).toEqual(["blocker"]);
+    expect(ids(queue.decisions)).toEqual(["decision"]);
+    expect(ids(queue.unevaluated)).toEqual(["unevaluated"]);
+    expect(ids(queue.preparation)).toEqual(["prep-soon", "prep-late"]);
+    expect(tags(queue, "blocker")).toEqual(["Decisió pendent", "Sense avaluar", "1 pendent de preparació (totes les àrees)"]);
+    expect(tags(queue, "decision")).toEqual([]);
+    expect(tags(queue, "unevaluated")).toEqual(["3 pendents de preparació (totes les àrees)"]);
+    // Una fila de preparació no porta cap etiqueta: no hi ha cap condició de prioritat inferior.
+    expect(tags(queue, "prep-soon")).toEqual([]);
+    expect(queue.preparation?.find((row) => row.workspace.id === "prep-soon")?.pending).toBeNull();
+    expect(queue.decisionsAbove).toBe(1);
+    expect(queue.preparationAbove).toBe(2);
+    // Cap candidatura en dues seccions.
+    const all = [...queue.blockers, ...queue.decisions, ...queue.unevaluated, ...(queue.preparation ?? [])].map((row) => row.workspace.id);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("una ajornada amb bloqueig porta «Ajornada · torna a decidir», com a «Decisions pendents»", () => {
+    const deferred = workspace({ id: "d", human_decision: "defer", analysis_outdated: true, analysis_state: "current" });
+    const queue = assignQueue([deferred], { d: 0 });
+    expect(ids(queue.blockers)).toEqual(["d"]);
+    expect(tags(queue, "d")).toEqual(["Ajornada · torna a decidir"]);
+  });
+
+  it("mentre es compten els pendents: cap fila només de preparació, cap etiqueta de preparació", () => {
+    const rows = [
+      lescala,
+      workspace({ id: "prep", human_decision: "go", status: "preparing_bid", analysis_state: "current" }),
+    ];
+    const queue = assignQueue(rows, null);
+    expect(queue.preparation).toBeNull();
+    expect(ids(queue.decisions)).toEqual(["lescala"]);
+    expect(tags(queue, "lescala")).toEqual(["Sense avaluar"]);
+    expect(tags(queue, "prep")).toBeUndefined();
+    expect(queue.preparationAbove).toBe(0);
+  });
+
+  it("sense comptar (`null`) o absent de la resposta: «Pendents sense comptar», mai un zero", () => {
+    const queue = assignQueue([lescala], {});
+    expect(tags(queue, "lescala")).toEqual(["Sense avaluar", "Pendents sense comptar"]);
+  });
+
+  it("les fora de termini i les tancades no tenen pendents de preparació", () => {
+    const late = workspace({ id: "late", human_decision: "go", status: "preparing_bid", deadline_passed: true, analysis_state: "current" });
+    const queue = assignQueue([late], { late: 3 });
+    expect(ids(queue.blockers)).toEqual(["late"]);
+    expect(tags(queue, "late")).toEqual([]);
+  });
+
+  it("els textos de secció buida diuen on són les altres, en singular i en plural", () => {
+    expect(decisionsAboveLine(1)).toBe("Cap altra decisió pendent: 1 amb un bloqueig detectat (a «Bloquejos i pendents»).");
+    expect(decisionsAboveLine(3)).toBe("Cap altra decisió pendent: 3 amb un bloqueig detectat (a «Bloquejos i pendents»).");
+    expect(preparationAboveLine(1)).toBe("Cap altre pendent de preparació: 1 candidatura amb pendents surt més amunt.");
+    expect(preparationAboveLine(2)).toBe("Cap altre pendent de preparació: 2 candidatures amb pendents surten més amunt.");
+    expect(withWorkspaceLine(1)).toBe("1 candidata ja té candidatura");
+    expect(withWorkspaceLine(4)).toBe("4 candidates ja tenen candidatura");
   });
 });

@@ -17,30 +17,34 @@ import {
   shortSummary,
 } from "@/lib/labels";
 import type { MatchSummary, RecalculationResult, TenderMatchListItem } from "@/lib/matching";
-import { blockerCount, blockerCountLabel, type FinalReadiness } from "@/lib/readiness";
+import { blockerCountLabel, type PreparationCounts } from "@/lib/readiness";
 import { buildQuery, type Page } from "@/lib/tenders";
-import type { DashboardSummary } from "@/lib/types";
 import type { WorkspaceSummary } from "@/lib/workspace";
 
 import {
   RADAR_NOTE,
+  assignQueue,
   blockerReasons,
   candidatesCause,
   candidatesEmptyLine,
   candidatesLine,
-  openBlockers,
-  pendingDecisions,
-  preparationRows,
+  decisionsAboveLine,
+  formatCount,
+  preparationAboveLine,
   preparationScope,
   todayLine,
-  unevaluatedWorkspaces,
+  withWorkspaceLine,
   type CandidatesCause,
+  type QueueRow,
+  type QueueTag,
 } from "./queue";
 
 /**
  * Pendents de preparació de cada candidatura oberta: els bloquejos de
- * `final-readiness` (la mateixa lectura que Tancar). `null` mentre es compta; un
- * valor `null` per candidatura vol dir que no s'ha pogut saber, mai zero.
+ * `final-readiness` (la mateixa lectura que Tancar), comptats al servidor en UNA
+ * crida (`…/workspaces/preparation-counts`, P2-09). `null` mentre es compta; un
+ * valor `null` per candidatura vol dir que no s'ha pogut saber, mai zero: si la
+ * crida falla, totes les de l'abast; si en falta una a la resposta, aquella.
  */
 function usePreparationPending(
   base: string,
@@ -55,39 +59,33 @@ function usePreparationPending(
     if (key === null || idsKey === null) return;
     let cancelled = false;
     const list = idsKey ? idsKey.split(",") : [];
-    void mapLimited(list, READINESS_CONCURRENCY, async (id): Promise<[string, number | null]> => {
-      try {
-        const readiness = await api.get<FinalReadiness>(`${base}/workspaces/${id}/final-readiness`);
-        return [id, Array.isArray(readiness?.findings) ? blockerCount(readiness.findings) : null];
-      } catch {
-        return [id, null];
+    void (async () => {
+      let pending: Map<string, number | null> | null = null;
+      // Cap candidatura a l'abast: res a demanar.
+      if (list.length > 0) {
+        try {
+          const response = await api.get<PreparationCounts>(`${base}/workspaces/preparation-counts`);
+          if (Array.isArray(response?.items)) {
+            pending = new Map(response.items.map((item) => [item.workspace_id, item.pending]));
+          }
+        } catch {
+          pending = null;
+        }
       }
-    }).then((entries) => {
-      if (!cancelled) setState({ key, counts: Object.fromEntries(entries) });
-    });
+      const counts = Object.fromEntries(
+        list.map((id) => {
+          const value = pending?.get(id);
+          return [id, typeof value === "number" ? value : null];
+        }),
+      );
+      if (!cancelled) setState({ key, counts });
+    })();
     return () => {
       cancelled = true;
     };
   }, [base, key, idsKey]);
   if (key === null || !state || state.key !== key) return null;
   return state.counts;
-}
-
-/** Lectures de `final-readiness` simultànies com a molt: cada una és una lectura pesada del servidor. */
-const READINESS_CONCURRENCY = 3;
-
-/** Com `Promise.all(items.map(fn))`, però amb com a molt `limit` crides en curs; conserva l'ordre. */
-async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await fn(items[index]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
 }
 
 function SubHeading({ children }: { children: ReactNode }) {
@@ -167,6 +165,35 @@ function CountPill({ count }: { count: number }) {
   );
 }
 
+/**
+ * Les altres condicions d'una fila (P2-05): cada candidatura surt una sola vegada,
+ * a la secció més urgent, i la resta es diu aquí, unida amb « · ».
+ */
+function QueueTags({ tags }: { tags: QueueTag[] }) {
+  if (tags.length === 0) return null;
+  return (
+    <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[12px] text-muted" data-testid="queue-tags">
+      {tags.map((tag, index) => (
+        <span key={tag.kind} className="inline-flex items-center gap-1">
+          {index > 0 && <span aria-hidden>{" · "}</span>}
+          <StatusPill level="attention" size="sm">
+            {tag.label}
+          </StatusPill>
+        </span>
+      ))}
+    </p>
+  );
+}
+
+/** «N candidates ja tenen candidatura»: les que Avui treu de la llista, amb on són. */
+function WithWorkspaceNote({ count }: { count: number }) {
+  return (
+    <Link href="/candidatures" className="text-brand-strong hover:text-accent-800">
+      {withWorkspaceLine(count)}
+    </Link>
+  );
+}
+
 /** El recàlcul del pre-fit que ja existeix (`POST …/matches/recalculate`). */
 interface RadarCalculation {
   run: () => void;
@@ -188,6 +215,19 @@ function RadarEmpty({
   cause: CandidatesCause | null;
   calculate: RadarCalculation;
 }) {
+  // P2-05: la llista no porta les que ja tenen candidatura. Si totes en tenen, es diu així.
+  const withWorkspace = radar?.open_candidates_with_workspace ?? 0;
+  if (withWorkspace > 0) {
+    return (
+      <Nothing>
+        Totes les candidates obertes ja tenen{" "}
+        <Link href="/candidatures" className="text-brand-strong hover:text-accent-800">
+          candidatura
+        </Link>{" "}
+        ({formatCount(withWorkspace)}).
+      </Nothing>
+    );
+  }
   if (radar && radar.candidates > 0) {
     return <Nothing>Cap candidata amb termini obert · {candidatesLine(radar.candidates, radar.total_tenders)}.</Nothing>;
   }
@@ -219,12 +259,14 @@ export default function AvuiPage() {
   const { companyId } = useSession();
   const base = `/companies/${companyId}`;
   const workspaces = useResource<WorkspaceSummary[]>(`${base}/workspaces`);
+  // Només les candidates NOVES (sense candidatura oberta): les que ja en tenen
+  // surten a les seccions de candidatures i aquí es diuen a part (P2-05).
   const fresh = useResource<Page<TenderMatchListItem>>(
-    `${base}/matches?${buildQuery({ match_status: "candidate", sort: "deadline", only_open: true, limit: FRESH_LIMIT })}`,
+    `${base}/matches?${buildQuery({ match_status: "candidate", sort: "deadline", only_open: true, exclude_open_workspaces: true, limit: FRESH_LIMIT })}`,
   );
-  const profile = useResource<DashboardSummary>(`${base}/summary`);
   // El resum del Radar: candidates prioritzades i el total de licitacions
-  // visibles (el mateix univers que «Totes» d'Oportunitats), A17.
+  // visibles (el mateix univers que «Totes» d'Oportunitats), A17. Porta també
+  // els recomptes del perfil per a la causa del 0 (P2-09: cap crida a `/summary`).
   const radar = useResource<MatchSummary>(`${base}/matches/summary`);
 
   const recalculation = useMutation();
@@ -235,10 +277,9 @@ export default function AvuiPage() {
   const reloadAll = useCallback(() => {
     void workspaces.reload();
     void fresh.reload();
-    void profile.reload();
     void radar.reload();
     recountPreparation();
-  }, [workspaces, fresh, profile, radar, recountPreparation]);
+  }, [workspaces, fresh, radar, recountPreparation]);
 
   const calculate: RadarCalculation = {
     saving: recalculation.saving,
@@ -256,23 +297,28 @@ export default function AvuiPage() {
     },
   };
 
-  const decisions = workspaces.data ? pendingDecisions(workspaces.data) : null;
-  const blockers = workspaces.data ? openBlockers(workspaces.data) : null;
   // Només les de l'empresa activa: en canviar d'empresa, la llista anterior no es compta ni es demana amb la ruta nova.
   const companyWorkspaces = workspaces.data
     ? workspaces.data.filter((workspace) => workspace.company_id === companyId)
     : null;
-  // Auditoria UI P1-04: «cap bloqueig» no pot amagar el que no s'ha avaluat ni el que falta preparar.
-  const unevaluated = companyWorkspaces ? unevaluatedWorkspaces(companyWorkspaces) : null;
   const preparation = usePreparationPending(
     base,
     companyWorkspaces ? preparationScope(companyWorkspaces).map((workspace) => workspace.id) : null,
     readinessVersion,
   );
-  const preparationList = companyWorkspaces && preparation ? preparationRows(companyWorkspaces, preparation) : null;
+  // P2-05: cada candidatura a UNA sola secció (la més urgent), amb la resta d'etiquetes.
+  // Auditoria UI P1-04: «cap bloqueig» no pot amagar el que no s'ha avaluat ni el que falta preparar.
+  const queue = companyWorkspaces ? assignQueue(companyWorkspaces, preparation) : null;
+  const decisions = queue?.decisions ?? null;
+  const blockers = queue?.blockers ?? null;
+  const unevaluated = queue?.unevaluated ?? null;
+  const preparationList = queue?.preparation ?? null;
   const freshTotal = fresh.data ? fresh.data.total : undefined;
+  const withWorkspace = radar.data?.open_candidates_with_workspace ?? 0;
+  // «Veure les N»: totes les candidates obertes, també les que ja tenen candidatura.
+  const allOpenCandidates = freshTotal !== undefined ? freshTotal + withWorkspace : undefined;
   // La causa del 0 surt del resum del Radar (avaluades), mai només del perfil (F1).
-  const cause = candidatesCause(radar.data, profile.data?.counts);
+  const cause = candidatesCause(radar.data, radar.data?.profile_counts);
   const subtitle = todayLine(new Date(), {
     decisions: decisions?.length,
     warnings: blockers?.length,
@@ -394,9 +440,9 @@ export default function AvuiPage() {
         ) : !decisions ? (
           <GhostRows />
         ) : decisions.length === 0 ? (
-          <Nothing>Cap decisió pendent.</Nothing>
+          <Nothing>{queue && queue.decisionsAbove > 0 ? decisionsAboveLine(queue.decisionsAbove) : "Cap decisió pendent."}</Nothing>
         ) : (
-          decisions.map((workspace, index) => (
+          decisions.map(({ workspace, tags }, index) => (
             <Row key={workspace.id}>
               <div className="min-w-0 flex-1">
                 <p className="font-medium text-ink">{workspace.tender_title ?? workspace.expediente_number ?? "Licitació"}</p>
@@ -419,6 +465,7 @@ export default function AvuiPage() {
                     Ajornada · torna a decidir
                   </StatusPill>
                 )}
+                <QueueTags tags={tags} />
               </div>
               <DeadlinePill deadline={workspace.deadline_at} />
               <LinkButton
@@ -448,7 +495,7 @@ export default function AvuiPage() {
               recountPreparation();
             }}
           />
-        ) : !blockers || !unevaluated ? (
+        ) : !queue || !blockers || !unevaluated ? (
           <GhostRows rows={2} />
         ) : (
           <>
@@ -456,8 +503,9 @@ export default function AvuiPage() {
             {blockers.length === 0 ? (
               <Nothing>
                 Cap bloqueig detectat.
-                {unevaluated.length > 0 &&
-                  ` Això no vol dir que no n'hi hagi: ${unevaluated.length === 1 ? "1 candidatura encara no s'ha avaluat" : `${unevaluated.length} candidatures encara no s'han avaluat`}.`}
+                {/* Una advertència, no un comptador: totes les sense avaluar, siguin a la secció que siguin. */}
+                {queue.unevaluatedTotal > 0 &&
+                  ` Això no vol dir que no n'hi hagi: ${queue.unevaluatedTotal === 1 ? "1 candidatura encara no s'ha avaluat" : `${queue.unevaluatedTotal} candidatures encara no s'han avaluat`}.`}
               </Nothing>
             ) : (
               <BlockerRows blockers={blockers} />
@@ -466,7 +514,7 @@ export default function AvuiPage() {
             {unevaluated.length > 0 && (
               <>
                 <SubHeading>Sense avaluar</SubHeading>
-                {unevaluated.map((workspace) => (
+                {unevaluated.map(({ workspace, tags }) => (
                   <Row key={workspace.id}>
                     <StatusPill level="attention" className="shrink-0 self-start sm:self-center">
                       Sense anàlisi del plec
@@ -481,6 +529,7 @@ export default function AvuiPage() {
                           .filter(Boolean)
                           .join(" · ")}
                       </p>
+                      <QueueTags tags={tags} />
                     </div>
                     <LinkButton href={`/candidatures/${workspace.id}`} variant="secondary" size="md" className={ACTION_CLASS}>
                       Obre la candidatura
@@ -494,9 +543,13 @@ export default function AvuiPage() {
             {!preparationList ? (
               <GhostRows rows={1} />
             ) : preparationList.length === 0 ? (
-              <Nothing>Cap pendent de preparació a les candidatures obertes.</Nothing>
+              <Nothing>
+                {queue.preparationAbove > 0
+                  ? preparationAboveLine(queue.preparationAbove)
+                  : "Cap pendent de preparació a les candidatures obertes."}
+              </Nothing>
             ) : (
-              preparationList.map(({ workspace, pending }) => (
+              preparationList.map(({ workspace, pending = null }) => (
                 <Row key={workspace.id}>
                   <StatusPill level={pending === null ? "neutral" : "attention"} className="shrink-0 self-start sm:self-center">
                     {pending === null ? "Sense comptar" : blockerCountLabel(pending)}
@@ -577,10 +630,15 @@ export default function AvuiPage() {
                 </Row>
               );
             })}
-            {freshTotal !== undefined && freshTotal > fresh.data.items.length && (
+            {withWorkspace > 0 && (
+              <div className="border-t border-border px-3.5 py-2.5 text-[13px]">
+                <WithWorkspaceNote count={withWorkspace} />
+              </div>
+            )}
+            {allOpenCandidates !== undefined && allOpenCandidates > fresh.data.items.length && (
               <div className="border-t border-border px-3.5 py-2.5 text-[13px]">
                 <Link href="/licitacions?match_status=candidate" className="text-brand-strong hover:text-accent-800">
-                  Veure les {freshTotal} a Oportunitats →
+                  Veure les {allOpenCandidates} a Oportunitats →
                 </Link>
               </div>
             )}
@@ -592,10 +650,10 @@ export default function AvuiPage() {
 }
 
 /** Bloquejos detectats: cada un amb el motiu i on es resol (el que ja feia «Avui»). */
-function BlockerRows({ blockers }: { blockers: WorkspaceSummary[] }) {
+function BlockerRows({ blockers }: { blockers: QueueRow[] }) {
   return (
     <>
-      {blockers.map((workspace, index) => {
+      {blockers.map(({ workspace, tags }, index) => {
         const reasons = blockerReasons(workspace);
         const first = reasons[0];
         return (
@@ -608,6 +666,7 @@ function BlockerRows({ blockers }: { blockers: WorkspaceSummary[] }) {
               <p className="text-[13px] text-muted">
                 {[workspace.buyer_name, ...reasons.map((reason) => reason.detail)].filter(Boolean).join(" · ")}
               </p>
+              <QueueTags tags={tags} />
             </div>
             <LinkButton
               href={`/candidatures/${workspace.id}`}

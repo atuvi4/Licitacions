@@ -59,6 +59,15 @@ export interface FinalReadiness {
   economic: EconomicReadiness;
 }
 
+/**
+ * `GET /companies/{id}/workspaces/preparation-counts` (P2-09): els blocadors de
+ * `final-readiness` de cada candidatura oberta i dins de termini, d'una sola crida.
+ * `pending` nul = no s'ha pogut comptar, mai zero.
+ */
+export interface PreparationCounts {
+  items: { workspace_id: string; pending: number | null }[];
+}
+
 /* ------------------------------------------------------------------------- */
 /* Àrees de Preparar                                                          */
 /* ------------------------------------------------------------------------- */

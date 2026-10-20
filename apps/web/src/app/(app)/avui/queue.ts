@@ -1,6 +1,7 @@
 import { isOpenWorkspace, isPendingDecision } from "@/components/shell/counts";
 import { ELIGIBILITY_HINTS, ELIGIBILITY_LABELS, WARNING_LABELS, type Level } from "@/lib/labels";
 import { candidatesCause, type CandidatesCause } from "@/lib/matching";
+import { blockerCountLabel } from "@/lib/readiness";
 import type { WorkspaceSummary } from "@/lib/workspace";
 
 /**
@@ -93,6 +94,132 @@ export function preparationRows(
   return preparationScope(workspaces)
     .map((workspace) => ({ workspace, pending: counts[workspace.id] ?? null }))
     .filter((row) => row.pending === null || row.pending > 0);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Cada candidatura una sola vegada (auditoria UI P2-05)                      */
+/* ------------------------------------------------------------------------- */
+
+/** Les quatre seccions d'«Avui» on pot anar una candidatura, de més a menys urgent. */
+export type QueueSection = "blocker" | "decision" | "unevaluated" | "preparation";
+
+/** Una altra condició que la fila també compleix, de prioritat inferior a la seva secció. */
+export interface QueueTag {
+  kind: "decision" | "unevaluated" | "preparation";
+  label: string;
+}
+
+export interface QueueRow {
+  workspace: WorkspaceSummary;
+  section: QueueSection;
+  /** Pendents de preparació: `undefined` si no és a l'abast o encara es compten; `null` sense comptar. */
+  pending: number | null | undefined;
+  /** Les altres condicions, en ordre: decisió pendent, sense avaluar, pendents de preparació. */
+  tags: QueueTag[];
+}
+
+export interface QueueAssignment {
+  blockers: QueueRow[];
+  decisions: QueueRow[];
+  unevaluated: QueueRow[];
+  /** `null` mentre els recomptes de preparació no han arribat (fantasmes). */
+  preparation: QueueRow[] | null;
+  /** TOTES les sense avaluar, siguin a la secció que siguin: l'advertència de P1-04. */
+  unevaluatedTotal: number;
+  /** Amb decisió pendent però col·locades a «Bloquejos detectats». */
+  decisionsAbove: number;
+  /** Amb pendents de preparació (o sense comptar) però col·locades més amunt. */
+  preparationAbove: number;
+}
+
+/** Text de l'etiqueta «decisió pendent» d'una fila d'una altra secció. */
+function decisionTag(workspace: WorkspaceSummary): QueueTag {
+  return {
+    kind: "decision",
+    label: workspace.human_decision === "defer" ? "Ajornada · torna a decidir" : "Decisió pendent",
+  };
+}
+
+/**
+ * Assigna cada candidatura de l'empresa a UNA sola secció, la primera que compleix:
+ * 1. bloqueig detectat (`isOpenBlocker`); 2. decisió pendent (`isPendingDecision`);
+ * 3. sense avaluar (`isUnevaluated`); 4. pendents de preparació (dins de
+ * `preparationScope` i amb `pending` nul o positiu, la regla de `preparationRows`).
+ * Les altres condicions que també compleix van a la mateixa fila com a etiquetes.
+ *
+ * `counts` és `null` mentre es compten els pendents: aleshores la condició 4 no se
+ * sap, les que només complirien la 4 no surten i cap fila en porta l'etiqueta. Dins
+ * de cada secció, l'ordre és `byDeadline`.
+ */
+export function assignQueue(
+  workspaces: WorkspaceSummary[],
+  counts: Record<string, number | null> | null,
+): QueueAssignment {
+  const inScope = new Set(preparationScope(workspaces).map((workspace) => workspace.id));
+  const sections: Record<QueueSection, QueueRow[]> = { blocker: [], decision: [], unevaluated: [], preparation: [] };
+  let decisionsAbove = 0;
+  let preparationAbove = 0;
+
+  for (const workspace of [...workspaces].sort(byDeadline)) {
+    const blocker = isOpenBlocker(workspace);
+    const decision = isPendingDecision(workspace);
+    const unevaluated = isUnevaluated(workspace);
+    const pending = counts && inScope.has(workspace.id) ? (counts[workspace.id] ?? null) : undefined;
+    const preparation = pending !== undefined && (pending === null || pending > 0);
+
+    const section: QueueSection | null = blocker
+      ? "blocker"
+      : decision
+        ? "decision"
+        : unevaluated
+          ? "unevaluated"
+          : preparation
+            ? "preparation"
+            : null;
+    if (section === null) continue;
+
+    const tags: QueueTag[] = [];
+    if (decision && section === "blocker") tags.push(decisionTag(workspace));
+    if (unevaluated && (section === "blocker" || section === "decision")) {
+      tags.push({ kind: "unevaluated", label: "Sense avaluar" });
+    }
+    if (preparation && section !== "preparation") {
+      tags.push({
+        kind: "preparation",
+        label: pending === null ? "Pendents sense comptar" : blockerCountLabel(pending as number),
+      });
+    }
+    if (decision && section === "blocker") decisionsAbove += 1;
+    if (preparation && section !== "preparation") preparationAbove += 1;
+    sections[section].push({ workspace, section, pending, tags });
+  }
+
+  return {
+    blockers: sections.blocker,
+    decisions: sections.decision,
+    unevaluated: sections.unevaluated,
+    preparation: counts ? sections.preparation : null,
+    unevaluatedTotal: workspaces.filter(isUnevaluated).length,
+    decisionsAbove,
+    preparationAbove,
+  };
+}
+
+/** «Cap altra decisió pendent: N amb un bloqueig detectat (a «Bloquejos i pendents»).» */
+export function decisionsAboveLine(count: number): string {
+  return `Cap altra decisió pendent: ${formatCount(count)} amb un bloqueig detectat (a «Bloquejos i pendents»).`;
+}
+
+/** «Cap altre pendent de preparació: N candidatura(es) amb pendents surt(en) més amunt.» */
+export function preparationAboveLine(count: number): string {
+  return count === 1
+    ? "Cap altre pendent de preparació: 1 candidatura amb pendents surt més amunt."
+    : `Cap altre pendent de preparació: ${formatCount(count)} candidatures amb pendents surten més amunt.`;
+}
+
+/** «1 candidata ja té candidatura» / «N candidates ja tenen candidatura». */
+export function withWorkspaceLine(count: number): string {
+  return count === 1 ? "1 candidata ja té candidatura" : `${formatCount(count)} candidates ja tenen candidatura`;
 }
 
 /* ------------------------------------------------------------------------- */
