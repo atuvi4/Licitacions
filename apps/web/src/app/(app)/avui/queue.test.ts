@@ -10,13 +10,11 @@ import {
   candidatesEmptyLine,
   candidatesLine,
   decisionsAboveLine,
-  openBlockers,
   isUnevaluated,
-  pendingDecisions,
+  needsPreparation,
   preparationAboveLine,
-  preparationRows,
-  unevaluatedWorkspaces,
   todayLine,
+  uncountedLine,
   withWorkspaceLine,
   type QueueAssignment,
 } from "./queue";
@@ -45,7 +43,9 @@ function workspace(overrides: Partial<WorkspaceSummary>): WorkspaceSummary {
   };
 }
 
-describe("pendingDecisions", () => {
+const idsOf = (rows: { workspace: WorkspaceSummary }[] | null) => rows?.map((row) => row.workspace.id) ?? null;
+
+describe("decisions pendents (assignQueue)", () => {
   it("inclou sense decisió i ajornades, exclou tancades, i ordena per termini amb null al final", () => {
     const rows = [
       workspace({ id: "null-deadline", human_decision: null, days_remaining: null }),
@@ -57,16 +57,19 @@ describe("pendingDecisions", () => {
       workspace({ id: "withdrawn", human_decision: null, status: "withdrawn", days_remaining: 1 }),
       workspace({ id: "nogo", human_decision: "no_go", status: "no_go_approved", days_remaining: 1 }),
     ];
-    expect(pendingDecisions(rows).map((row) => row.id)).toEqual(["urgent", "deferred", "far", "null-deadline"]);
+    expect(idsOf(assignQueue(rows, null).decisions)).toEqual(["urgent", "deferred", "far", "null-deadline"]);
   });
 
-  it("un termini passat també és una decisió pendent si no s'ha decidit", () => {
+  it("un termini passat també és una decisió pendent si no s'ha decidit: va a bloquejos amb l'etiqueta", () => {
     const rows = [workspace({ id: "late", human_decision: null, days_remaining: -3, deadline_passed: true })];
-    expect(pendingDecisions(rows).map((row) => row.id)).toEqual(["late"]);
+    const queue = assignQueue(rows, null);
+    expect(idsOf(queue.blockers)).toEqual(["late"]);
+    expect(queue.blockers[0].tags.map((tag) => tag.label)).toEqual(["Decisió pendent"]);
+    expect(queue.decisionsAbove).toBe(1);
   });
 });
 
-describe("openBlockers i blockerReasons", () => {
+describe("bloquejos detectats (assignQueue) i blockerReasons", () => {
   it("només NO-GO, anàlisi endarrerida o termini passat, amb el motiu del diccionari", () => {
     const rows = [
       workspace({ id: "clean", eligibility: "eligible" }),
@@ -75,7 +78,7 @@ describe("openBlockers i blockerReasons", () => {
       workspace({ id: "late", deadline_passed: true, days_remaining: -2 }),
       workspace({ id: "nodeadline", eligibility: "eligible", days_remaining: null }),
     ];
-    expect(openBlockers(rows).map((row) => row.id)).toEqual(["late", "outdated", "nogo"]);
+    expect(idsOf(assignQueue(rows, null).blockers)).toEqual(["late", "outdated", "nogo"]);
     expect(blockerReasons(rows[1]).map((reason) => [reason.level, reason.label])).toEqual([["blocking", "No elegible"]]);
     expect(blockerReasons(rows[2]).map((reason) => [reason.level, reason.label])).toEqual([["attention", "Anàlisi endarrerida"]]);
     expect(blockerReasons(rows[3]).map((reason) => [reason.level, reason.label])).toEqual([["blocking", "Fora de termini"]]);
@@ -83,7 +86,7 @@ describe("openBlockers i blockerReasons", () => {
   });
 
   it("un termini null no és cap bloqueig", () => {
-    expect(openBlockers([workspace({ id: "x", days_remaining: null, deadline_passed: false })])).toEqual([]);
+    expect(assignQueue([workspace({ id: "x", days_remaining: null, deadline_passed: false })], null).blockers).toEqual([]);
   });
 });
 
@@ -176,14 +179,19 @@ describe("bloquejos, sense avaluar i pendents de preparació (auditoria UI P1-04
   const unanalysed = workspace({ id: "lescala", status: "analysis", analysis_state: "absent", eligibility: null, human_decision: null });
 
   it("una candidatura sense anàlisi no és cap bloqueig detectat, però sí «sense avaluar»", () => {
-    expect(openBlockers([unanalysed])).toEqual([]);
+    const queue = assignQueue([unanalysed], null);
+    expect(queue.blockers).toEqual([]);
     expect(isUnevaluated(unanalysed)).toBe(true);
-    expect(unevaluatedWorkspaces([unanalysed]).map((w) => w.id)).toEqual(["lescala"]);
+    expect(queue.unevaluatedTotal).toBe(1);
+    // Ja decidida (GO), surt a «Sense avaluar»; sense decidir, a «Decisions pendents» amb l'etiqueta.
+    const decided = { ...unanalysed, human_decision: "go" as const, status: "preparing_bid" as const };
+    expect(idsOf(assignQueue([decided], null).unevaluated)).toEqual(["lescala"]);
+    expect(queue.decisions[0].tags.map((tag) => tag.label)).toEqual(["Sense avaluar"]);
   });
 
   it("un NO-GO (no elegible) amb anàlisi és un bloqueig i no es barreja amb «sense avaluar»", () => {
     const noGo = workspace({ id: "nogo", eligibility: "no_go", analysis_state: "current" });
-    expect(openBlockers([noGo]).map((w) => w.id)).toEqual(["nogo"]);
+    expect(idsOf(assignQueue([noGo], null).blockers)).toEqual(["nogo"]);
     expect(isUnevaluated(noGo)).toBe(false);
   });
 
@@ -196,14 +204,22 @@ describe("bloquejos, sense avaluar i pendents de preparació (auditoria UI P1-04
   });
 
   it("pendents de preparació: les que en tenen, i les que no s'han pogut comptar; mai un zero inventat", () => {
-    const a = workspace({ id: "a", days_remaining: 3 });
-    const b = workspace({ id: "b", days_remaining: 9 });
-    const c = workspace({ id: "c", days_remaining: 12 });
-    const rows = preparationRows([a, b, c], { a: 4, b: 0 });
+    const ready = { human_decision: "go" as const, status: "preparing_bid" as const, analysis_state: "current" as const };
+    const a = workspace({ id: "a", days_remaining: 3, ...ready });
+    const b = workspace({ id: "b", days_remaining: 9, ...ready });
+    const c = workspace({ id: "c", days_remaining: 12, ...ready });
+    const rows = assignQueue([a, b, c], { a: 4, b: 0 }).preparation ?? [];
     expect(rows.map((row) => [row.workspace.id, row.pending])).toEqual([
       ["a", 4],
       ["c", null],
     ]);
+  });
+
+  it("needsPreparation: positiu o sense comptar; mai zero ni fora de l'abast", () => {
+    expect(needsPreparation(4)).toBe(true);
+    expect(needsPreparation(null)).toBe(true);
+    expect(needsPreparation(0)).toBe(false);
+    expect(needsPreparation(undefined)).toBe(false);
   });
 
   it("la línia del dia diu les sense avaluar a part, i no les compta com a bloquejos", () => {
@@ -244,7 +260,19 @@ describe("assignQueue: cada candidatura una sola vegada (auditoria UI P2-05)", (
     expect(tags(queue, "lescala")).toEqual(["Sense avaluar", "4 pendents de preparació (totes les àrees)"]);
     expect(queue.unevaluatedTotal).toBe(1);
     expect(queue.preparationAbove).toBe(1);
+    expect(queue.uncountedAbove).toBe(0);
     expect(queue.decisionsAbove).toBe(0);
+  });
+
+  it("I-1: L'Escala sense comptar no compta com a «amb pendents», sinó a part", () => {
+    const cases: Record<string, number | null>[] = [{ lescala: null }, {}];
+    for (const counts of cases) {
+      const queue = assignQueue([lescala], counts);
+      expect(ids(queue.decisions)).toEqual(["lescala"]);
+      expect(tags(queue, "lescala")).toEqual(["Sense avaluar", "Pendents sense comptar"]);
+      expect(queue.preparationAbove).toBe(0);
+      expect(queue.uncountedAbove).toBe(1);
+    }
   });
 
   it("l'ordre de prioritat és bloqueig, decisió, sense avaluar, preparació; dins de cada secció, per termini", () => {
@@ -270,6 +298,7 @@ describe("assignQueue: cada candidatura una sola vegada (auditoria UI P2-05)", (
     expect(queue.preparation?.find((row) => row.workspace.id === "prep-soon")?.pending).toBeNull();
     expect(queue.decisionsAbove).toBe(1);
     expect(queue.preparationAbove).toBe(2);
+    expect(queue.uncountedAbove).toBe(0);
     // Cap candidatura en dues seccions.
     const all = [...queue.blockers, ...queue.decisions, ...queue.unevaluated, ...(queue.preparation ?? [])].map((row) => row.workspace.id);
     expect(new Set(all).size).toBe(all.length);
@@ -298,6 +327,8 @@ describe("assignQueue: cada candidatura una sola vegada (auditoria UI P2-05)", (
   it("sense comptar (`null`) o absent de la resposta: «Pendents sense comptar», mai un zero", () => {
     const queue = assignQueue([lescala], {});
     expect(tags(queue, "lescala")).toEqual(["Sense avaluar", "Pendents sense comptar"]);
+    expect(queue.uncountedAbove).toBe(1);
+    expect(queue.preparationAbove).toBe(0);
   });
 
   it("les fora de termini i les tancades no tenen pendents de preparació", () => {
@@ -312,6 +343,8 @@ describe("assignQueue: cada candidatura una sola vegada (auditoria UI P2-05)", (
     expect(decisionsAboveLine(3)).toBe("Cap altra decisió pendent: 3 amb un bloqueig detectat (a «Bloquejos i pendents»).");
     expect(preparationAboveLine(1)).toBe("Cap altre pendent de preparació: 1 candidatura amb pendents surt més amunt.");
     expect(preparationAboveLine(2)).toBe("Cap altre pendent de preparació: 2 candidatures amb pendents surten més amunt.");
+    expect(uncountedLine(1)).toBe("No s'han pogut comptar els pendents d'1 candidatura.");
+    expect(uncountedLine(3)).toBe("No s'han pogut comptar els pendents de 3 candidatures.");
     expect(withWorkspaceLine(1)).toBe("1 candidata ja té candidatura");
     expect(withWorkspaceLine(4)).toBe("4 candidates ja tenen candidatura");
   });

@@ -18,17 +18,9 @@ export function byDeadline(a: WorkspaceSummary, b: WorkspaceSummary): number {
   return a.days_remaining - b.days_remaining;
 }
 
-export function pendingDecisions(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
-  return workspaces.filter(isPendingDecision).sort(byDeadline);
-}
-
 /** Un termini `null` no és cap bloqueig: només ho és `deadline_passed`. */
 export function isOpenBlocker(workspace: WorkspaceSummary): boolean {
   return workspace.eligibility === "no_go" || workspace.analysis_outdated || workspace.deadline_passed;
-}
-
-export function openBlockers(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
-  return workspaces.filter(isOpenBlocker).sort(byDeadline);
 }
 
 export interface BlockerReason {
@@ -69,31 +61,19 @@ export function isUnevaluated(workspace: WorkspaceSummary): boolean {
   return workspace.analysis_state === "absent" && !workspace.deadline_passed && isOpenWorkspace(workspace);
 }
 
-export function unevaluatedWorkspaces(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
-  return workspaces.filter(isUnevaluated).sort(byDeadline);
-}
-
 /** Les candidatures on té sentit comptar què falta preparar: obertes i dins de termini. */
 export function preparationScope(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
   return workspaces.filter((workspace) => isOpenWorkspace(workspace) && !workspace.deadline_passed).sort(byDeadline);
 }
 
 /**
- * Pendents de preparació per candidatura. `counts[id]` és el nombre de bloquejos de
- * `final-readiness`, o `null` si no s'ha pogut saber: aleshores no s'afirma cap zero.
+ * Si una candidatura de l'abast té pendents de preparació. `pending` és el nombre de
+ * bloquejos de `final-readiness`; `null` si no s'ha pogut saber (aleshores no s'afirma
+ * cap zero: sí que n'ha de dir alguna cosa); `undefined` si no és a l'abast o encara
+ * es compta.
  */
-export interface PreparationRow {
-  workspace: WorkspaceSummary;
-  pending: number | null;
-}
-
-export function preparationRows(
-  workspaces: WorkspaceSummary[],
-  counts: Record<string, number | null>,
-): PreparationRow[] {
-  return preparationScope(workspaces)
-    .map((workspace) => ({ workspace, pending: counts[workspace.id] ?? null }))
-    .filter((row) => row.pending === null || row.pending > 0);
+export function needsPreparation(pending: number | null | undefined): boolean {
+  return pending !== undefined && (pending === null || pending > 0);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -128,8 +108,13 @@ export interface QueueAssignment {
   unevaluatedTotal: number;
   /** Amb decisió pendent però col·locades a «Bloquejos detectats». */
   decisionsAbove: number;
-  /** Amb pendents de preparació (o sense comptar) però col·locades més amunt. */
+  /** Amb pendents de preparació comptats (`pending > 0`) però col·locades més amunt. */
   preparationAbove: number;
+  /**
+   * Col·locades més amunt amb els pendents SENSE COMPTAR (`pending === null`): no es
+   * pot dir que en tinguin, i la subsecció «Pendents de preparació» ho diu a part.
+   */
+  uncountedAbove: number;
 }
 
 /** Text de l'etiqueta «decisió pendent» d'una fila d'una altra secció. */
@@ -144,7 +129,7 @@ function decisionTag(workspace: WorkspaceSummary): QueueTag {
  * Assigna cada candidatura de l'empresa a UNA sola secció, la primera que compleix:
  * 1. bloqueig detectat (`isOpenBlocker`); 2. decisió pendent (`isPendingDecision`);
  * 3. sense avaluar (`isUnevaluated`); 4. pendents de preparació (dins de
- * `preparationScope` i amb `pending` nul o positiu, la regla de `preparationRows`).
+ * `preparationScope` i `needsPreparation`: `pending` nul o positiu).
  * Les altres condicions que també compleix van a la mateixa fila com a etiquetes.
  *
  * `counts` és `null` mentre es compten els pendents: aleshores la condició 4 no se
@@ -159,13 +144,14 @@ export function assignQueue(
   const sections: Record<QueueSection, QueueRow[]> = { blocker: [], decision: [], unevaluated: [], preparation: [] };
   let decisionsAbove = 0;
   let preparationAbove = 0;
+  let uncountedAbove = 0;
 
   for (const workspace of [...workspaces].sort(byDeadline)) {
     const blocker = isOpenBlocker(workspace);
     const decision = isPendingDecision(workspace);
     const unevaluated = isUnevaluated(workspace);
     const pending = counts && inScope.has(workspace.id) ? (counts[workspace.id] ?? null) : undefined;
-    const preparation = pending !== undefined && (pending === null || pending > 0);
+    const preparation = needsPreparation(pending);
 
     const section: QueueSection | null = blocker
       ? "blocker"
@@ -190,7 +176,10 @@ export function assignQueue(
       });
     }
     if (decision && section === "blocker") decisionsAbove += 1;
-    if (preparation && section !== "preparation") preparationAbove += 1;
+    if (preparation && section !== "preparation") {
+      if (pending === null) uncountedAbove += 1;
+      else preparationAbove += 1;
+    }
     sections[section].push({ workspace, section, pending, tags });
   }
 
@@ -202,6 +191,7 @@ export function assignQueue(
     unevaluatedTotal: workspaces.filter(isUnevaluated).length,
     decisionsAbove,
     preparationAbove,
+    uncountedAbove,
   };
 }
 
@@ -215,6 +205,13 @@ export function preparationAboveLine(count: number): string {
   return count === 1
     ? "Cap altre pendent de preparació: 1 candidatura amb pendents surt més amunt."
     : `Cap altre pendent de preparació: ${formatCount(count)} candidatures amb pendents surten més amunt.`;
+}
+
+/** «No s'han pogut comptar els pendents de N candidatura(es).»: neutre, sense afirmar que en tinguin. */
+export function uncountedLine(count: number): string {
+  return count === 1
+    ? "No s'han pogut comptar els pendents d'1 candidatura."
+    : `No s'han pogut comptar els pendents de ${formatCount(count)} candidatures.`;
 }
 
 /** «1 candidata ja té candidatura» / «N candidates ja tenen candidatura». */

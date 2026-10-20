@@ -33,6 +33,7 @@ import {
   preparationAboveLine,
   preparationScope,
   todayLine,
+  uncountedLine,
   withWorkspaceLine,
   type CandidatesCause,
   type QueueRow,
@@ -185,6 +186,21 @@ function QueueTags({ tags }: { tags: QueueTag[] }) {
   );
 }
 
+/**
+ * Candidatures de més amunt amb els pendents sense comptar (I-1): no es diu que en
+ * tinguin, i es pot tornar a demanar el recompte des d'aquí.
+ */
+function UncountedAbove({ count, onRecount }: { count: number; onRecount: () => void }) {
+  return (
+    <Row>
+      <p className="min-w-0 flex-1 text-[13px] text-muted">{uncountedLine(count)}</p>
+      <Button variant="secondary" size="md" className={ACTION_CLASS} onClick={onRecount}>
+        Torna-ho a comptar
+      </Button>
+    </Row>
+  );
+}
+
 /** «N candidates ja tenen candidatura»: les que Avui treu de la llista, amb on són. */
 function WithWorkspaceNote({ count }: { count: number }) {
   return (
@@ -220,11 +236,13 @@ function RadarEmpty({
   if (withWorkspace > 0) {
     return (
       <Nothing>
-        Totes les candidates obertes ja tenen{" "}
+        {withWorkspace === 1
+          ? "L'única candidata oberta ja té "
+          : `Totes les ${formatCount(withWorkspace)} candidates obertes ja tenen `}
         <Link href="/candidatures" className="text-brand-strong hover:text-accent-800">
           candidatura
-        </Link>{" "}
-        ({formatCount(withWorkspace)}).
+        </Link>
+        .
       </Nothing>
     );
   }
@@ -543,11 +561,13 @@ export default function AvuiPage() {
             {!preparationList ? (
               <GhostRows rows={1} />
             ) : preparationList.length === 0 ? (
-              <Nothing>
-                {queue.preparationAbove > 0
-                  ? preparationAboveLine(queue.preparationAbove)
-                  : "Cap pendent de preparació a les candidatures obertes."}
-              </Nothing>
+              // Cap afirmació falsa: les comptades de més amunt es diuen «amb pendents»; les
+              // que no s'han pogut comptar, a part (`UncountedAbove`). Zero només si no n'hi ha cap.
+              queue.preparationAbove > 0 ? (
+                <Nothing>{preparationAboveLine(queue.preparationAbove)}</Nothing>
+              ) : queue.uncountedAbove === 0 ? (
+                <Nothing>Cap pendent de preparació a les candidatures obertes.</Nothing>
+              ) : null
             ) : (
               preparationList.map(({ workspace, pending = null }) => (
                 <Row key={workspace.id}>
@@ -579,6 +599,9 @@ export default function AvuiPage() {
                   )}
                 </Row>
               ))
+            )}
+            {preparationList && queue.uncountedAbove > 0 && (
+              <UncountedAbove count={queue.uncountedAbove} onRecount={recountPreparation} />
             )}
           </>
         )}

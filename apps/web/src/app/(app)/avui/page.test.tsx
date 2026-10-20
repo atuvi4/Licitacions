@@ -364,6 +364,78 @@ describe("Avui", () => {
     expect(screen.getByText(/1 decisió pendent, 1 bloqueig detectat, 1 candidatura sense avaluar/)).toBeTruthy();
   });
 
+  const lescalaOpen = () =>
+    workspace({
+      id: "lescala",
+      tender_title: "Telecomunicacions 2027",
+      status: "analysis",
+      eligibility: null,
+      recommendation: null,
+      human_decision: null,
+      analysis_state: "absent",
+      days_remaining: 1,
+    });
+
+  for (const [name, response] of [
+    ["la crida de recomptes falla (503)", new Error("503")],
+    ["L'Escala no surt a la resposta", counts({})],
+  ] as const) {
+    it(`I-1: ${name}: L'Escala surt a Decisions «sense comptar», sense dir «amb pendents», i es pot tornar a comptar`, async () => {
+      let first = true;
+      respondWith({
+        "/companies/c1/workspaces": [lescalaOpen()],
+        "/companies/c1/matches?": noFresh,
+        "/companies/c1/matches/summary": { ...summary, candidates: 0, total_tenders: 17336, evaluated_count: 17336 },
+      });
+      const base = get.getMockImplementation()!;
+      get.mockImplementation((path: string) => {
+        if (path === PREPARATION) {
+          if (first) {
+            first = false;
+            return response instanceof Error ? Promise.reject(response) : Promise.resolve(response);
+          }
+          return Promise.resolve(counts({ lescala: 4 }));
+        }
+        return base(path);
+      });
+      render(<AvuiPage />);
+      const blockers = (await screen.findByText("Bloquejos i pendents")).closest("section")!;
+      await screen.findByText("No s'han pogut comptar els pendents d'1 candidatura.");
+
+      expect(titles(document.body).filter((title) => title === "Telecomunicacions 2027")).toHaveLength(1);
+      expect(section("Decisions pendents").querySelector("[data-testid='queue-tags']")?.textContent).toBe(
+        "Sense avaluar · Pendents sense comptar",
+      );
+      expect(blockers.textContent).not.toMatch(/amb pendents/);
+      expect(blockers.textContent).not.toContain("Cap pendent de preparació a les candidatures obertes.");
+
+      fireEvent.click(screen.getByRole("button", { name: "Torna-ho a comptar" }));
+      expect(await screen.findByText("Cap altre pendent de preparació: 1 candidatura amb pendents surt més amunt.")).toBeTruthy();
+      expect(calledPaths().filter((path) => path === PREPARATION)).toHaveLength(2);
+      expect(screen.queryByText(/No s'han pogut comptar/)).toBeNull();
+      expect(section("Decisions pendents").querySelector("[data-testid='queue-tags']")?.textContent).toBe(
+        "Sense avaluar · 4 pendents de preparació (totes les àrees)",
+      );
+    });
+  }
+
+  it("I-1: amb pendents comptats i sense comptar més amunt, es diuen totes dues coses", async () => {
+    respondWith({
+      [PREPARATION]: counts({ counted: 2 }),
+      "/companies/c1/workspaces": [
+        workspace({ id: "counted", tender_title: "Comptada", analysis_state: "current", days_remaining: 3 }),
+        workspace({ id: "missing", tender_title: "Sense comptar", analysis_state: "current", days_remaining: 4 }),
+      ],
+      "/companies/c1/matches?": noFresh,
+      "/companies/c1/matches/summary": summary,
+    });
+    render(<AvuiPage />);
+    const blockers = (await screen.findByText("Bloquejos i pendents")).closest("section")!;
+    await screen.findByText("Cap altre pendent de preparació: 1 candidatura amb pendents surt més amunt.");
+    expect(blockers.textContent).toContain("No s'han pogut comptar els pendents d'1 candidatura.");
+    expect(screen.getByRole("button", { name: "Torna-ho a comptar" })).toBeTruthy();
+  });
+
   it("auditoria UI P1-04: si no es poden comptar els pendents, no s'afirma cap zero", async () => {
     respondWith({
       [PREPARATION]: new Error("503"),
@@ -500,9 +572,23 @@ describe("Avui", () => {
     render(<AvuiPage />);
     await screen.findByText("Fibra òptica municipal");
     const radar = section("Candidates del Radar");
-    expect(radar.textContent).toContain("Totes les candidates obertes ja tenen candidatura (3).");
+    expect(radar.textContent).toContain("Totes les 3 candidates obertes ja tenen candidatura.");
     expect(radar.textContent).not.toContain("Cap candidata amb termini obert");
     expect(radar.querySelector("a[href='/candidatures']")).not.toBeNull();
+  });
+
+  it("P2-05: si l'única candidata oberta ja té candidatura, ho diu en singular", async () => {
+    respondWith({
+      [PREPARATION]: counts({ w1: 0 }),
+      "/companies/c1/workspaces": [workspace({ id: "w1", tender_title: "Fibra òptica municipal", days_remaining: 6 })],
+      "/companies/c1/matches?": noFresh,
+      "/companies/c1/matches/summary": { ...summary, candidates: 1, open_candidates_with_workspace: 1 },
+    });
+    render(<AvuiPage />);
+    await screen.findByText("Fibra òptica municipal");
+    const radar = section("Candidates del Radar");
+    expect(radar.textContent).toContain("L'única candidata oberta ja té candidatura.");
+    expect(radar.textContent).not.toMatch(/Totes les/);
   });
 
   it("si la càrrega falla mostra l'error amb reintent, mai un zero", async () => {
