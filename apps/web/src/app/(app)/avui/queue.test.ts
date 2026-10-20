@@ -343,8 +343,8 @@ describe("assignQueue: cada candidatura una sola vegada (auditoria UI P2-05)", (
     expect(decisionsAboveLine(3)).toBe("Cap altra decisió pendent: 3 amb un bloqueig detectat (a «Bloquejos i pendents»).");
     expect(preparationAboveLine(1)).toBe("Cap altre pendent de preparació: 1 candidatura amb pendents surt més amunt.");
     expect(preparationAboveLine(2)).toBe("Cap altre pendent de preparació: 2 candidatures amb pendents surten més amunt.");
-    expect(uncountedLine(1)).toBe("No s'han pogut comptar els pendents d'1 candidatura.");
-    expect(uncountedLine(3)).toBe("No s'han pogut comptar els pendents de 3 candidatures.");
+    expect(uncountedLine(1)).toBe("No s'han pogut comptar els pendents d'una candidatura de més amunt.");
+    expect(uncountedLine(3)).toBe("No s'han pogut comptar els pendents de 3 candidatures de més amunt.");
     expect(withWorkspaceLine(1)).toBe("1 candidata ja té candidatura");
     expect(withWorkspaceLine(4)).toBe("4 candidates ja tenen candidatura");
   });

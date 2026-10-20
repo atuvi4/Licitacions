@@ -400,7 +400,7 @@ describe("Avui", () => {
       });
       render(<AvuiPage />);
       const blockers = (await screen.findByText("Bloquejos i pendents")).closest("section")!;
-      await screen.findByText("No s'han pogut comptar els pendents d'1 candidatura.");
+      await screen.findByText("No s'han pogut comptar els pendents d'una candidatura de més amunt.");
 
       expect(titles(document.body).filter((title) => title === "Telecomunicacions 2027")).toHaveLength(1);
       expect(section("Decisions pendents").querySelector("[data-testid='queue-tags']")?.textContent).toBe(
@@ -432,7 +432,7 @@ describe("Avui", () => {
     render(<AvuiPage />);
     const blockers = (await screen.findByText("Bloquejos i pendents")).closest("section")!;
     await screen.findByText("Cap altre pendent de preparació: 1 candidatura amb pendents surt més amunt.");
-    expect(blockers.textContent).toContain("No s'han pogut comptar els pendents d'1 candidatura.");
+    expect(blockers.textContent).toContain("No s'han pogut comptar els pendents d'una candidatura de més amunt.");
     expect(screen.getByRole("button", { name: "Torna-ho a comptar" })).toBeTruthy();
   });
 

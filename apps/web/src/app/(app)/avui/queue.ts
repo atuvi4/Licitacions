@@ -207,11 +207,11 @@ export function preparationAboveLine(count: number): string {
     : `Cap altre pendent de preparació: ${formatCount(count)} candidatures amb pendents surten més amunt.`;
 }
 
-/** «No s'han pogut comptar els pendents de N candidatura(es).»: neutre, sense afirmar que en tinguin. */
+/** «No s'han pogut comptar els pendents de N candidatura(es) de més amunt.»: neutre, sense afirmar que en tinguin. */
 export function uncountedLine(count: number): string {
   return count === 1
-    ? "No s'han pogut comptar els pendents d'1 candidatura."
-    : `No s'han pogut comptar els pendents de ${formatCount(count)} candidatures.`;
+    ? "No s'han pogut comptar els pendents d'una candidatura de més amunt."
+    : `No s'han pogut comptar els pendents de ${formatCount(count)} candidatures de més amunt.`;
 }
 
 /** «1 candidata ja té candidatura» / «N candidates ja tenen candidatura». */
