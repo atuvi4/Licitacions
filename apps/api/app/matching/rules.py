@@ -28,9 +28,10 @@ from app.models.enums import DimensionResult
 #   coincidencia feble no s'aguanta nomes amb territori, import i termini;
 # - un termini desconegut compta 0 de 10 i la puntuacio es sobre 100: abans es
 #   treia del denominador i la resta d'aquella licitacio pujava (65 de 90 = 72);
-# - un lot sense CPV propi hereta nomes el primer CPV que publica la font
-#   (`is_main`: PLACSP no marca cap principal), no tota la llista (els acords marc
-#   en porten centenars); el factor ho diu (`inherited_from_tender`);
+# - un lot sense CPV propi hereta tota la llista de l'expedient si te fins a
+#   `LOT_INHERITS_ALL_MAX_CPVS` CPV; amb mes (els acords marc en porten centenars),
+#   nomes el primer que publica la font (`is_main`: PLACSP no marca cap principal), i
+#   el factor ho diu (`inherited_first_cpv_only`);
 # - `pending_award` (PLACSP EV) ja no es accionable: el termini ja ha passat.
 RULES_VERSION = "metadata-match-v3"
 
@@ -84,6 +85,13 @@ CPV_CANDIDATE_BLOCKERS = frozenset(
 # prioritat; la de CLASSE, nomes amb prioritat alta (22); la de GRUP, mai (14
 # com a maxim). Un CPV desconegut compta 0: tampoc no hi arriba.
 CPV_CANDIDATE_MIN_SCORE = 20.0
+# v3 (D1): un lot sense CPV propis hereta TOTS els CPV de l'expedient si n'hi ha fins a
+# aquesta quantitat: una llista curta descriu l'objecte, i el primer que publica la font
+# no sempre n'es el principal (L'Escala: 32562100 primer al feed, 64200000 al plec). Amb
+# mes, nomes el primer: un acord marc en porta desenes o centenars i cada lot encaixava
+# amb qualsevol d'ells (Cetursa, 314 CPV i 29 lots). A la copia del pilot (21-10-2026)
+# donava les mateixes candidates que heretar sempre el primer.
+LOT_INHERITS_ALL_MAX_CPVS = 5
 HIGH_FIT_THRESHOLD = 80       # nomes per a metriques del dashboard
 # Si no s'ha pogut avaluar almenys aquesta fraccio del pes total, el resultat
 # no es un score baix: es "no tenim prou dades".

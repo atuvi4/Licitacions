@@ -101,8 +101,8 @@ export interface TenderCPV {
    * no marca cap CPV com a principal i la ingesta pren el primer de la llista
    * (`placsp/normalizer.py`). El principal del plec o del PSCP pot ser un altre
    * dels CPV de la llista (auditoria UI P1-05: L'Escala 2026/3964, 32562100 primer
-   * al feed i 64200000 principal al PSCP i al DOC-03). Al Radar, un expedient sense lots
-   * es valora amb tots; si té lots sense CPV propis, cada lot només amb aquest (regles v3).
+   * al feed i 64200000 principal al PSCP i al DOC-03). Al Radar compten tots; només els
+   * lots sense CPV propis d'un expedient amb més de 5 CPV es valoren amb aquest (v3, D1).
    */
   is_main: boolean;
   description: string | null;
@@ -116,7 +116,7 @@ export const SOURCE_FIRST_CPV_SHORT_HELP = "La font no indica el principal: és 
 
 /** Per què no es diu «principal»: la font no ho indica. */
 export const SOURCE_FIRST_CPV_HELP =
-  "La font (feed PLACSP) no indica quin CPV és el principal: es marca el primer que publica. El CPV principal declarat al plec o al PSCP pot ser un altre dels d'aquesta llista. Al Radar, una licitació sense lots es valora amb tots aquests CPV; si té lots sense CPV propis, cada lot només amb el primer.";
+  "La font (feed PLACSP) no indica quin CPV és el principal: es marca el primer que publica. El CPV principal declarat al plec o al PSCP pot ser un altre dels d'aquesta llista. Al Radar es valoren tots aquests CPV; només els lots sense CPV propis d'una licitació amb més de 5 CPV es valoren amb el primer.";
 
 /* ----- Imports (P2-06): quina xifra és cada una ------------------------- */
 

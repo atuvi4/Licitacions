@@ -233,27 +233,32 @@ def cpv(code, main=False):
 
 
 class TestCPVDelsLots:
-    def test_un_lot_sense_cpv_hereta_nomes_el_principal(self):
-        # L'acord marc: principal «vaixella» i, entre centenars de secundaris, «equips de xarxa».
-        marc = tender([cpv("39221130", True), cpv("32420000", False)], [lot()])
+    def test_un_lot_d_un_acord_marc_hereta_nomes_el_primer_i_ho_diu(self):
+        # L'acord marc: «vaixella» primer i, entre la resta (mes de 5), «equips de xarxa».
+        codes = ("32420000", "34100000", "09130000", "33600000", "39500000")
+        secundaris = [cpv(code) for code in codes]
+        marc = tender([cpv("39221130", True), *secundaris], [lot()])
         _summary, lots = evaluate_tender(profile([("32420000", 7)]), marc, NOW)
         (_, outcome), = lots
         assert cpv_factor(outcome)["reason_code"] == ReasonCode.CPV_NO_OVERLAP
         assert outcome.status is MatchStatus.LOW_FIT
-        # El factor diu que el CPV es el de l'expedient, perque la fitxa ho pugui explicar.
-        assert cpv_factor(outcome)["detail"]["inherited_from_tender"] is True
+        # El factor diu que nomes s'ha avaluat el primer, perque la fitxa ho pugui explicar.
+        assert cpv_factor(outcome)["detail"]["inherited_first_cpv_only"] is True
+        assert cpv_factor(outcome)["detail"]["tender_cpv_count"] == 6
 
-    def test_el_principal_es_el_primer_que_publica_la_font(self):
+    def test_una_llista_curta_l_hereten_sencera_els_lots(self):
         # L'ordre real del feed de L'Escala: 32562100 primer, 64200000 (el del plec) tercer.
-        # Sense lots compten tots; amb lots sense CPV propis, nomes el primer.
+        # Amb 5 CPV o menys, els lots sense CPV propis les hereten totes (D1).
         feed = [cpv("32562100", True), cpv("45314300", False), cpv("64200000", False)]
         prof = profile([("64200000", 10)])
         sense_lots, _ = evaluate_tender(prof, tender(feed, []), NOW)
         amb_lots, lots = evaluate_tender(prof, tender(feed, [lot(), lot()]), NOW)
         assert sense_lots.status is MatchStatus.CANDIDATE
-        assert amb_lots.status is MatchStatus.LOW_FIT
-        assert all(cpv_factor(o)["reason_code"] == ReasonCode.CPV_NO_OVERLAP for _, o in lots)
-        assert all(cpv_factor(o)["detail"]["inherited_from_tender"] is True for _, o in lots)
+        assert amb_lots.status is MatchStatus.CANDIDATE
+        assert all(
+            cpv_factor(o)["reason_code"] == ReasonCode.CPV_EXACT_HIGH_PRIORITY for _, o in lots
+        )
+        assert all("inherited_first_cpv_only" not in cpv_factor(o)["detail"] for _, o in lots)
 
     def test_l_expedient_sense_lots_continua_mirant_tots_els_seus_cpv(self):
         sense_lots = tender([cpv("39221130", True), cpv("32420000", False)], [])
@@ -265,7 +270,7 @@ class TestCPVDelsLots:
         marc = tender([cpv("39221130", True)], [lot([cpv("32420000")])])
         _summary, ((_, outcome),) = evaluate_tender(profile([("32420000", 7)]), marc, NOW)
         assert cpv_factor(outcome)["reason_code"] == ReasonCode.CPV_EXACT_MEDIUM_PRIORITY
-        assert "inherited_from_tender" not in cpv_factor(outcome)["detail"]
+        assert "inherited_first_cpv_only" not in cpv_factor(outcome)["detail"]
 
     def test_un_lot_que_no_arriba_al_minim_no_amaga_un_lot_candidat(self):
         # Lot 1: classe mitjana (18,7), 79, baix encaix pel minim. Lot 2: exacte, 73, candidat.
@@ -282,10 +287,10 @@ class TestCPVDelsLots:
 
     def test_sense_cpv_al_perfil_el_lot_no_porta_la_marca_d_herencia(self):
         # No s'ha comparat amb cap CPV: dir que «s'ha avaluat amb el primer» seria fals.
-        marc = tender([cpv("64200000", True)], [lot()])
-        _summary, ((_, outcome),) = evaluate_tender(profile([]), marc, NOW)
+        llista = [cpv("64200000", True), *(cpv(f"3242{index}000") for index in range(5))]
+        _summary, ((_, outcome),) = evaluate_tender(profile([]), tender(llista, [lot()]), NOW)
         assert cpv_factor(outcome)["reason_code"] == ReasonCode.CPV_NO_COMPANY_PREFERENCES
-        assert "inherited_from_tender" not in cpv_factor(outcome)["detail"]
+        assert "inherited_first_cpv_only" not in cpv_factor(outcome)["detail"]
 
     def test_sense_cap_lot_puntuat_no_hi_ha_lot_destacat(self):
         marc = tender([cpv("64200000", True)], [lot(), lot()], status="pending_award")
@@ -306,12 +311,27 @@ class TestCPVDelsLots:
     def test_sense_principal_i_un_sol_cpv_l_hereta(self):
         assert inherited_lot_cpvs(tender([cpv("64200000")], [])) == ["64200000"]
 
-    def test_sense_principal_i_diversos_cpv_no_n_hereta_cap(self):
-        assert inherited_lot_cpvs(tender([cpv("64200000"), cpv("32420000")], [])) == []
+    def test_fins_a_5_cpv_s_hereten_tots(self):
+        cinc = [cpv("64200000", True), *(cpv(f"3242{index}000") for index in range(4))]
+        assert inherited_lot_cpvs(tender(cinc, [])) == sorted(item.cpv_code for item in cinc)
+        # Sense cap de marcat, tambe: la llista curta ja descriu l'objecte.
+        assert inherited_lot_cpvs(tender([cpv("64200000"), cpv("32420000")], [])) == [
+            "32420000",
+            "64200000",
+        ]
 
-    def test_amb_principal_nomes_el_principal(self):
-        marc = tender([cpv("32420000", False), cpv("64200000", True)], [])
-        assert inherited_lot_cpvs(marc) == ["64200000"]
+    def test_amb_mes_de_5_nomes_el_marcat(self):
+        sis = [
+            cpv("32420000"),
+            cpv("64200000", True),
+            *(cpv(f"3242{index}000") for index in range(1, 5)),
+        ]
+        assert len(sis) == 6
+        assert inherited_lot_cpvs(tender(sis, [])) == ["64200000"]
+
+    def test_amb_mes_de_5_i_cap_de_marcat_no_n_hereta_cap(self):
+        sis = [cpv(f"3242{index}000") for index in range(6)]
+        assert inherited_lot_cpvs(tender(sis, [])) == []
 
 
 # --------------------------------------------------------------------------- #

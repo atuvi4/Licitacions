@@ -24,7 +24,7 @@ from sqlalchemy.orm import noload, selectinload
 from app.matching.economic import AmountBasis, AmountReference, reference_amount
 from app.matching.engine import MatchOutcome, aggregate_lots, evaluate
 from app.matching.profile import CompanyMatchProfile, load_profile
-from app.matching.rules import RULES_VERSION
+from app.matching.rules import LOT_INHERITS_ALL_MAX_CPVS, RULES_VERSION
 from app.models.enums import DimensionResult
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
 from app.models.tender_lifecycle import TenderRevision
@@ -64,19 +64,17 @@ class RecalculationSummary:
 
 
 def inherited_lot_cpvs(tender: Tender) -> list[str]:
-    """Els CPV que hereta un lot sense CPV propis (v3): el marcat `is_main`.
+    """Els CPV que hereta un lot sense CPV propis (v3, D1).
 
-    `is_main` es el PRIMER CPV que publica la font, no un principal declarat: el feed
-    PLACSP no en marca cap (auditoria UI P1-05). Sense cap de marcat, nomes s'hereta
-    si l'expedient en te un de sol (aleshores no hi ha dubte de quin es l'objecte).
-    Amb diversos i cap de marcat, el lot no n'hereta cap: endevinar-ne un seria
-    inventar l'objecte.
+    Fins a `LOT_INHERITS_ALL_MAX_CPVS`, tots els de l'expedient. Amb mes, nomes el marcat
+    `is_main`, que es el PRIMER CPV que publica la font, no un principal declarat: el feed
+    PLACSP no en marca cap (auditoria UI P1-05). Amb mes i cap de marcat, cap: endevinar-ne
+    un seria inventar l'objecte.
     """
-    main = sorted({item.cpv_code for item in tender.cpvs if item.is_main})
-    if main:
-        return main
     codes = sorted({item.cpv_code for item in tender.cpvs})
-    return codes if len(codes) == 1 else []
+    if len(codes) <= LOT_INHERITS_ALL_MAX_CPVS:
+        return codes
+    return sorted({item.cpv_code for item in tender.cpvs if item.is_main})
 
 
 def evaluate_tender(
@@ -116,12 +114,16 @@ def evaluate_tender(
         return outcome, []
 
     inherited_cpvs = inherited_lot_cpvs(tender)
+    tender_cpv_count = len({item.cpv_code for item in tender.cpvs})
+    # Nomes el primer CPV d'una llista llarga (v3, D1): la fitxa ho ha d'explicar.
+    first_cpv_only = len(inherited_cpvs) < tender_cpv_count
     lot_results: list[tuple[TenderLot, MatchOutcome]] = []
     for lot in lots:
-        # CPV del lot si en te; si no, el primer que publica la font (v3). Un lot sense
-        # CPV propis hereta l'objecte del contracte, no es queda sense classificar;
-        # pero no tota la llista: un acord marc en porta centenars (subministraments,
-        # serveis, vehicles...) i cada lot encaixava amb qualsevol d'ells.
+        # CPV del lot si en te; si no, els de l'expedient (v3, D1: tots si en te fins a
+        # 5; si no, el primer que publica la font). Un lot sense CPV propis hereta
+        # l'objecte del contracte, no es queda sense classificar; pero no la llista d'un
+        # acord marc, que en porta centenars (subministraments, serveis, vehicles...) i
+        # cada lot encaixava amb qualsevol d'ells.
         own_cpvs = [item.cpv_code for item in lot.cpvs]
         lot_cpvs = own_cpvs or inherited_cpvs
         # NUTS: el del lot mana; si no en te, s'aplica el de l'expedient.
@@ -155,16 +157,16 @@ def evaluate_tender(
             deadline=lot.deadline_at or tender.deadline_at,
             now=now,
         )
-        if not own_cpvs and inherited_cpvs:
-            _mark_inherited_cpvs(lot_outcome)
+        if not own_cpvs and first_cpv_only:
+            _mark_first_cpv_only(lot_outcome, tender_cpv_count)
         lot_results.append((lot, lot_outcome))
 
     summary = aggregate_lots([outcome for _, outcome in lot_results])
     return summary, lot_results
 
 
-def _mark_inherited_cpvs(outcome: MatchOutcome) -> None:
-    """Deixa escrit al factor CPV del lot que el CPV es el de l'expedient (v3).
+def _mark_first_cpv_only(outcome: MatchOutcome, tender_cpv_count: int) -> None:
+    """Deixa escrit al factor CPV del lot que nomes s'ha avaluat el primer de l'expedient.
 
     La fitxa ho explica: si no, un «cap CPV en comu» amb el CPV de l'empresa a la
     llista de l'expedient sembla un error. Nomes si el CPV s'ha avaluat: sense CPV al
@@ -172,7 +174,11 @@ def _mark_inherited_cpvs(outcome: MatchOutcome) -> None:
     """
     for factor in outcome.factors:
         if factor["dimension"] == "cpv" and factor["result"] != DimensionResult.UNKNOWN.value:
-            factor["detail"] = {**(factor.get("detail") or {}), "inherited_from_tender": True}
+            factor["detail"] = {
+                **(factor.get("detail") or {}),
+                "inherited_first_cpv_only": True,
+                "tender_cpv_count": tender_cpv_count,
+            }
 
 
 def best_lot(

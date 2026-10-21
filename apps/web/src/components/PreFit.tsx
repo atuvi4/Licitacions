@@ -20,13 +20,13 @@ import { MATCH_STATUS_LEVEL } from "@/lib/labels";
 import {
   DIMENSION_LABELS,
   DIMENSION_ORDER,
-  INHERITED_CPV_NOTE,
   MATCH_STATUS_LABELS,
   PREFIT_DISCLAIMER,
   belowCandidateMinimum,
   countsAsZero,
   factorSourceValue,
-  inheritedCpv,
+  inheritedCpvNote,
+  inheritedFirstCpvOnly,
   isUnknown,
   lotSummary,
   profileGaps,
@@ -142,9 +142,9 @@ function FactorRow({ factor, zeroed }: { factor: MatchFactor; zeroed: boolean })
           {factor.source_value && <>Licitació: {factorSourceValue(factor)}</>}
         </p>
       )}
-      {inheritedCpv(factor) && (
+      {inheritedFirstCpvOnly(factor) && (
         <p className="mt-0.5 text-[11px] text-faint" data-inherited-cpv>
-          {INHERITED_CPV_NOTE}
+          {inheritedCpvNote(factor)}
         </p>
       )}
     </div>

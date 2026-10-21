@@ -273,11 +273,11 @@ describe("PreFitPanel · regles v3, revisió", () => {
     expect(container.textContent).toMatch(/La puntuació surt del 60 % del pes, el termini inclòs amb 0 punts/);
   });
 
-  it("un lot sense CPV propis diu amb quin CPV s'ha avaluat", () => {
+  it("un lot d'un expedient amb més de 5 CPV diu que s'ha avaluat només amb el primer", () => {
     const { container } = render(
       <PreFitPanel
         match={v3Match({ status: "low_fit", score: 60, data_coverage: 1 }, [
-          v3Factor("cpv", "no_match", "CPV_NO_OVERLAP", 0, 40, { inherited_from_tender: true }),
+          v3Factor("cpv", "no_match", "CPV_NO_OVERLAP", 0, 40, { inherited_first_cpv_only: true, tender_cpv_count: 314 }),
           v3Factor("geography", "match", "TERRITORY_HIGH_PRIORITY", 25, 25),
           v3Factor("economic", "match", "AMOUNT_PREFERRED", 25, 25),
           v3Factor("timing", "match", "DEADLINE_ADEQUATE", 10, 10),
@@ -285,7 +285,7 @@ describe("PreFitPanel · regles v3, revisió", () => {
       />,
     );
     expect(container.querySelector("[data-inherited-cpv]")?.textContent).toBe(
-      "Lot sense CPV propis: s'ha avaluat només amb el primer CPV que publica la font per a l'expedient.",
+      "Lot sense CPV propis: l'expedient en publica 314 i s'ha avaluat només amb el primer que publica la font.",
     );
   });
 });

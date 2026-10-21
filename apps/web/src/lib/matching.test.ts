@@ -9,7 +9,8 @@ import {
   countsAsZero,
   cpvBelowMinimumHelp,
   factorSourceValue,
-  inheritedCpv,
+  inheritedCpvNote,
+  inheritedFirstCpvOnly,
   insufficientCause,
   lotSummary,
   reasonLabel,
@@ -207,10 +208,15 @@ describe("regles v3: mínim de CPV per ser candidata i termini que compta zero",
     expect(statusHelp(m)).toBe(CPV_UNKNOWN_NOT_CANDIDATE_HELP.CPV_NO_COMPANY_PREFERENCES);
   });
 
-  it("un lot sense CPV propis ho porta al factor CPV, i només al CPV", () => {
-    expect(inheritedCpv(withDetail(factor("cpv", "no_match", "CPV_NO_OVERLAP"), { inherited_from_tender: true }))).toBe(true);
-    expect(inheritedCpv(factor("cpv", "no_match", "CPV_NO_OVERLAP"))).toBe(false);
-    expect(inheritedCpv(withDetail(factor("geography", "match", "TERRITORY_HIGH_PRIORITY"), { inherited_from_tender: true }))).toBe(false);
+  it("un lot avaluat només amb el primer CPV ho porta al factor CPV, i només al CPV", () => {
+    const marca = { inherited_first_cpv_only: true, tender_cpv_count: 314 };
+    expect(inheritedFirstCpvOnly(withDetail(factor("cpv", "no_match", "CPV_NO_OVERLAP"), marca))).toBe(true);
+    expect(inheritedFirstCpvOnly(factor("cpv", "no_match", "CPV_NO_OVERLAP"))).toBe(false);
+    expect(inheritedFirstCpvOnly(withDetail(factor("geography", "match", "TERRITORY_HIGH_PRIORITY"), marca))).toBe(false);
+    expect(inheritedCpvNote({ detail: marca })).toBe(
+      "Lot sense CPV propis: l'expedient en publica 314 i s'ha avaluat només amb el primer que publica la font.",
+    );
+    expect(inheritedCpvNote({ detail: {} })).toMatch(/en publica més de 5/);
   });
 
   it("la marca només es llegeix en un baix encaix", () => {

@@ -274,13 +274,17 @@ export const CPV_UNKNOWN_NOT_CANDIDATE_HELP: Record<string, string> = {
     "El perfil encara no té cap CPV: sense saber a què es dedica l'empresa, cap licitació no pot ser candidata encara que territori, import i termini encaixin.",
 };
 
-/** Regles v3: el lot no publica CPV propis i s'ha avaluat amb el primer de l'expedient. */
-export function inheritedCpv(factor: MatchFactor): boolean {
-  return factor.dimension === "cpv" && factor.detail?.inherited_from_tender === true;
+/** Regles v3 (D1): el lot no publica CPV propis i l'expedient en té més de 5: s'ha avaluat amb el primer. */
+export function inheritedFirstCpvOnly(factor: MatchFactor): boolean {
+  return factor.dimension === "cpv" && factor.detail?.inherited_first_cpv_only === true;
 }
 
-export const INHERITED_CPV_NOTE =
-  "Lot sense CPV propis: s'ha avaluat només amb el primer CPV que publica la font per a l'expedient.";
+/** La nota de la fila CPV d'aquest lot, amb el nombre de CPV de l'expedient que ha escrit el motor. */
+export function inheritedCpvNote(factor: Pick<MatchFactor, "detail">): string {
+  const count = factor.detail?.tender_cpv_count;
+  const publishes = typeof count === "number" ? `en publica ${count.toLocaleString("ca-ES")}` : "en publica més de 5";
+  return `Lot sense CPV propis: l'expedient ${publishes} i s'ha avaluat només amb el primer que publica la font.`;
+}
 
 /** Regles v3: el termini que la licitació no publica és una dada que falta, però compta 0 sobre el seu pes. */
 export function countsAsZero(factor: MatchFactor): boolean {
