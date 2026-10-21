@@ -30,8 +30,9 @@ NOW = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
 D = Decimal
 
 
-def test_la_versio_de_les_regles_es_v2():
-    assert RULES_VERSION == "metadata-match-v2"
+def test_la_versio_de_les_regles_es_v3():
+    # v3 (precisio del Radar) no canvia res de la base de l'import de v2.
+    assert RULES_VERSION == "metadata-match-v3"
 
 
 class TestReferenceAmount:
@@ -200,13 +201,13 @@ class TestEngineV2:
         assert outcome.status is not MatchStatus.EXCLUDED
         assert outcome.economic_score is None
 
-    def test_el_resultat_porta_la_versio_v2(self):
-        assert evaluate_default(perfect_profile()).rules_version == "metadata-match-v2"
+    def test_el_resultat_porta_la_versio_vigent(self):
+        assert evaluate_default(perfect_profile()).rules_version == "metadata-match-v3"
 
 
 def _tender(*, vec=None, net=None, gross=None, lots=()):
     return SimpleNamespace(
-        cpvs=[SimpleNamespace(cpv_code="45314320")],
+        cpvs=[SimpleNamespace(cpv_code="45314320", is_main=True)],
         estimated_value=vec,
         base_budget_without_tax=net,
         base_budget=gross,

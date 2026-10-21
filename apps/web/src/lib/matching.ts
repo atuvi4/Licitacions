@@ -234,7 +234,28 @@ const INSUFFICIENT_CAUSE_SHORT: Record<InsufficientCause, string> = {
 /** L'ajuda de l'estat d'un pre-fit concret: amb dades insuficients, diu de qui és la manca. */
 export function statusHelp(match: Pick<MatchCommon, "status" | "factors">): string {
   if (match.status === "insufficient_data") return INSUFFICIENT_CAUSE_HELP[insufficientCause(match)];
+  if (belowCandidateMinimum(match)) return CPV_BELOW_MINIMUM_HELP;
   return MATCH_STATUS_HELP[match.status];
+}
+
+/**
+ * Regles v3: la puntuació arriba al llindar de candidatura, però l'activitat (CPV) no
+ * arriba al mínim per ser candidata. El motor només ho escriu al factor CPV quan és
+ * això el que la deixa fora; aquí només es llegeix.
+ */
+export function belowCandidateMinimum(match: Pick<MatchCommon, "status" | "factors">): boolean {
+  if (match.status !== "low_fit") return false;
+  const cpv = match.factors.find((factor) => factor.dimension === "cpv");
+  return cpv?.detail?.below_candidate_minimum === true;
+}
+
+export const CPV_BELOW_MINIMUM_SHORT = "L'activitat (CPV) no arriba al mínim per ser candidata";
+export const CPV_BELOW_MINIMUM_HELP =
+  "La puntuació arriba al llindar, però l'activitat (CPV) no arriba al mínim de 20 de 40 punts per ser candidata: territori, import i termini sols no la fan rellevant.";
+
+/** Regles v3: el termini que la licitació no publica és una dada que falta, però compta 0 sobre el seu pes. */
+export function countsAsZero(factor: MatchFactor): boolean {
+  return isUnknown(factor) && factor.detail?.counts_as_zero === true;
 }
 
 export const DIMENSION_LABELS: Record<DimensionName, string> = {
@@ -334,6 +355,8 @@ export function shortSummary(match: MatchCommon): string {
     .filter((factor) => !isUnknown(factor))
     .sort((a, b) => (a.score ?? 0) / a.max_score - (b.score ?? 0) / b.max_score)[0];
 
+  // Sense cap CPV publicat, el motiu concret ja ho diu millor que el mínim.
+  if (belowCandidateMinimum(match) && cpv && !isUnknown(cpv)) return CPV_BELOW_MINIMUM_SHORT;
   if (match.status === "low_fit" && cpv) {
     return reasonLabel(cpv.reason_code);
   }

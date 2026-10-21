@@ -22,7 +22,16 @@ from app.models.enums import DimensionResult
 # v2 (F-06b): sense VEC, el pressupost base sense IVA (PBL) entra com a COTA
 # INFERIOR del VEC, identificat; uns imports incoherents (VEC < PBL) no donen
 # cap conclusio. Amb VEC coherent, el resultat es el mateix que a v1.
-RULES_VERSION = "metadata-match-v2"
+#
+# v3 (precisio del Radar, 21-10-2026), quatre canvis:
+# - per ser candidata cal un minim de CPV (`CPV_CANDIDATE_MIN_SCORE`): una
+#   coincidencia feble no s'aguanta nomes amb territori, import i termini;
+# - un termini desconegut compta 0 de 10 i la puntuacio es sobre 100: abans es
+#   treia del denominador i la resta d'aquella licitacio pujava (65 de 90 = 72);
+# - un lot sense CPV propi hereta nomes el CPV principal de l'expedient, no tota
+#   la llista (els acords marc en porten centenars);
+# - `pending_award` (PLACSP EV) ja no es accionable: el termini ja ha passat.
+RULES_VERSION = "metadata-match-v3"
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +74,15 @@ CPV_CANDIDATE_BLOCKERS = frozenset(
         "CPV_INACTIVE_ONLY",     # nomes encaixa amb CPV que l'empresa te desactivats
     }
 )
+# v3: a mes dels motius de dalt, cal que la dimensio CPV arribi a aquest minim
+# (la meitat del seu pes). Una coincidencia de CLASSE (4 digits) amb un CPV de
+# prioritat mitjana en dona 18,7: amb 20+25+8 de territori, import i termini
+# arribava a 72 i era candidata. La CLASSE «4531» (instal.lacio electrica)
+# junta el cablejat de telecomunicacions i l'enllumenat d'un camp de futbol.
+# L'exacta (28-40) i la de CATEGORIA (5 digits, 21-30) hi arriben amb qualsevol
+# prioritat; la de CLASSE, nomes amb prioritat alta (22); la de GRUP, mai (14
+# com a maxim). Un CPV desconegut compta 0: tampoc no hi arriba.
+CPV_CANDIDATE_MIN_SCORE = 20.0
 HIGH_FIT_THRESHOLD = 80       # nomes per a metriques del dashboard
 # Si no s'ha pogut avaluar almenys aquesta fraccio del pes total, el resultat
 # no es un score baix: es "no tenim prou dades".
@@ -182,7 +200,11 @@ class ReasonCode:
 
 
 # Estats de licitacio que ja no son accionables per presentar-s'hi.
-NON_ACTIONABLE_STATUSES = {"awarded", "resolved", "cancelled"}
+# v3: `pending_award` (PLACSP EV, «pendent d'adjudicacio») tambe: les ofertes ja
+# s'han presentat. Sovint no porta termini, i sense aquesta regla sortia com a
+# «termini desconegut» i podia ser candidata. Un `pre_announcement` (anunci previ)
+# SI que es avaluable: es una convocatoria futura, encara sense termini.
+NON_ACTIONABLE_STATUSES = {"awarded", "resolved", "cancelled", "pending_award"}
 
 
 @dataclass(slots=True)
@@ -216,8 +238,10 @@ class Factor:
 class DimensionOutcome:
     """Resultat d'avaluar una dimensio.
 
-    `score` a None vol dir UNKNOWN: la dimensio queda fora del calcul en comptes
-    de comptar com un zero, que seria penalitzar una dada que no tenim.
+    UNKNOWN vol dir que la dimensio queda fora del calcul en comptes de comptar
+    com un zero, que seria penalitzar una dada que no tenim. Excepcio (v3): el
+    termini desconegut (`counts_as_zero`) continua sent una dada desconeguda,
+    pero compta 0 sobre el seu pes.
     """
 
     factor: Factor
@@ -234,6 +258,11 @@ class DimensionOutcome:
     @property
     def is_unknown(self) -> bool:
         return self.factor.result is DimensionResult.UNKNOWN
+
+    @property
+    def counts_as_zero(self) -> bool:
+        """Desconeguda, pero dins del denominador amb 0 punts (v3: el termini)."""
+        return self.is_unknown and bool((self.factor.detail or {}).get("counts_as_zero"))
 
 
 def priority_band(priority: int, high: int, medium: int) -> str:

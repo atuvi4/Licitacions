@@ -231,7 +231,7 @@ async def test_l_ordre_per_import_salta_els_zeros(client_a, zeros):
 
 def _prefit_tender(*, vec=None, net=None, gross=None):
     return SimpleNamespace(
-        cpvs=[SimpleNamespace(cpv_code="45314320")],
+        cpvs=[SimpleNamespace(cpv_code="45314320", is_main=True)],
         estimated_value=vec,
         base_budget_without_tax=net,
         base_budget=gross,
@@ -248,8 +248,9 @@ def _economic(outcome):
 
 
 class TestPrefitAmbZeros:
-    def test_la_versio_de_les_regles_no_canvia(self):
-        assert RULES_VERSION == "metadata-match-v2"
+    def test_la_versio_de_les_regles_es_la_vigent(self):
+        # Els imports zero no la van pujar; la v3 (precisio del Radar) si.
+        assert RULES_VERSION == "metadata-match-v3"
 
     def test_vec_zero_i_pbl_es_la_cota_inferior(self):
         assert reference_amount(D("0.00"), D("300000.00"), None) == AmountReference(

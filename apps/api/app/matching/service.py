@@ -62,6 +62,20 @@ class RecalculationSummary:
         }
 
 
+def inherited_lot_cpvs(tender: Tender) -> list[str]:
+    """Els CPV que hereta un lot sense CPV propis (v3): el principal de l'expedient.
+
+    Sense cap CPV marcat com a principal, nomes s'hereta si l'expedient en te un
+    de sol (aleshores no hi ha dubte de quin es l'objecte). Amb diversos i cap de
+    principal, el lot no n'hereta cap: endevinar-ne un seria inventar l'objecte.
+    """
+    main = sorted({item.cpv_code for item in tender.cpvs if item.is_main})
+    if main:
+        return main
+    codes = sorted({item.cpv_code for item in tender.cpvs})
+    return codes if len(codes) == 1 else []
+
+
 def evaluate_tender(
     profile: CompanyMatchProfile,
     tender: Tender,
@@ -98,11 +112,14 @@ def evaluate_tender(
         )
         return outcome, []
 
+    inherited_cpvs = inherited_lot_cpvs(tender)
     lot_results: list[tuple[TenderLot, MatchOutcome]] = []
     for lot in lots:
-        # CPV del lot si en te; si no, els de l'expedient. Un lot sense CPV
-        # propis hereta l'objecte del contracte, no es queda sense classificar.
-        lot_cpvs = [item.cpv_code for item in lot.cpvs] or tender_cpvs
+        # CPV del lot si en te; si no, el PRINCIPAL de l'expedient (v3). Un lot sense
+        # CPV propis hereta l'objecte del contracte, no es queda sense classificar;
+        # pero no tota la llista: un acord marc en porta centenars (subministraments,
+        # serveis, vehicles...) i cada lot encaixava amb qualsevol d'ells.
+        lot_cpvs = [item.cpv_code for item in lot.cpvs] or inherited_cpvs
         # NUTS: el del lot mana; si no en te, s'aplica el de l'expedient.
         lot_nuts = lot.nuts_code or tender.nuts_code
         lot_place = lot.place_of_execution or tender.place_of_execution

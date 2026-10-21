@@ -3,7 +3,8 @@
 Un termini curt NO vol dir "impossible presentar-s'hi": vol dir menys marge, i
 per tant menys punts en aquesta dimensio (que nomes val 10 sobre 100). El que
 si que treu una licitacio del cercle de candidates es que el termini ja hagi
-vencut o que l'expedient ja no sigui accionable (adjudicat, resolt, anul.lat).
+vencut o que l'expedient ja no sigui accionable (pendent d'adjudicacio,
+adjudicat, resolt, anul.lat). Un termini que no consta compta 0 de 10 (v3).
 """
 
 from __future__ import annotations
@@ -54,13 +55,17 @@ def evaluate(
 
     remaining = days_left(deadline, now)
     if remaining is None:
+        # v3: la dada continua sent desconeguda (no se sap el termini), pero compta
+        # 0 de 10 en lloc de sortir del calcul. Treure-la del denominador inflava la
+        # resta de la licitacio i la posava per davant de les que si que el publiquen.
         return DimensionOutcome(
             Factor(
                 dimension="timing",
                 result=DimensionResult.UNKNOWN,
                 reason_code=ReasonCode.DEADLINE_UNKNOWN,
                 weight=WEIGHT_TIMING,
-                score=None,
+                score=0.0,
+                detail={"counts_as_zero": True},
             )
         )
 

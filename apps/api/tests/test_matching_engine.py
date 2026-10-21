@@ -285,10 +285,13 @@ class TestTiming:
         assert outcome.excluded is True
         assert outcome.factor.reason_code == ReasonCode.STATUS_NOT_OPEN
 
-    def test_sense_termini_es_desconegut(self):
+    def test_sense_termini_es_desconegut_i_compta_zero(self):
+        # v3: la dada continua sent desconeguda, pero compta 0 de 10 (no surt del calcul).
         outcome = timing.evaluate("open", None, NOW)
         assert outcome.is_unknown
-        assert outcome.score is None
+        assert outcome.counts_as_zero
+        assert outcome.score == 0.0
+        assert outcome.factor.reason_code == ReasonCode.DEADLINE_UNKNOWN
 
     def test_termini_curt_no_vol_dir_impossible(self):
         outcome = timing.evaluate("open", NOW + timedelta(days=2), NOW)

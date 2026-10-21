@@ -5,7 +5,7 @@
   consulta per a N lots.
 * Oferta economica (`_lot_maximums`): amb lot del plec, el maxim es el PBL sense IVA
   resolt; `conflict` / `no_value` -> indeterminat (mai «supera»).
-* Pre-fit per lot (`metadata-match-v2`, sense canviar `RULES_VERSION`): els imports
+* Pre-fit per lot (F-06e no va canviar `RULES_VERSION`; ara es `metadata-match-v3`): els imports
   resolts del lot amb la mateixa `reference_amount` / `evaluate`.
 """
 
@@ -281,8 +281,9 @@ async def test_sense_lot_del_plec_el_maxim_es_el_de_la_licitacio(client_a, db, t
 # --------------------------------------------------------------------------- #
 
 
-def test_la_versio_de_les_regles_no_canvia():
-    assert RULES_VERSION == "metadata-match-v2"
+def test_la_versio_de_les_regles_es_la_vigent():
+    # F-06e no la va pujar; la v3 (precisio del Radar) si.
+    assert RULES_VERSION == "metadata-match-v3"
 
 
 def _resolved(**values):
@@ -437,7 +438,7 @@ async def test_el_recalcul_fa_servir_els_imports_resolts_del_lot(db, tenant_a):
     assert _reason(matches[conflict_lot.id]) == ReasonCode.AMOUNT_UNKNOWN
     assert _reason(matches[empty_lot.id]) == ReasonCode.AMOUNT_UNKNOWN
     assert _reason(matches[placsp_lot.id]) == ReasonCode.AMOUNT_PREFERRED
-    assert {m.rules_version for m in matches.values()} == {"metadata-match-v2"}
+    assert {m.rules_version for m in matches.values()} == {"metadata-match-v3"}
 
 
 async def test_sense_capacitat_el_recalcul_no_canvia(db, tenant_a):

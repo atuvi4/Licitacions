@@ -422,7 +422,7 @@ class TestMatchingAPI:
         assert dimensions == {"cpv", "geography", "economic", "timing"}
         for factor in top["factors"]:
             assert factor["reason_code"]
-        assert top["rules_version"] == "metadata-match-v2"
+        assert top["rules_version"] == "metadata-match-v3"
 
     async def test_filtre_per_estat(self, client_a, prepared):
         response = await client_a.get(
@@ -461,7 +461,7 @@ class TestMatchingAPI:
         assert response.status_code == 200
         body = response.json()
         assert body["tenders_evaluated"] == 3
-        assert body["rules_version"] == "metadata-match-v2"
+        assert body["rules_version"] == "metadata-match-v3"
 
 
 # ---------------------------------------------------------------------------

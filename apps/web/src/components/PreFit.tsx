@@ -6,6 +6,8 @@
  * Regla que travessa tot el fitxer: **un número sol no val res**. Cada
  * puntuació que es mostra va acompanyada del motiu, i les dimensions que no
  * s'han pogut avaluar es diuen explícitament en comptes de comptar com a zero.
+ * Excepció de les regles v3: el termini que no es publica sí que compta 0 (per no
+ * inflar la resta), i també es diu.
  * Si algun dia algú vol ensenyar només la xifra, aquest és el lloc on s'ha de
  * discutir. El pre-fit no és cap probabilitat de guanyar, i cap component
  * d'aquí l'anomena així.
@@ -20,6 +22,7 @@ import {
   DIMENSION_ORDER,
   MATCH_STATUS_LABELS,
   PREFIT_DISCLAIMER,
+  countsAsZero,
   factorSourceValue,
   isUnknown,
   lotSummary,
@@ -103,7 +106,8 @@ export function PreFitDisclaimer({ className }: { className?: string }) {
   );
 }
 
-function FactorRow({ factor }: { factor: MatchFactor }) {
+/** `zeroed`: regles v3, una dada que falta però que compta 0 a la puntuació (el termini). */
+function FactorRow({ factor, zeroed }: { factor: MatchFactor; zeroed: boolean }) {
   const unknown = isUnknown(factor);
   return (
     <div className="border-t border-border px-5 py-3 first:border-t-0">
@@ -112,7 +116,7 @@ function FactorRow({ factor }: { factor: MatchFactor }) {
           {DIMENSION_LABELS[factor.dimension]}
         </span>
         <span className="whitespace-nowrap text-[13px] tabular-nums">
-          {unknown ? (
+          {unknown && !zeroed ? (
             <span className="text-faint">no avaluable</span>
           ) : (
             <>
@@ -125,6 +129,7 @@ function FactorRow({ factor }: { factor: MatchFactor }) {
 
       <p className={cn("mt-1.5 text-caption", unknown ? "text-faint" : "text-muted")}>
         {reasonLabel(factor.reason_code)}
+        {zeroed && <span data-counts-as-zero>: compta 0 de {factor.max_score}</span>}
       </p>
 
       {(factor.company_value || factor.source_value) && (
@@ -207,8 +212,14 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
     match.factors.find((factor) => factor.dimension === dimension),
   ).filter((factor): factor is MatchFactor => Boolean(factor));
 
-  const unknowns = ordered.filter(isUnknown);
+  // Dades que no compten (fora del càlcul) i dades que falten però compten 0 (regles v3: el
+  // termini). Sense puntuació (tancada, descartada o sense prou dades) no compta res: allà el
+  // termini que no es publica és una dada que falta com qualsevol altra.
+  const zeroed = match.score === null ? [] : ordered.filter(countsAsZero);
+  const unknowns = ordered.filter((factor) => isUnknown(factor) && !zeroed.includes(factor));
   const coverage = Math.round(match.data_coverage * 100);
+  // El pes sobre el qual surt la puntuació: l'avaluat més el que compta 0.
+  const scoredShare = coverage + zeroed.reduce((total, factor) => total + factor.max_score, 0);
   // Qui no té la dada: el perfil de l'empresa o la licitació (motius del motor).
   const missingInProfile = profileGaps(match);
   const missingInSource = sourceGaps(match);
@@ -249,20 +260,28 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
 
       <div>
         {ordered.map((factor) => (
-          <FactorRow key={factor.dimension} factor={factor} />
+          <FactorRow key={factor.dimension} factor={factor} zeroed={zeroed.includes(factor)} />
         ))}
       </div>
 
-      {unknowns.length > 0 && (
+      {(unknowns.length > 0 || zeroed.length > 0) && (
         <div className="border-t border-border bg-subtle px-5 py-3">
           <p className="text-caption font-medium text-ink">
-            {unknowns.length === 1 ? "Dada no disponible" : "Dades no disponibles"}
+            {unknowns.length + zeroed.length === 1 ? "Dada no disponible" : "Dades no disponibles"}
           </p>
-          <p className="mt-0.5 text-caption text-muted">
-            {unknowns.map((factor) => DIMENSION_LABELS[factor.dimension]).join(", ")}. No compta
-            com a desencaix: senzillament no s&apos;ha pogut valorar. La puntuació surt del{" "}
-            {coverage} % del pes que sí que s&apos;ha pogut avaluar.
-          </p>
+          {unknowns.length > 0 && (
+            <p className="mt-0.5 text-caption text-muted">
+              {unknowns.map((factor) => DIMENSION_LABELS[factor.dimension]).join(", ")}. No compta
+              com a desencaix: senzillament no s&apos;ha pogut valorar. La puntuació surt del{" "}
+              {scoredShare} % del pes{zeroed.length > 0 ? ", el termini inclòs amb 0 punts" : " que sí que s'ha pogut avaluar"}.
+            </p>
+          )}
+          {zeroed.length > 0 && (
+            <p className="mt-0.5 text-caption text-muted" data-zeroed-note>
+              {zeroed.map((factor) => DIMENSION_LABELS[factor.dimension]).join(", ")}: la licitació no el publica i hi
+              compta 0 punts. No es treu del càlcul, perquè la resta de la licitació no pugi per una dada que falta.
+            </p>
+          )}
           {missingInProfile.length > 0 && (
             <p className="mt-1.5 text-caption text-ink" data-gap="profile">
               Falta al perfil de l&apos;empresa:{" "}

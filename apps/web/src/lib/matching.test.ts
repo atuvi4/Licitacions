@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CPV_BELOW_MINIMUM_HELP,
+  CPV_BELOW_MINIMUM_SHORT,
   INSUFFICIENT_CAUSE_HELP,
   MATCH_STATUS_HELP,
+  belowCandidateMinimum,
+  countsAsZero,
   factorSourceValue,
   insufficientCause,
   reasonLabel,
@@ -146,5 +150,67 @@ describe("F-06b (regles v2): base de l'import al factor econòmic", () => {
       expect(profileGaps(m)).toEqual([]);
       expect(insufficientCause(m)).toBe("source");
     }
+  });
+});
+
+describe("regles v3: mínim de CPV per ser candidata i termini que compta zero", () => {
+  const withDetail = (f: MatchFactor, detail: Record<string, unknown>): MatchFactor => ({ ...f, detail });
+  const scored = (factors: MatchFactor[], status: MatchCommon["status"], score: number): MatchCommon => ({
+    ...match(factors, status),
+    score,
+    data_coverage: 1,
+  });
+  const minimum = { below_candidate_minimum: true, candidate_minimum: 20 };
+  const rest = [
+    factor("geography", "match", "TERRITORY_HIGH_PRIORITY"),
+    factor("economic", "match", "AMOUNT_PREFERRED"),
+    factor("timing", "match", "DEADLINE_ADEQUATE"),
+  ];
+
+  it("la marca del motor explica per què un 72 no és candidat (El Vendrell, Vic)", () => {
+    const m = scored([withDetail(factor("cpv", "partial", "CPV_RELATED_CLASS"), minimum), ...rest], "low_fit", 72);
+    expect(belowCandidateMinimum(m)).toBe(true);
+    expect(shortSummary(m)).toBe(CPV_BELOW_MINIMUM_SHORT);
+    expect(statusHelp(m)).toBe(CPV_BELOW_MINIMUM_HELP);
+    expect(CPV_BELOW_MINIMUM_HELP).toMatch(/20 de 40/);
+  });
+
+  it("sense la marca, el baix encaix diu el motiu del CPV com sempre", () => {
+    const m = scored([factor("cpv", "no_match", "CPV_NO_OVERLAP"), ...rest], "low_fit", 60);
+    expect(belowCandidateMinimum(m)).toBe(false);
+    expect(shortSummary(m)).toBe(reasonLabel("CPV_NO_OVERLAP"));
+    expect(statusHelp(m)).toBe(MATCH_STATUS_HELP.low_fit);
+  });
+
+  it("si la licitació no publica cap CPV, el resum diu això i l'ajuda, el mínim", () => {
+    const m = scored([withDetail(factor("cpv", "unknown", "CPV_UNKNOWN"), minimum), ...rest], "low_fit", 100);
+    expect(shortSummary(m)).toBe(reasonLabel("CPV_UNKNOWN"));
+    expect(statusHelp(m)).toBe(CPV_BELOW_MINIMUM_HELP);
+  });
+
+  it("la marca només es llegeix en un baix encaix", () => {
+    const cpv = withDetail(factor("cpv", "partial", "CPV_RELATED_CLASS"), minimum);
+    expect(belowCandidateMinimum(scored([cpv, ...rest], "candidate", 72))).toBe(false);
+    expect(belowCandidateMinimum(scored([cpv, ...rest], "closed", 72))).toBe(false);
+  });
+
+  it("compta zero només el termini desconegut que el motor marca així", () => {
+    const deadline = factor("timing", "unknown", "DEADLINE_UNKNOWN");
+    expect(countsAsZero(withDetail({ ...deadline, score: 0 }, { counts_as_zero: true }))).toBe(true);
+    // Un factor de v2 (sense la marca) continua fora del càlcul.
+    expect(countsAsZero(deadline)).toBe(false);
+    expect(countsAsZero(withDetail(factor("timing", "match", "DEADLINE_ADEQUATE"), { counts_as_zero: true }))).toBe(false);
+  });
+
+  it("el termini que compta zero continua sent una dada que la font no publica", () => {
+    const m = match(
+      [
+        factor("cpv", "match", "CPV_EXACT_HIGH_PRIORITY"),
+        withDetail({ ...factor("timing", "unknown", "DEADLINE_UNKNOWN"), score: 0 }, { counts_as_zero: true }),
+      ],
+      "candidate",
+    );
+    expect(sourceGaps(m)).toEqual(["timing"]);
+    expect(profileGaps(m)).toEqual([]);
   });
 });

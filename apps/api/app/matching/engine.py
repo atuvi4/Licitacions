@@ -18,6 +18,11 @@ resultat no es un score dolent: es `insufficient_data`.
 Exemple: si nomes es coneixen CPV (40) i territori (25), un encaix perfecte dona
 100 amb cobertura 0,65 — no 65, que suggeriria un mal encaix quan el que passa
 es que falten dades.
+
+Excepcio (v3): el TERMINI desconegut (`counts_as_zero`) es queda al denominador
+amb 0 punts. Continua sent una dada desconeguda (no augmenta la cobertura), pero
+ja no infla la resta: amb 65,25 punts d'altres dimensions, la puntuacio es 65,
+no 72,5 sobre 90.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ from app.matching.profile import CompanyMatchProfile
 from app.matching.rules import (
     CANDIDATE_THRESHOLD,
     CPV_CANDIDATE_BLOCKERS,
+    CPV_CANDIDATE_MIN_SCORE,
     MIN_DATA_COVERAGE,
     RULES_VERSION,
     TOTAL_WEIGHT,
@@ -137,16 +143,25 @@ def evaluate(
         )
 
     earned = sum(dimension.score or 0.0 for dimension in known)
-    score = round(earned / known_weight * 100)
+    # v3: el termini desconegut es queda al denominador amb 0 punts (no infla la resta).
+    scored_weight = known_weight + sum(
+        dimension.weight for dimension in dimensions if dimension.counts_as_zero
+    )
+    score = round(earned / scored_weight * 100)
 
     # Sostre per CPV: sense una interseccio prou concreta amb l'activitat
     # declarada, la licitacio no pot ser candidata per bona que sigui la resta.
     # No es una exclusio (l'empresa no ha decidit res): es que no tenim motiu
-    # per posar-la sobre la taula.
+    # per posar-la sobre la taula. v3: a mes, la dimensio CPV ha d'arribar al
+    # minim. Quan es el minim (i no un dels motius de sempre, que ja s'expliquen
+    # sols) el que la deixa fora, el factor ho diu perque la interficie ho expliqui.
     capped = cpv.factor.reason_code in CPV_CANDIDATE_BLOCKERS
+    below_minimum = (cpv.score or 0.0) < CPV_CANDIDATE_MIN_SCORE
+    if score >= CANDIDATE_THRESHOLD and below_minimum and not capped:
+        _mark_below_candidate_minimum(factors)
     status = (
         MatchStatus.CANDIDATE
-        if score >= CANDIDATE_THRESHOLD and not capped
+        if score >= CANDIDATE_THRESHOLD and not capped and not below_minimum
         else MatchStatus.LOW_FIT
     )
 
@@ -162,6 +177,17 @@ def evaluate(
 def _coverage(dimensions: list[DimensionOutcome]) -> float:
     known = sum(dimension.weight for dimension in dimensions if not dimension.is_unknown)
     return known / TOTAL_WEIGHT
+
+
+def _mark_below_candidate_minimum(factors: list[dict[str, Any]]) -> None:
+    """Deixa escrit al factor CPV que el minim es el que la deixa fora de candidata (v3)."""
+    for factor in factors:
+        if factor["dimension"] == "cpv":
+            factor["detail"] = {
+                **(factor.get("detail") or {}),
+                "below_candidate_minimum": True,
+                "candidate_minimum": CPV_CANDIDATE_MIN_SCORE,
+            }
 
 
 def aggregate_lots(lot_outcomes: list[MatchOutcome]) -> MatchOutcome:
