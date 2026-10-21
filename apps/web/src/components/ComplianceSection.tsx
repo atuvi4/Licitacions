@@ -100,7 +100,57 @@ function resultLabel(value: string | undefined): string | undefined {
   return RESULT_LABELS[value as AssessmentResult] ?? value;
 }
 
-type ReviewTrace = { kind: "changed" | "dropped"; reason: string; text: string };
+type ReviewTrace = { kind: "changed" | "dropped"; reason: string; text: string; actionable: boolean };
+
+/** Resultats en què ja no hi ha res a mirar: el sistema diu que es compleix o que no aplica. */
+const SETTLED: AssessmentResult[] = ["satisfies", "not_applicable"];
+
+function traceOf(item: AssessmentDisplay["assessment"]): ReviewTrace | null {
+  const carried = item.explanation_params?.review_carried_over as
+    | { automatic_changed?: boolean; reviewed_against?: string }
+    | undefined;
+  if (carried?.automatic_changed) {
+    return {
+      kind: "changed",
+      reason: "automatic_changed",
+      actionable: true,
+      text: `Revisió conservada d'un càlcul anterior. Des que es va fer, el resultat automàtic ha canviat (llavors: ${resultLabel(carried.reviewed_against)}): torna-la a mirar.`,
+    };
+  }
+  const dropped = item.explanation_params?.review_not_carried as
+    | { reason?: string; reviewed_against?: string; reviewed_result?: string | null; review_note?: string | null }
+    | undefined;
+  if (!dropped) return null;
+  const reason = dropped.reason ?? "";
+  const note = dropped.review_note?.trim() ? ` («${dropped.review_note.trim()}»)` : "";
+  if (reason === "requirement_changed") {
+    return {
+      kind: "dropped",
+      reason,
+      actionable: true,
+      text: "El requisit ha canviat des de l'última revisió, i aquella revisió no s'ha conservat: torna a revisar el requisit.",
+    };
+  }
+  if (reason === "automatic_now_fails") {
+    return {
+      kind: "dropped",
+      reason,
+      actionable: true,
+      text: `Una revisió d'un càlcul anterior deia «${resultLabel(dropped.reviewed_result ?? undefined)}»${note}, quan el resultat automàtic era «${resultLabel(dropped.reviewed_against)}». Ara el sistema diu «${RESULT_LABELS.does_not_satisfy}» i aquella revisió no s'ha conservat: torna a revisar el requisit.`,
+    };
+  }
+  // Una confirmació d'un resultat que ha canviat. Si ara el sistema diu que es compleix
+  // (o que no aplica), no hi ha res de nou per revisar: només s'informa.
+  const settled = SETTLED.includes(item.effective_result);
+  return {
+    kind: "dropped",
+    reason,
+    actionable: !settled,
+    text: settled
+      ? `Una confirmació d'un càlcul anterior, feta quan el resultat era «${resultLabel(dropped.reviewed_against)}», no s'ha conservat perquè el resultat automàtic ha canviat. Ara el sistema diu «${resultLabel(item.effective_result)}».`
+      : `Una confirmació d'un càlcul anterior, feta quan el resultat era «${resultLabel(dropped.reviewed_against)}», no s'ha conservat perquè el resultat automàtic ha canviat: torna a revisar el requisit.`,
+  };
+}
 
 /**
  * Què ha passat amb la revisió d'un càlcul anterior (el «Recalcula» no l'esborra).
@@ -108,48 +158,30 @@ type ReviewTrace = { kind: "changed" | "dropped"; reason: string; text: string }
  * mana, i algú l'ha de tornar a mirar. No conservada, perquè ja no parlava del
  * mateix (una confirmació d'un resultat que ha canviat, un «compleix» que el motor
  * ara contradiu, o un requisit editat): la fila torna a estar per revisar, i es diu
- * per què. La revisió es fa per a tota la fila, així que en un grup de duplicats
- * compta qualsevol membre.
+ * per què. Només el que demana una persona compta («actionable»): una confirmació
+ * que ha quedat enrere perquè ara tot es compleix s'explica, però no avisa. La
+ * revisió es fa per a tota la fila, així que en un grup de duplicats compta
+ * qualsevol membre, i mana el que demana atenció.
  */
 function reviewTrace(row: AssessmentDisplay): ReviewTrace | null {
-  for (const item of [row.assessment, ...row.members]) {
-    const carried = item.explanation_params?.review_carried_over as
-      | { automatic_changed?: boolean; reviewed_against?: string }
-      | undefined;
-    if (carried?.automatic_changed) {
-      return {
-        kind: "changed",
-        reason: "automatic_changed",
-        text: `Revisió conservada d'un càlcul anterior. Des que es va fer, el resultat automàtic ha canviat (llavors: ${resultLabel(carried.reviewed_against)}): torna-la a mirar.`,
-      };
-    }
-    const dropped = item.explanation_params?.review_not_carried as
-      | { reason?: string; reviewed_against?: string; reviewed_result?: string | null; review_note?: string | null }
-      | undefined;
-    if (dropped) {
-      const reason = dropped.reason ?? "";
-      const note = dropped.review_note?.trim() ? ` («${dropped.review_note.trim()}»)` : "";
-      const text =
-        reason === "requirement_changed"
-          ? "El requisit ha canviat des de l'última revisió, i aquella revisió no s'ha conservat: torna a revisar el requisit."
-          : reason === "automatic_now_fails"
-            ? `Una revisió d'un càlcul anterior deia «${resultLabel(dropped.reviewed_result ?? undefined)}»${note}, quan el resultat automàtic era «${resultLabel(dropped.reviewed_against)}». Ara el sistema diu «${RESULT_LABELS.does_not_satisfy}» i aquella revisió no s'ha conservat: torna a revisar el requisit.`
-            : `Una confirmació d'un càlcul anterior, feta quan el resultat era «${resultLabel(dropped.reviewed_against)}», no s'ha conservat perquè el resultat automàtic ha canviat: torna a revisar el requisit.`;
-      return { kind: "dropped", reason, text };
-    }
-  }
-  return null;
+  const traces = [row.assessment, ...row.members].map(traceOf).filter((trace): trace is ReviewTrace => trace !== null);
+  return traces.find((trace) => trace.actionable) ?? traces[0] ?? null;
+}
+
+function needsAnotherLook(row: AssessmentDisplay): boolean {
+  return reviewTrace(row)?.actionable ?? false;
 }
 
 function ReviewTraceNotice({ row }: { row: AssessmentDisplay }) {
   const trace = reviewTrace(row);
   if (!trace) return null;
+  const tone = trace.actionable ? "text-warning" : "text-muted";
   return trace.kind === "changed" ? (
-    <p className="mt-1.5 text-caption text-warning" data-carried-review-changed>
+    <p className={`mt-1.5 text-caption ${tone}`} data-carried-review-changed>
       {trace.text}
     </p>
   ) : (
-    <p className="mt-1.5 text-caption text-warning" data-review-not-carried={trace.reason}>
+    <p className={`mt-1.5 text-caption ${tone}`} data-review-not-carried={trace.reason} data-informative={trace.actionable ? undefined : "true"}>
       {trace.text}
     </p>
   );
@@ -539,7 +571,7 @@ export function ComplianceSection({
   })).filter((group) => group.items.length > 0);
   const hasAttention = groups.some((group) => !group.collapsible);
   // Revisions d'un càlcul anterior que cal tornar a mirar: es compten a dalt i no queden mai plegades.
-  const tracedCount = rows.filter((row) => reviewTrace(row) !== null).length;
+  const tracedCount = rows.filter(needsAnotherLook).length;
   const analyseLabel = run ? "Recalcula" : "Analitza compliment";
   const analysisCurrent = analysisState === "current";
   const analysisGate =
@@ -688,7 +720,9 @@ export function ComplianceSection({
           {groups.map((group) => {
             const collapsed = Boolean(group.collapsible && hasAttention && !open[group.key]);
             // Plegat no vol dir amagat: una fila amb un avís de revisió es veu igualment.
-            const shown = collapsed ? group.items.filter((row) => reviewTrace(row) !== null) : group.items;
+            const shown = collapsed ? group.items.filter(needsAnotherLook) : group.items;
+            const hidden = group.items.length - shown.length;
+            const listId = `assessment-group-${group.key}`;
             return (
               <div key={group.key} data-assessment-group={group.key}>
                 <div className="flex flex-wrap items-center gap-2 border-b border-border bg-subtle px-4 py-1.5 sm:px-5">
@@ -697,31 +731,31 @@ export function ComplianceSection({
                     {collapsed && shown.length > 0 ? ` · ${shown.length} amb avís` : ""}
                   </span>
                   {group.hint && <span className="text-caption text-muted">{group.hint}</span>}
-                  {group.collapsible && hasAttention && (
+                  {/* Plegat sense res amagat (totes les files tenen avís): no hi ha res a desplegar. */}
+                  {group.collapsible && hasAttention && (!collapsed || hidden > 0) && (
                     <button
                       type="button"
                       aria-expanded={!collapsed}
+                      aria-controls={listId}
                       onClick={() => setOpen((current) => ({ ...current, [group.key]: collapsed }))}
                       className="ml-auto text-caption text-brand-strong hover:text-accent-800"
                     >
-                      {collapsed ? "plegats · desplega" : "plega"}
+                      {collapsed ? `${hidden} ${hidden === 1 ? "plegat" : "plegats"} · desplega` : "plega"}
                     </button>
                   )}
                 </div>
-                {shown.length > 0 && (
-                  <ul className="divide-y divide-border">
-                    {shown.map((row) => (
-                      <AssessmentRow
-                        key={row.assessment.id}
-                        tenderId={tenderId}
-                        row={row}
-                        busy={reviewing === row.assessment.id}
-                        failure={failedReview === row.assessment.id ? actionError : null}
-                        onReview={review}
-                      />
-                    ))}
-                  </ul>
-                )}
+                <ul id={listId} className="divide-y divide-border">
+                  {shown.map((row) => (
+                    <AssessmentRow
+                      key={row.assessment.id}
+                      tenderId={tenderId}
+                      row={row}
+                      busy={reviewing === row.assessment.id}
+                      failure={failedReview === row.assessment.id ? actionError : null}
+                      onReview={review}
+                    />
+                  ))}
+                </ul>
               </div>
             );
           })}

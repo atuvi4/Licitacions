@@ -646,6 +646,63 @@ describe("ComplianceSection · Pas 2: confirmats, possibles i revisions conserva
     expect(screen.getByText("Acreditat amb avís")).toBeTruthy();
     expect(container.querySelector("[data-assessment-group='satisfies']")?.textContent).toContain("Acreditats · 2 · 1 amb avís");
     expect(container.querySelector("[data-compliance-counters]")?.textContent).toContain("Revisions a tornar a mirar1");
+    // El botó diu quantes en queden de plegades i diu quina llista controla.
+    const toggle = screen.getByRole("button", { name: "1 plegat · desplega" });
+    expect(toggle.getAttribute("aria-controls")).toBe("assessment-group-satisfies");
+    expect(document.getElementById("assessment-group-satisfies")).not.toBeNull();
+  });
+
+  it("si totes les files d'un grup plegat tenen avís, no hi ha botó de desplegar", () => {
+    const req = (id: string, title: string) => ({ ...assessment().requirement!, requirement_id: id, title });
+    const value: Compliance = {
+      run: run({ confirmed_blockers_count: 0, needs_review_count: 1, satisfies_count: 1 }),
+      is_stale: false,
+      assessments: [
+        assessment({ id: "q1", requirement_id: "rq", automatic_result: "needs_review", effective_result: "needs_review", requirement: req("rq", "Per mirar") }),
+        assessment({
+          id: "s2",
+          requirement_id: "rt",
+          automatic_result: "needs_review",
+          reviewed_result: "satisfies",
+          effective_result: "satisfies",
+          review_status: "verified",
+          review_note: "Revisat a mà",
+          explanation_params: { review_carried_over: { from_run: "cr0", reviewed_against: "unknown", automatic_changed: true } },
+          requirement: req("rt", "Acreditat amb avís"),
+        }),
+      ],
+    };
+    const { container } = renderSection(value);
+    expect(screen.getByText("Acreditat amb avís")).toBeTruthy();
+    const group = container.querySelector("[data-assessment-group='satisfies']") as HTMLElement;
+    expect(within(group).queryByRole("button", { name: /desplega/ })).toBeNull();
+  });
+
+  it("una confirmació que queda enrere perquè ara es compleix s'explica, però no compta ni es força a la vista", () => {
+    const req = (id: string, title: string) => ({ ...assessment().requirement!, requirement_id: id, title });
+    const value: Compliance = {
+      run: run({ confirmed_blockers_count: 0, needs_review_count: 1, satisfies_count: 1 }),
+      is_stale: false,
+      assessments: [
+        assessment({ id: "q1", requirement_id: "rq", automatic_result: "needs_review", effective_result: "needs_review", requirement: req("rq", "Per mirar") }),
+        assessment({
+          id: "s3",
+          requirement_id: "ru",
+          explanation_params: {
+            review_not_carried: { from_run: "cr0", reviewed_against: "unknown", reviewed_result: null, review_note: null, reason: "automatic_changed" },
+          },
+          requirement: req("ru", "Ara es compleix"),
+        }),
+      ],
+    };
+    const { container } = renderSection(value);
+    expect(container.querySelector("[data-compliance-counters]")?.textContent).not.toContain("Revisions a tornar a mirar");
+    expect(screen.queryByText("Ara es compleix")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "1 plegat · desplega" }));
+    const notice = screen.getByText("Ara es compleix").closest("li")!.querySelector("[data-review-not-carried]");
+    expect(notice?.getAttribute("data-informative")).toBe("true");
+    expect(notice?.textContent).toContain("Ara el sistema diu «Compleix»");
+    expect(notice?.textContent).not.toContain("torna a revisar");
   });
 
   it("en un grup de duplicats, l'avís d'un membre que no és el canònic també surt a la fila", () => {
