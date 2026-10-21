@@ -188,6 +188,9 @@ async def analyze_company_compliance(
         req_fingerprint=req_fingerprint,
         prefit=prefit,
     )
+    # Recalcular sobre la MATEIXA analisi no esborra el que una persona ha
+    # revisat: les revisions del run vigent passen al nou, requisit a requisit.
+    carried_reviews = await _reviews_to_carry(session, company.id, tender.id, extraction_run.id)
 
     deadline = tender.deadline_at.date() if tender.deadline_at else None
     # Si l'expedient no te lots, un abast desconegut no es ambigu.
@@ -310,6 +313,9 @@ async def analyze_company_compliance(
             evidence_strength=outcome.strength,
             calculated_at=datetime.now(UTC),
         )
+        previous_review = carried_reviews.get(requirement.id)
+        if previous_review is not None:
+            _carry_review(assessment, previous_review, requirement)
         session.add(assessment)
         for ref in outcome.evidence:
             assessment.evidence.append(
@@ -322,12 +328,14 @@ async def analyze_company_compliance(
                     strength=ref.strength,
                 )
             )
+        # El recompte es el de `_recount_run`: amb el resultat EFECTIU (la revisio
+        # humana conservada, si n'hi ha) i el bloqueig que en resulta.
         rows.append(
             (
                 consolidation.group_marker(requirement.id, outcome.params),
                 requirement.obligation,
-                outcome.result,
-                blocker,
+                assessment.effective_result,
+                assessment.blocker_status,
             )
         )
 
@@ -416,6 +424,74 @@ async def _claim_run(
     return run
 
 
+#: Clau de `explanation_params` amb la traca d'una revisio conservada d'un run anterior.
+CARRIED_REVIEW_KEY = "review_carried_over"
+
+
+async def _reviews_to_carry(
+    session: AsyncSession,
+    company_id: uuid.UUID,
+    tender_id: uuid.UUID,
+    extraction_run_id: uuid.UUID,
+) -> dict[uuid.UUID, CompanyRequirementAssessment]:
+    """Les avaluacions revisades del run vigent, per requisit, si es la mateixa analisi.
+
+    Una revisio parla d'un requisit concret: si l'analisi de requisits ha canviat
+    (un run nou de requisits, uns altres ids), no hi ha res a conservar i el run
+    nou comenca net, com abans. Sobre la mateixa analisi, un "Recalcula" (perfil
+    nou, una polissa afegida) no pot fer perdre el que una persona ja ha dit.
+    """
+    previous = await current_run_for(session, company_id, tender_id)
+    if previous is None or previous.requirement_extraction_run_id != extraction_run_id:
+        return {}
+    reviewed = (
+        await session.scalars(
+            sa.select(CompanyRequirementAssessment).where(
+                CompanyRequirementAssessment.assessment_run_id == previous.id,
+                sa.or_(
+                    CompanyRequirementAssessment.review_status != ReviewStatus.UNREVIEWED,
+                    CompanyRequirementAssessment.reviewed_result.is_not(None),
+                ),
+            )
+        )
+    ).all()
+    return {assessment.requirement_id: assessment for assessment in reviewed}
+
+
+def _carry_review(
+    assessment: CompanyRequirementAssessment,
+    previous: CompanyRequirementAssessment,
+    requirement: Requirement,
+) -> None:
+    """Copia la revisio humana al run nou i en refa el bloqueig com `review_assessment`.
+
+    El resultat automatic nou es queda tal com l'ha calculat el motor: si ha canviat
+    des de la revisio, la traca ho diu (`automatic_changed`) perque la persona hi
+    pugui tornar; la revisio no s'esborra ni es reinterpreta.
+    """
+    assessment.reviewed_result = previous.reviewed_result
+    assessment.review_status = previous.review_status
+    assessment.review_note = previous.review_note
+    assessment.reviewed_by = previous.reviewed_by
+    assessment.reviewed_at = previous.reviewed_at
+    assessment.blocker_status = derive_blocker_status(
+        obligation=assessment.obligation,
+        effective_result=assessment.effective_result,
+        requirement_review_status=requirement.review_status,
+        assessment_reviewed=previous.review_status
+        in (ReviewStatus.VERIFIED, ReviewStatus.REJECTED),
+        modality=getattr(requirement, "modality", None),
+    )
+    assessment.explanation_params = {
+        **(assessment.explanation_params or {}),
+        CARRIED_REVIEW_KEY: {
+            "from_run": str(previous.assessment_run_id),
+            "previous_automatic_result": str(previous.automatic_result),
+            "automatic_changed": previous.automatic_result != assessment.automatic_result,
+        },
+    }
+
+
 async def is_run_stale(
     session: AsyncSession, run: CompanyComplianceRun, company: Company
 ) -> bool:
@@ -488,6 +564,9 @@ async def review_assessment(
             requirement.review_status if requirement else ReviewStatus.UNREVIEWED
         ),
         assessment_reviewed=review_status in (ReviewStatus.VERIFIED, ReviewStatus.REJECTED),
+        # La mateixa llei que el motor: una branca alternativa o condicional no
+        # bloqueja tota sola, encara que una persona la marqui "no compleix".
+        modality=getattr(requirement, "modality", None) if requirement else None,
     )
 
     await session.flush()

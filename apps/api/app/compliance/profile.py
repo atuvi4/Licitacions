@@ -212,8 +212,18 @@ def compute_profile_fingerprint(snapshot: ProfileSnapshot) -> str:
             f"reg|{reg.type}|{reg.name.strip().casefold()}|{reg.issued_at}|{reg.expires_at}"
         )
     for ins in snapshot.insurances:
+        # Els limits (per sinistre, anual, per victima...) i l'assegurat addicional
+        # els llegeix la regla d'assegurances: afegir-ne o canviar-ne un ha de deixar
+        # el compliment desactualitzat, com qualsevol altra dada que el decideix.
+        limits = ",".join(
+            sorted(
+                f"{limit.kind}:{_money(limit.amount)}:{limit.currency}"
+                for limit in (getattr(ins, "limits", None) or [])
+            )
+        )
         parts.append(
             f"ins|{ins.type}|{_money(ins.coverage_amount)}|{ins.currency}|{ins.expires_at}"
+            f"|{getattr(ins, 'additional_insured', None)}|{limits}"
         )
     for project in snapshot.projects:
         cpvs = ",".join(sorted(link.cpv_code for link in project.cpvs))
