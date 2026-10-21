@@ -259,7 +259,8 @@ describe("PreFitPanel · regles v3, revisió", () => {
   it("amb el CPV desconegut i una altra dada que falta, cadascuna amb la seva frase", () => {
     const { container } = render(
       <PreFitPanel
-        match={v3Match({ status: "low_fit", score: 100, data_coverage: 0.5 }, [
+        // 25 + 25 de 60 (el termini hi compta amb 0): 83, com ho calcula el motor.
+        match={v3Match({ status: "low_fit", score: 83, data_coverage: 0.5 }, [
           v3Factor("cpv", "unknown", "CPV_UNKNOWN", null, 40, { below_candidate_minimum: true, candidate_minimum: 20 }),
           v3Factor("geography", "match", "TERRITORY_HIGH_PRIORITY", 25, 25),
           v3Factor("economic", "match", "AMOUNT_PREFERRED", 25, 25),
