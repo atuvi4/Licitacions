@@ -100,41 +100,59 @@ function resultLabel(value: string | undefined): string | undefined {
   return RESULT_LABELS[value as AssessmentResult] ?? value;
 }
 
+type ReviewTrace = { kind: "changed" | "dropped"; reason: string; text: string };
+
 /**
  * Què ha passat amb la revisió d'un càlcul anterior (el «Recalcula» no l'esborra).
  * Conservada, però el resultat automàtic ha canviat des que es va fer: la revisió
  * mana, i algú l'ha de tornar a mirar. No conservada, perquè ja no parlava del
- * mateix (una confirmació d'un resultat que ha canviat, o un requisit editat): la
- * fila torna a estar per revisar, i es diu per què. La revisió es fa per a tota la
- * fila, així que en un grup de duplicats compta qualsevol membre.
+ * mateix (una confirmació d'un resultat que ha canviat, un «compleix» que el motor
+ * ara contradiu, o un requisit editat): la fila torna a estar per revisar, i es diu
+ * per què. La revisió es fa per a tota la fila, així que en un grup de duplicats
+ * compta qualsevol membre.
  */
-function ReviewTraceNotice({ row }: { row: AssessmentDisplay }) {
+function reviewTrace(row: AssessmentDisplay): ReviewTrace | null {
   for (const item of [row.assessment, ...row.members]) {
     const carried = item.explanation_params?.review_carried_over as
       | { automatic_changed?: boolean; reviewed_against?: string }
       | undefined;
     if (carried?.automatic_changed) {
-      return (
-        <p className="mt-1.5 text-caption text-warning" data-carried-review-changed>
-          Revisió conservada d&apos;un càlcul anterior. Des que es va fer, el resultat automàtic ha canviat (llavors:{" "}
-          {resultLabel(carried.reviewed_against)}): torna-la a mirar.
-        </p>
-      );
+      return {
+        kind: "changed",
+        reason: "automatic_changed",
+        text: `Revisió conservada d'un càlcul anterior. Des que es va fer, el resultat automàtic ha canviat (llavors: ${resultLabel(carried.reviewed_against)}): torna-la a mirar.`,
+      };
     }
     const dropped = item.explanation_params?.review_not_carried as
-      | { reason?: string; reviewed_against?: string }
+      | { reason?: string; reviewed_against?: string; reviewed_result?: string | null; review_note?: string | null }
       | undefined;
     if (dropped) {
-      return (
-        <p className="mt-1.5 text-caption text-warning" data-review-not-carried={dropped.reason ?? ""}>
-          {dropped.reason === "requirement_changed"
-            ? "El requisit ha canviat des de l'última revisió, i aquella revisió no s'ha conservat: torna'l a revisar."
-            : `Hi havia una confirmació d'un càlcul anterior, quan el resultat era «${resultLabel(dropped.reviewed_against)}». El resultat automàtic ha canviat i la confirmació no s'ha conservat: torna-la a mirar.`}
-        </p>
-      );
+      const reason = dropped.reason ?? "";
+      const note = dropped.review_note?.trim() ? ` («${dropped.review_note.trim()}»)` : "";
+      const text =
+        reason === "requirement_changed"
+          ? "El requisit ha canviat des de l'última revisió, i aquella revisió no s'ha conservat: torna a revisar el requisit."
+          : reason === "automatic_now_fails"
+            ? `Una revisió d'un càlcul anterior deia «${resultLabel(dropped.reviewed_result ?? undefined)}»${note}, quan el resultat automàtic era «${resultLabel(dropped.reviewed_against)}». Ara el sistema diu «${RESULT_LABELS.does_not_satisfy}» i aquella revisió no s'ha conservat: torna a revisar el requisit.`
+            : `Una confirmació d'un càlcul anterior, feta quan el resultat era «${resultLabel(dropped.reviewed_against)}», no s'ha conservat perquè el resultat automàtic ha canviat: torna a revisar el requisit.`;
+      return { kind: "dropped", reason, text };
     }
   }
   return null;
+}
+
+function ReviewTraceNotice({ row }: { row: AssessmentDisplay }) {
+  const trace = reviewTrace(row);
+  if (!trace) return null;
+  return trace.kind === "changed" ? (
+    <p className="mt-1.5 text-caption text-warning" data-carried-review-changed>
+      {trace.text}
+    </p>
+  ) : (
+    <p className="mt-1.5 text-caption text-warning" data-review-not-carried={trace.reason}>
+      {trace.text}
+    </p>
+  );
 }
 
 /** Resultats que la regla ha decidit sola: la fila no pot dir «no comparable». */
@@ -520,6 +538,8 @@ export function ComplianceSection({
     items: rows.filter((row) => groupOf(row) === group.key),
   })).filter((group) => group.items.length > 0);
   const hasAttention = groups.some((group) => !group.collapsible);
+  // Revisions d'un càlcul anterior que cal tornar a mirar: es compten a dalt i no queden mai plegades.
+  const tracedCount = rows.filter((row) => reviewTrace(row) !== null).length;
   const analyseLabel = run ? "Recalcula" : "Analitza compliment";
   const analysisCurrent = analysisState === "current";
   const analysisGate =
@@ -536,6 +556,9 @@ export function ComplianceSection({
         { label: "Sense dades", value: run.unknown_count, level: "attention" as const },
         { label: "Acreditats", value: run.satisfies_count, level: "ready" as const },
         { label: "Obligatoris", value: run.mandatory_total, level: "neutral" as const },
+        ...(tracedCount > 0
+          ? [{ label: "Revisions a tornar a mirar", value: tracedCount, level: "attention" as const }]
+          : []),
       ]
     : [];
 
@@ -664,11 +687,14 @@ export function ComplianceSection({
           />
           {groups.map((group) => {
             const collapsed = Boolean(group.collapsible && hasAttention && !open[group.key]);
+            // Plegat no vol dir amagat: una fila amb un avís de revisió es veu igualment.
+            const shown = collapsed ? group.items.filter((row) => reviewTrace(row) !== null) : group.items;
             return (
               <div key={group.key} data-assessment-group={group.key}>
                 <div className="flex flex-wrap items-center gap-2 border-b border-border bg-subtle px-4 py-1.5 sm:px-5">
                   <span className={KICKER}>
                     {group.label} · {group.items.length}
+                    {collapsed && shown.length > 0 ? ` · ${shown.length} amb avís` : ""}
                   </span>
                   {group.hint && <span className="text-caption text-muted">{group.hint}</span>}
                   {group.collapsible && hasAttention && (
@@ -682,9 +708,9 @@ export function ComplianceSection({
                     </button>
                   )}
                 </div>
-                {!collapsed && (
+                {shown.length > 0 && (
                   <ul className="divide-y divide-border">
-                    {group.items.map((row) => (
+                    {shown.map((row) => (
                       <AssessmentRow
                         key={row.assessment.id}
                         tenderId={tenderId}

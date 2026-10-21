@@ -590,6 +590,64 @@ describe("ComplianceSection · Pas 2: confirmats, possibles i revisions conserva
     expect(notice?.textContent).toContain("El requisit ha canviat");
   });
 
+  it("un «compleix» que el motor ara contradiu no es conserva, i la fila diu què deia i per què", () => {
+    const value: Compliance = {
+      run: run({ confirmed_blockers_count: 0, potential_blockers_count: 1 }),
+      is_stale: false,
+      assessments: [
+        assessment({
+          automatic_result: "does_not_satisfy",
+          effective_result: "does_not_satisfy",
+          blocker_status: "potential",
+          explanation_params: {
+            review_not_carried: {
+              from_run: "cr0",
+              reviewed_against: "unknown",
+              reviewed_result: "satisfies",
+              review_note: "Comptes dipositats",
+              reason: "automatic_now_fails",
+            },
+          },
+        }),
+      ],
+    };
+    const { container } = renderSection(value);
+    const notice = container.querySelector("[data-review-not-carried]");
+    expect(notice?.getAttribute("data-review-not-carried")).toBe("automatic_now_fails");
+    expect(notice?.textContent).toContain("deia «Compleix» («Comptes dipositats»)");
+    expect(notice?.textContent).toContain("Ara el sistema diu «No compleix»");
+    expect(groupOfRow("Certificat ISO 9001 en vigor")).toBe("potential");
+  });
+
+  it("una fila amb avís no queda mai plegada, i el recompte de dalt la compta", () => {
+    const req = (id: string, title: string) => ({ ...assessment().requirement!, requirement_id: id, title });
+    const value: Compliance = {
+      run: run({ confirmed_blockers_count: 0, needs_review_count: 1, satisfies_count: 2 }),
+      is_stale: false,
+      assessments: [
+        assessment({ id: "q1", requirement_id: "rq", automatic_result: "needs_review", effective_result: "needs_review", requirement: req("rq", "Per mirar") }),
+        assessment({ id: "s1", requirement_id: "rs", requirement: req("rs", "Acreditat sense res") }),
+        assessment({
+          id: "s2",
+          requirement_id: "rt",
+          automatic_result: "needs_review",
+          reviewed_result: "satisfies",
+          effective_result: "satisfies",
+          review_status: "verified",
+          review_note: "Revisat a mà",
+          explanation_params: { review_carried_over: { from_run: "cr0", reviewed_against: "unknown", automatic_changed: true } },
+          requirement: req("rt", "Acreditat amb avís"),
+        }),
+      ],
+    };
+    const { container } = renderSection(value);
+    // «Acreditats» es plega perquè hi ha files d'atenció; la de l'avís es veu igualment.
+    expect(screen.queryByText("Acreditat sense res")).toBeNull();
+    expect(screen.getByText("Acreditat amb avís")).toBeTruthy();
+    expect(container.querySelector("[data-assessment-group='satisfies']")?.textContent).toContain("Acreditats · 2 · 1 amb avís");
+    expect(container.querySelector("[data-compliance-counters]")?.textContent).toContain("Revisions a tornar a mirar1");
+  });
+
   it("en un grup de duplicats, l'avís d'un membre que no és el canònic també surt a la fila", () => {
     const econ = (id: string, requirementId: string, canonical: boolean, params: Record<string, unknown> | null) =>
       assessment({
