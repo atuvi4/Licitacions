@@ -63,11 +63,13 @@ class RecalculationSummary:
 
 
 def inherited_lot_cpvs(tender: Tender) -> list[str]:
-    """Els CPV que hereta un lot sense CPV propis (v3): el principal de l'expedient.
+    """Els CPV que hereta un lot sense CPV propis (v3): el marcat `is_main`.
 
-    Sense cap CPV marcat com a principal, nomes s'hereta si l'expedient en te un
-    de sol (aleshores no hi ha dubte de quin es l'objecte). Amb diversos i cap de
-    principal, el lot no n'hereta cap: endevinar-ne un seria inventar l'objecte.
+    `is_main` es el PRIMER CPV que publica la font, no un principal declarat: el feed
+    PLACSP no en marca cap (auditoria UI P1-05). Sense cap de marcat, nomes s'hereta
+    si l'expedient en te un de sol (aleshores no hi ha dubte de quin es l'objecte).
+    Amb diversos i cap de marcat, el lot no n'hereta cap: endevinar-ne un seria
+    inventar l'objecte.
     """
     main = sorted({item.cpv_code for item in tender.cpvs if item.is_main})
     if main:
@@ -115,11 +117,12 @@ def evaluate_tender(
     inherited_cpvs = inherited_lot_cpvs(tender)
     lot_results: list[tuple[TenderLot, MatchOutcome]] = []
     for lot in lots:
-        # CPV del lot si en te; si no, el PRINCIPAL de l'expedient (v3). Un lot sense
+        # CPV del lot si en te; si no, el primer que publica la font (v3). Un lot sense
         # CPV propis hereta l'objecte del contracte, no es queda sense classificar;
         # pero no tota la llista: un acord marc en porta centenars (subministraments,
         # serveis, vehicles...) i cada lot encaixava amb qualsevol d'ells.
-        lot_cpvs = [item.cpv_code for item in lot.cpvs] or inherited_cpvs
+        own_cpvs = [item.cpv_code for item in lot.cpvs]
+        lot_cpvs = own_cpvs or inherited_cpvs
         # NUTS: el del lot mana; si no en te, s'aplica el de l'expedient.
         lot_nuts = lot.nuts_code or tender.nuts_code
         lot_place = lot.place_of_execution or tender.place_of_execution
@@ -141,24 +144,42 @@ def evaluate_tender(
                 resolved.base_budget_without_tax.value,
                 resolved.base_budget.value,
             )
-        lot_results.append(
-            (
-                lot,
-                evaluate(
-                    profile,
-                    cpv_codes=lot_cpvs,
-                    nuts_code=lot_nuts,
-                    place_name=lot_place,
-                    amount=lot_amount,
-                    tender_status=status,
-                    deadline=lot.deadline_at or tender.deadline_at,
-                    now=now,
-                ),
-            )
+        lot_outcome = evaluate(
+            profile,
+            cpv_codes=lot_cpvs,
+            nuts_code=lot_nuts,
+            place_name=lot_place,
+            amount=lot_amount,
+            tender_status=status,
+            deadline=lot.deadline_at or tender.deadline_at,
+            now=now,
         )
+        if not own_cpvs and inherited_cpvs:
+            _mark_inherited_cpvs(lot_outcome)
+        lot_results.append((lot, lot_outcome))
 
     summary = aggregate_lots([outcome for _, outcome in lot_results])
     return summary, lot_results
+
+
+def _mark_inherited_cpvs(outcome: MatchOutcome) -> None:
+    """Deixa escrit al factor CPV del lot que el CPV es el de l'expedient (v3).
+
+    La fitxa ho explica: si no, un «cap CPV en comu» amb el CPV de l'empresa a la
+    llista de l'expedient sembla un error.
+    """
+    for factor in outcome.factors:
+        if factor["dimension"] == "cpv":
+            factor["detail"] = {**(factor.get("detail") or {}), "inherited_from_tender": True}
+
+
+def best_lot(
+    summary: MatchOutcome, lot_results: list[tuple[TenderLot, MatchOutcome]]
+) -> TenderLot | None:
+    """El lot que resumeix l'expedient: el que ha triat `aggregate_lots`, si puntua."""
+    if summary.score is None:
+        return None
+    return next((lot for lot, outcome in lot_results if outcome is summary), None)
 
 
 class MatchingService:
@@ -288,16 +309,11 @@ class MatchingService:
                 for lot, lot_outcome in lot_results
                 if lot_outcome.is_candidate
             ]
-            best = (
-                max(
-                    (pair for pair in lot_results if pair[1].score is not None),
-                    key=lambda pair: pair[1].score or 0,
-                    default=None,
-                )
-            )
+            # El mateix lot que resumeix l'expedient (v3: el millor candidat, si n'hi ha).
+            best = best_lot(outcome, lot_results)
             match.total_lot_count = len(lot_results)
             match.candidate_lot_count = len(candidates)
-            match.best_lot_id = best[0].id if best else None
+            match.best_lot_id = best.id if best else None
 
             await self.session.flush()
             await self._sync_lot_matches(

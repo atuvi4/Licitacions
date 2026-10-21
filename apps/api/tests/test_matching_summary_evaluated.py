@@ -13,6 +13,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 
 from app.matching.service import MatchingService
+from app.models.enums import MatchStatus
 from app.models.matching import CompanyTenderMatch
 from tests.test_matching_api import configure_company, make_source, make_tender
 
@@ -138,3 +139,28 @@ async def test_high_fit_i_stale_tambe_nomes_compten_licitacions_visibles(
     assert summary["evaluated_count"] == 1
     assert summary["high_fit"] == 1
     assert summary["stale"] == 1
+
+
+async def test_high_fit_nomes_compta_candidates(db, client_a, tenant_a):
+    """Regles v3: una puntuacio alta ja no vol dir candidata (minim de CPV)."""
+    _, company = tenant_a
+    source = await make_source(db)
+    await make_tender(db, source, title="Cablejat a Girona")
+    await make_tender(db, source, title="Cablejat a Salt")
+    await db.commit()
+    await configure_company(db, company.id)
+    await MatchingService(db).recalculate(company.id)
+    rows = (
+        await db.execute(
+            sa.select(CompanyTenderMatch).where(CompanyTenderMatch.company_id == company.id)
+        )
+    ).scalars().all()
+    assert len(rows) == 2
+    # Totes dues amb 95: una candidata i una de baix encaix (p. ex. sense cap CPV publicat).
+    rows[0].score, rows[0].status = 95, MatchStatus.CANDIDATE
+    rows[1].score, rows[1].status = 95, MatchStatus.LOW_FIT
+    await db.commit()
+
+    summary = await _summary(client_a, company)
+
+    assert summary["high_fit"] == 1

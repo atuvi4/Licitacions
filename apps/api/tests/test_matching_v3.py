@@ -35,7 +35,7 @@ from app.matching.rules import (
     RULES_VERSION,
     ReasonCode,
 )
-from app.matching.service import evaluate_tender, inherited_lot_cpvs
+from app.matching.service import best_lot, evaluate_tender, inherited_lot_cpvs
 from app.models.enums import ExclusionKind, MatchStatus
 
 NOW = datetime(2026, 10, 21, 9, 48, tzinfo=UTC)
@@ -48,11 +48,11 @@ CAPACITY = ContractCapacity(
 )
 
 
-def profile(cpvs: list[tuple[str, int]]) -> CompanyMatchProfile:
+def profile(cpvs: list[tuple[str, int]], *, active: bool = True) -> CompanyMatchProfile:
     return CompanyMatchProfile(
         company_id=uuid.uuid4(),
         cpv_preferences=[
-            CPVPreference(code=code, priority=priority, active=True, excluded=False)
+            CPVPreference(code=code, priority=priority, active=active, excluded=False)
             for code, priority in cpvs
         ],
         territories=[
@@ -128,6 +128,36 @@ class TestMinimDeCPV:
         assert outcome.status is MatchStatus.LOW_FIT
         assert "below_candidate_minimum" not in (cpv_factor(outcome)["detail"] or {})
 
+    def test_sense_cpv_al_perfil_no_pot_ser_candidata_i_ho_diu(self):
+        outcome = evaluate(profile([]), cpvs=["64200000"])
+        assert cpv_factor(outcome)["reason_code"] == ReasonCode.CPV_NO_COMPANY_PREFERENCES
+        assert outcome.score == 100
+        assert outcome.status is MatchStatus.LOW_FIT
+        assert cpv_factor(outcome)["detail"]["below_candidate_minimum"] is True
+
+    @pytest.mark.parametrize(
+        ("cpvs", "active", "reason"),
+        [
+            (["85200000"], True, ReasonCode.CPV_NO_OVERLAP),
+            (["64200000"], False, ReasonCode.CPV_INACTIVE_ONLY),
+        ],
+    )
+    def test_els_altres_bloquejadors_tampoc_no_porten_la_marca(self, cpvs, active, reason):
+        outcome = evaluate(profile([("64200000", 10)], active=active), cpvs=cpvs)
+        assert cpv_factor(outcome)["reason_code"] == reason
+        assert outcome.score >= 60
+        assert outcome.status is MatchStatus.LOW_FIT
+        assert "below_candidate_minimum" not in (cpv_factor(outcome)["detail"] or {})
+
+    def test_el_minim_i_el_termini_desconegut_alhora(self):
+        # 18,7 + 25 + 25 + 0 (termini desconegut) = 68,7: sobre 100, 69; baix encaix pel minim.
+        outcome = evaluate(profile([("45314300", 5)]), cpvs=["45316100"], deadline=None)
+        assert outcome.score == 69
+        assert outcome.status is MatchStatus.LOW_FIT
+        assert cpv_factor(outcome)["detail"]["below_candidate_minimum"] is True
+        timing_factor = next(f for f in outcome.factors if f["dimension"] == "timing")
+        assert timing_factor["detail"] == {"counts_as_zero": True}
+
     def test_sota_del_llindar_la_marca_no_hi_es(self):
         # Amb 55 no seria candidata igualment: el motiu es la puntuacio, no el minim.
         outcome = evaluate(
@@ -190,11 +220,11 @@ def tender(cpvs, lots, *, status="open"):
     )
 
 
-def lot(cpvs=()):
+def lot(cpvs=(), amount=Decimal("50000")):
     return SimpleNamespace(
-        removed_at=None, cpvs=list(cpvs), nuts_code=None, place_of_execution=None,
-        estimated_value=Decimal("50000"), base_budget_without_tax=None, base_budget=None,
-        deadline_at=None,
+        id=uuid.uuid4(), removed_at=None, cpvs=list(cpvs), nuts_code=None,
+        place_of_execution=None, estimated_value=amount, base_budget_without_tax=None,
+        base_budget=None, deadline_at=None,
     )
 
 
@@ -210,6 +240,20 @@ class TestCPVDelsLots:
         (_, outcome), = lots
         assert cpv_factor(outcome)["reason_code"] == ReasonCode.CPV_NO_OVERLAP
         assert outcome.status is MatchStatus.LOW_FIT
+        # El factor diu que el CPV es el de l'expedient, perque la fitxa ho pugui explicar.
+        assert cpv_factor(outcome)["detail"]["inherited_from_tender"] is True
+
+    def test_el_principal_es_el_primer_que_publica_la_font(self):
+        # L'ordre real del feed de L'Escala: 32562100 primer, 64200000 (el del plec) tercer.
+        # Sense lots compten tots; amb lots sense CPV propis, nomes el primer.
+        feed = [cpv("32562100", True), cpv("45314300", False), cpv("64200000", False)]
+        prof = profile([("64200000", 10)])
+        sense_lots, _ = evaluate_tender(prof, tender(feed, []), NOW)
+        amb_lots, lots = evaluate_tender(prof, tender(feed, [lot(), lot()]), NOW)
+        assert sense_lots.status is MatchStatus.CANDIDATE
+        assert amb_lots.status is MatchStatus.LOW_FIT
+        assert all(cpv_factor(o)["reason_code"] == ReasonCode.CPV_NO_OVERLAP for _, o in lots)
+        assert all(cpv_factor(o)["detail"]["inherited_from_tender"] is True for _, o in lots)
 
     def test_l_expedient_sense_lots_continua_mirant_tots_els_seus_cpv(self):
         sense_lots = tender([cpv("39221130", True), cpv("32420000", False)], [])
@@ -221,6 +265,29 @@ class TestCPVDelsLots:
         marc = tender([cpv("39221130", True)], [lot([cpv("32420000")])])
         _summary, ((_, outcome),) = evaluate_tender(profile([("32420000", 7)]), marc, NOW)
         assert cpv_factor(outcome)["reason_code"] == ReasonCode.CPV_EXACT_MEDIUM_PRIORITY
+        assert "inherited_from_tender" not in cpv_factor(outcome)["detail"]
+
+    def test_un_lot_que_no_arriba_al_minim_no_amaga_un_lot_candidat(self):
+        # Lot 1: classe mitjana (18,7), 79, baix encaix pel minim. Lot 2: exacte, 73, candidat.
+        prof = profile([("45314300", 5), ("64200000", 6)])
+        lot_1 = lot([cpv("45316100")], amount=Decimal("100000"))
+        lot_2 = lot([cpv("64200000")], amount=Decimal("5000"))
+        summary, lots = evaluate_tender(prof, tender([cpv("45316100", True)], [lot_1, lot_2]), NOW)
+        (first, outcome_1), (second, outcome_2) = lots
+        assert (outcome_1.score, outcome_1.status) == (79, MatchStatus.LOW_FIT)
+        assert (outcome_2.score, outcome_2.status) == (73, MatchStatus.CANDIDATE)
+        # L'expedient es el del millor lot CANDIDAT, i el lot destacat es el mateix.
+        assert summary is outcome_2
+        assert best_lot(summary, lots) is second
+
+    def test_sense_cap_lot_candidat_l_expedient_es_el_lot_de_mes_puntuacio(self):
+        prof = profile([("45314300", 5)])
+        lot_1 = lot([cpv("45316100")], amount=Decimal("100000"))
+        lot_2 = lot([cpv("45316100")], amount=Decimal("5000"))
+        summary, lots = evaluate_tender(prof, tender([cpv("45316100", True)], [lot_1, lot_2]), NOW)
+        assert summary is lots[0][1]
+        assert summary.status is MatchStatus.LOW_FIT
+        assert best_lot(summary, lots) is lots[0][0]
 
     def test_sense_principal_i_un_sol_cpv_l_hereta(self):
         assert inherited_lot_cpvs(tender([cpv("64200000")], [])) == ["64200000"]

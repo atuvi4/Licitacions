@@ -28,8 +28,9 @@ from app.models.enums import DimensionResult
 #   coincidencia feble no s'aguanta nomes amb territori, import i termini;
 # - un termini desconegut compta 0 de 10 i la puntuacio es sobre 100: abans es
 #   treia del denominador i la resta d'aquella licitacio pujava (65 de 90 = 72);
-# - un lot sense CPV propi hereta nomes el CPV principal de l'expedient, no tota
-#   la llista (els acords marc en porten centenars);
+# - un lot sense CPV propi hereta nomes el primer CPV que publica la font
+#   (`is_main`: PLACSP no marca cap principal), no tota la llista (els acords marc
+#   en porten centenars); el factor ho diu (`inherited_from_tender`);
 # - `pending_award` (PLACSP EV) ja no es accionable: el termini ja ha passat.
 RULES_VERSION = "metadata-match-v3"
 

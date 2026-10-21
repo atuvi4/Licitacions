@@ -307,6 +307,8 @@ async def match_summary(session: SessionDep, ctx: CompanyCtx):
                 CompanyTenderMatch.company_id == ctx.company_id,
                 visible_to_company(ctx.company_id),
                 CompanyTenderMatch.score >= HIGH_FIT_THRESHOLD,
+                # v3: una puntuacio alta ja no vol dir candidata (minim de CPV).
+                CompanyTenderMatch.status == MatchStatus.CANDIDATE,
             )
         )
     ).scalar_one()

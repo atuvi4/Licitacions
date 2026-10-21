@@ -234,7 +234,14 @@ const INSUFFICIENT_CAUSE_SHORT: Record<InsufficientCause, string> = {
 /** L'ajuda de l'estat d'un pre-fit concret: amb dades insuficients, diu de qui és la manca. */
 export function statusHelp(match: Pick<MatchCommon, "status" | "factors">): string {
   if (match.status === "insufficient_data") return INSUFFICIENT_CAUSE_HELP[insufficientCause(match)];
-  if (belowCandidateMinimum(match)) return CPV_BELOW_MINIMUM_HELP;
+  if (belowCandidateMinimum(match)) {
+    const cpv = match.factors.find((factor) => factor.dimension === "cpv");
+    // Sense CPV avaluable no és que «no arribi» a res: és que no se sap de quina activitat és.
+    if (cpv && isUnknown(cpv) && CPV_UNKNOWN_NOT_CANDIDATE_HELP[cpv.reason_code]) {
+      return CPV_UNKNOWN_NOT_CANDIDATE_HELP[cpv.reason_code];
+    }
+    return cpvBelowMinimumHelp(cpv);
+  }
   return MATCH_STATUS_HELP[match.status];
 }
 
@@ -250,8 +257,30 @@ export function belowCandidateMinimum(match: Pick<MatchCommon, "status" | "facto
 }
 
 export const CPV_BELOW_MINIMUM_SHORT = "L'activitat (CPV) no arriba al mínim per ser candidata";
-export const CPV_BELOW_MINIMUM_HELP =
-  "La puntuació arriba al llindar, però l'activitat (CPV) no arriba al mínim de 20 de 40 punts per ser candidata: territori, import i termini sols no la fan rellevant.";
+
+/** L'ajuda del mínim, amb el mínim i el màxim que el motor ha escrit al factor. */
+export function cpvBelowMinimumHelp(cpv: Pick<MatchFactor, "max_score" | "detail"> | undefined): string {
+  const declared = cpv?.detail?.candidate_minimum;
+  const minimum = typeof declared === "number" ? declared : 20;
+  const points = (value: number) => value.toLocaleString("ca-ES");
+  return `La puntuació arriba al llindar, però l'activitat (CPV) no arriba al mínim de ${points(minimum)} de ${points(cpv?.max_score ?? 40)} punts per ser candidata: territori, import i termini sols no la fan rellevant.`;
+}
+
+/** Sense cap CPV avaluable, el motiu concret: la licitació no en publica o el perfil no en té. */
+export const CPV_UNKNOWN_NOT_CANDIDATE_HELP: Record<string, string> = {
+  CPV_UNKNOWN:
+    "La licitació no publica cap codi CPV: sense saber de quina activitat és, no pot ser candidata encara que territori, import i termini encaixin.",
+  CPV_NO_COMPANY_PREFERENCES:
+    "El perfil encara no té cap CPV: sense saber a què es dedica l'empresa, cap licitació no pot ser candidata encara que territori, import i termini encaixin.",
+};
+
+/** Regles v3: el lot no publica CPV propis i s'ha avaluat amb el primer de l'expedient. */
+export function inheritedCpv(factor: MatchFactor): boolean {
+  return factor.dimension === "cpv" && factor.detail?.inherited_from_tender === true;
+}
+
+export const INHERITED_CPV_NOTE =
+  "Lot sense CPV propis: s'ha avaluat només amb el primer CPV que publica la font per a l'expedient.";
 
 /** Regles v3: el termini que la licitació no publica és una dada que falta, però compta 0 sobre el seu pes. */
 export function countsAsZero(factor: MatchFactor): boolean {
@@ -402,8 +431,9 @@ export type CandidatesCause = "not_evaluated" | "profile" | "insufficient_data" 
  *
  * - Cap licitació avaluada → `not_evaluated`, sigui com sigui el perfil.
  * - Avaluades i el perfil SENSE CPV, territoris NI preferències de contracte
- *   (`prefitProfileReady === false`) → `profile`: és cert i és la raó. Amb
- *   territoris però sense CPV, la causa del perfil no està demostrada.
+ *   (`prefitProfileReady === false`) → `profile`: és cert i és la raó.
+ * - Avaluades i el perfil sense cap CPV, encara que tingui territoris → `profile`:
+ *   amb les regles v3 (mínim de CPV) cap licitació no pot ser candidata sense CPV.
  * - Totes les avaluades sense dades suficients → `insufficient_data`.
  * - Si no → `no_match`.
  */
@@ -414,6 +444,7 @@ export function candidatesCause(
   if (!radar || radar.candidates > 0) return null;
   if (radar.evaluated_count === 0) return "not_evaluated";
   if (prefitProfileReady(profile) === false) return "profile";
+  if (profile && profile.cpv_preferences === 0) return "profile";
   if (radar.insufficient_data === radar.evaluated_count) return "insufficient_data";
   return "no_match";
 }

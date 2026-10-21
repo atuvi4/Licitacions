@@ -156,7 +156,7 @@ describe("PreFitPanel · regles v3", () => {
       <PreFitPanel
         match={v3Match({ status: "candidate", score: 65, data_coverage: 0.9 }, [
           v3Factor("cpv", "match", "CPV_EXACT_MEDIUM_PRIORITY", 34, 40),
-          v3Factor("geography", "partial", "TERRITORY_SAME_COUNTRY", 6.25, 25),
+          v3Factor("geography", "partial", "TERRITORY_NOT_DECLARED", 6.25, 25),
           v3Factor("economic", "match", "AMOUNT_PREFERRED", 25, 25),
           v3Factor("timing", "unknown", "DEADLINE_UNKNOWN", 0, 10, { counts_as_zero: true }),
         ])}
@@ -192,7 +192,7 @@ describe("PreFitPanel · regles v3", () => {
       <PreFitPanel
         match={v3Match({ status: "candidate", score: 72, data_coverage: 0.9 }, [
           v3Factor("cpv", "match", "CPV_EXACT_MEDIUM_PRIORITY", 34, 40),
-          v3Factor("geography", "partial", "TERRITORY_SAME_COUNTRY", 6.25, 25),
+          v3Factor("geography", "partial", "TERRITORY_NOT_DECLARED", 6.25, 25),
           v3Factor("economic", "match", "AMOUNT_PREFERRED", 25, 25),
           v3Factor("timing", "unknown", "DEADLINE_UNKNOWN", null, 10),
         ])}
@@ -225,12 +225,66 @@ describe("PreFitPanel · regles v3", () => {
       <PreFitPanel
         match={v3Match({ status: "low_fit", score: 72, data_coverage: 1 }, [
           v3Factor("cpv", "partial", "CPV_RELATED_CLASS", 18.7, 40, { below_candidate_minimum: true, candidate_minimum: 20 }),
-          v3Factor("geography", "partial", "TERRITORY_SAME_REGION", 20, 25),
+          v3Factor("geography", "partial", "TERRITORY_MEDIUM_PRIORITY", 20, 25),
           v3Factor("economic", "match", "AMOUNT_PREFERRED", 25, 25),
           v3Factor("timing", "match", "DEADLINE_ADEQUATE", 8, 10),
         ])}
       />,
     );
     expect(screen.getByText(/no arriba al mínim de 20 de 40 punts per ser candidata/)).toBeTruthy();
+  });
+});
+
+describe("PreFitPanel · regles v3, revisió", () => {
+  it("sense cap CPV publicat, el CPV no «no compta com a desencaix»: és el motiu del baix encaix", () => {
+    const { container } = render(
+      <PreFitPanel
+        match={v3Match({ status: "low_fit", score: 100, data_coverage: 0.6 }, [
+          v3Factor("cpv", "unknown", "CPV_UNKNOWN", null, 40, { below_candidate_minimum: true, candidate_minimum: 20 }),
+          v3Factor("geography", "match", "TERRITORY_HIGH_PRIORITY", 25, 25),
+          v3Factor("economic", "match", "AMOUNT_PREFERRED", 25, 25),
+          v3Factor("timing", "match", "DEADLINE_ADEQUATE", 10, 10),
+        ])}
+      />,
+    );
+    expect(container.textContent).not.toMatch(/No compta com a desencaix/);
+    expect(container.querySelector("[data-blocking-unknown]")?.textContent).toMatch(
+      /^Activitat \(CPV\): sense aquesta dada no pot ser candidata/,
+    );
+    expect(container.textContent).toMatch(/La licitació no publica cap codi CPV: sense saber de quina activitat és/);
+    expect(container.textContent).not.toMatch(/no arriba al mínim/);
+    expect(container.textContent).toMatch(/La puntuació surt del 60 % del pes que sí que s'ha pogut avaluar/);
+  });
+
+  it("amb el CPV desconegut i una altra dada que falta, cadascuna amb la seva frase", () => {
+    const { container } = render(
+      <PreFitPanel
+        match={v3Match({ status: "low_fit", score: 100, data_coverage: 0.5 }, [
+          v3Factor("cpv", "unknown", "CPV_UNKNOWN", null, 40, { below_candidate_minimum: true, candidate_minimum: 20 }),
+          v3Factor("geography", "match", "TERRITORY_HIGH_PRIORITY", 25, 25),
+          v3Factor("economic", "match", "AMOUNT_PREFERRED", 25, 25),
+          v3Factor("timing", "unknown", "DEADLINE_UNKNOWN", 0, 10, { counts_as_zero: true }),
+        ])}
+      />,
+    );
+    expect(container.querySelector("[data-blocking-unknown]")).not.toBeNull();
+    expect(container.querySelector("[data-zeroed-note]")).not.toBeNull();
+    expect(container.textContent).toMatch(/La puntuació surt del 60 % del pes, el termini inclòs amb 0 punts/);
+  });
+
+  it("un lot sense CPV propis diu amb quin CPV s'ha avaluat", () => {
+    const { container } = render(
+      <PreFitPanel
+        match={v3Match({ status: "low_fit", score: 60, data_coverage: 1 }, [
+          v3Factor("cpv", "no_match", "CPV_NO_OVERLAP", 0, 40, { inherited_from_tender: true }),
+          v3Factor("geography", "match", "TERRITORY_HIGH_PRIORITY", 25, 25),
+          v3Factor("economic", "match", "AMOUNT_PREFERRED", 25, 25),
+          v3Factor("timing", "match", "DEADLINE_ADEQUATE", 10, 10),
+        ])}
+      />,
+    );
+    expect(container.querySelector("[data-inherited-cpv]")?.textContent).toBe(
+      "Lot sense CPV propis: s'ha avaluat només amb el primer CPV que publica la font per a l'expedient.",
+    );
   });
 });

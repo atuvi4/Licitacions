@@ -343,8 +343,8 @@ function ReviewFeed() {
           />
         );
       }
-      // La MATEIXA causa que Avui (`candidatesCause`, lib/matching): només es culpa
-      // el perfil si no té CPV, territoris NI preferències de contracte.
+      // La MATEIXA causa que Avui (`candidatesCause`, lib/matching): es culpa el perfil
+      // si no té CPV, territoris NI preferències de contracte, o si no té cap CPV (v3).
       const cause = candidatesCause(summary.data, profile.data?.counts);
       if (cause === "profile") {
         return (

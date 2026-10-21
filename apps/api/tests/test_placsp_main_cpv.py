@@ -3,7 +3,8 @@
 El feed PLACSP llista els CPV (`RequiredCommodityClassification`) sense marcar-ne cap de
 principal. La ingesta marca `is_main` al PRIMER de la llista i conserva tots els altres; el
 web ho diu «primer a la font», no «principal». Aquests tests fixen el comportament que el
-web descriu: cap reordenacio, cap CPV perdut, i el Radar els fa servir tots.
+web descriu: cap reordenacio, cap CPV perdut, i el Radar els fa servir tots per a un
+expedient sense lots (regles v3: un lot sense CPV propis nomes hereta el primer).
 
 Cas real: L'Escala 2026/3964, feed amb 32562100 primer; el PSCP i el DOC-03 declaren
 64200000 com a principal.

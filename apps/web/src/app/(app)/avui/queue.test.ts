@@ -148,6 +148,14 @@ describe("candidates del Radar (A17: prioritzades pel Radar, no licitacions inge
     expect(candidatesCause(undefined, EMPTY_PROFILE)).toBeNull();
   });
 
+  it("regles v3: amb avaluacions i el perfil sense cap CPV, la causa és el perfil", () => {
+    // Amb el mínim de CPV, cap licitació no pot ser candidata sense CPV, encara que hi hagi territoris.
+    const noCpv = { cpv_preferences: 0, territories: 2, contract_preferences: 1 };
+    expect(candidatesCause(radar(46), noCpv)).toBe("profile");
+    // Sense cap avaluació, la causa continua sent que el Radar no s'ha calculat.
+    expect(candidatesCause(radar(0), noCpv)).toBe("not_evaluated");
+  });
+
   it("el buit explica el 0 amb la causa, amb les paraules exactes", () => {
     expect(candidatesEmptyLine(46, 0, "not_evaluated")).toBe("0 candidates de 46 licitacions: el Radar encara no s'ha calculat");
     expect(candidatesEmptyLine(17336, 17336, "profile")).toBe("0 candidates de 17.336 licitacions: el perfil no té CPV/territoris");

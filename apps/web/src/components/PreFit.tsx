@@ -20,10 +20,13 @@ import { MATCH_STATUS_LEVEL } from "@/lib/labels";
 import {
   DIMENSION_LABELS,
   DIMENSION_ORDER,
+  INHERITED_CPV_NOTE,
   MATCH_STATUS_LABELS,
   PREFIT_DISCLAIMER,
+  belowCandidateMinimum,
   countsAsZero,
   factorSourceValue,
+  inheritedCpv,
   isUnknown,
   lotSummary,
   profileGaps,
@@ -139,6 +142,11 @@ function FactorRow({ factor, zeroed }: { factor: MatchFactor; zeroed: boolean })
           {factor.source_value && <>Licitació: {factorSourceValue(factor)}</>}
         </p>
       )}
+      {inheritedCpv(factor) && (
+        <p className="mt-0.5 text-[11px] text-faint" data-inherited-cpv>
+          {INHERITED_CPV_NOTE}
+        </p>
+      )}
     </div>
   );
 }
@@ -217,6 +225,12 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
   // termini que no es publica és una dada que falta com qualsevol altra.
   const zeroed = match.score === null ? [] : ordered.filter(countsAsZero);
   const unknowns = ordered.filter((factor) => isUnknown(factor) && !zeroed.includes(factor));
+  // Regles v3: sense CPV avaluable no pot ser candidata. Aquest CPV no és una dada «neutra»
+  // que no compta com a desencaix: és el motiu del baix encaix.
+  const blocking = belowCandidateMinimum(match)
+    ? unknowns.filter((factor) => factor.dimension === "cpv")
+    : [];
+  const neutral = unknowns.filter((factor) => !blocking.includes(factor));
   const coverage = Math.round(match.data_coverage * 100);
   // El pes sobre el qual surt la puntuació: l'avaluat més el que compta 0.
   const scoredShare = coverage + zeroed.reduce((total, factor) => total + factor.max_score, 0);
@@ -271,9 +285,20 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
           </p>
           {unknowns.length > 0 && (
             <p className="mt-0.5 text-caption text-muted">
-              {unknowns.map((factor) => DIMENSION_LABELS[factor.dimension]).join(", ")}. No compta
-              com a desencaix: senzillament no s&apos;ha pogut valorar. La puntuació surt del{" "}
-              {scoredShare} % del pes{zeroed.length > 0 ? ", el termini inclòs amb 0 punts" : " que sí que s'ha pogut avaluar"}.
+              {neutral.length > 0 && (
+                <>
+                  {neutral.map((factor) => DIMENSION_LABELS[factor.dimension]).join(", ")}. No compta
+                  com a desencaix: senzillament no s&apos;ha pogut valorar.{" "}
+                </>
+              )}
+              {blocking.length > 0 && (
+                <span data-blocking-unknown>
+                  {DIMENSION_LABELS.cpv}: sense aquesta dada no pot ser candidata, encara que la resta
+                  encaixi.{" "}
+                </span>
+              )}
+              La puntuació surt del {scoredShare} % del pes
+              {zeroed.length > 0 ? ", el termini inclòs amb 0 punts" : " que sí que s'ha pogut avaluar"}.
             </p>
           )}
           {zeroed.length > 0 && (
@@ -307,7 +332,8 @@ export function PreFitPanel({ match }: { match: TenderMatch | null }) {
             <span className="text-caption text-muted">{lotSummary(match)}</span>
           </div>
           <p className="mt-0.5 text-caption text-faint">
-            La puntuació de l&apos;expedient és la del millor lot, no la mitjana.
+            La puntuació de l&apos;expedient és la del millor lot (el millor candidat, si n&apos;hi ha),
+            no la mitjana.
           </p>
           <ul className="mt-2 space-y-1.5">
             {match.lot_matches.map((lot) => (

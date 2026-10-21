@@ -15,9 +15,9 @@ dimensions que SI s'han pogut avaluar, reescalada a 100, i `data_coverage` diu
 quina fraccio del pes total s'ha pogut mirar. Si la cobertura es massa baixa, el
 resultat no es un score dolent: es `insufficient_data`.
 
-Exemple: si nomes es coneixen CPV (40) i territori (25), un encaix perfecte dona
-100 amb cobertura 0,65 — no 65, que suggeriria un mal encaix quan el que passa
-es que falten dades.
+Exemple: si l'import (25) no es coneix, un encaix perfecte de la resta dona 100
+amb cobertura 0,75 — no 75, que suggeriria un mal encaix quan el que passa es que
+falten dades.
 
 Excepcio (v3): el TERMINI desconegut (`counts_as_zero`) es queda al denominador
 amb 0 punts. Continua sent una dada desconeguda (no augmenta la cobertura), pero
@@ -196,11 +196,16 @@ def aggregate_lots(lot_outcomes: list[MatchOutcome]) -> MatchOutcome:
     El resultat de l'expedient es el del MILLOR lot, mai una mitjana: amagar un
     lot que encaixa al 91 darrere d'una mitjana de 55 seria justament perdre la
     informacio util. El recompte de lots candidats acompanya el numero.
+
+    v3: el millor lot CANDIDAT, si n'hi ha cap. Amb el minim de CPV, un lot de mes
+    puntuacio pot quedar en baix encaix, i no ha d'amagar un lot candidat: l'expedient
+    seria baix encaix amb un lot candidat a dins.
     """
     if not lot_outcomes:  # pragma: no cover - qui crida ja ho comprova
         raise ValueError("Cal com a minim un lot")
 
-    scored = [outcome for outcome in lot_outcomes if outcome.score is not None]
+    candidates = [outcome for outcome in lot_outcomes if outcome.is_candidate]
+    scored = candidates or [outcome for outcome in lot_outcomes if outcome.score is not None]
     if scored:
         return max(scored, key=lambda outcome: outcome.score or 0)
 

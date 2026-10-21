@@ -278,16 +278,18 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
     expect(container.textContent).not.toMatch(/Completa el perfil|3 passos/);
   });
 
-  it("retoc: territoris sí, CPV no, avaluades > 0 i 0 candidates → no culpa el perfil (mateixa causa que Avui)", async () => {
+  it("regles v3: territoris sí, CPV no, avaluades > 0 i 0 candidates → culpa el perfil (mateixa causa que Avui)", async () => {
+    // Abans («retoc») no es culpava el perfil: sense CPV encara es podia ser candidata. Amb el
+    // mínim de CPV de les regles v3, sense cap CPV al perfil no n'hi pot haver cap.
     search = "match_status=candidate";
     respondWith(base([], 0, {
       "/companies/c1/matches/summary": { ...summary, evaluated_count: 88, candidates: 0, insufficient_data: 2 },
       "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0, territories: 2, contract_preferences: 0 } },
     }));
-    const { container } = render(<TendersFeedPage />);
-    expect(await screen.findByRole("heading", { name: "Cap candidata ara mateix" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Encara no sabem què busqueu" })).toBeNull();
-    expect(container.textContent).not.toMatch(/no té CPV|Sense això no podem ordenar/);
+    render(<TendersFeedPage />);
+    expect(await screen.findByRole("heading", { name: "Encara no sabem què busqueu" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Cap candidata ara mateix" })).toBeNull();
+    expect(screen.getByRole("link", { name: /Defineix les preferències del Radar/ }).getAttribute("href")).toBe("/empresa/radar");
   });
 
   it("F1: Radar amb el perfil complet però cap licitació avaluada → «El Radar encara no s'ha calculat» + càlcul, mai «ampliar»", async () => {

@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CPV_BELOW_MINIMUM_HELP,
   CPV_BELOW_MINIMUM_SHORT,
+  CPV_UNKNOWN_NOT_CANDIDATE_HELP,
   INSUFFICIENT_CAUSE_HELP,
   MATCH_STATUS_HELP,
   belowCandidateMinimum,
   countsAsZero,
+  cpvBelowMinimumHelp,
   factorSourceValue,
+  inheritedCpv,
   insufficientCause,
   reasonLabel,
   profileGaps,
@@ -167,12 +169,19 @@ describe("regles v3: mínim de CPV per ser candidata i termini que compta zero",
     factor("timing", "match", "DEADLINE_ADEQUATE"),
   ];
 
+  const classe = withDetail({ ...factor("cpv", "partial", "CPV_RELATED_CLASS"), score: 18.7, max_score: 40 }, minimum);
+
   it("la marca del motor explica per què un 72 no és candidat (El Vendrell, Vic)", () => {
-    const m = scored([withDetail(factor("cpv", "partial", "CPV_RELATED_CLASS"), minimum), ...rest], "low_fit", 72);
+    const m = scored([classe, ...rest], "low_fit", 72);
     expect(belowCandidateMinimum(m)).toBe(true);
     expect(shortSummary(m)).toBe(CPV_BELOW_MINIMUM_SHORT);
-    expect(statusHelp(m)).toBe(CPV_BELOW_MINIMUM_HELP);
-    expect(CPV_BELOW_MINIMUM_HELP).toMatch(/20 de 40/);
+    expect(statusHelp(m)).toBe(cpvBelowMinimumHelp(classe));
+    expect(statusHelp(m)).toMatch(/no arriba al mínim de 20 de 40 punts per ser candidata/);
+  });
+
+  it("el mínim i el màxim de l'ajuda surten del factor, no del text", () => {
+    expect(cpvBelowMinimumHelp({ max_score: 40, detail: { candidate_minimum: 25 } })).toMatch(/mínim de 25 de 40 punts/);
+    expect(cpvBelowMinimumHelp(undefined)).toMatch(/mínim de 20 de 40 punts/);
   });
 
   it("sense la marca, el baix encaix diu el motiu del CPV com sempre", () => {
@@ -182,16 +191,28 @@ describe("regles v3: mínim de CPV per ser candidata i termini que compta zero",
     expect(statusHelp(m)).toBe(MATCH_STATUS_HELP.low_fit);
   });
 
-  it("si la licitació no publica cap CPV, el resum diu això i l'ajuda, el mínim", () => {
+  it("si la licitació no publica cap CPV, el resum i l'ajuda diuen això, no «no arriba al mínim»", () => {
     const m = scored([withDetail(factor("cpv", "unknown", "CPV_UNKNOWN"), minimum), ...rest], "low_fit", 100);
     expect(shortSummary(m)).toBe(reasonLabel("CPV_UNKNOWN"));
-    expect(statusHelp(m)).toBe(CPV_BELOW_MINIMUM_HELP);
+    expect(statusHelp(m)).toBe(CPV_UNKNOWN_NOT_CANDIDATE_HELP.CPV_UNKNOWN);
+    expect(statusHelp(m)).not.toMatch(/no arriba al mínim/);
+  });
+
+  it("si el perfil no té cap CPV, l'ajuda ho diu", () => {
+    const m = scored([withDetail(factor("cpv", "unknown", "CPV_NO_COMPANY_PREFERENCES"), minimum), ...rest], "low_fit", 100);
+    expect(shortSummary(m)).toBe(reasonLabel("CPV_NO_COMPANY_PREFERENCES"));
+    expect(statusHelp(m)).toBe(CPV_UNKNOWN_NOT_CANDIDATE_HELP.CPV_NO_COMPANY_PREFERENCES);
+  });
+
+  it("un lot sense CPV propis ho porta al factor CPV, i només al CPV", () => {
+    expect(inheritedCpv(withDetail(factor("cpv", "no_match", "CPV_NO_OVERLAP"), { inherited_from_tender: true }))).toBe(true);
+    expect(inheritedCpv(factor("cpv", "no_match", "CPV_NO_OVERLAP"))).toBe(false);
+    expect(inheritedCpv(withDetail(factor("geography", "match", "TERRITORY_HIGH_PRIORITY"), { inherited_from_tender: true }))).toBe(false);
   });
 
   it("la marca només es llegeix en un baix encaix", () => {
-    const cpv = withDetail(factor("cpv", "partial", "CPV_RELATED_CLASS"), minimum);
-    expect(belowCandidateMinimum(scored([cpv, ...rest], "candidate", 72))).toBe(false);
-    expect(belowCandidateMinimum(scored([cpv, ...rest], "closed", 72))).toBe(false);
+    expect(belowCandidateMinimum(scored([classe, ...rest], "candidate", 72))).toBe(false);
+    expect(belowCandidateMinimum(scored([classe, ...rest], "closed", 72))).toBe(false);
   });
 
   it("compta zero només el termini desconegut que el motor marca així", () => {
