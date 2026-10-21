@@ -62,9 +62,9 @@ type GroupKey = "blockers" | "potential" | "not_met" | "review" | "unknown" | "s
  * alternativa) té el seu propi grup: dir-ne «bloqueja» seria fals.
  */
 const GROUPS: Array<{ key: GroupKey; label: string; hint?: string; collapsible?: boolean }> = [
-  { key: "blockers", label: "Bloquejos confirmats", hint: "un requisit obligatori no es compleix, i algú ho ha confirmat" },
+  { key: "blockers", label: "Bloquejos confirmats", hint: "un requisit obligatori no es compleix, i una persona n'ha verificat el requisit o el veredicte" },
   { key: "potential", label: "Possibles bloquejos", hint: "el sistema diu que un requisit obligatori no es compleix; falta que una persona ho confirmi" },
-  { key: "not_met", label: "No es compleix (no bloqueja)", hint: "requisit no obligatori o via alternativa" },
+  { key: "not_met", label: "No es compleix (no bloqueja)", hint: "requisit no obligatori, condicional o via alternativa" },
   { key: "review", label: "Per revisar", hint: "ho ha de mirar una persona" },
   { key: "unknown", label: "Sense dades", hint: "falta informació al perfil: ni sí ni no" },
   { key: "satisfies", label: "Acreditats", collapsible: true },
@@ -96,23 +96,45 @@ function citationsLabel(count: number): string {
   return count === 1 ? "1 cita addicional" : `${count} cites addicionals`;
 }
 
+function resultLabel(value: string | undefined): string | undefined {
+  return RESULT_LABELS[value as AssessmentResult] ?? value;
+}
+
 /**
- * Una revisió conservada d'un càlcul anterior (el «Recalcula» no l'esborra). Si
- * des de llavors el resultat automàtic ha canviat, es diu: la revisió es manté,
- * però algú l'ha de tornar a mirar.
+ * Què ha passat amb la revisió d'un càlcul anterior (el «Recalcula» no l'esborra).
+ * Conservada, però el resultat automàtic ha canviat des que es va fer: la revisió
+ * mana, i algú l'ha de tornar a mirar. No conservada, perquè ja no parlava del
+ * mateix (una confirmació d'un resultat que ha canviat, o un requisit editat): la
+ * fila torna a estar per revisar, i es diu per què. La revisió es fa per a tota la
+ * fila, així que en un grup de duplicats compta qualsevol membre.
  */
-function CarriedReviewNotice({ assessment }: { assessment: Compliance["assessments"][number] }) {
-  const carried = assessment.explanation_params?.review_carried_over as
-    | { automatic_changed?: boolean; previous_automatic_result?: string }
-    | undefined;
-  if (!carried?.automatic_changed) return null;
-  const previous = RESULT_LABELS[carried.previous_automatic_result as AssessmentResult] ?? carried.previous_automatic_result;
-  return (
-    <p className="text-caption text-warning" data-carried-review-changed>
-      Revisió conservada d&apos;un càlcul anterior. Des de llavors, el resultat automàtic ha canviat (abans: {previous}):
-      torna-la a mirar.
-    </p>
-  );
+function ReviewTraceNotice({ row }: { row: AssessmentDisplay }) {
+  for (const item of [row.assessment, ...row.members]) {
+    const carried = item.explanation_params?.review_carried_over as
+      | { automatic_changed?: boolean; reviewed_against?: string }
+      | undefined;
+    if (carried?.automatic_changed) {
+      return (
+        <p className="mt-1.5 text-caption text-warning" data-carried-review-changed>
+          Revisió conservada d&apos;un càlcul anterior. Des que es va fer, el resultat automàtic ha canviat (llavors:{" "}
+          {resultLabel(carried.reviewed_against)}): torna-la a mirar.
+        </p>
+      );
+    }
+    const dropped = item.explanation_params?.review_not_carried as
+      | { reason?: string; reviewed_against?: string }
+      | undefined;
+    if (dropped) {
+      return (
+        <p className="mt-1.5 text-caption text-warning" data-review-not-carried={dropped.reason ?? ""}>
+          {dropped.reason === "requirement_changed"
+            ? "El requisit ha canviat des de l'última revisió, i aquella revisió no s'ha conservat: torna'l a revisar."
+            : `Hi havia una confirmació d'un càlcul anterior, quan el resultat era «${resultLabel(dropped.reviewed_against)}». El resultat automàtic ha canviat i la confirmació no s'ha conservat: torna-la a mirar.`}
+        </p>
+      );
+    }
+  }
+  return null;
 }
 
 /** Resultats que la regla ha decidit sola: la fila no pot dir «no comparable». */
@@ -320,7 +342,6 @@ function AssessmentRow({
           <p className="text-[13px] text-muted">
             {assessment.review_note ? <>«{assessment.review_note}»</> : <span className="italic">Motiu no registrat.</span>}
           </p>
-          <CarriedReviewNotice assessment={assessment} />
           <div className="border border-border bg-subtle px-3 py-2">
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted">
               <span className={KICKER}>Resultat automàtic</span>
@@ -339,6 +360,7 @@ function AssessmentRow({
           {automatic.text}
         </p>
       )}
+      <ReviewTraceNotice row={row} />
 
       {/* Contradir el motor és una afirmació nova i el backend n'exigeix el
           motiu. Sense un lloc on escriure'l, prémer «Marca compleix» tornava un

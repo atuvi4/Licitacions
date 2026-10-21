@@ -488,7 +488,7 @@ describe("ComplianceSection · ronda 2", () => {
 });
 
 describe("ComplianceSection · Pas 2: confirmats, possibles i revisions conservades", () => {
-  const groupOfRow = (container: HTMLElement, title: string) =>
+  const groupOfRow = (title: string) =>
     screen.getByText(title).closest("[data-assessment-group]")?.getAttribute("data-assessment-group");
 
   it("un possible bloqueig va a «Possibles bloquejos», un de confirmat a «Bloquejos confirmats» i un no compleix que no bloqueja al seu grup", () => {
@@ -502,9 +502,9 @@ describe("ComplianceSection · Pas 2: confirmats, possibles i revisions conserva
       ],
     };
     const { container } = renderSection(value);
-    expect(groupOfRow(container, "Confirmat pel revisor")).toBe("blockers");
-    expect(groupOfRow(container, "Possible pel motor")).toBe("potential");
-    expect(groupOfRow(container, "No obligatori que no es compleix")).toBe("not_met");
+    expect(groupOfRow("Confirmat pel revisor")).toBe("blockers");
+    expect(groupOfRow("Possible pel motor")).toBe("potential");
+    expect(groupOfRow("No obligatori que no es compleix")).toBe("not_met");
     expect(container.textContent).toContain("Bloquejos confirmats · 1");
     expect(container.textContent).toContain("Possibles bloquejos · 1");
     expect(container.textContent).not.toContain("Bloquegen");
@@ -521,13 +521,13 @@ describe("ComplianceSection · Pas 2: confirmats, possibles i revisions conserva
           effective_result: "does_not_satisfy",
           review_status: "verified",
           review_note: "Revisat a mà",
-          explanation_params: { review_carried_over: { from_run: "cr0", previous_automatic_result: "unknown", automatic_changed: true } },
+          explanation_params: { review_carried_over: { from_run: "cr0", reviewed_against: "unknown", automatic_changed: true } },
         }),
       ],
     };
     const { container } = renderSection(value);
     const notice = container.querySelector("[data-carried-review-changed]");
-    expect(notice?.textContent).toContain("abans: Sense dades");
+    expect(notice?.textContent).toContain("llavors: Sense dades");
   });
 
   it("una revisió conservada sense canvi del resultat automàtic no avisa de res", () => {
@@ -539,11 +539,81 @@ describe("ComplianceSection · Pas 2: confirmats, possibles i revisions conserva
           reviewed_result: "satisfies",
           review_status: "verified",
           review_note: "Revisat a mà",
-          explanation_params: { review_carried_over: { from_run: "cr0", previous_automatic_result: "satisfies", automatic_changed: false } },
+          explanation_params: { review_carried_over: { from_run: "cr0", reviewed_against: "satisfies", automatic_changed: false } },
         }),
       ],
     };
     const { container } = renderSection(value);
     expect(container.querySelector("[data-carried-review-changed]")).toBeNull();
+    expect(container.querySelector("[data-review-not-carried]")).toBeNull();
+  });
+
+  it("una confirmació que no s'ha conservat ho diu a la fila, que torna a estar sense revisar", () => {
+    const value: Compliance = {
+      run: run({ confirmed_blockers_count: 0, potential_blockers_count: 1 }),
+      is_stale: false,
+      assessments: [
+        assessment({
+          automatic_result: "does_not_satisfy",
+          effective_result: "does_not_satisfy",
+          blocker_status: "potential",
+          explanation_params: {
+            review_not_carried: { from_run: "cr0", reviewed_against: "satisfies", reviewed_result: null, reason: "automatic_changed" },
+          },
+        }),
+      ],
+    };
+    const { container } = renderSection(value);
+    const notice = container.querySelector("[data-review-not-carried]");
+    expect(notice?.getAttribute("data-review-not-carried")).toBe("automatic_changed");
+    expect(notice?.textContent).toContain("«Compleix»");
+    expect(notice?.textContent).toContain("no s'ha conservat");
+    // Ningú no ha confirmat l'incompliment: és un possible bloqueig, i la fila és de la regla.
+    expect(groupOfRow("Certificat ISO 9001 en vigor")).toBe("potential");
+  });
+
+  it("la revisió d'un requisit que s'ha editat no es conserva, i es diu", () => {
+    const value: Compliance = {
+      run: run(),
+      is_stale: false,
+      assessments: [
+        assessment({
+          explanation_params: {
+            review_not_carried: { from_run: "cr0", reviewed_against: "unknown", reviewed_result: "satisfies", reason: "requirement_changed" },
+          },
+        }),
+      ],
+    };
+    const { container } = renderSection(value);
+    const notice = container.querySelector("[data-review-not-carried]");
+    expect(notice?.getAttribute("data-review-not-carried")).toBe("requirement_changed");
+    expect(notice?.textContent).toContain("El requisit ha canviat");
+  });
+
+  it("en un grup de duplicats, l'avís d'un membre que no és el canònic també surt a la fila", () => {
+    const econ = (id: string, requirementId: string, canonical: boolean, params: Record<string, unknown> | null) =>
+      assessment({
+        id,
+        requirement_id: requirementId,
+        automatic_result: "does_not_satisfy",
+        reviewed_result: "satisfies",
+        effective_result: "satisfies",
+        review_status: "verified",
+        review_note: "Comptes dipositats",
+        explanation_params: params,
+        consolidation: { canonical_requirement_id: "rA", is_canonical: canonical, member_requirement_ids: ["rA", "rB"], divergent: false },
+        requirement: { ...assessment().requirement!, requirement_id: requirementId, title: canonical ? "Volum anual de negoci" : "Volum mínim" },
+      });
+    const value: Compliance = {
+      run: run({ requirements_total: 1 }),
+      is_stale: false,
+      assessments: [
+        econ("a1", "rA", true, { review_carried_over: { from_run: "cr0", reviewed_against: "does_not_satisfy", automatic_changed: false } }),
+        econ("a2", "rB", false, { review_carried_over: { from_run: "cr0", reviewed_against: "unknown", automatic_changed: true } }),
+      ],
+      groups: [{ canonical_assessment_id: "a1", canonical_requirement_id: "rA", member_assessment_ids: ["a1", "a2"], member_requirement_ids: ["rA", "rB"], effective_result: "satisfies", blocker_status: "none", divergent: false }],
+    };
+    const { container } = renderSection(value);
+    expect(container.querySelector("[data-carried-review-changed]")?.textContent).toContain("llavors: Sense dades");
   });
 });
