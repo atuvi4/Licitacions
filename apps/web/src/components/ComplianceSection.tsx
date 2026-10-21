@@ -54,11 +54,17 @@ function explanation(code: string): { text: string; known: boolean } {
   return text ? { text, known: true } : { text: "Explicació no disponible per a aquesta regla.", known: false };
 }
 
-type GroupKey = "blockers" | "potential" | "review" | "unknown" | "satisfies" | "not_applicable";
+type GroupKey = "blockers" | "potential" | "not_met" | "review" | "unknown" | "satisfies" | "not_applicable";
 
+/**
+ * Confirmats i possibles, separats: la capçalera de la fitxa els compta igual
+ * (`requirementsLine`). Un «no compleix» que no bloqueja (no obligatori, o una via
+ * alternativa) té el seu propi grup: dir-ne «bloqueja» seria fals.
+ */
 const GROUPS: Array<{ key: GroupKey; label: string; hint?: string; collapsible?: boolean }> = [
-  { key: "blockers", label: "Bloquegen", hint: "un requisit obligatori no es compleix" },
-  { key: "potential", label: "Possibles bloquejos", hint: "l'extracció no està verificada" },
+  { key: "blockers", label: "Bloquejos confirmats", hint: "un requisit obligatori no es compleix, i algú ho ha confirmat" },
+  { key: "potential", label: "Possibles bloquejos", hint: "el sistema diu que un requisit obligatori no es compleix; falta que una persona ho confirmi" },
+  { key: "not_met", label: "No es compleix (no bloqueja)", hint: "requisit no obligatori o via alternativa" },
   { key: "review", label: "Per revisar", hint: "ho ha de mirar una persona" },
   { key: "unknown", label: "Sense dades", hint: "falta informació al perfil: ni sí ni no" },
   { key: "satisfies", label: "Acreditats", collapsible: true },
@@ -66,8 +72,9 @@ const GROUPS: Array<{ key: GroupKey; label: string; hint?: string; collapsible?:
 ];
 
 function groupOf(row: AssessmentDisplay): GroupKey {
-  if (row.blockerStatus === "confirmed" || row.effectiveResult === "does_not_satisfy") return "blockers";
+  if (row.blockerStatus === "confirmed") return "blockers";
   if (row.blockerStatus === "potential") return "potential";
+  if (row.effectiveResult === "does_not_satisfy") return "not_met";
   if (row.effectiveResult === "needs_review") return "review";
   if (row.effectiveResult === "unknown") return "unknown";
   if (row.effectiveResult === "not_applicable") return "not_applicable";
@@ -87,6 +94,25 @@ function citationHref(tenderId: string, citation: { tender_document_id: string |
  */
 function citationsLabel(count: number): string {
   return count === 1 ? "1 cita addicional" : `${count} cites addicionals`;
+}
+
+/**
+ * Una revisió conservada d'un càlcul anterior (el «Recalcula» no l'esborra). Si
+ * des de llavors el resultat automàtic ha canviat, es diu: la revisió es manté,
+ * però algú l'ha de tornar a mirar.
+ */
+function CarriedReviewNotice({ assessment }: { assessment: Compliance["assessments"][number] }) {
+  const carried = assessment.explanation_params?.review_carried_over as
+    | { automatic_changed?: boolean; previous_automatic_result?: string }
+    | undefined;
+  if (!carried?.automatic_changed) return null;
+  const previous = RESULT_LABELS[carried.previous_automatic_result as AssessmentResult] ?? carried.previous_automatic_result;
+  return (
+    <p className="text-caption text-warning" data-carried-review-changed>
+      Revisió conservada d&apos;un càlcul anterior. Des de llavors, el resultat automàtic ha canviat (abans: {previous}):
+      torna-la a mirar.
+    </p>
+  );
 }
 
 /** Resultats que la regla ha decidit sola: la fila no pot dir «no comparable». */
@@ -294,6 +320,7 @@ function AssessmentRow({
           <p className="text-[13px] text-muted">
             {assessment.review_note ? <>«{assessment.review_note}»</> : <span className="italic">Motiu no registrat.</span>}
           </p>
+          <CarriedReviewNotice assessment={assessment} />
           <div className="border border-border bg-subtle px-3 py-2">
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted">
               <span className={KICKER}>Resultat automàtic</span>
@@ -481,7 +508,7 @@ export function ComplianceSection({
   const counters = run
     ? [
         { label: "Tots", value: run.requirements_total, level: "neutral" as const },
-        { label: "Bloquegen", value: run.confirmed_blockers_count, level: "blocking" as const },
+        { label: "Bloquejos confirmats", value: run.confirmed_blockers_count, level: "blocking" as const },
         { label: "Possibles bloquejos", value: run.potential_blockers_count, level: "attention" as const },
         { label: "Per revisar", value: run.needs_review_count, level: "attention" as const },
         { label: "Sense dades", value: run.unknown_count, level: "attention" as const },

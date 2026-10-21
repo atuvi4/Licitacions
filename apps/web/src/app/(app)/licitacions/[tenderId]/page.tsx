@@ -554,7 +554,15 @@ function TenderDetail() {
                 </Link>
               )}
               {requirements.detail && (
-                <span className={requirements.level === "blocking" ? "text-danger" : "font-normal text-muted"}>
+                <span
+                  className={
+                    requirements.level === "blocking"
+                      ? "text-danger"
+                      : requirements.level === "attention"
+                        ? "text-warning"
+                        : "font-normal text-muted"
+                  }
+                >
                   · {requirements.detail}
                 </span>
               )}

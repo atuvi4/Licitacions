@@ -67,11 +67,18 @@ export function requirementsLine(analysis: RequirementAnalysis | null, complianc
   const run = compliance?.run;
   if (!run) return { text, detail: null, level: "neutral" };
   if (run.overall_result === "undetermined") return { text, detail: "encara no avaluats", level: "neutral" };
-  const blockers = run.confirmed_blockers_count;
+  // Confirmats i possibles es diuen per separat: la secció de compliment els
+  // agrupa igual, i un «0 bloquegen» al costat de «Possibles bloquejos · 3» es
+  // contradiria.
+  const confirmed = run.confirmed_blockers_count;
+  const potential = run.potential_blockers_count;
+  const parts = [`${confirmed} ${confirmed === 1 ? "bloqueig confirmat" : "bloquejos confirmats"}`];
+  if (potential > 0) parts.push(`${potential} ${potential === 1 ? "possible bloqueig" : "possibles bloquejos"}`);
+  parts.push(`${run.needs_review_count} per revisar`);
   return {
     text,
-    detail: `${blockers} bloquegen · ${run.needs_review_count} per revisar`,
-    level: blockers > 0 ? "blocking" : "neutral",
+    detail: parts.join(" · "),
+    level: confirmed > 0 ? "blocking" : potential > 0 ? "attention" : "neutral",
   };
 }
 

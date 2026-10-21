@@ -486,3 +486,64 @@ describe("ComplianceSection · ronda 2", () => {
     expect(li.textContent).not.toContain("Valor no comparable");
   });
 });
+
+describe("ComplianceSection · Pas 2: confirmats, possibles i revisions conservades", () => {
+  const groupOfRow = (container: HTMLElement, title: string) =>
+    screen.getByText(title).closest("[data-assessment-group]")?.getAttribute("data-assessment-group");
+
+  it("un possible bloqueig va a «Possibles bloquejos», un de confirmat a «Bloquejos confirmats» i un no compleix que no bloqueja al seu grup", () => {
+    const value: Compliance = {
+      run: run({ confirmed_blockers_count: 1, potential_blockers_count: 1 }),
+      is_stale: false,
+      assessments: [
+        assessment({ id: "c1", requirement_id: "rc", automatic_result: "does_not_satisfy", effective_result: "does_not_satisfy", blocker_status: "confirmed", requirement: { ...assessment().requirement!, requirement_id: "rc", title: "Confirmat pel revisor" } }),
+        assessment({ id: "p1", requirement_id: "rp", automatic_result: "does_not_satisfy", effective_result: "does_not_satisfy", blocker_status: "potential", requirement: { ...assessment().requirement!, requirement_id: "rp", title: "Possible pel motor" } }),
+        assessment({ id: "n1", requirement_id: "rn", obligation: "scored", automatic_result: "does_not_satisfy", effective_result: "does_not_satisfy", blocker_status: "none", requirement: { ...assessment().requirement!, requirement_id: "rn", title: "No obligatori que no es compleix" } }),
+      ],
+    };
+    const { container } = renderSection(value);
+    expect(groupOfRow(container, "Confirmat pel revisor")).toBe("blockers");
+    expect(groupOfRow(container, "Possible pel motor")).toBe("potential");
+    expect(groupOfRow(container, "No obligatori que no es compleix")).toBe("not_met");
+    expect(container.textContent).toContain("Bloquejos confirmats · 1");
+    expect(container.textContent).toContain("Possibles bloquejos · 1");
+    expect(container.textContent).not.toContain("Bloquegen");
+  });
+
+  it("una revisió conservada d'un càlcul anterior avisa si el resultat automàtic ha canviat", () => {
+    const value: Compliance = {
+      run: run(),
+      is_stale: false,
+      assessments: [
+        assessment({
+          automatic_result: "satisfies",
+          reviewed_result: "does_not_satisfy",
+          effective_result: "does_not_satisfy",
+          review_status: "verified",
+          review_note: "Revisat a mà",
+          explanation_params: { review_carried_over: { from_run: "cr0", previous_automatic_result: "unknown", automatic_changed: true } },
+        }),
+      ],
+    };
+    const { container } = renderSection(value);
+    const notice = container.querySelector("[data-carried-review-changed]");
+    expect(notice?.textContent).toContain("abans: Sense dades");
+  });
+
+  it("una revisió conservada sense canvi del resultat automàtic no avisa de res", () => {
+    const value: Compliance = {
+      run: run(),
+      is_stale: false,
+      assessments: [
+        assessment({
+          reviewed_result: "satisfies",
+          review_status: "verified",
+          review_note: "Revisat a mà",
+          explanation_params: { review_carried_over: { from_run: "cr0", previous_automatic_result: "satisfies", automatic_changed: false } },
+        }),
+      ],
+    };
+    const { container } = renderSection(value);
+    expect(container.querySelector("[data-carried-review-changed]")).toBeNull();
+  });
+});

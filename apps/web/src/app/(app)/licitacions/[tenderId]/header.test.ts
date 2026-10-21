@@ -102,15 +102,27 @@ describe("línia de requisits de la capçalera", () => {
     expect(line.text).not.toContain("Encara no hi ha cap anàlisi");
   });
 
-  it("amb compliment avaluat: bloquegen en vermell només si n'hi ha", () => {
+  it("amb compliment avaluat: bloquejos confirmats en vermell només si n'hi ha", () => {
     expect(requirementsLine(analysis({}), compliance({ confirmed_blockers_count: 2, needs_review_count: 3 }))).toMatchObject({
-      detail: "2 bloquegen · 3 per revisar",
+      detail: "2 bloquejos confirmats · 3 per revisar",
       level: "blocking",
     });
     expect(requirementsLine(analysis({}), compliance({ confirmed_blockers_count: 0, needs_review_count: 1, overall_result: "review_required" }))).toMatchObject({
-      detail: "0 bloquegen · 1 per revisar",
+      detail: "0 bloquejos confirmats · 1 per revisar",
       level: "neutral",
     });
+    expect(requirementsLine(analysis({}), compliance({ confirmed_blockers_count: 1, needs_review_count: 0 }))).toMatchObject({
+      detail: "1 bloqueig confirmat · 0 per revisar",
+    });
+  });
+
+  it("els possibles bloquejos es diuen a part, en atenció: mai «0 bloquegen» al costat de «Possibles bloquejos · 3»", () => {
+    expect(
+      requirementsLine(analysis({}), compliance({ confirmed_blockers_count: 0, potential_blockers_count: 3, needs_review_count: 184, overall_result: "review_required" })),
+    ).toMatchObject({ detail: "0 bloquejos confirmats · 3 possibles bloquejos · 184 per revisar", level: "attention" });
+    expect(
+      requirementsLine(analysis({}), compliance({ confirmed_blockers_count: 1, potential_blockers_count: 1, needs_review_count: 2 })),
+    ).toMatchObject({ detail: "1 bloqueig confirmat · 1 possible bloqueig · 2 per revisar", level: "blocking" });
   });
 
   it("undetermined no és cap OK: «encara no avaluats»", () => {

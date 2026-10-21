@@ -151,7 +151,7 @@ describe("Fitxa de licitació", () => {
     expect(pills).toContain("Preparant oferta[running]");
     expect(pills).toContain("GO[ready]");
     expect(header.querySelector("[data-score-tone]")?.textContent).toBe("92");
-    expect(header.textContent).toContain("2 bloquegen · 3 per revisar");
+    expect(header.textContent).toContain("2 bloquejos confirmats · 3 per revisar");
     expect(header.textContent).toContain("240.000");
     expect(header.textContent).toContain("Publicada 2 cops");
     expect(header.textContent).not.toMatch(/probabilitat/i);
