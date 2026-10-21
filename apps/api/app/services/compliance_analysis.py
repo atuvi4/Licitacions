@@ -14,6 +14,8 @@ anteriors queden consultables tal com es van calcular.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import time
 import uuid
@@ -190,7 +192,9 @@ async def analyze_company_compliance(
     )
     # Recalcular sobre la MATEIXA analisi no esborra el que una persona ha
     # revisat: les revisions del run vigent passen al nou, requisit a requisit.
-    carried_reviews = await _reviews_to_carry(session, company.id, tender.id, extraction_run.id)
+    carried_reviews = await _reviews_to_carry(
+        session, company.id, tender.id, extraction_run.id, tender_lot_id=tender_lot_id
+    )
 
     deadline = tender.deadline_at.date() if tender.deadline_at else None
     # Si l'expedient no te lots, un abast desconegut no es ambigu.
@@ -424,8 +428,36 @@ async def _claim_run(
     return run
 
 
+#: Clau de `explanation_params` amb la base d'una revisio humana: el run on es va
+#: fer, el resultat automatic que la persona tenia davant i l'empremta del requisit.
+REVIEW_BASIS_KEY = "review_basis"
 #: Clau de `explanation_params` amb la traca d'una revisio conservada d'un run anterior.
 CARRIED_REVIEW_KEY = "review_carried_over"
+#: Clau de `explanation_params` quan la revisio d'un run anterior NO s'ha conservat.
+DROPPED_REVIEW_KEY = "review_not_carried"
+#: El que fa que un requisit demani una altra cosa, o que compti d'una altra manera.
+_REQUIREMENT_IDENTITY_FIELDS = (
+    "category",
+    "title",
+    "operator",
+    "value_json",
+    "obligation",
+    "modality",
+    "scope",
+    "tender_lot_id",
+    "alternative_group",
+)
+
+
+def requirement_identity(requirement: Requirement) -> str:
+    """Empremta del que demana un requisit: si canvia, una revisio d'abans ja no hi parla."""
+    payload = json.dumps(
+        {field: getattr(requirement, field, None) for field in _REQUIREMENT_IDENTITY_FIELDS},
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 async def _reviews_to_carry(
@@ -433,6 +465,8 @@ async def _reviews_to_carry(
     company_id: uuid.UUID,
     tender_id: uuid.UUID,
     extraction_run_id: uuid.UUID,
+    *,
+    tender_lot_id: uuid.UUID | None = None,
 ) -> dict[uuid.UUID, CompanyRequirementAssessment]:
     """Les avaluacions revisades del run vigent, per requisit, si es la mateixa analisi.
 
@@ -440,7 +474,12 @@ async def _reviews_to_carry(
     (un run nou de requisits, uns altres ids), no hi ha res a conservar i el run
     nou comenca net, com abans. Sobre la mateixa analisi, un "Recalcula" (perfil
     nou, una polissa afegida) no pot fer perdre el que una persona ja ha dit.
+    Si es conserva cada revisio ho decideix `_carry_review`.
     """
+    # El run no desa per a quin lot s'ha calculat: no se sap si les revisions del
+    # vigent parlen d'aquest lot, i en un calcul d'un sol lot no es traspassen.
+    if tender_lot_id is not None:
+        return {}
     previous = await current_run_for(session, company_id, tender_id)
     if previous is None or previous.requirement_extraction_run_id != extraction_run_id:
         return {}
@@ -458,6 +497,43 @@ async def _reviews_to_carry(
     return {assessment.requirement_id: assessment for assessment in reviewed}
 
 
+def _review_basis(previous: CompanyRequirementAssessment) -> dict:
+    """Sobre que es va pronunciar la persona: la base desada en revisar, o el mateix run.
+
+    Una revisio conservada porta la base del run on es va fer, no la del darrer
+    salt: si no, un segon «Recalcula» compararia el motor amb ell mateix i l'avis
+    de canvi desapareixeria sense que ningu hi hagues tornat. Les revisions
+    d'abans d'aquesta traca no en tenen: la base es l'avaluacio que es va revisar.
+    """
+    stored = (previous.explanation_params or {}).get(REVIEW_BASIS_KEY)
+    if isinstance(stored, dict) and stored.get("automatic_result"):
+        return dict(stored)
+    return {
+        "run": str(previous.assessment_run_id),
+        "automatic_result": str(previous.automatic_result),
+        "requirement": None,
+    }
+
+
+def _same_requirement(
+    previous: CompanyRequirementAssessment, basis: dict, requirement: Requirement
+) -> bool:
+    """El requisit encara demana el que demanava quan es va revisar.
+
+    Un requisit manual s'edita sobre la mateixa fila: comparar nomes l'id
+    conservaria un «compleix» dit sobre 450.000 EUR en un requisit que ara en
+    demana 9 milions.
+    """
+    if (
+        previous.requirement_value_json != requirement.value_json
+        or previous.obligation != requirement.obligation
+        or previous.tender_lot_id != requirement.tender_lot_id
+    ):
+        return False
+    fingerprint = basis.get("requirement")
+    return fingerprint is None or fingerprint == requirement_identity(requirement)
+
+
 def _carry_review(
     assessment: CompanyRequirementAssessment,
     previous: CompanyRequirementAssessment,
@@ -465,10 +541,39 @@ def _carry_review(
 ) -> None:
     """Copia la revisio humana al run nou i en refa el bloqueig com `review_assessment`.
 
-    El resultat automatic nou es queda tal com l'ha calculat el motor: si ha canviat
-    des de la revisio, la traca ho diu (`automatic_changed`) perque la persona hi
-    pugui tornar; la revisio no s'esborra ni es reinterpreta.
+    El resultat automatic nou es queda tal com l'ha calculat el motor. Una revisio
+    amb veredicte propi es conserva encara que el motor hagi canviat: la persona
+    mana fins que hi torni, i la traca (`automatic_changed`) li ho diu. Una
+    confirmacio (sense veredicte propi) diu «el sistema te rao» sobre UN resultat:
+    si el resultat ha canviat, no parla del nou i no es conserva, perque un
+    «compleix» confirmat no pot acabar sent un bloqueig confirmat. Si el requisit
+    ha canviat, tampoc. El que no es conserva queda escrit (`DROPPED_REVIEW_KEY`).
     """
+    basis = _review_basis(previous)
+    automatic_changed = basis["automatic_result"] != str(assessment.automatic_result)
+    if not _same_requirement(previous, basis, requirement):
+        reason = "requirement_changed"
+    elif previous.reviewed_result is None and automatic_changed:
+        reason = "automatic_changed"
+    else:
+        reason = None
+    if reason is not None:
+        assessment.explanation_params = {
+            **(assessment.explanation_params or {}),
+            DROPPED_REVIEW_KEY: {
+                "from_run": basis.get("run"),
+                "reviewed_against": basis["automatic_result"],
+                "reviewed_result": (
+                    str(previous.reviewed_result) if previous.reviewed_result else None
+                ),
+                "reason": reason,
+            },
+        }
+        return
+
+    if basis.get("requirement") is None:
+        # Una revisio d'abans de l'empremta: a partir d'ara, el requisit tal com es avui.
+        basis["requirement"] = requirement_identity(requirement)
     assessment.reviewed_result = previous.reviewed_result
     assessment.review_status = previous.review_status
     assessment.review_note = previous.review_note
@@ -484,10 +589,11 @@ def _carry_review(
     )
     assessment.explanation_params = {
         **(assessment.explanation_params or {}),
+        REVIEW_BASIS_KEY: basis,
         CARRIED_REVIEW_KEY: {
-            "from_run": str(previous.assessment_run_id),
-            "previous_automatic_result": str(previous.automatic_result),
-            "automatic_changed": previous.automatic_result != assessment.automatic_result,
+            "from_run": basis.get("run"),
+            "reviewed_against": basis["automatic_result"],
+            "automatic_changed": automatic_changed,
         },
     }
 
@@ -557,6 +663,20 @@ async def review_assessment(
     assessment.reviewed_at = datetime.now(UTC)
 
     requirement = await session.get(Requirement, assessment.requirement_id)
+    # Una revisio nova es la base dels recalculs que vinguin: sobre aquest resultat
+    # automatic i aquest requisit. L'avis d'una revisio anterior (conservada o no)
+    # ja esta ates. Un dict nou: la columna JSON no veu els canvis in situ.
+    params = {
+        key: value
+        for key, value in (assessment.explanation_params or {}).items()
+        if key not in (CARRIED_REVIEW_KEY, DROPPED_REVIEW_KEY)
+    }
+    params[REVIEW_BASIS_KEY] = {
+        "run": str(assessment.assessment_run_id),
+        "automatic_result": str(assessment.automatic_result),
+        "requirement": requirement_identity(requirement) if requirement else None,
+    }
+    assessment.explanation_params = params
     assessment.blocker_status = derive_blocker_status(
         obligation=assessment.obligation,
         effective_result=assessment.effective_result,

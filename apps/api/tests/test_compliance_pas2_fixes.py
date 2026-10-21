@@ -1,7 +1,9 @@
 # ruff: noqa: F811  (els fixtures `tender` i `extraction_run` s'importen de test_compliance_api)
 """Validacio integral, Pas 2: tres correccions del motor de compliment.
 
-1. Un "Recalcula" sobre la MATEIXA analisi conserva les revisions humanes (abans es perdien).
+1. Un "Recalcula" sobre la MATEIXA analisi conserva les revisions humanes (abans es perdien),
+   pero nomes les que encara parlen del mateix: una confirmacio d'un resultat que ha canviat,
+   o la revisio d'un requisit que s'ha editat, no es conserven.
 2. Els limits de les polisses entren a l'empremta del perfil: afegir-ne o canviar-ne un deixa el
    compliment desactualitzat i no es reutilitza el run antic.
 3. Revisar a ma una avaluacio refa el bloqueig amb la modalitat del requisit, com el motor.
@@ -26,12 +28,19 @@ from app.models.enums import (
     InsuranceType,
     RequirementCategory,
     RequirementModality,
+    RequirementObligation,
+    RequirementOperator,
+    RequirementScope,
     ReviewStatus,
 )
 from app.models.profile import CompanyFinancialYear
 from app.models.requirements import RequirementExtractionRun
+from app.models.tenders import TenderLot
+from app.services import manual_requirement
 from app.services.compliance_analysis import (
     CARRIED_REVIEW_KEY,
+    DROPPED_REVIEW_KEY,
+    REVIEW_BASIS_KEY,
     analyze_company_compliance,
     is_run_stale,
     review_assessment,
@@ -142,7 +151,7 @@ async def test_a_carried_review_says_when_the_automatic_result_changed(
     )
     assert carried.explanation_params[CARRIED_REVIEW_KEY] == {
         "from_run": str(first.id),
-        "previous_automatic_result": "unknown",
+        "reviewed_against": "unknown",
         "automatic_changed": True,
     }
     # Revisat i verificat: el bloqueig continua confirmat, igual que al run anterior.
@@ -216,6 +225,346 @@ async def test_without_any_review_the_recount_is_unchanged(
         first.unknown_count,
         first.satisfies_count,
     )
+
+
+async def _all_assessments(db, run_id) -> list[CompanyRequirementAssessment]:
+    return list(
+        (
+            await db.scalars(
+                sa.select(CompanyRequirementAssessment).where(
+                    CompanyRequirementAssessment.assessment_run_id == run_id
+                )
+            )
+        ).all()
+    )
+
+
+async def _revenue(db, company, amount: str) -> CompanyFinancialYear:
+    year = CompanyFinancialYear(
+        company_id=company.id, year=2025, revenue=Decimal(amount), currency="EUR"
+    )
+    db.add(year)
+    await db.commit()
+    return year
+
+
+async def test_a_confirmation_is_not_carried_when_the_automatic_result_changed(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    """«Confirma» diu «el sistema te rao» sobre UN resultat: no confirma el resultat nou."""
+    user, _ = tenant_a
+    company = await company_of(db, tenant_a)
+    year = await _revenue(db, company, "900000")
+    await add_requirement(db, extraction_run, tender, value=ECONOMIC_450K)
+    first = (await analyze_company_compliance(db, company, tender)).run
+    confirmed = await _only_assessment(db, first.id)
+    assert confirmed.automatic_result == AssessmentResult.SATISFIES
+    await review_assessment(
+        db,
+        confirmed,
+        reviewed_result=None,
+        review_status=ReviewStatus.VERIFIED,
+        note=None,
+        user_id=user.id,
+    )
+    # La xifra del perfil es corregeix: ara no s'arriba al volum.
+    year.revenue = Decimal("100")
+    await db.commit()
+
+    second = (await analyze_company_compliance(db, company, tender, force=True)).run
+
+    fresh = await _only_assessment(db, second.id)
+    assert fresh.automatic_result == AssessmentResult.DOES_NOT_SATISFY
+    assert fresh.review_status == ReviewStatus.UNREVIEWED
+    assert fresh.reviewed_by is None
+    assert fresh.blocker_status == BlockerStatus.POTENTIAL, "ningu ha confirmat cap incompliment"
+    assert (second.confirmed_blockers_count, second.potential_blockers_count) == (0, 1)
+    assert CARRIED_REVIEW_KEY not in fresh.explanation_params
+    assert fresh.explanation_params[DROPPED_REVIEW_KEY] == {
+        "from_run": str(first.id),
+        "reviewed_against": "satisfies",
+        "reviewed_result": None,
+        "reason": "automatic_changed",
+    }
+
+
+async def test_a_confirmation_is_kept_when_the_automatic_result_did_not_change(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    user, _ = tenant_a
+    company = await company_of(db, tenant_a)
+    await _revenue(db, company, "100")
+    await add_requirement(db, extraction_run, tender, value=ECONOMIC_450K)
+    first = (await analyze_company_compliance(db, company, tender)).run
+    reviewed = await review_assessment(
+        db,
+        await _only_assessment(db, first.id),
+        reviewed_result=None,
+        review_status=ReviewStatus.VERIFIED,
+        note=None,
+        user_id=user.id,
+    )
+    assert reviewed.blocker_status == BlockerStatus.CONFIRMED
+
+    second = (await analyze_company_compliance(db, company, tender, force=True)).run
+
+    carried = await _only_assessment(db, second.id)
+    assert carried.review_status == ReviewStatus.VERIFIED
+    assert carried.reviewed_result is None
+    assert carried.blocker_status == BlockerStatus.CONFIRMED, "la persona va confirmar aixo mateix"
+    assert carried.explanation_params[CARRIED_REVIEW_KEY]["automatic_changed"] is False
+    assert second.confirmed_blockers_count == 1
+
+
+async def _reviewed_unknown_then_breach(db, tenant_a, tender, extraction_run):
+    """Una revisio «compleix» sobre `unknown`; despres el perfil diu que no s'hi arriba."""
+    user, _ = tenant_a
+    company = await company_of(db, tenant_a)
+    await add_requirement(db, extraction_run, tender, value=ECONOMIC_450K)
+    first = (await analyze_company_compliance(db, company, tender)).run
+    await review_assessment(
+        db,
+        await _only_assessment(db, first.id),
+        reviewed_result=AssessmentResult.SATISFIES,
+        review_status=ReviewStatus.VERIFIED,
+        note="Comptes dipositats al registre.",
+        user_id=user.id,
+    )
+    await _revenue(db, company, "100")
+    second = (await analyze_company_compliance(db, company, tender, force=True)).run
+    return user, company, first, second
+
+
+async def test_the_change_notice_survives_a_second_recalculation(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    """L'avis compara amb el que va revisar la persona, no amb el darrer run."""
+    _user, company, first, second = await _reviewed_unknown_then_breach(
+        db, tenant_a, tender, extraction_run
+    )
+    expected = {
+        "from_run": str(first.id),
+        "reviewed_against": "unknown",
+        "automatic_changed": True,
+    }
+    carried = await _only_assessment(db, second.id)
+    assert carried.explanation_params[CARRIED_REVIEW_KEY] == expected
+
+    third = (await analyze_company_compliance(db, company, tender, force=True)).run
+
+    carried = await _only_assessment(db, third.id)
+    assert carried.automatic_result == AssessmentResult.DOES_NOT_SATISFY
+    assert carried.reviewed_result == AssessmentResult.SATISFIES
+    assert carried.explanation_params[CARRIED_REVIEW_KEY] == expected
+
+
+async def test_a_new_review_clears_the_change_notice_and_becomes_the_new_basis(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    user, company, _first, second = await _reviewed_unknown_then_breach(
+        db, tenant_a, tender, extraction_run
+    )
+    again = await review_assessment(
+        db,
+        await _only_assessment(db, second.id),
+        reviewed_result=AssessmentResult.DOES_NOT_SATISFY,
+        review_status=ReviewStatus.VERIFIED,
+        note="Revisat de nou: no s'hi arriba.",
+        user_id=user.id,
+    )
+    assert CARRIED_REVIEW_KEY not in again.explanation_params, "l'avis ja esta ates"
+    assert again.explanation_params[REVIEW_BASIS_KEY]["run"] == str(second.id)
+    assert again.explanation_params[REVIEW_BASIS_KEY]["automatic_result"] == "does_not_satisfy"
+
+    third = (await analyze_company_compliance(db, company, tender, force=True)).run
+
+    carried = await _only_assessment(db, third.id)
+    assert carried.reviewed_result == AssessmentResult.DOES_NOT_SATISFY
+    assert carried.explanation_params[CARRIED_REVIEW_KEY] == {
+        "from_run": str(second.id),
+        "reviewed_against": "does_not_satisfy",
+        "automatic_changed": False,
+    }
+
+
+MANUAL_VOLUME = {
+    "title": "Volum anual de negoci",
+    "category": RequirementCategory.ECONOMIC_SOLVENCY,
+    "obligation": RequirementObligation.MANDATORY,
+    "operator": RequirementOperator.GTE,
+    "scope": RequirementScope.TENDER,
+    "value_json": ECONOMIC_450K,
+}
+
+
+async def _reviewed_manual_requirement(db, tenant_a, tender):
+    user, _ = tenant_a
+    company = await company_of(db, tenant_a)
+    manual = await manual_requirement.create_manual_requirement(
+        db, tender=tender, user=user, fields=dict(MANUAL_VOLUME)
+    )
+    await db.commit()
+    first = (await analyze_company_compliance(db, company, tender)).run
+    assessment = await _only_assessment(db, first.id)
+    assert assessment.requirement_id == manual.id
+    await review_assessment(
+        db,
+        assessment,
+        reviewed_result=AssessmentResult.SATISFIES,
+        review_status=ReviewStatus.VERIFIED,
+        note="Tenim 500.000.",
+        user_id=user.id,
+    )
+    return user, company, manual
+
+
+async def test_an_edited_manual_requirement_does_not_keep_the_old_review(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    user, company, manual = await _reviewed_manual_requirement(db, tenant_a, tender)
+    assert await manual_requirement.update_manual_requirement(
+        db,
+        tender=tender,
+        requirement=manual,
+        user=user,
+        fields={"value_json": {**ECONOMIC_450K, "amount": 9000000}},
+    )
+    await db.commit()
+
+    second = (await analyze_company_compliance(db, company, tender, force=True)).run
+
+    fresh = await _only_assessment(db, second.id)
+    assert fresh.automatic_result == AssessmentResult.UNKNOWN, "el motor tampoc no ho sap ara"
+    assert fresh.reviewed_result is None, "el «compleix» era sobre 450.000, no sobre 9 milions"
+    assert fresh.review_status == ReviewStatus.UNREVIEWED
+    dropped = fresh.explanation_params[DROPPED_REVIEW_KEY]
+    assert (dropped["reason"], dropped["reviewed_result"]) == ("requirement_changed", "satisfies")
+
+
+async def test_a_retitled_manual_requirement_does_not_keep_the_old_review(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    """L'empremta desada en revisar veu el que no es copia a l'avaluacio (titol, modalitat...)."""
+    user, company, manual = await _reviewed_manual_requirement(db, tenant_a, tender)
+    assert await manual_requirement.update_manual_requirement(
+        db,
+        tender=tender,
+        requirement=manual,
+        user=user,
+        fields={"title": "Volum anual de negoci en serveis de telecomunicacions"},
+    )
+    await db.commit()
+
+    second = (await analyze_company_compliance(db, company, tender, force=True)).run
+
+    fresh = await _only_assessment(db, second.id)
+    assert fresh.review_status == ReviewStatus.UNREVIEWED
+    assert fresh.explanation_params[DROPPED_REVIEW_KEY]["reason"] == "requirement_changed"
+
+
+async def test_an_unchanged_manual_requirement_keeps_its_review(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    user, company, manual = await _reviewed_manual_requirement(db, tenant_a, tender)
+    assert not await manual_requirement.update_manual_requirement(
+        db, tender=tender, requirement=manual, user=user, fields=dict(MANUAL_VOLUME)
+    )
+
+    second = (await analyze_company_compliance(db, company, tender, force=True)).run
+
+    carried = await _only_assessment(db, second.id)
+    assert carried.reviewed_result == AssessmentResult.SATISFIES
+    assert DROPPED_REVIEW_KEY not in carried.explanation_params
+
+
+async def test_a_single_lot_calculation_does_not_inherit_reviews(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    """El run no desa el lot: una revisio d'un altre abast no decideix el calcul d'un lot."""
+    user, _ = tenant_a
+    company = await company_of(db, tenant_a)
+    lot = TenderLot(tender_id=tender.id, external_lot_id="1", lot_number=1, title="Lot 1")
+    db.add(lot)
+    await db.commit()
+    await add_requirement(
+        db, extraction_run, tender, category=RequirementCategory.TECHNICAL_REQUIREMENT, value=None
+    )
+    first = (await analyze_company_compliance(db, company, tender)).run
+    await review_assessment(
+        db,
+        await _only_assessment(db, first.id),
+        reviewed_result=AssessmentResult.SATISFIES,
+        review_status=ReviewStatus.VERIFIED,
+        note="Revisat.",
+        user_id=user.id,
+    )
+
+    by_lot = (
+        await analyze_company_compliance(db, company, tender, force=True, tender_lot_id=lot.id)
+    ).run
+
+    fresh = await _only_assessment(db, by_lot.id)
+    assert fresh.review_status == ReviewStatus.UNREVIEWED
+    assert CARRIED_REVIEW_KEY not in (fresh.explanation_params or {})
+
+
+async def test_carried_reviews_of_duplicates_still_count_once(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    """Una exigencia repetida al plec es una sola fila, abans i despres del «Recalcula»."""
+    user, _ = tenant_a
+    company = await company_of(db, tenant_a)
+    for _ in range(2):
+        await add_requirement(
+            db, extraction_run, tender, value=ECONOMIC_450K, title="Volum anual de negoci"
+        )
+    first = (await analyze_company_compliance(db, company, tender)).run
+    assert first.requirements_total == 1
+    # La web revisa la fila sencera: tots els membres del grup.
+    for assessment in await _all_assessments(db, first.id):
+        await review_assessment(
+            db,
+            assessment,
+            reviewed_result=AssessmentResult.SATISFIES,
+            review_status=ReviewStatus.VERIFIED,
+            note="Comptes dipositats.",
+            user_id=user.id,
+        )
+
+    second = (await analyze_company_compliance(db, company, tender, force=True)).run
+
+    assert second.requirements_total == 1
+    assert (second.satisfies_count, second.unknown_count) == (1, 0)
+    carried = await _all_assessments(db, second.id)
+    assert len(carried) == 2
+    assert {a.reviewed_result for a in carried} == {AssessmentResult.SATISFIES}
 
 
 # --------------------------------------------------------------------------- #
@@ -326,6 +675,18 @@ async def test_reviewing_a_conditional_requirement_does_not_confirm_a_blocker(
         db, tenant_a, tender, extraction_run, RequirementModality.CONDITIONAL
     )
     assert reviewed.blocker_status == BlockerStatus.NONE
+
+
+async def test_reviewing_an_explicitly_mandatory_breach_confirms_the_blocker(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    reviewed = await _reviewed_breach(
+        db, tenant_a, tender, extraction_run, RequirementModality.MANDATORY
+    )
+    assert reviewed.blocker_status == BlockerStatus.CONFIRMED
 
 
 async def test_reviewing_a_plain_mandatory_breach_still_confirms_the_blocker(
