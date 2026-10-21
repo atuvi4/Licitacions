@@ -51,6 +51,7 @@ from app.compliance.rules import (
     RuleOutcome,
     needs_review,
 )
+from app.compliance.specs import is_effectively_mandatory
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.models.compliance import (
     AssessmentEvidence,
@@ -559,12 +560,14 @@ def _carry_review(
     El resultat automatic nou es queda tal com l'ha calculat el motor. Una revisio
     amb veredicte propi es conserva encara que el motor hagi canviat: la persona
     mana fins que hi torni, i la traca (`automatic_changed`) li ho diu. Amb una
-    excepcio: si el motor ha passat a dir «no compleix» DESPRES de la revisio, i la
-    persona no havia dit aixo, la revisio no es conserva. Es va fer sense saber-ho,
-    i conservar-la amagaria un incompliment nou darrere d'un «compleix»: ni la
-    capcalera, ni els comptadors, ni els avisos de la decisio no el veurien. Al
-    reves no: un «no compleix» huma es conserva encara que el motor ara digui que
-    si, perque es la lectura prudent.
+    excepcio: si el motor ha passat a dir «no compleix» DESPRES de la revisio, en un
+    requisit que pot bloquejar, i la persona no havia dit aixo, la revisio no es
+    conserva. Es va fer sense saber-ho, i conservar-la amagaria un incompliment nou
+    darrere d'un «compleix»: ni la capcalera, ni els comptadors, ni els avisos de la
+    decisio no el veurien. Si el requisit no pot bloquejar (puntuable, via
+    alternativa, condicional), no hi ha res a amagar i es conserva amb l'avis. Al
+    reves tampoc: un «no compleix» huma es conserva encara que el motor ara digui
+    que si, perque es la lectura prudent.
 
     Una confirmacio (sense veredicte propi) diu «el sistema te rao» sobre UN
     resultat: si el resultat ha canviat, no parla del nou i no es conserva, perque
@@ -584,6 +587,7 @@ def _carry_review(
         automatic_changed
         and automatic == AssessmentResult.DOES_NOT_SATISFY
         and verdict != automatic
+        and is_effectively_mandatory(requirement)
     ):
         reason = "automatic_now_fails"
     else:

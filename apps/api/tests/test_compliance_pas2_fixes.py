@@ -459,6 +459,43 @@ async def test_a_kept_satisfies_review_does_not_hide_a_new_breach(
     }
 
 
+async def test_a_review_of_a_requirement_that_cannot_block_is_kept_with_the_notice(
+    db,
+    tenant_a,
+    tender,
+    extraction_run,
+):
+    """Puntuable: un «no compleix» nou del motor no bloqueja, i no hi ha res a amagar."""
+    user, _ = tenant_a
+    company = await company_of(db, tenant_a)
+    await add_requirement(
+        db,
+        extraction_run,
+        tender,
+        obligation=RequirementObligation.SCORED,
+        value=ECONOMIC_450K,
+    )
+    first = (await analyze_company_compliance(db, company, tender)).run
+    await review_assessment(
+        db,
+        await _only_assessment(db, first.id),
+        reviewed_result=AssessmentResult.SATISFIES,
+        review_status=ReviewStatus.VERIFIED,
+        note="Comptes dipositats.",
+        user_id=user.id,
+    )
+    await _revenue(db, company, "100")
+
+    second = (await analyze_company_compliance(db, company, tender, force=True)).run
+
+    carried = await _only_assessment(db, second.id)
+    assert carried.automatic_result == AssessmentResult.DOES_NOT_SATISFY
+    assert carried.reviewed_result == AssessmentResult.SATISFIES
+    assert carried.blocker_status == BlockerStatus.NONE
+    assert carried.explanation_params[CARRIED_REVIEW_KEY]["automatic_changed"] is True
+    assert DROPPED_REVIEW_KEY not in carried.explanation_params
+
+
 async def test_an_override_of_a_breach_the_person_saw_is_kept(
     db,
     tenant_a,
