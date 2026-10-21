@@ -262,6 +262,8 @@ export function candidatesCauseText(cause: CandidatesCause, evaluated: number): 
       return "el Radar encara no s'ha calculat";
     case "profile":
       return "el perfil no té CPV/territoris";
+    case "no_cpv":
+      return "el perfil no té cap CPV";
     case "insufficient_data":
       return `dades insuficients a ${evaluatedPhrase(evaluated)}`;
     case "no_match":

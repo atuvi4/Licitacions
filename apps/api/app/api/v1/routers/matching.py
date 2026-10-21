@@ -89,8 +89,17 @@ def _to_read(match: CompanyTenderMatch, stale: bool) -> TenderMatchRead:
                 rules_version=lot_match.rules_version,
                 calculated_at=lot_match.calculated_at,
             )
+            # El lot que resumeix l'expedient (`best_lot_id`), primer; despres els candidats i
+            # la resta, de mes a menys punts. v3: un lot de mes puntuacio pot no ser candidat
+            # (minim de CPV), i la llista no l'ha de posar per davant del que dona la puntuacio.
             for lot_match in sorted(
-                match.lot_matches, key=lambda item: (item.score is None, -(item.score or 0))
+                match.lot_matches,
+                key=lambda item: (
+                    item.tender_lot_id != match.best_lot_id,
+                    item.status != MatchStatus.CANDIDATE,
+                    item.score is None,
+                    -(item.score or 0),
+                ),
             )
         ],
     )

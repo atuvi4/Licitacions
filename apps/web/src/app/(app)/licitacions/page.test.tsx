@@ -286,10 +286,14 @@ describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
       "/companies/c1/matches/summary": { ...summary, evaluated_count: 88, candidates: 0, insufficient_data: 2 },
       "/companies/c1/summary": { ...profile, counts: { ...profile.counts, cpv_preferences: 0, territories: 2, contract_preferences: 0 } },
     }));
-    render(<TendersFeedPage />);
-    expect(await screen.findByRole("heading", { name: "Encara no sabem què busqueu" })).toBeTruthy();
+    const { container } = render(<TendersFeedPage />);
+    expect(await screen.findByRole("heading", { name: "Sense CPV al perfil, cap licitació no pot ser candidata" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Cap candidata ara mateix" })).toBeNull();
-    expect(screen.getByRole("link", { name: /Defineix les preferències del Radar/ }).getAttribute("href")).toBe("/empresa/radar");
+    expect(screen.queryByRole("heading", { name: "Encara no sabem què busqueu" })).toBeNull();
+    // Les licitacions SÍ que estan avaluades: no és el text del perfil buit («només llistar-les»).
+    expect(container.textContent).toContain("El Radar ja ha avaluat 88 licitacions, però una licitació només és candidata");
+    expect(container.textContent).not.toMatch(/només llistar-les/);
+    expect(screen.getByRole("link", { name: /Afegeix els CPV al perfil/ }).getAttribute("href")).toBe("/empresa/radar");
   });
 
   it("F1: Radar amb el perfil complet però cap licitació avaluada → «El Radar encara no s'ha calculat» + càlcul, mai «ampliar»", async () => {

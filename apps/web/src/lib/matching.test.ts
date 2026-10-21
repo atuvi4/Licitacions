@@ -11,13 +11,16 @@ import {
   factorSourceValue,
   inheritedCpv,
   insufficientCause,
+  lotSummary,
   reasonLabel,
   profileGaps,
   shortSummary,
   sourceGaps,
   statusHelp,
+  type LotMatch,
   type MatchCommon,
   type MatchFactor,
+  type TenderMatch,
 } from "@/lib/matching";
 
 function factor(dimension: MatchFactor["dimension"], result: MatchFactor["result"], reason_code: string): MatchFactor {
@@ -233,5 +236,33 @@ describe("regles v3: mínim de CPV per ser candidata i termini que compta zero",
     );
     expect(sourceGaps(m)).toEqual(["timing"]);
     expect(profileGaps(m)).toEqual([]);
+  });
+});
+
+describe("regles v3: el lot que dona la puntuació de l'expedient", () => {
+  const lot = (id: string, score: number, status: MatchCommon["status"]): LotMatch => ({
+    ...match([], status),
+    id,
+    score,
+    tender_lot_id: id,
+    lot_number: null,
+    lot_title: null,
+  });
+
+  it("«Millor lot» és el lot de `best_lot_id`, no el primer de la llista", () => {
+    // Un lot de 79 en baix encaix (mínim de CPV) no és el que dona la puntuació: ho és el candidat de 73.
+    const tender: TenderMatch = {
+      ...match([], "candidate"),
+      score: 73,
+      tender_id: "t1",
+      best_lot_id: "l2",
+      candidate_lot_count: 1,
+      total_lot_count: 2,
+      is_stale: false,
+      lot_matches: [lot("l1", 79, "low_fit"), lot("l2", 73, "candidate")],
+    };
+    expect(lotSummary(tender)).toBe("Millor lot: 73 · 1 de 2 lots candidats");
+    // Sense lot destacat (cap lot puntuat), el primer de la llista, com abans.
+    expect(lotSummary({ ...tender, best_lot_id: null })).toBe("Millor lot: 79 · 1 de 2 lots candidats");
   });
 });

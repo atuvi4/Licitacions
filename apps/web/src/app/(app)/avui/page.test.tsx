@@ -235,6 +235,24 @@ describe("Avui", () => {
     expect(document.body.textContent).not.toMatch(/\d+ ?% /);
   });
 
+  it("regles v3: perfil amb territoris però sense CPV, avaluades i cap candidata → la causa és que no té CPV", async () => {
+    respondWith({
+      "/companies/c1/workspaces": [],
+      "/companies/c1/matches?": noFresh,
+      "/companies/c1/matches/summary": {
+        ...summary, candidates: 0, total_tenders: 17336, evaluated_count: 120,
+        profile_counts: { cpv_preferences: 0, territories: 2, contract_preferences: 1 },
+      },
+    });
+    render(<AvuiPage />);
+    expect(await screen.findByRole("heading", { name: "Sense CPV al perfil, cap licitació no pot ser candidata" })).toBeTruthy();
+    expect(screen.getByText(/0 candidates de 17\.336 licitacions: el perfil no té cap CPV/)).toBeTruthy();
+    // Les licitacions SÍ que estan avaluades: no és el text del perfil buit («només pot llistar»).
+    expect(document.body.textContent).toContain("el Radar ja avalua les licitacions, però una licitació només és candidata");
+    expect(document.body.textContent).not.toMatch(/només pot llistar/);
+    expect(screen.getByRole("link", { name: /Afegeix els CPV al perfil/ }).getAttribute("href")).toBe("/empresa/radar");
+  });
+
   it("amb perfil i licitacions avaluades però cap candidata, la causa és «cap coincidència» entre les avaluades", async () => {
     respondWith({
       "/companies/c1/workspaces": [],

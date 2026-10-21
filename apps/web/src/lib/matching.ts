@@ -395,7 +395,8 @@ export function shortSummary(match: MatchCommon): string {
 /** "Millor lot: 91 · 2 de 3 lots candidats" */
 export function lotSummary(match: TenderMatch): string | null {
   if (match.total_lot_count === 0) return null;
-  const best = match.lot_matches[0];
+  // El lot que dona la puntuació de l'expedient (v3: el millor candidat, si n'hi ha).
+  const best = match.lot_matches.find((lot) => lot.tender_lot_id === match.best_lot_id) ?? match.lot_matches[0];
   const parts: string[] = [];
   if (best && best.score !== null) parts.push(`Millor lot: ${best.score}`);
   parts.push(
@@ -423,7 +424,7 @@ export function prefitProfileReady(counts: PrefitProfileCounts | null | undefine
 }
 
 /** Per què el Radar té 0 candidates (revisió 3B-2, F1). */
-export type CandidatesCause = "not_evaluated" | "profile" | "insufficient_data" | "no_match";
+export type CandidatesCause = "not_evaluated" | "profile" | "no_cpv" | "insufficient_data" | "no_match";
 
 /**
  * La causa d'un 0 candidates, UNA sola funció per a Avui i per a Oportunitats ›
@@ -432,8 +433,9 @@ export type CandidatesCause = "not_evaluated" | "profile" | "insufficient_data" 
  * - Cap licitació avaluada → `not_evaluated`, sigui com sigui el perfil.
  * - Avaluades i el perfil SENSE CPV, territoris NI preferències de contracte
  *   (`prefitProfileReady === false`) → `profile`: és cert i és la raó.
- * - Avaluades i el perfil sense cap CPV, encara que tingui territoris → `profile`:
- *   amb les regles v3 (mínim de CPV) cap licitació no pot ser candidata sense CPV.
+ * - Avaluades i el perfil sense cap CPV, encara que tingui territoris → `no_cpv`:
+ *   amb les regles v3 (mínim de CPV) cap licitació no pot ser candidata sense CPV. Les
+ *   licitacions sí que tenen pre-fit: no és el perfil buit.
  * - Totes les avaluades sense dades suficients → `insufficient_data`.
  * - Si no → `no_match`.
  */
@@ -444,7 +446,7 @@ export function candidatesCause(
   if (!radar || radar.candidates > 0) return null;
   if (radar.evaluated_count === 0) return "not_evaluated";
   if (prefitProfileReady(profile) === false) return "profile";
-  if (profile && profile.cpv_preferences === 0) return "profile";
+  if (profile && profile.cpv_preferences === 0) return "no_cpv";
   if (radar.insufficient_data === radar.evaluated_count) return "insufficient_data";
   return "no_match";
 }

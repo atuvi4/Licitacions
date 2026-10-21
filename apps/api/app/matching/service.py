@@ -25,6 +25,7 @@ from app.matching.economic import AmountBasis, AmountReference, reference_amount
 from app.matching.engine import MatchOutcome, aggregate_lots, evaluate
 from app.matching.profile import CompanyMatchProfile, load_profile
 from app.matching.rules import RULES_VERSION
+from app.models.enums import DimensionResult
 from app.models.matching import CompanyTenderLotMatch, CompanyTenderMatch
 from app.models.tender_lifecycle import TenderRevision
 from app.models.tenders import Tender, TenderLot
@@ -166,10 +167,11 @@ def _mark_inherited_cpvs(outcome: MatchOutcome) -> None:
     """Deixa escrit al factor CPV del lot que el CPV es el de l'expedient (v3).
 
     La fitxa ho explica: si no, un «cap CPV en comu» amb el CPV de l'empresa a la
-    llista de l'expedient sembla un error.
+    llista de l'expedient sembla un error. Nomes si el CPV s'ha avaluat: sense CPV al
+    perfil no s'ha comparat amb res, i la marca diria el contrari.
     """
     for factor in outcome.factors:
-        if factor["dimension"] == "cpv":
+        if factor["dimension"] == "cpv" and factor["result"] != DimensionResult.UNKNOWN.value:
             factor["detail"] = {**(factor.get("detail") or {}), "inherited_from_tender": True}
 
 

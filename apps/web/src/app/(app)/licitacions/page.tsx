@@ -344,7 +344,8 @@ function ReviewFeed() {
         );
       }
       // La MATEIXA causa que Avui (`candidatesCause`, lib/matching): es culpa el perfil
-      // si no té CPV, territoris NI preferències de contracte, o si no té cap CPV (v3).
+      // si no té CPV, territoris NI preferències de contracte; i, si només li falten els
+      // CPV, `no_cpv` (v3: sense CPV no hi pot haver candidates).
       const cause = candidatesCause(summary.data, profile.data?.counts);
       if (cause === "profile") {
         return (
@@ -354,6 +355,24 @@ function ReviewFeed() {
             action={
               <LinkButton href="/empresa/radar" variant="primary" size="md">
                 Defineix les preferències del Radar
+              </LinkButton>
+            }
+            secondary={
+              <Button variant="secondary" onClick={showOpen}>
+                {openLabel}
+              </Button>
+            }
+          />
+        );
+      }
+      if (cause === "no_cpv") {
+        return (
+          <EmptyState
+            title="Sense CPV al perfil, cap licitació no pot ser candidata"
+            description={`El Radar ja ha avaluat ${summary.data ? `${summary.data.evaluated_count} ` : ""}licitacions, però una licitació només és candidata si encaixa amb l'activitat (codis CPV) de l'empresa, i el perfil encara no en té cap. El territori i la franja d'import sols no hi arriben.`}
+            action={
+              <LinkButton href="/empresa/radar" variant="primary" size="md">
+                Afegeix els CPV al perfil
               </LinkButton>
             }
             secondary={

@@ -280,6 +280,20 @@ class TestCPVDelsLots:
         assert summary is outcome_2
         assert best_lot(summary, lots) is second
 
+    def test_sense_cpv_al_perfil_el_lot_no_porta_la_marca_d_herencia(self):
+        # No s'ha comparat amb cap CPV: dir que «s'ha avaluat amb el primer» seria fals.
+        marc = tender([cpv("64200000", True)], [lot()])
+        _summary, ((_, outcome),) = evaluate_tender(profile([]), marc, NOW)
+        assert cpv_factor(outcome)["reason_code"] == ReasonCode.CPV_NO_COMPANY_PREFERENCES
+        assert "inherited_from_tender" not in cpv_factor(outcome)["detail"]
+
+    def test_sense_cap_lot_puntuat_no_hi_ha_lot_destacat(self):
+        marc = tender([cpv("64200000", True)], [lot(), lot()], status="pending_award")
+        summary, lots = evaluate_tender(profile([("64200000", 10)]), marc, NOW)
+        assert summary.status is MatchStatus.CLOSED
+        assert summary.score is None
+        assert best_lot(summary, lots) is None
+
     def test_sense_cap_lot_candidat_l_expedient_es_el_lot_de_mes_puntuacio(self):
         prof = profile([("45314300", 5)])
         lot_1 = lot([cpv("45316100")], amount=Decimal("100000"))

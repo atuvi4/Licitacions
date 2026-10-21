@@ -592,3 +592,41 @@ class TestLogging:
         with caplog.at_level(logging.INFO, logger="app.matching"):
             await MatchingService(db).recalculate(company.id)
         assert any(record.name == "app.matching" for record in caplog.records)
+
+
+async def test_v3_el_lot_que_dona_la_puntuacio_va_primer(db, client_a, tenant_a):
+    """Regles v3: un lot de mes puntuacio en baix encaix (minim de CPV) no passa per davant.
+
+    Lot 1: grup de CPV (14 de 40) amb la resta perfecta, 74 i baix encaix. Lot 2: exacte amb
+    prioritat mitjana (34) pero import petit, 73 i candidat. L'expedient es el lot 2, i la
+    llista el posa primer: la fitxa diu «Millor lot» del primer.
+    """
+    _, company = tenant_a
+    source = await make_source(db)
+    tender = await make_tender(db, source, title="Expedient amb dos lots", cpv_codes=("45332000",))
+    pipes = await add_lot(
+        db, tender, number=1, title="Canonades", cpv_codes=("45332000",), amount="300000"
+    )
+    phones = await add_lot(
+        db, tender, number=2, title="Telefonia", cpv_codes=("64200000",), amount="5000"
+    )
+    await db.commit()
+    await configure_company(db, company.id)
+    db.add(
+        CompanyCPVPreference(
+            company_id=company.id, cpv_code="64200000", priority=5, active=True, excluded=False
+        )
+    )
+    await db.commit()
+    await MatchingService(db).recalculate(company.id)
+
+    response = await client_a.get(f"/api/v1/companies/{company.id}/matches/by-tender/{tender.id}")
+    assert response.status_code == 200
+    match = response.json()
+    lots = match["lot_matches"]
+    assert [(lot["tender_lot_id"], lot["score"], lot["status"]) for lot in lots] == [
+        (str(phones.id), 73, "candidate"),
+        (str(pipes.id), 74, "low_fit"),
+    ]
+    assert match["best_lot_id"] == str(phones.id)
+    assert (match["score"], match["status"], match["candidate_lot_count"]) == (73, "candidate", 1)

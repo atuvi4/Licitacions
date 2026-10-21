@@ -263,6 +263,10 @@ function RadarEmpty({
           <Link href="/empresa/radar" className="text-brand-strong hover:text-accent-800">
             Defineix les preferències del Radar →
           </Link>
+        ) : cause === "no_cpv" ? (
+          <Link href="/empresa/radar" className="text-brand-strong hover:text-accent-800">
+            Afegeix els CPV al perfil →
+          </Link>
         ) : (
           <Link href="/licitacions" className="text-brand-strong hover:text-accent-800">
             Mira totes les licitacions →
@@ -418,6 +422,22 @@ export default function AvuiPage() {
               secondary={
                 <LinkButton href="/licitacions" variant="secondary" size="md">
                   Mira les oportunitats sense encaix
+                </LinkButton>
+              }
+            />
+          ) : cause === "no_cpv" ? (
+            <EmptyState
+              icon={<Search aria-hidden strokeWidth={1.5} />}
+              title="Sense CPV al perfil, cap licitació no pot ser candidata"
+              description={`${zero}. Són ${RADAR_NOTE}: el Radar ja avalua les licitacions, però una licitació només és candidata si encaixa amb l'activitat (codis CPV) de l'empresa, i el perfil encara no en té cap. El territori i la franja d'import sols no hi arriben.`}
+              action={
+                <LinkButton href="/empresa/radar" variant="primary" size="md">
+                  Afegeix els CPV al perfil
+                </LinkButton>
+              }
+              secondary={
+                <LinkButton href="/licitacions" variant="secondary" size="md">
+                  Mira les oportunitats
                 </LinkButton>
               }
             />
