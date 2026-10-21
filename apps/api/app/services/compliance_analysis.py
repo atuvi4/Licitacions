@@ -436,6 +436,7 @@ CARRIED_REVIEW_KEY = "review_carried_over"
 #: Clau de `explanation_params` quan la revisio d'un run anterior NO s'ha conservat.
 DROPPED_REVIEW_KEY = "review_not_carried"
 #: El que fa que un requisit demani una altra cosa, o que compti d'una altra manera.
+#: `equivalence_allowed` hi es perque la regla de certificacions el llegeix.
 _REQUIREMENT_IDENTITY_FIELDS = (
     "category",
     "title",
@@ -446,7 +447,12 @@ _REQUIREMENT_IDENTITY_FIELDS = (
     "scope",
     "tender_lot_id",
     "alternative_group",
+    "equivalence_allowed",
 )
+#: Versio de la llista de camps de l'empremta, desada a cada base. Una base d'una altra
+#: versio es tracta com una revisio d'abans de l'empremta: canviar la llista no ha de
+#: descartar totes les revisions de cop.
+REQUIREMENT_IDENTITY_VERSION = 1
 
 
 def requirement_identity(requirement: Requirement) -> str:
@@ -475,9 +481,14 @@ async def _reviews_to_carry(
     nou comenca net, com abans. Sobre la mateixa analisi, un "Recalcula" (perfil
     nou, una polissa afegida) no pot fer perdre el que una persona ja ha dit.
     Si es conserva cada revisio ho decideix `_carry_review`.
+
+    Nomes es llegeix el run vigent: una revisio que no s'ha conservat (la fila torna
+    a estar sense revisar) ja no passa al run seguent, ni l'avis que en parlava.
     """
     # El run no desa per a quin lot s'ha calculat: no se sap si les revisions del
-    # vigent parlen d'aquest lot, i en un calcul d'un sol lot no es traspassen.
+    # vigent parlen d'aquest lot, i en un calcul d'un sol lot no es traspassen. Com
+    # que aquest calcul passa a ser el vigent, el recalcul sencer seguent tampoc no
+    # recupera les revisions d'abans (nomes per API: la web no envia mai el lot).
     if tender_lot_id is not None:
         return {}
     previous = await current_run_for(session, company_id, tender_id)
@@ -507,7 +518,11 @@ def _review_basis(previous: CompanyRequirementAssessment) -> dict:
     """
     stored = (previous.explanation_params or {}).get(REVIEW_BASIS_KEY)
     if isinstance(stored, dict) and stored.get("automatic_result"):
-        return dict(stored)
+        basis = dict(stored)
+        if basis.get("identity_version") != REQUIREMENT_IDENTITY_VERSION:
+            # Una empremta d'una altra llista de camps no es comparable amb la d'ara.
+            basis["requirement"] = None
+        return basis
     return {
         "run": str(previous.assessment_run_id),
         "automatic_result": str(previous.automatic_result),
@@ -543,18 +558,34 @@ def _carry_review(
 
     El resultat automatic nou es queda tal com l'ha calculat el motor. Una revisio
     amb veredicte propi es conserva encara que el motor hagi canviat: la persona
-    mana fins que hi torni, i la traca (`automatic_changed`) li ho diu. Una
-    confirmacio (sense veredicte propi) diu «el sistema te rao» sobre UN resultat:
-    si el resultat ha canviat, no parla del nou i no es conserva, perque un
-    «compleix» confirmat no pot acabar sent un bloqueig confirmat. Si el requisit
-    ha canviat, tampoc. El que no es conserva queda escrit (`DROPPED_REVIEW_KEY`).
+    mana fins que hi torni, i la traca (`automatic_changed`) li ho diu. Amb una
+    excepcio: si el motor ha passat a dir «no compleix» DESPRES de la revisio, i la
+    persona no havia dit aixo, la revisio no es conserva. Es va fer sense saber-ho,
+    i conservar-la amagaria un incompliment nou darrere d'un «compleix»: ni la
+    capcalera, ni els comptadors, ni els avisos de la decisio no el veurien. Al
+    reves no: un «no compleix» huma es conserva encara que el motor ara digui que
+    si, perque es la lectura prudent.
+
+    Una confirmacio (sense veredicte propi) diu «el sistema te rao» sobre UN
+    resultat: si el resultat ha canviat, no parla del nou i no es conserva, perque
+    un «compleix» confirmat no pot acabar sent un bloqueig confirmat. Si el
+    requisit ha canviat, tampoc. El que no es conserva queda escrit
+    (`DROPPED_REVIEW_KEY`), amb el veredicte i el motiu d'abans.
     """
     basis = _review_basis(previous)
-    automatic_changed = basis["automatic_result"] != str(assessment.automatic_result)
+    automatic = str(assessment.automatic_result)
+    automatic_changed = basis["automatic_result"] != automatic
+    verdict = str(previous.reviewed_result) if previous.reviewed_result else None
     if not _same_requirement(previous, basis, requirement):
         reason = "requirement_changed"
-    elif previous.reviewed_result is None and automatic_changed:
+    elif automatic_changed and verdict is None:
         reason = "automatic_changed"
+    elif (
+        automatic_changed
+        and automatic == AssessmentResult.DOES_NOT_SATISFY
+        and verdict != automatic
+    ):
+        reason = "automatic_now_fails"
     else:
         reason = None
     if reason is not None:
@@ -563,9 +594,8 @@ def _carry_review(
             DROPPED_REVIEW_KEY: {
                 "from_run": basis.get("run"),
                 "reviewed_against": basis["automatic_result"],
-                "reviewed_result": (
-                    str(previous.reviewed_result) if previous.reviewed_result else None
-                ),
+                "reviewed_result": verdict,
+                "review_note": previous.review_note,
                 "reason": reason,
             },
         }
@@ -574,6 +604,7 @@ def _carry_review(
     if basis.get("requirement") is None:
         # Una revisio d'abans de l'empremta: a partir d'ara, el requisit tal com es avui.
         basis["requirement"] = requirement_identity(requirement)
+        basis["identity_version"] = REQUIREMENT_IDENTITY_VERSION
     assessment.reviewed_result = previous.reviewed_result
     assessment.review_status = previous.review_status
     assessment.review_note = previous.review_note
@@ -593,7 +624,8 @@ def _carry_review(
         CARRIED_REVIEW_KEY: {
             "from_run": basis.get("run"),
             "reviewed_against": basis["automatic_result"],
-            "automatic_changed": automatic_changed,
+            # Si el motor ara diu el mateix que la persona, no hi ha res a tornar a mirar.
+            "automatic_changed": automatic_changed and automatic != verdict,
         },
     }
 
@@ -675,6 +707,7 @@ async def review_assessment(
         "run": str(assessment.assessment_run_id),
         "automatic_result": str(assessment.automatic_result),
         "requirement": requirement_identity(requirement) if requirement else None,
+        "identity_version": REQUIREMENT_IDENTITY_VERSION,
     }
     assessment.explanation_params = params
     assessment.blocker_status = derive_blocker_status(
