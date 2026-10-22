@@ -10,6 +10,12 @@ candidatura serien un camp mes del formulari.
 **No hi ha DELETE.** Un dubte es tanca resolent-lo o descartant-lo. Esborrar-lo
 faria desapareixer la pregunta, la seva provinenca i la seva resposta, que es
 justament el que aquesta taula existeix per conservar.
+
+**Es treballen en l'analisi, abans de decidir** (ajust del propietari,
+22-10-2026): obrir, corregir, resoldre, descartar i citar dubtes no demana cap
+decisio; nomes un NO-GO vigent ho tanca (`assert_workspace_study_open`). Decidir
+si un dubte impedeix la revisio final es una decisio d'oferta i continua
+demanant GO.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ from app.services import audit
 from app.services import bid_workspace as workspace_service
 from app.services import issues as service
 from app.services.source_refs import resolve_source_ref
-from app.services.workspace_gate import assert_workspace_go
+from app.services.workspace_gate import assert_workspace_go, assert_workspace_study_open
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/issues", tags=["dubtes"])
 
@@ -97,7 +103,7 @@ async def create_issue(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
-    await assert_workspace_go(session, workspace)
+    await assert_workspace_study_open(session, workspace)
 
     issue = await service.create_issue(
         session, workspace=workspace, user=ctx.user, fields=payload.model_dump()
@@ -131,7 +137,7 @@ async def update_issue(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
-    await assert_workspace_go(session, workspace)
+    await assert_workspace_study_open(session, workspace)
     issue = await service.load_issue(session, workspace, issue_id)
 
     sent = payload.model_fields_set
@@ -180,7 +186,7 @@ async def resolve_issue(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
-    await assert_workspace_go(session, workspace)
+    await assert_workspace_study_open(session, workspace)
     issue = await service.load_issue(session, workspace, issue_id)
 
     await service.resolve_issue(
@@ -219,7 +225,7 @@ async def dismiss_issue(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
-    await assert_workspace_go(session, workspace)
+    await assert_workspace_study_open(session, workspace)
     issue = await service.load_issue(session, workspace, issue_id)
 
     await service.dismiss_issue(session, issue=issue, user=ctx.user)
@@ -261,6 +267,7 @@ async def set_final_review_block(
     service.assert_can_edit(ctx.membership.role)
     service.assert_can_block(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
+    # Decisio d'oferta, no d'estudi: a diferencia de la resta del dubte, demana GO.
     await assert_workspace_go(session, workspace)
     issue = await service.load_issue(session, workspace, issue_id)
 
@@ -305,7 +312,7 @@ async def link_source_ref(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
-    await assert_workspace_go(session, workspace)
+    await assert_workspace_study_open(session, workspace)
     issue = await service.load_issue(session, workspace, issue_id)
 
     linked = await service.link_source_ref(
@@ -349,7 +356,7 @@ async def unlink_source_ref(
     """
     service.assert_can_edit(ctx.membership.role)
     workspace = await workspace_service.get_workspace(session, ctx.company_id, workspace_id)
-    await assert_workspace_go(session, workspace)
+    await assert_workspace_study_open(session, workspace)
     issue = await service.load_issue(session, workspace, issue_id)
 
     removed = await service.unlink_source_ref(

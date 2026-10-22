@@ -2,17 +2,24 @@
 
 3B-2 §7.1.6 (decisio 4 del propietari, addendum A18): el pas Preparar es pot
 obrir i llegir sense GO, pero tota mutacio o generacio (dossier, solucio
-tecnica, oferta economica, paquet de presentacio, tasques i notes de
-preparacio) exigeix una decisio humana GO vigent. El guard viu al backend
+tecnica, oferta economica, paquet de presentacio, tasques) exigeix una decisio
+humana GO vigent. El guard viu al backend
 (`app.services.workspace_gate.assert_workspace_go`) i respon 403
 `decision_required`.
 
-`PREPARE_MUTATORS` es la llista EXPLICITA de tots els endpoints mutadors que
-pengen del workspace. `test_la_llista_explicita_cobreix_tots_els_mutadors`
-la compara amb les rutes reals de l'aplicacio: un endpoint nou sota
-`/workspaces/{workspace_id}` que no hi sigui fa fallar el test, i quan s'hi
-afegeix, els tests parametritzats li exigeixen el guard. L'unica excepcio es
-`POST .../decisions`: es el pas Decidir, no Preparar.
+Ajust del propietari (22-10-2026): les notes i els dubtes/discrepancies
+s'identifiquen en l'analisi, ABANS de decidir. Sense cap decisio, amb la
+decisio ajornada o amb GO s'hi pot escriure; nomes un NO-GO vigent els tanca
+(`assert_workspace_study_open`, el mateix 403). Decidir si un dubte impedeix la
+revisio final es una decisio d'oferta i continua a `PREPARE_MUTATORS`.
+
+`PREPARE_MUTATORS` i `STUDY_MUTATORS` son la llista EXPLICITA de tots els
+endpoints mutadors que pengen del workspace.
+`test_la_llista_explicita_cobreix_tots_els_mutadors` les compara amb les rutes
+reals de l'aplicacio: un endpoint nou sota `/workspaces/{workspace_id}` que no
+hi sigui fa fallar el test, i quan s'hi afegeix, els tests parametritzats li
+exigeixen el guard. Les excepcions son `POST .../decisions` (el pas Decidir, no
+Preparar) i «Marca com revisats».
 """
 
 from __future__ import annotations
@@ -47,13 +54,12 @@ PREPARE_MUTATORS: list[tuple[str, str, dict | None]] = [
     ("PATCH", "dossier/{id}", {"notes": "Nota"}),
     ("POST", "dossier/{id}/task", None),
     ("POST", "readiness/advance", None),
-    # Checklist, tasques i notes (routers/workspaces.py)
+    # Checklist i tasques (routers/workspaces.py). Les notes, a `STUDY_MUTATORS`.
     ("POST", "checklist/regenerate", None),
     ("POST", "checklist", {"title": "Item manual"}),
     ("PATCH", "checklist/{id}", {"note": "Nota"}),
     ("POST", "tasks", {"title": "Tasca"}),
     ("PATCH", "tasks/{id}", {"title": "Tasca"}),
-    ("POST", "notes", {"text": "Nota de preparacio"}),
     # Solucio tecnica (routers/technical_solutions.py)
     ("POST", "technical-solutions", {"title": "Solucio"}),
     ("POST", "technical-solutions/from-requirement", {"requirement_id": str(uuid.uuid4())}),
@@ -105,14 +111,9 @@ PREPARE_MUTATORS: list[tuple[str, str, dict | None]] = [
         {"expected_revision": 0, "working_value_text": "10", "reason": "Ho diu el plec."},
     ),
     ("POST", "dimensions/{id}/archive", {"expected_revision": 0}),
-    # Dubtes i discrepancies (routers/issues.py)
-    ("POST", "issues", {"issue_type": "internal_question", "title": "Dubte"}),
-    ("PATCH", "issues/{id}", {"title": "Dubte"}),
-    ("POST", "issues/{id}/resolve", {"resolution": "Resolt."}),
-    ("POST", "issues/{id}/dismiss", {}),
+    # Dubtes (routers/issues.py): nomes decidir si impedeix la revisio final,
+    # que es una decisio d'oferta. La resta del dubte, a `STUDY_MUTATORS`.
     ("POST", "issues/{id}/final-review-block", {"blocks_final_review": True}),
-    ("POST", "issues/{id}/source-refs", {"source_ref_id": str(uuid.uuid4())}),
-    ("DELETE", "issues/{id}/source-refs/{other}", None),
     # Opcions de solucio (routers/solution_options.py)
     ("POST", "solution-options", {"supplier_name": "Proveidor"}),
     ("PATCH", "solution-options/{id}", {"expected_revision": 0, "supplier_name": "Proveidor"}),
@@ -132,6 +133,24 @@ PREPARE_MUTATORS: list[tuple[str, str, dict | None]] = [
     ),
 ]
 
+#: Notes i dubtes/discrepancies: s'escriuen en l'analisi, abans de decidir. Sense
+#: cap decisio, amb la decisio ajornada o amb GO responen el que toqui (201, 200,
+#: 404 per un id inventat...); nomes un NO-GO vigent hi respon 403
+#: `decision_required` (`app.services.workspace_gate.assert_workspace_study_open`).
+STUDY_MUTATORS: list[tuple[str, str, dict | None]] = [
+    # Notes (routers/workspaces.py)
+    ("POST", "notes", {"text": "Nota d'estudi"}),
+    # Dubtes i discrepancies (routers/issues.py)
+    ("POST", "issues", {"issue_type": "internal_question", "title": "Dubte"}),
+    ("PATCH", "issues/{id}", {"title": "Dubte"}),
+    ("POST", "issues/{id}/resolve", {"resolution": "Resolt."}),
+    ("POST", "issues/{id}/dismiss", {}),
+    ("POST", "issues/{id}/source-refs", {"source_ref_id": str(uuid.uuid4())}),
+    ("DELETE", "issues/{id}/source-refs/{other}", None),
+]
+
+ALL_MUTATORS = PREPARE_MUTATORS + STUDY_MUTATORS
+
 #: Lectures que han de continuar responent 200 sense cap decisio.
 PREPARE_READS = [
     "",
@@ -148,7 +167,13 @@ PREPARE_READS = [
 ]
 
 
-MUTATOR_IDS = [f"{method} {path}" for method, path, _ in PREPARE_MUTATORS]
+def _ids(mutators: list[tuple[str, str, dict | None]]) -> list[str]:
+    return [f"{method} {path}" for method, path, _ in mutators]
+
+
+MUTATOR_IDS = _ids(PREPARE_MUTATORS)
+STUDY_IDS = _ids(STUDY_MUTATORS)
+ALL_IDS = _ids(ALL_MUTATORS)
 
 
 # --------------------------------------------------------------------------- #
@@ -223,17 +248,18 @@ async def test_sense_cap_decisio_cada_mutador_respon_403_decision_required(
     assert _error_code(response) == "decision_required"
 
 
-@pytest.mark.parametrize(("method", "path", "body"), PREPARE_MUTATORS, ids=MUTATOR_IDS)
+@pytest.mark.parametrize(("method", "path", "body"), ALL_MUTATORS, ids=ALL_IDS)
 async def test_amb_no_go_cada_mutador_respon_403_decision_required(
     client_a, workspace, method, path, body
 ):
+    """Un NO-GO vigent ho tanca tot: tambe les notes i els dubtes."""
     await _decide(client_a, workspace, "no_go")
     response = await _call(client_a, workspace, method, path, body)
     assert response.status_code == 403, response.text
     assert _error_code(response) == "decision_required"
 
 
-@pytest.mark.parametrize(("method", "path", "body"), PREPARE_MUTATORS, ids=MUTATOR_IDS)
+@pytest.mark.parametrize(("method", "path", "body"), ALL_MUTATORS, ids=ALL_IDS)
 async def test_amb_go_vigent_cap_mutador_no_queda_bloquejat(
     client_a, workspace, method, path, body
 ):
@@ -246,9 +272,76 @@ async def test_amb_go_vigent_cap_mutador_no_queda_bloquejat(
     assert _error_code(response) != "decision_required"
 
 
-async def test_un_ajornament_sense_go_tampoc_no_obre_preparar(client_a, workspace):
+# --------------------------------------------------------------------------- #
+# Notes i dubtes: oberts en l'analisi, abans de decidir                         #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(("method", "path", "body"), STUDY_MUTATORS, ids=STUDY_IDS)
+async def test_en_analisi_les_notes_i_els_dubtes_no_demanen_cap_decisio(
+    client_a, workspace, method, path, body
+):
+    """Sense cap decisio (estat `analysis`): la resposta es la que toqui (201,
+    200, 404 per un id inventat...), mai `decision_required`."""
+    assert workspace.status.value == "analysis"
+    response = await _call(client_a, workspace, method, path, body)
+    assert response.status_code != 403, response.text
+    assert response.status_code < 500, response.text
+    assert _error_code(response) != "decision_required"
+
+
+@pytest.mark.parametrize(("method", "path", "body"), STUDY_MUTATORS, ids=STUDY_IDS)
+async def test_amb_la_decisio_ajornada_les_notes_i_els_dubtes_continuen_oberts(
+    client_a, workspace, method, path, body
+):
+    """Ajornar no es dir que no: l'estudi continua."""
     await _decide(client_a, workspace, "defer")
-    response = await client_a.post(f"{_base(workspace)}/notes", json={"text": "Nota"})
+    response = await _call(client_a, workspace, method, path, body)
+    assert response.status_code != 403, response.text
+    assert response.status_code < 500, response.text
+    assert _error_code(response) != "decision_required"
+
+
+async def test_en_analisi_s_obre_i_es_resol_un_dubte_i_s_escriu_una_nota(client_a, workspace):
+    """De punta a punta i sense cap decisio: el dubte neix, es resol i la nota
+    queda escrita. La candidatura continua en `analysis` i sense decisions.
+    Bloquejar la revisio final, en canvi, es una decisio d'oferta: demana GO."""
+    base = _base(workspace)
+    created = await client_a.post(
+        f"{base}/issues",
+        json={"issue_type": "contradiction", "title": "El PPT i el PCAP no diuen el mateix"},
+    )
+    assert created.status_code == 201, created.text
+    issue_id = created.json()["id"]
+
+    resolved = await client_a.post(
+        f"{base}/issues/{issue_id}/resolve",
+        json={"resolution": "Aclarit al tauler.", "resolution_source": "Resposta oficial"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["status"] == "resolved"
+
+    note = await client_a.post(f"{base}/notes", json={"text": "Dimensionament: 131 linies."})
+    assert note.status_code == 200, note.text
+    texts = [n["text"] for n in (await client_a.get(f"{base}/notes")).json()]
+    assert texts == ["Dimensionament: 131 linies."]
+
+    blocked = await client_a.post(
+        f"{base}/issues/{issue_id}/final-review-block", json={"blocks_final_review": True}
+    )
+    assert blocked.status_code == 403, blocked.text
+    assert _error_code(blocked) == "decision_required"
+
+    detail = (await client_a.get(base)).json()
+    assert detail["status"] == "analysis"
+    assert detail["human_decision"] is None
+    assert (await client_a.get(f"{base}/decisions")).json() == []
+
+
+async def test_un_ajornament_sense_go_tampoc_no_obre_preparar(client_a, workspace):
+    """Ajornar deixa obertes les notes i els dubtes, pero no la preparacio."""
+    await _decide(client_a, workspace, "defer")
+    response = await client_a.post(f"{_base(workspace)}/tasks", json={"title": "Tasca"})
     assert response.status_code == 403
     assert _error_code(response) == "decision_required"
 
@@ -362,10 +455,13 @@ def _workspace_mutators_in_app() -> set[tuple[str, str]]:
 
 def test_la_llista_explicita_cobreix_tots_els_mutadors_del_workspace():
     """Un endpoint mutador nou sota el workspace ha d'entrar a `PREPARE_MUTATORS`
-    (i, per tant, portar el guard) o ser una excepcio documentada aqui."""
-    listed = {(method, _normalize(path)) for method, path, _ in PREPARE_MUTATORS}
+    o a `STUDY_MUTATORS` (i, per tant, portar el guard que li toca) o ser una
+    excepcio documentada aqui."""
+    prepare = {(method, _normalize(path)) for method, path, _ in PREPARE_MUTATORS}
+    study = {(method, _normalize(path)) for method, path, _ in STUDY_MUTATORS}
     # Excepcions explicites: el pas Decidir, i «Marca com revisats», que es
     # llegir els plecs abans de decidir (ruling C3), no preparar.
     exempt = {("POST", "decisions"), ("POST", "documents/review")}
-    assert listed.isdisjoint(exempt)
-    assert _workspace_mutators_in_app() == listed | exempt
+    assert prepare.isdisjoint(study)
+    assert prepare.isdisjoint(exempt) and study.isdisjoint(exempt)
+    assert _workspace_mutators_in_app() == prepare | study | exempt

@@ -65,7 +65,7 @@ from app.schemas.workspace import (
 )
 from app.services import audit, workspace_dossier, workspace_readiness
 from app.services import bid_workspace as service
-from app.services.workspace_gate import assert_workspace_go
+from app.services.workspace_gate import assert_workspace_go, assert_workspace_study_open
 from app.tenders.visibility import visible_to_company
 from app.workspace.decision import nothing_to_do_reason
 
@@ -711,8 +711,10 @@ async def create_note(
     session: SessionDep,
     ctx: CompanyCtx,
 ):
+    """Una nota d'estudi o de preparacio. Com els dubtes, s'escriu en l'analisi,
+    abans de decidir: nomes un NO-GO vigent la tanca (ajust del 22-10-2026)."""
     workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
-    await assert_workspace_go(session, workspace)
+    await assert_workspace_study_open(session, workspace)
     note = WorkspaceNote(
         company_id=ctx.company_id,
         workspace_id=workspace.id,
