@@ -6,11 +6,13 @@ import { readinessFixture } from "@/test/readiness-fixture";
 import { decisionFixture, workspaceFixture } from "@/test/workspace-fixture";
 
 /**
- * Preparar sense GO amb una secció REAL (cap secció mockejada): el control
- * existeix, es pot omplir, però és inert —el navegador no entrega el clic a un
- * control dins d'un `fieldset` desactivat— i cap crida mutadora surt de la UI.
- * El mateix gest amb GO sí que escriu: així es demostra que el que atura la
- * crida és el mode lectura, no el muntatge del test.
+ * Les notes amb la secció REAL (cap secció mockejada). Ajust del propietari
+ * (22-10-2026): les notes s'escriuen en l'anàlisi, abans de decidir —sense cap
+ * decisió, amb la decisió ajornada i amb GO—; només un NO-GO vigent les tanca.
+ * Amb NO-GO el control existeix, es pot omplir, però és inert —el navegador no
+ * entrega el clic a un control dins d'un `fieldset` desactivat— i cap crida
+ * mutadora surt de la UI. El mateix gest en l'anàlisi sí que escriu: així es
+ * demostra que el que atura la crida és el mode lectura, no el muntatge del test.
  */
 
 const get = vi.fn();
@@ -35,8 +37,13 @@ vi.mock("next/navigation", () => ({
 
 import WorkspacePage from "./page";
 
+const READ_ONLY = "Es pot consultar; s'obre a edició amb GO";
+const STUDY_OPEN = "Les notes i els dubtes ja s'hi poden escriure";
+
 const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 const go = () => ({ status: "preparing_bid" as const, human_decision: "go" as const, latest_decision: decisionFixture(), decisions: [decisionFixture()] });
+const deferred = () => ({ status: "awaiting_decision" as const, human_decision: "defer" as const, latest_decision: decisionFixture({ decision: "defer" }) });
+const noGo = () => ({ status: "no_go_approved" as const, human_decision: "no_go" as const, latest_decision: decisionFixture({ decision: "no_go" }) });
 
 function respond(workspace: ReturnType<typeof workspaceFixture>) {
   get.mockImplementation((path: string) => {
@@ -63,16 +70,39 @@ beforeEach(() => {
   post.mockResolvedValue({ id: "n1", text: "Parlat amb el responsable.", author_id: "u1", author_name: "Anna Puig", created_at: "2026-10-10T10:00:00Z" });
 });
 
-describe("Preparar sense GO amb la secció de notes real", () => {
-  it("sense GO: el camp i el botó pengen d'un fieldset desactivat, el clic és inert i no surt cap crida", async () => {
+describe("Notes amb la secció real: s'escriuen en l'anàlisi; un NO-GO les tanca", () => {
+  it("sense cap decisió (estat `analysis`): el gest escriu la nota; la resta de Preparar continua en lectura", async () => {
     respond(workspaceFixture());
+    render(<WorkspacePage />);
+    await flush();
+    const { button } = await typeANoteAndClick();
+    expect(button.closest("fieldset[disabled]")).toBeNull();
+    expect(post).toHaveBeenCalledWith("/companies/c1/workspaces/w1/notes", { text: "Parlat amb el responsable." });
+    // Checklist i tasques continuen demanant GO, i la nota de lectura diu les dues coses.
+    expect(document.querySelector("fieldset[data-prepare-mode='read-only']")).not.toBeNull();
+    expect(screen.getByText(READ_ONLY)).toBeTruthy();
+    expect(screen.getByText(STUDY_OPEN)).toBeTruthy();
+  });
+
+  it("amb la decisió ajornada: la nota també s'escriu", async () => {
+    respond(workspaceFixture(deferred()));
+    render(<WorkspacePage />);
+    await flush();
+    const { button } = await typeANoteAndClick();
+    expect(button.closest("fieldset[disabled]")).toBeNull();
+    expect(post).toHaveBeenCalledWith("/companies/c1/workspaces/w1/notes", { text: "Parlat amb el responsable." });
+  });
+
+  it("amb NO-GO vigent: el camp i el botó pengen d'un fieldset desactivat, el clic és inert i no surt cap crida", async () => {
+    respond(workspaceFixture(noGo()));
     render(<WorkspacePage />);
     await flush();
     const { textarea, button } = await typeANoteAndClick();
     expect(textarea.closest("fieldset[disabled]")).not.toBeNull();
     expect(button.closest("fieldset[disabled]")).not.toBeNull();
     expect(post).not.toHaveBeenCalled();
-    expect(screen.getByText("Es pot consultar; s'obre a edició amb GO")).toBeTruthy();
+    expect(screen.getByText(READ_ONLY)).toBeTruthy();
+    expect(screen.queryByText(STUDY_OPEN)).toBeNull();
   });
 
   it("amb GO: el mateix gest escriu la nota", async () => {

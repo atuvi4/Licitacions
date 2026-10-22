@@ -39,6 +39,8 @@ import {
 } from "@/lib/labels";
 import { formatDateTime } from "@/lib/tenders";
 import {
+  STUDY_OPEN_TEXT,
+  isStudyEditable,
   workspaceStatusLabel,
   type WorkspaceDecisionType,
   type WorkspaceDetail,
@@ -58,12 +60,20 @@ import {
 /**
  * Preparar i Tancar sense GO (3B-2 §7.1.6, decisió 4): es llegeixen, no
  * s'editen. Una nota i no un bàner: la pàgina només en té un (handoff §2.4).
+ * `studyOpen`: en l'anàlisi (sense decisió o ajornada) les notes i els dubtes
+ * ja s'escriuen (ajust del 22-10-2026), i la nota ho diu.
  */
-function ReadOnlyNote({ decideHref }: { decideHref: string }) {
+function ReadOnlyNote({ decideHref, studyOpen = false }: { decideHref: string; studyOpen?: boolean }) {
   return (
     <p role="note" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-muted">
       <Lock size={14} strokeWidth={1.5} aria-hidden />
       <span>{PREPARE_READ_ONLY_TEXT}</span>
+      {studyOpen && (
+        <>
+          <span aria-hidden>·</span>
+          <span>{STUDY_OPEN_TEXT}</span>
+        </>
+      )}
       <span aria-hidden>·</span>
       <Link href={decideHref} className="font-medium text-brand hover:underline">
         Ves a Decidir
@@ -85,6 +95,25 @@ function PrepareArea({ editable, children }: { editable: boolean; children: Reac
       disabled={!editable}
       data-prepare-mode={editable ? "edit" : "read-only"}
       aria-label="Preparació de la candidatura"
+      className="m-0 min-w-0 space-y-5 border-0 p-0"
+    >
+      {children}
+    </fieldset>
+  );
+}
+
+/**
+ * Les notes (ajust del 22-10-2026): com els dubtes, s'escriuen en l'anàlisi,
+ * abans de decidir, i només un NO-GO vigent les tanca. Van en un `fieldset`
+ * propi i no dins de `PrepareArea` perquè un `fieldset` desactivat no es pot
+ * tornar a activar per dins.
+ */
+function StudyArea({ editable, children }: { editable: boolean; children: ReactNode }) {
+  return (
+    <fieldset
+      disabled={!editable}
+      data-study-mode={editable ? "edit" : "read-only"}
+      aria-label="Notes de la candidatura"
       className="m-0 min-w-0 space-y-5 border-0 p-0"
     >
       {children}
@@ -401,6 +430,9 @@ function WorkspaceView() {
   const banner = primaryBanner(data);
   // La porta d'edició de Preparar i Tancar: només un GO vigent (3B-2 §7.1.6).
   const editable = prepareMode(data) === "edit";
+  // Notes i dubtes: oberts en l'anàlisi (sense decisió o ajornada) i amb GO;
+  // només un NO-GO vigent els tanca (ajust del 22-10-2026, com l'API).
+  const studyEditable = isStudyEditable(data);
   const signerName = user?.full_name || user?.email || "tu";
   // Qualsevol desat d'una secció ja passava per aquí; ara també torna a
   // preguntar la preparació final, perquè el capçal no quedi dient el que era
@@ -558,13 +590,16 @@ function WorkspaceView() {
               </Button>
             </div>
 
-            {!editable && <ReadOnlyNote decideHref={hrefFor("decidir")} />}
+            {!editable && <ReadOnlyNote decideHref={hrefFor("decidir")} studyOpen={studyEditable} />}
 
+            {/* Els dubtes s'escriuen en l'anàlisi; decidir si un impedeix la
+                revisió final, en canvi, és una decisió d'oferta i demana GO. */}
             <IssuesDrawer
               workspace={data}
               open={issuesOpen}
               onClose={() => setIssuesOpen(false)}
-              readOnly={!editable}
+              readOnly={!studyEditable}
+              canDecideBlock={editable}
             />
 
             <PrepareArea editable={editable}>
@@ -576,10 +611,14 @@ function WorkspaceView() {
                   <WorkPlanDeadlines workspace={data} />
                   <ChecklistSection workspace={data} onChange={refresh} />
                   <TasksSection workspace={data} onChange={refresh} />
-                  <NotesSection workspace={data} onChange={refresh} />
                 </>
               )}
             </PrepareArea>
+            {area === "pla" && (
+              <StudyArea editable={studyEditable}>
+                <NotesSection workspace={data} onChange={refresh} />
+              </StudyArea>
+            )}
           </>
         )}
 

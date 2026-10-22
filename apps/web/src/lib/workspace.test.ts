@@ -4,7 +4,9 @@ import {
   PREPARE_READ_ONLY_TEXT,
   READINESS_BLOCKER_LABELS,
   STALE_REASON_LABELS,
+  STUDY_OPEN_TEXT,
   isPrepareEditable,
+  isStudyEditable,
   readinessBlockerLabel,
   staleReasonLabel,
   warningLabel,
@@ -96,5 +98,20 @@ describe("Preparar sense GO (3B-2 §7.1.6, decisió 4)", () => {
 
   it("la copy del mode lectura és exactament la de la spec", () => {
     expect(PREPARE_READ_ONLY_TEXT).toBe("Es pot consultar; s'obre a edició amb GO");
+  });
+});
+
+describe("Notes i dubtes en l'anàlisi (ajust del 22-10-2026, com l'API)", () => {
+  it("s'escriuen sense cap decisió, amb la decisió ajornada i amb GO; només un NO-GO els tanca", () => {
+    expect(isStudyEditable({ human_decision: null })).toBe(true);
+    expect(isStudyEditable({ human_decision: "defer" })).toBe(true);
+    expect(isStudyEditable({ human_decision: "go" })).toBe(true);
+    expect(isStudyEditable({ human_decision: "no_go" })).toBe(false);
+  });
+
+  it("la resta de Preparar continua demanant GO, i la copy ho distingeix", () => {
+    expect(isPrepareEditable({ human_decision: null })).toBe(false);
+    expect(isPrepareEditable({ human_decision: "defer" })).toBe(false);
+    expect(STUDY_OPEN_TEXT).toBe("Les notes i els dubtes ja s'hi poden escriure");
   });
 });

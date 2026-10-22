@@ -1018,7 +1018,10 @@ describe("Candidatura · propietari únic de /analysis/current", () => {
 
 describe("Candidatura · Preparar sense GO és visible però només lectura (3B-2 §7.1.6, A18)", () => {
   const COPY = "Es pot consultar; s'obre a edició amb GO";
+  // Ajust del 22-10-2026: notes i dubtes s'escriuen en l'anàlisi; només un NO-GO els tanca.
+  const STUDY = "Les notes i els dubtes ja s'hi poden escriure";
   const go = () => ({ status: "preparing_bid" as const, human_decision: "go" as const, latest_decision: decisionFixture(), decisions: [decisionFixture()] });
+  const noGo = () => ({ status: "no_go_approved" as const, human_decision: "no_go" as const, latest_decision: decisionFixture({ decision: "no_go" }) });
 
   beforeEach(() => {
     get.mockReset();
@@ -1054,22 +1057,26 @@ describe("Candidatura · Preparar sense GO és visible però només lectura (3B-
     const control = screen.getByRole("button", { name: "simula canvis sense desar" });
     expect(control.closest("fieldset[disabled]")).not.toBeNull();
     expect(screen.getByText(COPY)).toBeTruthy();
+    // En l'anàlisi les notes i els dubtes ja s'escriuen, i la nota de lectura ho diu.
+    expect(screen.getByText(STUDY)).toBeTruthy();
     expect(post).not.toHaveBeenCalled();
   });
 
   it("amb NO-GO vigent, Preparar també és només lectura", async () => {
-    get.mockResolvedValue(workspaceFixture({ status: "no_go_approved", human_decision: "no_go", latest_decision: decisionFixture({ decision: "no_go" }) }));
+    get.mockResolvedValue(workspaceFixture(noGo()));
     render(<WorkspacePage />);
     await flush();
     expect(readOnlyArea().disabled).toBe(true);
     expect(screen.getByText(COPY)).toBeTruthy();
+    expect(screen.queryByText(STUDY)).toBeNull();
   });
 
-  it("un ajornament tampoc no obre l'edició", async () => {
+  it("un ajornament tampoc no obre l'edició de Preparar, però sí les notes i els dubtes", async () => {
     get.mockResolvedValue(workspaceFixture({ human_decision: "defer", latest_decision: decisionFixture({ decision: "defer" }) }));
     render(<WorkspacePage />);
     await flush();
     expect(readOnlyArea().disabled).toBe(true);
+    expect(screen.getByText(STUDY)).toBeTruthy();
   });
 
   it("amb GO vigent és editable: cap fieldset desactivat i cap copy de lectura", async () => {
@@ -1096,8 +1103,42 @@ describe("Candidatura · Preparar sense GO és visible però només lectura (3B-
     }
   });
 
-  it("els dubtes es poden consultar sense GO, però no obrir-ne cap", async () => {
+  it("en l'anàlisi, al pla de treball les notes ja s'editen; checklist i tasques, no", async () => {
+    get.mockResolvedValue(workspaceFixture());
+    search = "pas=preparar&area=pla";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByTestId("tasks").closest("fieldset[disabled]")).not.toBeNull();
+    expect(screen.getByTestId("checklist").closest("fieldset[disabled]")).not.toBeNull();
+    expect(screen.getByTestId("notes").closest("fieldset[disabled]")).toBeNull();
+    expect(screen.getByTestId("notes").closest("fieldset[data-study-mode='edit']")).not.toBeNull();
+  });
+
+  it("amb NO-GO vigent, les notes tornen a ser només lectura", async () => {
+    get.mockResolvedValue(workspaceFixture(noGo()));
+    search = "pas=preparar&area=pla";
+    render(<WorkspacePage />);
+    await flush();
+    expect(screen.getByTestId("notes").closest("fieldset[disabled]")).not.toBeNull();
+    expect(screen.getByTestId("notes").closest("fieldset[data-study-mode='read-only']")).not.toBeNull();
+  });
+
+  it("en l'anàlisi, el calaix de dubtes ja s'edita sense GO: cap fieldset desactivat ni copy de lectura", async () => {
     get.mockImplementation(async (path: string) => (path.endsWith("/issues") ? [] : workspaceFixture()));
+    render(<WorkspacePage />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Dubtes i discrepàncies" }));
+    await flush();
+    const drawer = screen.getByRole("dialog", { name: "Dubtes i discrepàncies" });
+    expect(drawer.textContent).toContain("Cap dubte obert");
+    expect(drawer.textContent).not.toContain(COPY);
+    expect(drawer.querySelector("fieldset[disabled]")).toBeNull();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("amb NO-GO vigent, els dubtes es poden consultar però no obrir-ne cap", async () => {
+    get.mockImplementation(async (path: string) => (path.endsWith("/issues") ? [] : workspaceFixture(noGo())));
+    search = "pas=preparar";
     render(<WorkspacePage />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Dubtes i discrepàncies" }));

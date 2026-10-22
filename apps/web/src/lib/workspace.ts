@@ -483,6 +483,20 @@ export function isPrepareEditable(workspace: Pick<WorkspaceDetail, "human_decisi
   return workspace.human_decision === "go";
 }
 
+/**
+ * Notes i dubtes/discrepàncies (ajust del propietari, 22-10-2026; API
+ * `assert_workspace_study_open`): s'identifiquen en l'anàlisi, ABANS de decidir.
+ * S'hi pot escriure sense cap decisió, amb la decisió ajornada i amb GO; només
+ * un NO-GO vigent els torna a tancar. Decidir si un dubte impedeix la revisió
+ * final continua sent cosa del GO (`isPrepareEditable`).
+ */
+export function isStudyEditable(workspace: Pick<WorkspaceDetail, "human_decision">): boolean {
+  return workspace.human_decision !== "no_go";
+}
+
+/** Al costat de `PREPARE_READ_ONLY_TEXT` quan, sense GO, les notes i els dubtes ja s'escriuen. */
+export const STUDY_OPEN_TEXT = "Les notes i els dubtes ja s'hi poden escriure";
+
 /** Cert si els comptadors del dossier no tenen cap anàlisi al darrere. */
 export function hasNoAnalysis(coverage: Pick<DossierCoverageCounters, "analysis_state" | "mandatory_total"> | null | undefined): boolean {
   return coverage?.analysis_state === "absent" || coverage?.mandatory_total === null;

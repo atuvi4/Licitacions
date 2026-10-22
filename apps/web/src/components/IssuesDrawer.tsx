@@ -58,7 +58,7 @@ export interface IssueContext {
  * * **no obre cap dubte sola.** «Obre dubte» al costat d'una entitat només
  *   prepara el formulari amb el context; fins que algú confirma, no hi ha res;
  * * **no ofereix bloquejar la revisió final a qui no ho pot decidir.** Per a la
- *   resta d'editors el control no hi és.
+ *   resta d'editors el control no hi és; i sense GO no hi és per a ningú.
  */
 export function IssuesDrawer({
   workspace,
@@ -66,6 +66,7 @@ export function IssuesDrawer({
   onClose,
   context,
   readOnly = false,
+  canDecideBlock = true,
 }: {
   workspace: WorkspaceDetail;
   open: boolean;
@@ -73,16 +74,25 @@ export function IssuesDrawer({
   /** Quan s'obre des d'una entitat, el formulari ja ve preomplert amb ella. */
   context?: IssueContext | null;
   /**
-   * Sense GO vigent (3B-2 §7.1.6): els dubtes es consulten però no s'hi
-   * escriu. Tot el cos del calaix queda dins d'un `fieldset` desactivat; el
-   * botó de tancar és del `Drawer` i continua funcionant.
+   * Amb un NO-GO vigent (3B-2 §7.1.6 i l'ajust del 22-10-2026): els dubtes es
+   * consulten però no s'hi escriu. Tot el cos del calaix queda dins d'un
+   * `fieldset` desactivat; el botó de tancar és del `Drawer` i continua
+   * funcionant. En l'anàlisi (sense decisió o ajornada) i amb GO, s'hi escriu.
    */
   readOnly?: boolean;
+  /**
+   * Decidir si un dubte impedeix la revisió final és una decisió d'oferta: només
+   * amb GO vigent (com el backend, `final-review-block`). Sense GO el control
+   * no hi és, ni per als rols de decisió.
+   */
+  canDecideBlock?: boolean;
 }) {
   const { companyId, membership } = useSession();
   const invalidateReadiness = useInvalidateReadiness();
   const canEdit = canEditIssues(membership?.role);
-  const canBlock = canBlockFinalReview(membership?.role);
+  const roleCanBlock = canBlockFinalReview(membership?.role);
+  const canBlock = roleCanBlock && canDecideBlock;
+  const blockNeedsGo = roleCanBlock && !canDecideBlock;
 
   const path =
     companyId && open ? `/companies/${companyId}/workspaces/${workspace.id}/issues` : null;
@@ -169,6 +179,7 @@ export function IssuesDrawer({
               workspace={workspace}
               canEdit={canEdit}
               canBlock={canBlock}
+              blockNeedsGo={blockNeedsGo}
               expanded={openId === issue.id}
               onToggle={() => setOpenId(openId === issue.id ? null : issue.id)}
               onChanged={refresh}
@@ -188,6 +199,7 @@ function IssueRow({
   workspace,
   canEdit,
   canBlock,
+  blockNeedsGo,
   expanded,
   onToggle,
   onChanged,
@@ -196,6 +208,8 @@ function IssueRow({
   workspace: WorkspaceDetail;
   canEdit: boolean;
   canBlock: boolean;
+  /** Un rol de decisió sense GO vigent: el control no hi és, però es diu per què. */
+  blockNeedsGo: boolean;
   expanded: boolean;
   onToggle: () => void;
   onChanged: () => Promise<void>;
@@ -354,6 +368,11 @@ function IssueRow({
                     ? "Ja no impedeix la revisió"
                     : "Impedeix la revisió final"}
                 </Button>
+              )}
+              {blockNeedsGo && (
+                <p className="w-full text-caption text-muted">
+                  Decidir si impedeix la revisió final s&apos;obre amb GO.
+                </p>
               )}
             </div>
           )}

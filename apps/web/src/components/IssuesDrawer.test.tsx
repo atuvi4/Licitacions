@@ -96,13 +96,17 @@ function issue(overrides: Partial<Issue> = {}): Issue {
   };
 }
 
-async function mount(context: Record<string, string> | null = null) {
+async function mount(
+  context: Record<string, string> | null = null,
+  gate: { readOnly?: boolean; canDecideBlock?: boolean } = {},
+) {
   const view = render(
     <IssuesDrawer
       workspace={workspaceFixture({ tender_lot_id: null })}
       open
       onClose={vi.fn()}
       context={context}
+      {...gate}
     />,
   );
   await flush();
@@ -345,6 +349,47 @@ it("un tècnic pot obrir i resoldre però no marcar el bloqueig", async () => {
   // El control no hi és: no és que estigui desactivat.
   expect(screen.queryByRole("button", { name: /Impedeix la revisió/ })).toBeNull();
   expect(screen.queryByRole("button", { name: /Ja no impedeix/ })).toBeNull();
+});
+
+/* ----- En l'anàlisi, sense GO (ajust del 22-10-2026) ----------------------- */
+
+it("sense GO, un rol de decisió obre i resol, però el bloqueig no hi és i se li diu per què", async () => {
+  payload = [issue()];
+  await mount(null, { canDecideBlock: false });
+
+  expect(screen.getByRole("button", { name: "Obre dubte" })).toBeTruthy();
+  await click("Quantes extensions hi ha");
+  expect(screen.getByRole("button", { name: "Resol" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Descarta" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Impedeix la revisió/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Ja no impedeix/ })).toBeNull();
+  expect(screen.getByText("Decidir si impedeix la revisió final s'obre amb GO.")).toBeTruthy();
+
+  await click("Descarta");
+  expect(post).toHaveBeenCalledWith("/companies/c1/workspaces/w1/issues/i1/dismiss", {});
+});
+
+it("sense GO, un tècnic no veu ni el control ni l'avís del bloqueig", async () => {
+  role = "technical";
+  payload = [issue()];
+  await mount(null, { canDecideBlock: false });
+
+  await click("Quantes extensions hi ha");
+  expect(screen.getByRole("button", { name: "Resol" })).toBeTruthy();
+  expect(screen.queryByText("Decidir si impedeix la revisió final s'obre amb GO.")).toBeNull();
+});
+
+it("amb un NO-GO vigent (readOnly) tot el cos és inert i no surt cap crida", async () => {
+  payload = [issue()];
+  await mount(null, { readOnly: true, canDecideBlock: false });
+
+  expect(screen.getByText("Es pot consultar; s'obre a edició amb GO")).toBeTruthy();
+  const create = screen.getByRole("button", { name: "Obre dubte" }) as HTMLButtonElement;
+  expect(create.closest("fieldset[disabled]")).not.toBeNull();
+  create.click();
+  await flush();
+  expect(screen.queryByText("Nou dubte")).toBeNull();
+  expect(post).not.toHaveBeenCalled();
 });
 
 it("un dubte que bloqueja ho diu", async () => {
