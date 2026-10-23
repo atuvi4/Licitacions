@@ -508,7 +508,7 @@ function NoteItem({
       )}
       {mode === "delete" && (
         <div className="mt-2 flex flex-wrap items-center gap-2" role="group" aria-label="Confirma l'esborrat">
-          <p className="text-[13px] text-ink">S'esborrarà definitivament. Ho vols fer?</p>
+          <p className="text-[13px] text-ink">S&apos;esborrarà definitivament. Ho vols fer?</p>
           <Button variant="danger" size="sm" onClick={() => void remove()} loading={mutation.saving} autoFocus>
             Esborra-la
           </Button>
