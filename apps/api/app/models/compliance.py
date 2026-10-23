@@ -39,12 +39,16 @@ from app.models.enums import (
     ComplianceRunStatus,
     EligibilityResult,
     EvidenceStrength,
+    MatchStatus,
     RecommendationResult,
     RequirementObligation,
     ReviewStatus,
 )
 
 _COMPLIANCE_IN_FLIGHT = "status IN ('pending', 'running')"
+_PREFIT_STATUS_VALID = "prefit_status IN ({})".format(
+    ", ".join(f"'{status.value}'" for status in MatchStatus)
+)
 
 
 class CompanyComplianceRun(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixin, Base):
@@ -74,6 +78,10 @@ class CompanyComplianceRun(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixi
             unique=True,
             postgresql_where=sa.text(_COMPLIANCE_IN_FLIGHT),
             sqlite_where=sa.text(_COMPLIANCE_IN_FLIGHT),
+        ),
+        # 0064, nomes a PostgreSQL: els estats tancats del pre-fit (NULL hi passa).
+        sa.CheckConstraint(_PREFIT_STATUS_VALID, name="prefit_status_valid").ddl_if(
+            dialect="postgresql"
         ),
     )
 
@@ -133,6 +141,12 @@ class CompanyComplianceRun(UUIDPrimaryKeyMixin, CompanyOwnedMixin, TimestampMixi
     #: Pre-fit vigent quan es va calcular. Es guarda per traçabilitat, no es
     #: fusiona amb l'elegibilitat.
     prefit_score: Mapped[int | None] = mapped_column(sa.Integer)
+    #: Classificacio del pre-fit en calcular (0064). No es fusiona amb l'elegibilitat,
+    #: pero decideix si una licitacio elegible es candidata: un `low_fit` no ho es
+    #: (D2). Nul en els runs anteriors a la 0064.
+    prefit_status: Mapped[MatchStatus | None] = mapped_column(
+        enum_column(MatchStatus, "match_status")
+    )
 
     duration_ms: Mapped[int | None] = mapped_column(sa.Integer)
     is_current: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)

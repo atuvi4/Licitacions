@@ -35,6 +35,7 @@ from app.compliance.alternatives import (
     effective_result,
     resolve_groups,
 )
+from app.compliance.certifications import POTENTIAL_ONLY_KEY
 from app.compliance.engine import (
     applies_to_lot,
     assess_requirement_traced,
@@ -44,6 +45,26 @@ from app.compliance.engine import (
 )
 from app.compliance.normalize import Normalization, normalize_requirement
 from app.compliance.profile import compute_profile_fingerprint, load_profile_snapshot
+from app.compliance.resolution import (
+    BRANCH_EXPLANATION_KEY,
+    BRANCH_MODE_KEY,
+    BRANCH_RESULT_KEY,
+    BRANCH_RULE_KEY,
+    CARRIED_REVIEW_KEY,
+    DROPPED_REVIEW_KEY,
+    OWN_EXPLANATION_KEY,
+    REVIEW_BASIS_KEY,
+    SUBSTITUTION_KEY,
+    RowState,
+    agreed_with_rewrite,
+    count_rows,
+    group_rewrites,
+    is_classification,
+    own_obligation,
+    own_result,
+    substitution_map,
+    substitution_params,
+)
 from app.compliance.rules import (
     RULES_VERSION,
     ExplanationCode,
@@ -63,6 +84,8 @@ from app.models.enums import (
     AssessmentResult,
     BlockerStatus,
     ComplianceRunStatus,
+    ContractType,
+    MatchStatus,
     ReviewStatus,
 )
 from app.models.identity import Company
@@ -112,16 +135,23 @@ def requirements_fingerprint(extraction_run: RequirementExtractionRun) -> str:
     return f"{extraction_run.id}:{extraction_run.input_fingerprint}"[:64]
 
 
-async def _prefit_score(
+async def _prefit(
     session: AsyncSession, company_id: uuid.UUID, tender_id: uuid.UUID
-) -> int | None:
-    """Pre-fit vigent. Es guarda per traçabilitat; NO es fusiona amb el resultat."""
-    return await session.scalar(
-        sa.select(CompanyTenderMatch.score).where(
-            CompanyTenderMatch.company_id == company_id,
-            CompanyTenderMatch.tender_id == tender_id,
+) -> tuple[int | None, MatchStatus | None]:
+    """Pre-fit vigent: puntuacio i classificacio. Es guarden per traçabilitat; NO es
+    fusionen amb l'elegibilitat, pero la classificacio decideix si una licitacio
+    elegible es candidata (D2: un `low_fit` amb 60 punts o mes no ho es)."""
+    row = (
+        await session.execute(
+            sa.select(CompanyTenderMatch.score, CompanyTenderMatch.status).where(
+                CompanyTenderMatch.company_id == company_id,
+                CompanyTenderMatch.tender_id == tender_id,
+            )
         )
-    )
+    ).first()
+    if row is None:
+        return None, None
+    return row[0], row[1]
 
 
 async def analyze_company_compliance(
@@ -181,7 +211,7 @@ async def analyze_company_compliance(
         ):
             return ComplianceOutcome(run=current, reused=True)
 
-    prefit = await _prefit_score(session, company.id, tender.id)
+    prefit, prefit_status = await _prefit(session, company.id, tender.id)
     run = await _claim_run(
         session,
         company_id=company.id,
@@ -190,6 +220,7 @@ async def analyze_company_compliance(
         profile_fingerprint=profile_fingerprint,
         req_fingerprint=req_fingerprint,
         prefit=prefit,
+        prefit_status=prefit_status,
     )
     # Recalcular sobre la MATEIXA analisi no esborra el que una persona ha
     # revisat: les revisions del run vigent passen al nou, requisit a requisit.
@@ -203,7 +234,8 @@ async def analyze_company_compliance(
         sa.select(sa.func.count()).select_from(TenderLot).where(TenderLot.tender_id == tender.id)
     )
     tender_has_lots = bool(lot_count)
-    rows: list[tuple] = []
+    #: (requisit, avaluacio) tal com es desen, per al recompte final.
+    created: list[tuple[Requirement, CompanyRequirementAssessment]] = []
     #: (requisit, veredicte propi) abans de resoldre les disjuncions.
     evaluated: list[tuple] = []
     #: Normalitzacio de lectura de cada requisit (per agrupar-ne els duplicats).
@@ -256,13 +288,38 @@ async def analyze_company_compliance(
         ]
     )
 
+    # v6: en serveis, la classificacio acreditada substitueix la solvencia del mateix
+    # abast (art. 77.1.b LCSP). Aqui, amb els resultats automatics; despres del
+    # traspas de revisions, `finalize_rows` ho torna a decidir amb el veredicte huma.
+    services = tender.contract_type == ContractType.SERVICES
+    states = [_state(requirement, outcome) for requirement, outcome in evaluated]
+    substitutions = substitution_map(states) if services else {}
+
     resolved: list[tuple] = []
     for requirement, outcome in evaluated:
         group_key = getattr(requirement, "alternative_group", None)
         resolution = groups.get(group_key) if group_key else None
         effective = effective_result(outcome.result, resolution)
-        if resolution is not None and effective != outcome.result:
+        if resolution is not None and group_rewrites(
+            outcome.result, effective, resolution.outcome
+        ):
+            # Una disjuncio que no s'acredita tambe ho deixa escrit a cada via que no
+            # compleix (v6): el recompte en refa l'unic bloqueig a partir d'aqui.
             outcome = _with_group(outcome, group_key, resolution, effective)
+        elif services and resolution is None:
+            if is_classification(
+                requirement.category, outcome.rule_code, outcome.params
+            ) and outcome.result not in (
+                AssessmentResult.SATISFIES,
+                AssessmentResult.NOT_APPLICABLE,
+            ):
+                outcome = _optional_in_services(outcome)
+            elif requirement.id in substitutions and outcome.result not in (
+                AssessmentResult.SATISFIES,
+                AssessmentResult.NOT_APPLICABLE,
+            ):
+                outcome = _with_substitution(outcome, substitutions[requirement.id])
+                effective = outcome.result
 
         blocker = derive_blocker_status(
             obligation=requirement.obligation,
@@ -270,6 +327,7 @@ async def analyze_company_compliance(
             requirement_review_status=requirement.review_status,
             assessment_reviewed=False,
             modality=getattr(requirement, "modality", None),
+            confirmable_by_source=not (outcome.params or {}).get(POTENTIAL_ONLY_KEY),
         )
         resolved.append((requirement, outcome, blocker))
 
@@ -333,20 +391,16 @@ async def analyze_company_compliance(
                     strength=ref.strength,
                 )
             )
-        # El recompte es el de `_recount_run`: amb el resultat EFECTIU (la revisio
-        # humana conservada, si n'hi ha) i el bloqueig que en resulta.
-        rows.append(
-            (
-                consolidation.group_marker(requirement.id, outcome.params),
-                requirement.obligation,
-                assessment.effective_result,
-                assessment.blocker_status,
-            )
-        )
+        created.append((requirement, assessment))
+
+    # El recompte es el de `_recount_run`: amb el resultat EFECTIU (la revisio humana
+    # conservada, si n'hi ha), les disjuncions i la substitucio resoltes amb ell, i el
+    # bloqueig que en resulta. Les files especials es desen tal com compten.
+    rows = count_rows(created, services=services, persist=True)
 
     # Una exigencia = un recompte: els duplicats d'un grup en fan una sola fila.
     summary_rows = consolidation.resolve_rows(rows)
-    summary = summarise(summary_rows, prefit_score=prefit)
+    summary = summarise(summary_rows, prefit_score=prefit, prefit_status=prefit_status)
 
     run.requirements_total = len(summary_rows)
     run.mandatory_total = summary.mandatory_total
@@ -398,6 +452,7 @@ async def _claim_run(
     profile_fingerprint: str,
     req_fingerprint: str,
     prefit: int | None,
+    prefit_status: MatchStatus | None = None,
 ) -> CompanyComplianceRun:
     """Reserva el calcul. L'index unic parcial impedeix el doble clic."""
     revision = await latest_revision(session, tender.id)
@@ -415,6 +470,7 @@ async def _claim_run(
         requirements_fingerprint=req_fingerprint,
         started_at=datetime.now(UTC),
         prefit_score=prefit,
+        prefit_status=prefit_status,
         is_current=False,
     )
     session.add(run)
@@ -429,13 +485,9 @@ async def _claim_run(
     return run
 
 
-#: Clau de `explanation_params` amb la base d'una revisio humana: el run on es va
-#: fer, el resultat automatic que la persona tenia davant i l'empremta del requisit.
-REVIEW_BASIS_KEY = "review_basis"
-#: Clau de `explanation_params` amb la traca d'una revisio conservada d'un run anterior.
-CARRIED_REVIEW_KEY = "review_carried_over"
-#: Clau de `explanation_params` quan la revisio d'un run anterior NO s'ha conservat.
-DROPPED_REVIEW_KEY = "review_not_carried"
+#: `REVIEW_BASIS_KEY`, `CARRIED_REVIEW_KEY` i `DROPPED_REVIEW_KEY` son de
+#: `app.compliance.resolution`: el recompte tambe hi escriu (una confirmacio que ja no
+#: parla del resultat que es mostra). Es reexporten des d'aqui.
 #: El que fa que un requisit demani una altra cosa, o que compti d'una altra manera.
 #: `equivalence_allowed` hi es perque la regla de certificacions el llegeix.
 _REQUIREMENT_IDENTITY_FIELDS = (
@@ -542,7 +594,9 @@ def _same_requirement(
     """
     if (
         previous.requirement_value_json != requirement.value_json
-        or previous.obligation != requirement.obligation
+        # L'obligatorietat amb que es va calcular: el recompte pot haver desat la
+        # fila d'una altra manera (una classificacio en serveis, informativa).
+        or own_obligation(previous) != requirement.obligation
         or previous.tender_lot_id != requirement.tender_lot_id
     ):
         return False
@@ -576,11 +630,29 @@ def _carry_review(
     (`DROPPED_REVIEW_KEY`), amb el veredicte i el motiu d'abans.
     """
     basis = _review_basis(previous)
-    automatic = str(assessment.automatic_result)
-    automatic_changed = basis["automatic_result"] != automatic
+    if basis.get("own_result"):
+        # El que deia la fila tota sola, abans i ara: el resultat que es mostra pot venir
+        # d'un grup o d'una substitucio que depenen del que diuen altres files (v6).
+        automatic, reference = str(own_result(assessment)), basis["own_result"]
+    else:
+        automatic, reference = str(assessment.automatic_result), basis["automatic_result"]
+    automatic_changed = reference != automatic
     verdict = str(previous.reviewed_result) if previous.reviewed_result else None
+    # Una confirmacio d'un resultat que nomes es mostrava per un grup o una substitucio,
+    # o un veredicte que nomes el reafirmava, parla d'un resultat MOSTRAT: si es conserva
+    # ho decideix el recompte, amb el que la fila hi torna a mostrar
+    # (`resolution._drop_stale_confirmation`). Comparar-ne el resultat propi amagaria que
+    # el grup o la substitucio ja no el donen.
+    shown_only = agreed_with_rewrite(previous.reviewed_result, basis) or (
+        verdict is None
+        and basis.get("own_result")
+        and basis["own_result"] != basis["automatic_result"]
+    )
     if not _same_requirement(previous, basis, requirement):
         reason = "requirement_changed"
+    elif shown_only:
+        reason = None
+        automatic_changed = False
     elif automatic_changed and verdict is None:
         reason = "automatic_changed"
     elif (
@@ -621,6 +693,7 @@ def _carry_review(
         assessment_reviewed=previous.review_status
         in (ReviewStatus.VERIFIED, ReviewStatus.REJECTED),
         modality=getattr(requirement, "modality", None),
+        confirmable_by_source=not (assessment.explanation_params or {}).get(POTENTIAL_ONLY_KEY),
     )
     assessment.explanation_params = {
         **(assessment.explanation_params or {}),
@@ -710,6 +783,8 @@ async def review_assessment(
     params[REVIEW_BASIS_KEY] = {
         "run": str(assessment.assessment_run_id),
         "automatic_result": str(assessment.automatic_result),
+        # v6: el de la fila sola, per comparar-lo en recalcular (`_carry_review`).
+        "own_result": str(own_result(assessment)),
         "requirement": requirement_identity(requirement) if requirement else None,
         "identity_version": REQUIREMENT_IDENTITY_VERSION,
     }
@@ -724,39 +799,80 @@ async def review_assessment(
         # La mateixa llei que el motor: una branca alternativa o condicional no
         # bloqueja tota sola, encara que una persona la marqui "no compleix".
         modality=getattr(requirement, "modality", None) if requirement else None,
+        confirmable_by_source=not params.get(POTENTIAL_ONLY_KEY),
     )
 
     await session.flush()
+    # El recompte torna a resoldre les disjuncions i la substitucio per classificacio
+    # amb aquest veredicte (v6): el bloqueig d'un grup o d'una solvencia substituida
+    # el decideix el conjunt, no aquesta fila sola.
     await _recount_run(session, assessment.assessment_run_id)
     await session.commit()
     await session.refresh(assessment)
     return assessment
 
 
-async def _recount_run(session: AsyncSession, run_id: uuid.UUID) -> None:
-    """Refa els agregats del run despres d'una revisio."""
-    run = await session.get(CompanyComplianceRun, run_id)
-    if run is None:
-        return
+async def resolved_rows(session: AsyncSession, run: CompanyComplianceRun) -> list[tuple]:
+    """Les files del recompte d'un run, una per avaluacio i abans de consolidar.
+
+    Un run de la versio vigent les resol com el calcul (`count_rows`: disjuncions i
+    substitucio per classificacio, amb els veredictes humans) i les desa tal com
+    compten. Un run d'una versio anterior es compta com es va calcular (les files
+    desades): aplicar-hi les regles d'ara barrejaria dues versions en un sol run.
+    """
     assessments = (
         await session.scalars(
             sa.select(CompanyRequirementAssessment).where(
-                CompanyRequirementAssessment.assessment_run_id == run_id
+                CompanyRequirementAssessment.assessment_run_id == run.id
             )
         )
     ).all()
-    # Els duplicats d'una exigencia continuen sent una sola fila del recompte.
-    rows = consolidation.resolve_rows(
-        (
-            consolidation.group_marker(a.requirement_id, a.explanation_params),
-            a.obligation,
-            a.effective_result,
-            a.blocker_status,
-        )
-        for a in assessments
+    if run.rules_version != RULES_VERSION:
+        return [
+            (
+                consolidation.group_marker(a.requirement_id, a.explanation_params),
+                a.obligation,
+                a.effective_result,
+                a.blocker_status,
+            )
+            for a in assessments
+        ]
+    requirement_ids = [a.requirement_id for a in assessments]
+    requirements = {
+        requirement.id: requirement
+        for requirement in (
+            await session.scalars(sa.select(Requirement).where(Requirement.id.in_(requirement_ids)))
+        ).all()
+    } if requirement_ids else {}
+    tender = await session.get(Tender, run.tender_id)
+    services = tender is not None and tender.contract_type == ContractType.SERVICES
+    return count_rows(
+        [(requirements.get(a.requirement_id), a) for a in assessments],
+        services=services,
+        persist=True,
     )
-    summary = summarise(rows, prefit_score=run.prefit_score)
 
+
+async def _recount_run(session: AsyncSession, run_id: uuid.UUID) -> None:
+    """Refa els agregats del run despres d'una revisio.
+
+    v6: les disjuncions i la substitucio per classificacio es tornen a resoldre amb
+    els veredictes humans i les files especials es desen tal com compten
+    (`resolved_rows`); la resta de files conserven el seu. Un run d'una versio
+    anterior es recompta com abans.
+    """
+    run = await session.get(CompanyComplianceRun, run_id)
+    if run is None:
+        return
+    counted = await resolved_rows(session, run)
+    # Els duplicats d'una exigencia continuen sent una sola fila del recompte.
+    rows = consolidation.resolve_rows(counted)
+    summary = summarise(rows, prefit_score=run.prefit_score, prefit_status=run.prefit_status)
+
+    # Tambe els totals: el recompte pot haver desat una altra obligatorietat (una
+    # classificacio que deixa de ser, o torna a ser, d'un contracte de serveis).
+    run.requirements_total = len(rows)
+    run.mandatory_total = summary.mandatory_total
     run.satisfies_count = summary.satisfies
     run.does_not_satisfy_count = summary.does_not_satisfy
     run.unknown_count = summary.unknown
@@ -800,9 +916,11 @@ def _with_group(
 ) -> RuleOutcome:
     """El veredicte d'una branca, reescrit pel que ha decidit la disjuncio.
 
-    Es conserva el que deia la branca tota sola (`branch_result`): sense aixo,
-    una persona que obri l'assessment no podria saber si el requisit s'acredita
-    per aquesta via o per una altra, ni per que no bloqueja.
+    Es conserva el que deia la branca tota sola (`branch_result` i, des de la v6, el
+    motiu, la regla i el mode): sense aixo, una persona que obri l'assessment no
+    podria saber si el requisit s'acredita per aquesta via o per una altra, ni per que
+    no bloqueja (o per que el grup sencer si), i el recompte no podria tornar-li el
+    veredicte propi si el grup canvia (`resolution.apply_outcome`).
     """
     return replace(
         outcome,
@@ -812,7 +930,10 @@ def _with_group(
         params={
             **(outcome.params or {}),
             "alternative_group": group_key,
-            "branch_result": str(outcome.result),
+            BRANCH_RESULT_KEY: str(outcome.result),
+            BRANCH_EXPLANATION_KEY: outcome.explanation_code,
+            BRANCH_RULE_KEY: outcome.rule_code,
+            BRANCH_MODE_KEY: str(outcome.mode),
             "group_outcome": resolution.outcome.value,
             "group_branches": resolution.branches,
             # Sense aixo, un `incomplete` no diria si es perque falta resoldre
@@ -823,5 +944,61 @@ def _with_group(
             AssessmentMode.REVIEW_REQUIRED
             if effective == AssessmentResult.NEEDS_REVIEW
             else outcome.mode
+        ),
+    )
+
+
+def _with_substitution(outcome: RuleOutcome, classification_id: uuid.UUID) -> RuleOutcome:
+    """Solvencia d'un contracte de serveis acreditada per la classificacio (v6).
+
+    Es conserva el veredicte propi (resultat, motiu, regla i mode): si una persona diu
+    despres que la classificacio no s'acredita, el recompte el torna a la fila.
+    """
+    return replace(
+        outcome,
+        result=AssessmentResult.SATISFIES,
+        rule_code=RuleCode.CLASSIFICATION_SUBSTITUTION,
+        explanation_code=ExplanationCode.CLASSIFICATION_SUBSTITUTES_SOLVENCY,
+        params={
+            **(outcome.params or {}),
+            SUBSTITUTION_KEY: substitution_params(
+                outcome.result,
+                outcome.explanation_code,
+                outcome.rule_code,
+                outcome.mode,
+                classification_id,
+            ),
+        },
+        mode=AssessmentMode.AUTOMATIC,
+    )
+
+
+def _optional_in_services(outcome: RuleOutcome) -> RuleOutcome:
+    """Classificacio d'un contracte de serveis que no s'acredita: no es exigible (v6).
+
+    El resultat no es toca (es el que es); el motiu diu que la solvencia s'acredita
+    pels altres mitjans i que no bloqueja.
+    """
+    return replace(
+        outcome,
+        explanation_code=ExplanationCode.CLASSIFICATION_OPTIONAL_IN_SERVICES,
+        params={**(outcome.params or {}), OWN_EXPLANATION_KEY: outcome.explanation_code},
+    )
+
+
+def _state(requirement: Requirement, outcome: RuleOutcome) -> RowState:
+    """Una fila abans de desar-la: nomes el resultat automatic."""
+    return RowState(
+        key=requirement.id,
+        category=requirement.category,
+        tender_lot_id=requirement.tender_lot_id,
+        obligation=requirement.obligation,
+        modality=getattr(requirement, "modality", None),
+        requirement_verified=requirement.review_status == ReviewStatus.VERIFIED,
+        alternative_group=getattr(requirement, "alternative_group", None),
+        group_complete=getattr(requirement, "alternative_group_complete", None),
+        own=outcome.result,
+        classification=is_classification(
+            requirement.category, outcome.rule_code, outcome.params
         ),
     )

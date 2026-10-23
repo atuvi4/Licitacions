@@ -422,6 +422,9 @@ class WorkspaceNote(UUIDPrimaryKeyMixin, CompanyOwnedMixin, Base):
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )
+    #: Darrera edicio del text (0064). Nul si no s'ha editat mai. Qui l'ha editada i
+    #: quan l'han esborrada queda al registre d'auditoria.
+    updated_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
     workspace: Mapped[BidWorkspace] = relationship(back_populates="notes")
 

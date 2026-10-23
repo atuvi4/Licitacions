@@ -363,7 +363,8 @@ def test_l_ens_sense_categoria_va_a_revisio_i_no_se_suposa_mitjana(prefix):
     )
     outcome = assess_requirement(req(prefix), profile, profile=PV2)
     assert outcome.result == AssessmentResult.NEEDS_REVIEW
-    assert outcome.rule_code == RuleCode.CERTIFICATION_EXACT
+    # v6: la regla de l'ENS per categories (abans, la de coincidencia exacta).
+    assert outcome.rule_code == RuleCode.ENS_CATEGORY_GTE
     assert outcome.explanation_code == ExplanationCode.CERTIFICATION_LEVEL_NOT_STATED
     assert outcome.params["company_certifications"] == ["ENS categoria Mitjana"]
     assert outcome.params["side"] == "tender"
@@ -391,18 +392,30 @@ def test_l_ens_amb_categoria_literal_s_avalua_amb_la_regla_de_certificacio():
     result = norm_of(requirement)
     assert result.route == "ens_certification" and result.ens.level == "mitjana"
     profile = ProfileSnapshot(
-        company_id=uuid.uuid4(), certifications=[Cert("ENS categoria Mitjana")]
+        company_id=uuid.uuid4(),
+        certifications=[Cert("ENS categoria Mitjana", expires_at=VALID_UNTIL)],
     )
     outcome = assess_requirement(requirement, profile, profile=PV2)
     assert outcome.result == AssessmentResult.SATISFIES
     assert outcome.explanation_code == ExplanationCode.CERTIFICATION_FOUND_VALID
-    # Una categoria superior sense «o superior» no casa sola: revisio, mai «no compleix».
+    # v6 (M3): sense data de caducitat no es pot afirmar que sigui vigent al termini.
+    undated = ProfileSnapshot(
+        company_id=uuid.uuid4(), certifications=[Cert("ENS categoria Mitjana")]
+    )
+    outcome = assess_requirement(requirement, undated, profile=PV2)
+    assert (outcome.result, outcome.explanation_code) == (
+        AssessmentResult.NEEDS_REVIEW,
+        ExplanationCode.CERTIFICATION_FOUND_NO_EXPIRY,
+    )
+    # v6: les categories son acumulatives. Una de superior compleix, encara que el
+    # plec no digui «o superior» (abans, revisio).
     profile_alta = ProfileSnapshot(
-        company_id=uuid.uuid4(), certifications=[Cert("ENS categoria Alta")]
+        company_id=uuid.uuid4(),
+        certifications=[Cert("ENS categoria Alta", expires_at=VALID_UNTIL)],
     )
     outcome = assess_requirement(requirement, profile_alta, profile=PV2)
-    assert outcome.result == AssessmentResult.NEEDS_REVIEW
-    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_LEVEL_HIGHER_REVIEW
+    assert outcome.result == AssessmentResult.SATISFIES
+    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_LEVEL_HIGHER_MET
 
 
 def test_l_ens_informatiu_no_es_recategoritza():
@@ -413,16 +426,53 @@ def test_l_ens_informatiu_no_es_recategoritza():
 
 
 def test_la_documentacio_reli_rolece_no_exigeix_estar_inscrit():
+    """v6: s'avalua. Inscrita -> en pot aportar el certificat; perfil incomplet -> sense
+    dades; perfil complet sense inscripcio i la marca nomes del titol -> revisio."""
+
+    @dataclass
+    class Reg:
+        type: RegistrationType
+        name: str
+        expires_at: date | None = None
+        id: uuid.UUID = field(default_factory=uuid.uuid4)
+
     outcome = assess_requirement(req("81bf423c"), empty(), profile=PV2)
+    assert outcome.result == AssessmentResult.UNKNOWN
+    assert outcome.explanation_code == ExplanationCode.REGISTRATION_DATA_INCOMPLETE
+    assert outcome.params["normalization"]["route"] == "registry_documentation_only"
+
+    registered = ProfileSnapshot(
+        company_id=uuid.uuid4(), registrations=[Reg(RegistrationType.ROLECE, "ROLECE")]
+    )
+    outcome = assess_requirement(req("81bf423c"), registered, profile=PV2)
+    assert outcome.result == AssessmentResult.SATISFIES
+    assert outcome.explanation_code == ExplanationCode.REGISTRATION_DOCUMENTATION_AVAILABLE
+
+    complete = ProfileSnapshot(company_id=uuid.uuid4(), section_ratio={"registrations": 1.0})
+    outcome = assess_requirement(req("81bf423c"), complete, profile=PV2)
+    # La marca «empreses inscrites» d'aquest requisit nomes es al titol: no aplica es
+    # massa agosarat, i continua anant a revisio.
     assert outcome.result == AssessmentResult.NEEDS_REVIEW
     assert outcome.explanation_code == ExplanationCode.REGISTRATION_DOCUMENTATION_ONLY
+
     before = assess_requirement(req("81bf423c"), empty())
     assert before.explanation_code == ExplanationCode.REGISTRATION_DATA_INCOMPLETE
 
 
-@pytest.mark.parametrize("prefix", ["0a70dd0c", "1739a725", "73800ff7", "fb1fc201"])
-def test_la_capacitat_d_operador_sense_nomenar_el_registre_no_s_automatitza(prefix):
+@pytest.mark.parametrize("prefix", ["0a70dd0c", "1739a725", "73800ff7"])
+def test_la_capacitat_legal_de_prestar_telecomunicacions_es_el_registre_d_operadors(prefix):
+    """v6: «capacitat legal (per explotar o prestar) serveis de telecomunicacions» o
+    «capacitat legal d'operador», al text literal, es el registre d'operadors (CNMC)."""
     outcome = assess_requirement(req(prefix), empty(), profile=PV2)
+    assert outcome.params["normalization"]["route"] == "sector_operator_registry"
+    assert outcome.explanation_code == ExplanationCode.REGISTRATION_DATA_INCOMPLETE
+    assert outcome.params["required_type"] == "sector_operator_registry"
+
+
+def test_la_capacitat_sense_dir_telecomunicacions_al_text_literal_no_s_automatitza():
+    """«Capacitat legal per explotar/prestar els serveis inclosos»: el literal no diu de
+    quins serveis; el titol del model no hi compta."""
+    outcome = assess_requirement(req("fb1fc201"), empty(), profile=PV2)
     assert outcome.explanation_code == ExplanationCode.RULE_NOT_AUTOMATABLE
     assert outcome.params["normalization"]["reason"] == "registry_not_named_explicitly"
 
@@ -672,6 +722,11 @@ class EnsCert:
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
 
+#: v6 (M3): una certificacio ha de ser vigent al termini (art. 140.4 LCSP); sense data
+#: de caducitat la regla demana revisio. Els certificats que han de complir en porten.
+VALID_UNTIL = date(2028, 7, 26)
+
+
 @pytest.mark.parametrize(
     ("text", "level"),
     [
@@ -707,23 +762,30 @@ _ENS_CASES = [
         AssessmentResult.DOES_NOT_SATISFY,
         "CERTIFICATION_LEVEL_BELOW",
     ),
+    # v6: una categoria superior compleix sempre (abans, revisio sense «o superior»).
     (
         "categoria MITJANA",
         "ENS Alta",
-        AssessmentResult.NEEDS_REVIEW,
-        "CERTIFICATION_LEVEL_HIGHER_REVIEW",
+        AssessmentResult.SATISFIES,
+        "CERTIFICATION_LEVEL_HIGHER_MET",
     ),
     (
         "categoria MITJANA o superior",
         "ENS Alta",
         AssessmentResult.SATISFIES,
-        "CERTIFICATION_FOUND_VALID",
+        "CERTIFICATION_LEVEL_HIGHER_MET",
     ),
     (
         "com a mínim de categoria MITJANA",
         "ENS Alta",
         AssessmentResult.SATISFIES,
-        "CERTIFICATION_FOUND_VALID",
+        "CERTIFICATION_LEVEL_HIGHER_MET",
+    ),
+    (
+        "categoria BÀSICA",
+        "ENS Mitjana",
+        AssessmentResult.SATISFIES,
+        "CERTIFICATION_LEVEL_HIGHER_MET",
     ),
     # Una certificacio de l'empresa sense categoria llegible no casa amb cap.
     ("categoria MITJANA", "ENS", AssessmentResult.NEEDS_REVIEW, "CERTIFICATION_LEVEL_NOT_STATED"),
@@ -739,7 +801,7 @@ def test_c1_i4_comparacio_de_categories_de_l_ens(required, company, result, code
     )
     profile = ProfileSnapshot(
         company_id=uuid.uuid4(),
-        certifications=[EnsCert(company)],
+        certifications=[EnsCert(company, expires_at=VALID_UNTIL)],
         section_ratio={"certifications": 1.0},
     )
     outcome = assess_requirement(requirement, profile, profile=PV2)
@@ -747,7 +809,8 @@ def test_c1_i4_comparacio_de_categories_de_l_ens(required, company, result, code
 
 
 def test_c1_un_v2_tipat_que_demana_ens_alta_es_llegeix_com_a_la_v4():
-    """La comparacio de noms de sempre no es toca (cap `ens:` comu)."""
+    """Un v2 tipat que demana l'ENS Alta, contra un ENS Mitjana, no compleix. Des de la
+    v6 ho decideix la regla per categories (tots els perfils), no la de noms."""
     from app.ai.value_schemas import VALUE_SCHEMA_VERSION
     from app.compliance.certifications import normalize_certification_name
     from app.compliance.engine import _dispatch
@@ -941,7 +1004,9 @@ def test_m7_igual_o_major_no_es_el_millor_exercici():
 
 
 def test_m2_la_cnmc_nomes_compta_si_ho_diu_el_text_literal():
-    requirement = req("1739a725", title="Inscripció al registre de la CNMC")
+    # v6: el 1739a725 ja diu al literal «capacitat legal ... serveis de
+    # telecomunicacions» (registre d'operadors); el fb1fc201 no ho diu enlloc del literal.
+    requirement = req("fb1fc201", title="Inscripció al registre de la CNMC")
     outcome = assess_requirement(requirement, empty(), profile=PV2)
     assert outcome.explanation_code == ExplanationCode.RULE_NOT_AUTOMATABLE
     assert outcome.params["normalization"]["reason"] == "registry_not_named_explicitly"
@@ -1012,7 +1077,9 @@ def test_o_superior_nomes_dins_del_sintagma_de_la_categoria(text, or_higher):
     assert (level, ambiguous, found) == ("mitjana", False, or_higher)
 
 
-def test_un_minim_alie_no_converteix_una_categoria_superior_en_compleix():
+def test_un_minim_alie_no_canvia_res_una_categoria_superior_ja_compleix():
+    """v6: una categoria superior compleix sempre; el «mínim» aliè no hi fa res (el
+    lector continua sense comptar-lo com a «o superior»)."""
     requirement = mk(
         RequirementCategory.TECHNICAL_REQUIREMENT,
         None,
@@ -1020,11 +1087,13 @@ def test_un_minim_alie_no_converteix_una_categoria_superior_en_compleix():
     )
     profile = ProfileSnapshot(
         company_id=uuid.uuid4(),
-        certifications=[EnsCert("ENS Alta")],
+        certifications=[EnsCert("ENS Alta", expires_at=VALID_UNTIL)],
         section_ratio={"certifications": 1.0},
     )
     outcome = assess_requirement(requirement, profile, profile=PV2)
-    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_LEVEL_HIGHER_REVIEW
+    assert outcome.result == AssessmentResult.SATISFIES
+    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_LEVEL_HIGHER_MET
+    assert outcome.params["or_higher"] is False
 
 
 def test_categoria_inferior_amb_la_seccio_incompleta_es_sense_dades():

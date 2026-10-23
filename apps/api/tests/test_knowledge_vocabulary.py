@@ -24,6 +24,14 @@ API_ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = API_ROOT / "alembic" / "versions" / "0045_company_knowledge.py"
 #: Les migracions posteriors que amplien el vocabulari, en ordre.
 LATER_MIGRATIONS = (API_ROOT / "alembic" / "versions" / "0046_mobile_telephony_line.py",)
+#: La 0064 (Bloc 1) hi afegeix una norma: ISO/IEC 20000-1.
+STANDARDS_0064 = API_ROOT / "alembic" / "versions" / "0064_compliance_v6_notes.py"
+
+
+def _seeded_standards() -> list[tuple[str, str, list[str] | None]]:
+    """Les normes que deixen les migracions: les de la 0045 i la de la 0064."""
+    code, label = _migration(STANDARDS_0064)._ISO_20000
+    return [*_migration()._STANDARDS, (code, label, None)]
 
 
 def _migration(path: Path = MIGRATION):
@@ -72,6 +80,7 @@ def test_the_pilot_needs_are_covered():
         "ISO_9001": None,
         "ISO_14001": None,
         "ISO_27001": None,
+        "ISO_20000": None,
     }
 
 
@@ -123,7 +132,7 @@ def test_the_migrations_seed_exactly_this_vocabulary():
         for c in CAPABILITIES
     )
     assert tuple(
-        (code, _without_accents(label), levels) for code, label, levels in migration._STANDARDS
+        (code, _without_accents(label), levels) for code, label, levels in _seeded_standards()
     ) == tuple(
         (s.code, _without_accents(s.label), list(s.levels) if s.levels else None)
         for s in CERTIFICATION_STANDARDS

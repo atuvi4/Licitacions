@@ -31,6 +31,7 @@ import { ReadinessControl } from "@/components/ReadinessControl";
 import { ReadinessProvider, useInvalidateReadiness, useReadiness } from "@/components/ReadinessProvider";
 import { decisionAnalysisState, analysisPath, type AnalysisRun } from "@/lib/analysis";
 import { useResource } from "@/lib/hooks";
+import { canEditIssues } from "@/lib/issues";
 import { IssuesDrawer } from "@/components/IssuesDrawer";
 import { PREPARE_AREAS, PREPARE_AREA_LABELS, blockerCount, blockersByArea, isPrepareArea, pendingCountLabel, type PrepareArea } from "@/lib/readiness";
 import {
@@ -326,7 +327,7 @@ export default function WorkspacePage() {
 
 function WorkspaceView() {
   const params = useParams<{ workspaceId: string }>();
-  const { companyId, user } = useSession();
+  const { companyId, user, membership } = useSession();
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
@@ -616,7 +617,7 @@ function WorkspaceView() {
             </PrepareArea>
             {area === "pla" && (
               <StudyArea editable={studyEditable}>
-                <NotesSection workspace={data} onChange={refresh} />
+                <NotesSection workspace={data} onChange={refresh} canEdit={canEditIssues(membership?.role)} />
               </StudyArea>
             )}
           </>

@@ -5,9 +5,18 @@ import { workspaceFixture } from "@/test/workspace-fixture";
 
 const post = vi.fn();
 const patch = vi.fn();
+const del = vi.fn();
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, api: { ...actual.api, post: (...args: unknown[]) => post(...args), patch: (...args: unknown[]) => patch(...args) } };
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      post: (...args: unknown[]) => post(...args),
+      patch: (...args: unknown[]) => patch(...args),
+      delete: (...args: unknown[]) => del(...args),
+    },
+  };
 });
 
 import { ChecklistSection, NotesSection, TasksSection } from "./WorkspaceWork";
@@ -23,6 +32,7 @@ describe("Checklist · Tasques · Notes (restil sense canviar la lògica)", () =
   beforeEach(() => {
     post.mockReset();
     patch.mockReset();
+    del.mockReset();
     onChange.mockClear();
   });
 
@@ -108,5 +118,99 @@ describe("Checklist · Tasques · Notes (restil sense canviar la lògica)", () =
     fireEvent.click(screen.getByRole("button", { name: "Afegeix la nota" }));
     await flush();
     expect(post).toHaveBeenCalledWith("/companies/c1/workspaces/w1/notes", { text: "Nova nota" });
+  });
+
+  it("notes (Bloc 1): es corregeixen al mateix lloc amb el PATCH i diuen quan es van corregir", async () => {
+    patch.mockResolvedValue({});
+    const workspace = workspaceFixture({
+      notes: [
+        { id: "n1", workspace_id: "w1", author_id: "u1", author_name: "Anna Puig", text: "Primera versió.", created_at: "2026-09-12T09:00:00Z", updated_at: "2026-09-13T10:00:00Z" },
+      ],
+    });
+    const { container } = render(<NotesSection workspace={workspace} onChange={onChange} />);
+    expect(container.textContent).toContain("Corregida el");
+
+    fireEvent.click(screen.getByRole("button", { name: /^Corregeix la nota/ }));
+    const editor = screen.getByLabelText("Text de la nota") as HTMLTextAreaElement;
+    expect(editor.value).toBe("Primera versió.");
+    fireEvent.change(editor, { target: { value: "  Versió corregida.  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Desa la correcció" }));
+    await flush();
+    expect(patch).toHaveBeenCalledWith("/companies/c1/workspaces/w1/notes/n1", { text: "Versió corregida." });
+    expect(onChange).toHaveBeenCalled();
+  });
+
+  it("notes (Bloc 1): esborrar demana confirmació i fa el DELETE només en confirmar", async () => {
+    del.mockResolvedValue(undefined);
+    const workspace = workspaceFixture({
+      notes: [{ id: "n1", workspace_id: "w1", author_id: "u1", author_name: "Anna Puig", text: "Nota repetida.", created_at: "2026-09-12T09:00:00Z" }],
+    });
+    const { container } = render(<NotesSection workspace={workspace} onChange={onChange} />);
+    expect(container.textContent).not.toContain("Corregida el");
+
+    fireEvent.click(screen.getByRole("button", { name: /^Esborra la nota/ }));
+    expect(del).not.toHaveBeenCalled();
+    expect(screen.getByRole("group", { name: "Confirma l'esborrat" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel·la" }));
+    expect(screen.queryByRole("group", { name: "Confirma l'esborrat" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Esborra la nota/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Esborra-la" }));
+    await flush();
+    expect(del).toHaveBeenCalledWith("/companies/c1/workspaces/w1/notes/n1");
+    expect(onChange).toHaveBeenCalled();
+  });
+
+  it("notes (Bloc 1): una correcció sense canvis no fa cap crida", async () => {
+    const workspace = workspaceFixture({
+      notes: [{ id: "n1", workspace_id: "w1", author_id: "u1", author_name: "Anna Puig", text: "Igual.", created_at: "2026-09-12T09:00:00Z" }],
+    });
+    render(<NotesSection workspace={workspace} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Corregeix la nota/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Desa la correcció" }));
+    await flush();
+    expect(patch).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /^Corregeix la nota/ })).not.toBeNull();
+  });
+
+  it("notes (Bloc 1): sense el rol que treballa els dubtes no es poden corregir ni esborrar", () => {
+    const workspace = workspaceFixture({
+      notes: [{ id: "n1", workspace_id: "w1", author_id: "u1", author_name: "Anna Puig", text: "Només lectura.", created_at: "2026-09-12T09:00:00Z" }],
+    });
+    render(<NotesSection workspace={workspace} onChange={onChange} canEdit={false} />);
+    expect(screen.getByText("Només lectura.")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /^Corregeix la nota/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Esborra la nota/ })).toBeNull();
+  });
+
+  it("notes (Bloc 1): buidar el text no desa res i diu que per treure-la cal esborrar-la", async () => {
+    const workspace = workspaceFixture({
+      notes: [{ id: "n1", workspace_id: "w1", author_id: "u1", author_name: "Anna Puig", text: "Text.", created_at: "2026-09-12T09:00:00Z" }],
+    });
+    render(<NotesSection workspace={workspace} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Corregeix la nota/ }));
+    fireEvent.change(screen.getByLabelText(/^Text de la nota/), { target: { value: "   " } });
+    const save = screen.getByRole("button", { name: "Desa la correcció" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(screen.getByText(/per treure-la, esborra-la/)).not.toBeNull();
+    fireEvent.click(save);
+    await flush();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("notes (Bloc 1): un error es mostra i cancel·lar l'esborra", async () => {
+    patch.mockRejectedValue(new Error("No s'ha pogut desar"));
+    const workspace = workspaceFixture({
+      notes: [{ id: "n1", workspace_id: "w1", author_id: "u1", author_name: "Anna Puig", text: "Abans.", created_at: "2026-09-12T09:00:00Z" }],
+    });
+    render(<NotesSection workspace={workspace} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Corregeix la nota/ }));
+    fireEvent.change(screen.getByLabelText(/^Text de la nota/), { target: { value: "Després." } });
+    fireEvent.click(screen.getByRole("button", { name: "Desa la correcció" }));
+    await flush();
+    expect(screen.getByText("No s'ha pogut desar")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel·la" }));
+    expect(screen.queryByText("No s'ha pogut desar")).toBeNull();
+    expect(screen.getByText("Abans.")).not.toBeNull();
   });
 });

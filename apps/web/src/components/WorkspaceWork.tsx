@@ -31,6 +31,7 @@ import {
   type ChecklistRegenerateResult,
   type TaskStatus,
   type WorkspaceDetail,
+  type WorkspaceNote,
   type WorkspaceTask,
 } from "@/lib/workspace";
 
@@ -360,13 +361,20 @@ export function TasksSection({
   );
 }
 
-/** Notes: text pla, ordenades de la més recent a la més antiga. */
+/**
+ * Notes: text pla, ordenades de la més recent a la més antiga. Es poden corregir i
+ * esborrar (Bloc 1) amb la mateixa guarda que escriure-les: dins de `StudyArea`, un
+ * NO-GO vigent desactiva tots els botons. Corregir i esborrar, només els rols que
+ * també treballen els dubtes (`canEdit`, com l'API).
+ */
 export function NotesSection({
   workspace,
   onChange,
+  canEdit = true,
 }: {
   workspace: WorkspaceDetail;
   onChange: () => Promise<void>;
+  canEdit?: boolean;
 }) {
   const mutation = useMutation();
   const [text, setText] = useState("");
@@ -397,13 +405,119 @@ export function NotesSection({
       {workspace.notes.length > 0 && (
         <ol className="divide-y divide-border border-t border-border">
           {workspace.notes.map((note) => (
-            <li key={note.id} className="px-3.5 py-3">
-              <Attribution kind="human" person={{ name: note.author_name ?? "Una persona" }} at={note.created_at} />
-              <p className="mt-1 text-[13px] leading-5 whitespace-pre-line text-ink">{note.text}</p>
-            </li>
+            <NoteItem key={note.id} note={note} workspace={workspace} onChange={onChange} canEdit={canEdit} />
           ))}
         </ol>
       )}
     </Card>
+  );
+}
+
+/** Una nota: es llegeix, es corregeix al mateix lloc o s'esborra amb confirmació. */
+function NoteItem({
+  note,
+  workspace,
+  onChange,
+  canEdit,
+}: {
+  note: WorkspaceNote;
+  workspace: WorkspaceDetail;
+  onChange: () => Promise<void>;
+  canEdit: boolean;
+}) {
+  const mutation = useMutation();
+  const [mode, setMode] = useState<"view" | "edit" | "delete">("view");
+  const [draft, setDraft] = useState(note.text);
+  // Per als lectors de pantalla, cada botó diu de quina nota parla.
+  const which = `la nota de ${note.author_name ?? "una persona"} del ${formatDateTime(note.created_at)}`;
+  const emptyDraft = !draft.trim();
+
+  function startEditing() {
+    setDraft(note.text);
+    mutation.reset();
+    setMode("edit");
+  }
+
+  function startDeleting() {
+    mutation.reset();
+    setMode("delete");
+  }
+
+  function cancel() {
+    mutation.reset();
+    setMode("view");
+  }
+
+  async function save() {
+    const text = draft.trim();
+    if (!text) return;
+    if (text === note.text) {
+      setMode("view");
+      return;
+    }
+    const ok = await mutation.run(async () => {
+      await api.patch(`${base(workspace)}/notes/${note.id}`, { text });
+    });
+    if (ok) {
+      setMode("view");
+      await onChange();
+    }
+  }
+
+  async function remove() {
+    const ok = await mutation.run(async () => {
+      await api.delete(`${base(workspace)}/notes/${note.id}`);
+    });
+    if (ok) await onChange();
+  }
+
+  return (
+    <li className="px-3.5 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Attribution kind="human" person={{ name: note.author_name ?? "Una persona" }} at={note.created_at} />
+        {mode === "view" && canEdit && (
+          <div className="flex gap-1">
+            <Button variant="ghost" size="sm" onClick={startEditing} aria-label={`Corregeix ${which}`}>
+              Corregeix
+            </Button>
+            <Button variant="ghost" size="sm" onClick={startDeleting} aria-label={`Esborra ${which}`}>
+              Esborra
+            </Button>
+          </div>
+        )}
+      </div>
+      {mode === "edit" ? (
+        <div className="mt-2 space-y-2">
+          <Field label="Text de la nota" hint={emptyDraft ? "Una nota no pot quedar buida: per treure-la, esborra-la." : undefined}>
+            <Textarea rows={3} value={draft} onChange={(event) => setDraft(event.target.value)} autoFocus />
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={() => void save()} loading={mutation.saving} disabled={emptyDraft}>
+              Desa la correcció
+            </Button>
+            <Button variant="ghost" size="sm" onClick={cancel} disabled={mutation.saving}>
+              Cancel·la
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-1 text-[13px] leading-5 whitespace-pre-line text-ink">{note.text}</p>
+      )}
+      {note.updated_at && mode !== "edit" && (
+        <p className="mt-1 text-[12px] text-muted">Corregida el {formatDateTime(note.updated_at)}</p>
+      )}
+      {mode === "delete" && (
+        <div className="mt-2 flex flex-wrap items-center gap-2" role="group" aria-label="Confirma l'esborrat">
+          <p className="text-[13px] text-ink">S'esborrarà definitivament. Ho vols fer?</p>
+          <Button variant="danger" size="sm" onClick={() => void remove()} loading={mutation.saving} autoFocus>
+            Esborra-la
+          </Button>
+          <Button variant="ghost" size="sm" onClick={cancel} disabled={mutation.saving}>
+            Cancel·la
+          </Button>
+        </div>
+      )}
+      {mutation.error && <p className="mt-1 text-[13px] text-danger">{mutation.error}</p>}
+    </li>
   );
 }

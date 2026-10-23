@@ -449,6 +449,9 @@ class CertificationSpec:
     names: tuple[str, ...] = ()
     equivalence_allowed: bool = False
     valid_at_deadline: bool = False
+    #: Amb diverses normes: cal tenir-les TOTES (v6). Sense la marca `all_of` ni
+    #: l'operador `all_of`, una llista continua sent «qualsevol de» (la v1).
+    all_required: bool = False
 
 
 def read_certification(requirement: Any) -> CertificationSpec:
@@ -467,6 +470,7 @@ def read_certification(requirement: Any) -> CertificationSpec:
     single = (value.get("name") or "").strip()
     if single:
         names.insert(0, single)
+    operator = getattr(requirement, "operator", None)
     return CertificationSpec(
         names=tuple(dict.fromkeys(names)),
         equivalence_allowed=(
@@ -475,4 +479,6 @@ def read_certification(requirement: Any) -> CertificationSpec:
             or bool(value.get("equivalence_allowed"))
         ),
         valid_at_deadline=bool(value.get("valid_at_deadline")),
+        all_required=bool(value.get("all_of"))
+        or str(getattr(operator, "value", operator) or "") == "all_of",
     )

@@ -162,6 +162,9 @@ CERTIFICATION_STANDARDS: tuple[CertificationStandard, ...] = (
     CertificationStandard("ISO_9001", "ISO 9001 (gestió de la qualitat)"),
     CertificationStandard("ISO_14001", "ISO 14001 (gestió ambiental)"),
     CertificationStandard("ISO_27001", "ISO/IEC 27001 (seguretat de la informació)"),
+    # Bloc 1 (migracio 0064): gestio de serveis de TI, la que demanen plecs com el de
+    # Parc Tauli juntament amb la 9001 i la 27001.
+    CertificationStandard("ISO_20000", "ISO/IEC 20000-1 (gestió de serveis de TI)"),
 )
 
 SERVICE_LINE_CODES = frozenset(s.code for s in SERVICE_LINES)

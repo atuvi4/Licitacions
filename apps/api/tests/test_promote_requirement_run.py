@@ -564,7 +564,7 @@ async def test_compliment_normalitza_i_compta_exigencies(
     before = await _extraction_state(session, run3.id)
 
     run = (await analyze_company_compliance(session, company, tender)).run
-    assert run.rules_version == "company-compliance-v5"
+    assert run.rules_version == "company-compliance-v6"
     # 5 requisits, 3 exigencies: economica (2), RC (2) i la tecnica.
     assert run.requirements_total == 3
     assert run.satisfies_count == 1  # la solvencia economica, un sol cop

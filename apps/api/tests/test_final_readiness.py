@@ -11,6 +11,7 @@ es una candidatura a punt.
 
 from __future__ import annotations
 
+import re
 import uuid
 from decimal import Decimal
 
@@ -167,6 +168,12 @@ async def _workspace(db, company, tender, *, tender_lot_id=None) -> BidWorkspace
     await grant_go(db, workspace)
     return workspace
 
+
+#: Un UUID o un instant ISO: poden contenir «666» per atzar (vegeu el test de les xifres).
+_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_MOMENT = re.compile(
+    r"\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?"
+)
 
 @pytest.fixture
 async def workspace(db, tenant_a):
@@ -898,8 +905,10 @@ async def test_llegir_la_porta_final_no_filtra_cap_xifra_interna(
         offered_unit_price_ex_vat=Decimal("999.99"),
     )
 
-    cru = (await client_a.get(url(workspace, "final-readiness"))).text
+    resposta = await client_a.get(url(workspace, "final-readiness"))
+    cru = resposta.text
 
+    # Els noms de camp no poden apareixer mai dins d'un UUID: es busquen al text cru.
     for filtrat in (
         "unit_cost_ex_vat",
         "total_cost",
@@ -908,10 +917,29 @@ async def test_llegir_la_porta_final_no_filtra_cap_xifra_interna(
         "markup_on_cost_pct",
         "monthly_equivalent_cost",
         "incomplete_cost_lines",
-        "666.66",
-        "666",
     ):
         assert filtrat not in cru, filtrat
+
+    # Les xifres, en canvi, es busquen a les FULLES del JSON, sense els UUID ni els
+    # instants: un UUID hexadecimal (o uns microsegons) pot contenir «666» per atzar i
+    # el test seria fals segons la sort (com ja es va corregir a
+    # `test_l_auditoria_no_guarda_cap_xifra_interna`). La resta, qualsevol «666»: el
+    # cost pot sortir arrodonit, en centims o sencer.
+    def fulles(node):
+        if isinstance(node, dict):
+            for valor in node.values():
+                yield from fulles(valor)
+        elif isinstance(node, list):
+            for valor in node:
+                yield from fulles(valor)
+        else:
+            yield node
+
+    for fulla in fulles(resposta.json()):
+        if isinstance(fulla, bool) or fulla is None:
+            continue
+        text = fulla if isinstance(fulla, str) else repr(fulla)
+        assert "666" not in _MOMENT.sub("", _UUID.sub("", text)), fulla
 
 
 async def test_un_maxim_unitari_desconegut_no_afirma_res_ni_ensenya_res(

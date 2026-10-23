@@ -127,6 +127,8 @@ export interface WorkspaceNote {
   author_name: string | null;
   text: string;
   created_at: string;
+  /** Darrera correcció del text; `null` si no s'ha corregit mai (0064). */
+  updated_at?: string | null;
 }
 
 export interface ComplianceCounters {

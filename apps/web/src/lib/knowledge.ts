@@ -263,6 +263,7 @@ export const STANDARD_LABELS: Record<string, string> = {
   ISO_9001: "ISO 9001",
   ISO_14001: "ISO 14001",
   ISO_27001: "ISO/IEC 27001",
+  ISO_20000: "ISO/IEC 20000-1",
 };
 
 export const STANDARD_DESCRIPTIONS: Record<string, string> = {
@@ -270,6 +271,7 @@ export const STANDARD_DESCRIPTIONS: Record<string, string> = {
   ISO_9001: "Gestió de la qualitat",
   ISO_14001: "Gestió ambiental",
   ISO_27001: "Seguretat de la informació",
+  ISO_20000: "Gestió de serveis de TI",
 };
 
 export const LEVEL_LABELS: Record<string, string> = { basic: "Bàsic", medium: "Mitjà", high: "Alt" };

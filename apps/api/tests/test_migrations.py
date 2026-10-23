@@ -2110,8 +2110,9 @@ def test_0056_es_reversible_i_mai_esborra_l_extensio():
     assert "pg_trgm" not in sql
 
 
-def test_0063_es_l_unic_cap_i_penja_de_0062():
-    """0062 penjava de 0061; 0063 (imports d'una font externa, F-06a) es el nou cap unic."""
+def test_0064_es_l_unic_cap_i_penja_de_0063():
+    """0063 (imports d'una font externa, F-06a) penjava de 0062; 0064 (compliment v6,
+    notes editables, ISO 20000) es el nou cap unic."""
     from app.db.revision import SCHEMA_REVISION
 
     result = subprocess.run(
@@ -2123,13 +2124,17 @@ def test_0063_es_l_unic_cap_i_penja_de_0062():
     )
     assert result.returncode == 0, result.stderr[-1000:]
     assert [line.split()[0] for line in result.stdout.splitlines() if line.strip()] == [
-        "0063_tender_amount_observations"
+        "0064_compliance_v6_notes"
     ]
-    assert SCHEMA_REVISION == "0063_tender_amount_observations"
+    assert SCHEMA_REVISION == "0064_compliance_v6_notes"
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(API_ROOT / "alembic.ini")))
+    assert (
+        script.get_revision("0064_compliance_v6_notes").down_revision
+        == "0063_tender_amount_observations"
+    )
     assert (
         script.get_revision("0063_tender_amount_observations").down_revision
         == "0062_requirement_uncertainties"
@@ -4303,3 +4308,165 @@ async def test_0063_round_trip_real_a_postgres(engine):
         assert (await conn.execute(count)).scalar_one() == len(rows) - 1
         await conn.execute(sa.text("DELETE FROM tenders WHERE id = :id"), {"id": tender_id})
         assert (await conn.execute(count)).scalar_one() == 0
+
+
+# --------------------------------------------------------------------------- #
+# 0064: compliment v6 (Bloc 1) — estat del pre-fit, notes editables, ISO 20000  #
+# --------------------------------------------------------------------------- #
+
+_V6_UP = "0063_tender_amount_observations:0064_compliance_v6_notes"
+_V6_DOWN = "0064_compliance_v6_notes:0063_tender_amount_observations"
+_PREFIT_CHECK = "ck_company_compliance_runs_prefit_status_valid"
+
+
+def test_0064_afegeix_dues_columnes_el_check_i_la_norma_sense_tocar_cap_fila():
+    sql = _offline_sql("upgrade", _V6_UP)
+    assert "ALTER TABLE company_compliance_runs ADD COLUMN prefit_status VARCHAR(17)" in sql
+    assert "ALTER TABLE workspace_notes ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE" in sql
+    assert (
+        f"ALTER TABLE company_compliance_runs ADD CONSTRAINT {_PREFIT_CHECK} CHECK (prefit_status "
+        "IN ('candidate', 'low_fit', 'excluded', 'closed', 'insufficient_data'))"
+    ) in sql
+    # La norma nomes si no hi es: cap fila existent no canvia.
+    assert "WHERE NOT EXISTS (SELECT 1 FROM certification_standards WHERE code = 'ISO_20000')" in (
+        sql
+    )
+    assert "UPDATE " not in sql.replace("UPDATE alembic_version", "")
+    assert "DELETE " not in sql
+
+
+def test_0064_downgrade_refusa_abans_de_cap_drop():
+    sql = _offline_sql("downgrade", _V6_DOWN)
+    guard = sql.index("DO $$")
+    for message in (
+        "0064: hi ha certificacions amb la norma ISO_20000",
+        "0064: hi ha runs de compliment amb prefit_status",
+        "0064: hi ha notes editades (updated_at)",
+    ):
+        assert guard < sql.index(message), message
+    for drop in (
+        f"DROP CONSTRAINT {_PREFIT_CHECK}",
+        "DELETE FROM certification_standards WHERE code = 'ISO_20000'",
+        "ALTER TABLE workspace_notes DROP COLUMN updated_at",
+        "ALTER TABLE company_compliance_runs DROP COLUMN prefit_status",
+    ):
+        assert guard < sql.index(drop), drop
+
+
+def test_0064_a_sqlite_sense_raise_ni_check():
+    up = _offline_sql_sqlite("upgrade", _V6_UP).replace("alembic_version", "")
+    down = _offline_sql_sqlite("downgrade", _V6_DOWN).replace("alembic_version", "")
+    assert "RAISE" not in up and "RAISE" not in down
+    assert _PREFIT_CHECK not in up and _PREFIT_CHECK not in down
+    assert "prefit_status" in up and "updated_at" in up
+
+
+def test_0064_al_model():
+    """El model i la migracio diuen el mateix: columnes, CHECK i estats del pre-fit."""
+    import importlib.util
+
+    from app.models.compliance import CompanyComplianceRun
+    from app.models.enums import MatchStatus
+    from app.models.workspace import WorkspaceNote
+
+    path = API_ROOT / "alembic" / "versions" / "0064_compliance_v6_notes.py"
+    spec = importlib.util.spec_from_file_location("mig_0064_compliance_v6_notes", path)
+    m64 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m64)
+
+    column = CompanyComplianceRun.__table__.c.prefit_status
+    assert column.nullable and column.type.length == 17
+    assert m64._PREFIT_STATUSES == tuple(status.value for status in MatchStatus)
+    assert max(len(status.value) for status in MatchStatus) <= 17
+    checks = {c.name for c in CompanyComplianceRun.__table__.constraints if c.name}
+    assert _PREFIT_CHECK in checks
+    updated = WorkspaceNote.__table__.c.updated_at
+    assert updated.nullable and updated.type.timezone
+
+
+@pytest.mark.postgres
+async def test_0064_round_trip_real_a_postgres(engine):
+    """0064 -> 0063 -> 0064 sense dades, esquema identic al dels models; amb una
+    certificacio ISO 20000, un run amb `prefit_status` o una nota editada, el downgrade
+    refusa i no toca res."""
+    import importlib.util
+    import uuid as uuid_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.models.credentials import CompanyCertification
+    from app.models.identity import Company
+
+    path = API_ROOT / "alembic" / "versions" / "0064_compliance_v6_notes.py"
+    spec = importlib.util.spec_from_file_location("mig_0064_compliance_v6_notes", path)
+    m64 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m64)
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def schema(conn) -> tuple:
+        columns = await conn.execute(
+            sa.text(
+                "SELECT table_name, column_name, data_type, is_nullable, "
+                "character_maximum_length FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND ("
+                "(table_name = 'company_compliance_runs' AND column_name = 'prefit_status') OR "
+                "(table_name = 'workspace_notes' AND column_name = 'updated_at')) "
+                "ORDER BY table_name"
+            )
+        )
+        checks = await conn.execute(
+            sa.text(
+                "SELECT conname, pg_get_constraintdef(c.oid) FROM pg_constraint c "
+                "JOIN pg_namespace n ON n.oid = c.connamespace "
+                "WHERE n.nspname = current_schema() AND conname = :name"
+            ),
+            {"name": _PREFIT_CHECK},
+        )
+        return [tuple(r) for r in columns], [tuple(r) for r in checks]
+
+    async def has_iso_20000(conn) -> bool:
+        return bool(
+            (
+                await conn.execute(
+                    sa.text("SELECT count(*) FROM certification_standards WHERE code = 'ISO_20000'")
+                )
+            ).scalar_one()
+        )
+
+    async with engine.begin() as conn:
+        from_models = await schema(conn)
+        await conn.run_sync(run, m64.downgrade)  # -> 0063, sense dades
+        assert await schema(conn) == ([], [])
+        assert not await has_iso_20000(conn)
+        await conn.run_sync(run, m64.upgrade)  # -> 0064
+        from_migration = await schema(conn)
+        assert await has_iso_20000(conn)
+    assert from_migration == from_models
+    assert len(from_migration[0]) == 2 and len(from_migration[1]) == 1
+
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        company = Company(legal_name=f"Empresa 0064 {uuid_module.uuid4().hex[:6]}")
+        session.add(company)
+        await session.flush()
+        session.add(
+            CompanyCertification(
+                company_id=company.id, name="ISO/IEC 20000-1", standard_code="ISO_20000"
+            )
+        )
+        await session.commit()
+
+    # Amb una certificacio ISO 20000, el downgrade refusa i no toca res.
+    with pytest.raises(DBAPIError) as caught:
+        async with engine.begin() as conn:
+            await conn.run_sync(run, m64.downgrade)
+    assert "0064: hi ha certificacions amb la norma ISO_20000" in str(caught.value)
+    async with engine.begin() as conn:
+        assert await schema(conn) == from_migration
+        assert await has_iso_20000(conn)

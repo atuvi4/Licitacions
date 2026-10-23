@@ -18,8 +18,13 @@ export function byDeadline(a: WorkspaceSummary, b: WorkspaceSummary): number {
   return a.days_remaining - b.days_remaining;
 }
 
-/** Un termini `null` no és cap bloqueig: només ho és `deadline_passed`. */
+/**
+ * Un termini `null` no és cap bloqueig: només ho és `deadline_passed`. I només en una
+ * candidatura OBERTA (Bloc 1): una de presentada, retirada o amb el NO-GO aprovat ja
+ * està tancada, i que el termini hagi vençut no és cap problema a resoldre avui.
+ */
 export function isOpenBlocker(workspace: WorkspaceSummary): boolean {
+  if (!isOpenWorkspace(workspace)) return false;
   return workspace.eligibility === "no_go" || workspace.analysis_outdated || workspace.deadline_passed;
 }
 

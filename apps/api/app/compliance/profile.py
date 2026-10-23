@@ -203,13 +203,21 @@ def compute_profile_fingerprint(snapshot: ProfileSnapshot) -> str:
     for year in snapshot.financial_years:
         parts.append(f"fy|{year.year}|{_money(year.revenue)}|{year.currency}")
     for cert in snapshot.certifications:
+        # v6: la norma (`standard_code`), la categoria (`level`) i si es vigent
+        # (`lifecycle`) decideixen el veredicte (ENS per categories, ISO): canviar-les
+        # ha de deixar el compliment desactualitzat.
         parts.append(
             f"cert|{cert.name.strip().casefold()}|{cert.issued_at}|{cert.expires_at}"
-            f"|{cert.verification_status}"
+            f"|{cert.verification_status}|{getattr(cert, 'standard_code', None)}"
+            f"|{getattr(cert, 'level', None)}|{getattr(cert, 'lifecycle', None)}"
         )
     for reg in snapshot.registrations:
+        # v6: la classificacio (`V-4-1`) es llegeix del nom o del numero del registre, i
+        # nomes compta el registre vigent (`lifecycle`).
         parts.append(
             f"reg|{reg.type}|{reg.name.strip().casefold()}|{reg.issued_at}|{reg.expires_at}"
+            f"|{(getattr(reg, 'registration_number', None) or '').strip().casefold()}"
+            f"|{getattr(reg, 'lifecycle', None)}"
         )
     for ins in snapshot.insurances:
         # Els limits (per sinistre, anual, per victima...) i l'assegurat addicional

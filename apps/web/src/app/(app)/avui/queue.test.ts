@@ -10,6 +10,7 @@ import {
   candidatesEmptyLine,
   candidatesLine,
   decisionsAboveLine,
+  isOpenBlocker,
   isUnevaluated,
   needsPreparation,
   preparationAboveLine,
@@ -87,6 +88,24 @@ describe("bloquejos detectats (assignQueue) i blockerReasons", () => {
 
   it("un termini null no és cap bloqueig", () => {
     expect(assignQueue([workspace({ id: "x", days_remaining: null, deadline_passed: false })], null).blockers).toEqual([]);
+  });
+
+  it("una candidatura tancada (presentada, retirada o NO-GO aprovat) no és mai un bloqueig, encara que el termini hagi vençut", () => {
+    const closed = [
+      workspace({ id: "submitted", status: "submitted", human_decision: "go", deadline_passed: true, days_remaining: -5 }),
+      workspace({ id: "withdrawn", status: "withdrawn", human_decision: "go", deadline_passed: true, days_remaining: -1 }),
+      workspace({ id: "nogo", status: "no_go_approved", human_decision: "no_go", eligibility: "no_go", deadline_passed: true }),
+      workspace({ id: "outdated", status: "submitted", human_decision: "go", analysis_outdated: true }),
+    ];
+    expect(closed.map(isOpenBlocker)).toEqual([false, false, false, false]);
+    const queue = assignQueue(closed, null);
+    expect(queue.blockers).toEqual([]);
+    expect(queue.decisions).toEqual([]);
+  });
+
+  it("una d'oberta amb el termini vençut continua sent un bloqueig", () => {
+    const open = workspace({ id: "late", status: "preparing_bid", human_decision: "go", deadline_passed: true });
+    expect(isOpenBlocker(open)).toBe(true);
   });
 });
 

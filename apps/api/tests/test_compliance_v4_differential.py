@@ -13,6 +13,12 @@ Exclou nomes el que el complement `product-v2` normalitza (format lliure), que e
 justament el que la v5 canvia a proposit. Es una prova de no-regressio sobre les
 entrades que exerciten les proves, no una prova exhaustiva de totes les entrades
 possibles.
+
+v6 (`company-compliance-v6`, Bloc 1): la v6 canvia A PROPOSIT algunes lectures que
+la v4 feia per a tots els perfils. Cada transicio volguda (regla, motiu i resultat
+de la v4 -> els de la v6) es a `V6_INTENDED`, amb el motiu; qualsevol altra
+diferencia continua fallant, i `test_les_divergencies_v6_son_exactament_les_volgudes`
+fixa quantes n'hi ha (una de nova o una que desapareix fa fallar la prova).
 """
 
 from __future__ import annotations
@@ -113,24 +119,94 @@ def test_el_fixture_cobreix_el_motor_i_les_set_regles():
     assert len(entries()) >= 1700
 
 
+#: Transicions volgudes de la v6: (regla, motiu, resultat) de la v4 -> de la v6.
+_ENS = "ens_category_gte_v1"
+_SET = "certification_set_v1"
+_CERT = "certification_exact_v1"
+_REG = "registration_exact_v1"
+_ANY = "registration_any_of_v1"
+_CLASS = "business_classification_gte_v1"
+_SAT, _DNS, _UNK, _REV = "satisfies", "does_not_satisfy", "unknown", "needs_review"
+_CDI = "CERTIFICATION_DATA_INCOMPLETE"
+_CNF = "CERTIFICATION_NOT_FOUND_PROFILE_COMPLETE"
+_CER = "CERTIFICATION_EQUIVALENCE_REVIEW"
+_CEND = "CERTIFICATION_EQUIVALENT_NOT_DECLARED"
+_RNF = "REGISTRATION_NOT_FOUND_PROFILE_COMPLETE"
+_RDI = "REGISTRATION_DATA_INCOMPLETE"
+_RCR = "REGISTRATION_CLASSIFICATION_REVIEW"
+V6_INTENDED = {
+    # ENS per categories en tots els perfils: el mateix veredicte amb la regla nova,
+    # una categoria inferior es «inferior» (abans «no trobada»), i casa la mateixa
+    # categoria encara que el nom no sigui identic (abans un fals «no compleix»).
+    ((_CERT, _CDI, _UNK), (_ENS, _CDI, _UNK)),
+    ((_CERT, _CNF, _DNS), (_ENS, _CNF, _DNS)),
+    ((_CERT, _CNF, _DNS), (_ENS, "CERTIFICATION_LEVEL_BELOW", _DNS)),
+    ((_CERT, _CNF, _DNS), (_ENS, "CERTIFICATION_FOUND_NO_EXPIRY", _REV)),
+    ((_CERT, _CER, _REV), (_ENS, "CERTIFICATION_FOUND_VALID", _SAT)),
+    # «O equivalent» (decisio 2): sense la norma i amb el perfil complet, «no compleix»
+    # nomes potencial; amb el perfil incomplet, «sense dades».
+    ((_CERT, _CER, _UNK), (_ENS, _CDI, _UNK)),
+    ((_CERT, _CER, _UNK), (_ENS, _CEND, _DNS)),
+    ((_CERT, _CER, _UNK), (_CERT, _CDI, _UNK)),
+    ((_CERT, _CER, _REV), (_CERT, _CEND, _DNS)),
+    # Una llista de noms («qualsevol de», operador `one_of`) es resol norma a norma.
+    ((_CERT, _CDI, _UNK), (_SET, _CDI, _UNK)),
+    ((_CERT, _CNF, _DNS), (_SET, "CERTIFICATION_SOME_MISSING", _DNS)),
+    ((_CERT, "CERTIFICATION_FOUND_VALID", _SAT), (_SET, "CERTIFICATION_FOUND_VALID", _SAT)),
+    # «RELI o ROLECE» es qualsevol dels dos (abans nomes el ROLECE).
+    ((_REG, _RNF, _DNS), (_ANY, _RNF, _DNS)),
+    ((_REG, _RDI, _UNK), (_ANY, _RDI, _UNK)),
+    # La classificacio es compara (grup, subgrup, categoria) i, sense dir quina, amb una
+    # empresa que no en te cap, es el veredicte de sempre del registre.
+    ((_REG, _RCR, _REV), (_CLASS, "CLASSIFICATION_NOT_HELD", _DNS)),
+    ((_REG, _RCR, _REV), (_REG, _RDI, _UNK)),
+}
+#: Quantes entrades del fixture canvien a proposit (v6). Fixat: una de nova o una
+#: que desapareix es una regressio o un canvi no documentat.
+V6_INTENDED_COUNT = 162
+
+
+def _signature(outcome: dict) -> tuple[str, str, str]:
+    return (outcome["rule_code"], outcome["explanation_code"], outcome["result"])
+
+
+def _evaluate(entry: dict) -> dict:
+    requirement = dec(entry["requirement"])
+    args = [dec(arg) for arg in entry["args"]]
+    kwargs = {k: dec(v) for k, v in entry["kwargs"].items()}
+    if entry["kind"] == "engine.assess_requirement":
+        outcome = engine.assess_requirement(requirement, *args, profile=entry["profile"], **kwargs)
+    else:
+        outcome = FUNCTIONS[entry["kind"]](requirement, *args, **kwargs)
+    return dump(key(outcome))
+
+
 @pytest.mark.parametrize("chunk", range(8))
 def test_cada_entrada_dona_el_mateix_rule_outcome_que_la_v4(chunk):
     differences = []
     selected = entries()[chunk::8]
     for entry in selected:
-        requirement = dec(entry["requirement"])
-        args = [dec(arg) for arg in entry["args"]]
-        kwargs = {k: dec(v) for k, v in entry["kwargs"].items()}
-        if entry["kind"] == "engine.assess_requirement":
-            outcome = engine.assess_requirement(
-                requirement, *args, profile=entry["profile"], **kwargs
-            )
-        else:
-            outcome = FUNCTIONS[entry["kind"]](requirement, *args, **kwargs)
-        if dump(key(outcome)) != entry["v4"]:
-            differences.append((entry["kind"], entry["profile"], entry["v4"], dump(key(outcome))))
+        outcome = _evaluate(entry)
+        if outcome == entry["v4"]:
+            continue
+        if (_signature(entry["v4"]), _signature(outcome)) in V6_INTENDED:
+            continue
+        differences.append((entry["kind"], entry["profile"], entry["v4"], outcome))
     assert not differences, differences[:3]
     assert selected
+
+
+def test_les_divergencies_v6_son_exactament_les_volgudes():
+    found = set()
+    count = 0
+    for entry in entries():
+        outcome = _evaluate(entry)
+        if outcome != entry["v4"]:
+            count += 1
+            found.add((_signature(entry["v4"]), _signature(outcome)))
+    assert found <= V6_INTENDED
+    assert found == V6_INTENDED, sorted(V6_INTENDED - found)
+    assert count == V6_INTENDED_COUNT
 
 
 def test_cap_entrada_del_fixture_no_entra_al_complement_product_v2():

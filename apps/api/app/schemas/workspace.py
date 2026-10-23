@@ -95,6 +95,12 @@ class NoteCreateRequest(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
 
 
+class NoteUpdateRequest(BaseModel):
+    """El text nou d'una nota: substitueix l'anterior sencer, amb el mateix limit."""
+
+    text: str = Field(min_length=1, max_length=8000)
+
+
 # --------------------------------------------------------------------------- #
 # Sortida                                                                       #
 # --------------------------------------------------------------------------- #
@@ -188,6 +194,8 @@ class NoteRead(ORMModel):
     author_name: str | None = None
     text: str
     created_at: datetime
+    #: Darrera edicio del text; nul si no s'ha editat mai (0064).
+    updated_at: datetime | None = None
 
 
 class ComplianceCountersRead(BaseModel):

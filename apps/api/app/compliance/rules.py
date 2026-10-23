@@ -42,7 +42,24 @@ from app.models.enums import (
 #: mateix resultat: ho verifica una prova diferencial contra `21d5f9e`. El resum
 #: compta EXIGENCIES (grups de duplicats, `app.compliance.consolidation`), no
 #: files. El pilot no tenia cap run de compliment: el canvi es segur.
-RULES_VERSION = "company-compliance-v5"
+#: v6 (22-10-2026, Bloc 1), per a TOTS els perfils d'extraccio:
+#: * ENS per categories `basica < mitjana < alta`: igual o superior compleix,
+#:   llegint primer el `level` estructurat de la certificacio i el nom com a
+#:   reserva; nomes compten les certificacions vigents (`lifecycle`).
+#: * ISO: una ruta del normalitzador llegeix les normes del text literal i les
+#:   exigeix TOTES; «o equivalent» sense la norma i amb el perfil complet es «no
+#:   compleix» com a bloqueig nomes POTENCIAL (`potential_only`).
+#: * Classificacio empresarial comparada (grup i subgrup exactes, categoria >=, amb
+#:   les lletres antigues del RD 773/2015) i mai «compleix» pel sol tipus; «RELI o
+#:   ROLECE» com a qualsevol dels dos; la documentacio de qui ja hi es inscrit,
+#:   avaluada; la capacitat legal de prestar serveis de telecomunicacions, com el
+#:   registre d'operadors de la CNMC.
+#: * Una disjuncio completa sense cap via que l'acrediti genera UN bloqueig, i en
+#:   contractes de serveis la classificacio substitueix la solvencia (art. 77.1.b
+#:   LCSP) i, si no s'acredita, no bloqueja.
+#: * La recomanacio llegeix l'estat del pre-fit (`low_fit` -> poc encaix).
+#: Un run v5 deixa de ser vigent.
+RULES_VERSION = "company-compliance-v6"
 
 
 class RuleCode:
@@ -52,7 +69,17 @@ class RuleCode:
     #: Facturacio combinada segons l'agregacio que demana el plec.
     ECONOMIC_AGGREGATE = "economic_turnover_aggregate_v2"
     CERTIFICATION_EXACT = "certification_exact_v1"
+    #: Diverses normes en un sol requisit: totes (o una, si el plec diu «o»).
+    CERTIFICATION_SET = "certification_set_v1"
+    #: ENS per categories: la de l'empresa igual o superior a l'exigida.
+    ENS_CATEGORY_GTE = "ens_category_gte_v1"
     REGISTRATION_EXACT = "registration_exact_v1"
+    #: Un de diversos registres (p. ex. «RELI o ROLECE»).
+    REGISTRATION_ANY_OF = "registration_any_of_v1"
+    #: Grup i subgrup exactes i categoria igual o superior.
+    BUSINESS_CLASSIFICATION_GTE = "business_classification_gte_v1"
+    #: En serveis, una classificacio acreditada substitueix la solvencia.
+    CLASSIFICATION_SUBSTITUTION = "classification_substitution_v1"
     INSURANCE_COVERAGE_GTE = "insurance_coverage_gte_v1"
     #: Cada limit de la polissa comparat per separat.
     INSURANCE_LIMITS = "insurance_limits_v2"
@@ -101,8 +128,21 @@ class ExplanationCode:
     #: L'empresa te l'ENS en una categoria inferior a l'exigida (v5).
     CERTIFICATION_LEVEL_BELOW = "CERTIFICATION_LEVEL_BELOW"
     #: L'empresa el te en una categoria superior i el plec no diu «o superior»:
-    #: si hi equival ho decideix una persona (v5).
+    #: si hi equival ho decideix una persona (v5). La v6 ja no l'emet: una
+    #: categoria superior compleix (`CERTIFICATION_LEVEL_HIGHER_MET`).
     CERTIFICATION_LEVEL_HIGHER_REVIEW = "CERTIFICATION_LEVEL_HIGHER_REVIEW"
+    #: L'empresa te l'ENS en una categoria superior a l'exigida: compleix (v6).
+    CERTIFICATION_LEVEL_HIGHER_MET = "CERTIFICATION_LEVEL_HIGHER_MET"
+    #: La certificacio consta, pero en tramit o retirada (`lifecycle`): ara no
+    #: acredita res (v6).
+    CERTIFICATION_NOT_CURRENT = "CERTIFICATION_NOT_CURRENT"
+    #: El plec admet equivalents i l'empresa, amb el perfil complet, no te la
+    #: norma: «no compleix», nomes com a bloqueig potencial (v6).
+    CERTIFICATION_EQUIVALENT_NOT_DECLARED = "CERTIFICATION_EQUIVALENT_NOT_DECLARED"
+    #: Requisit de diverses normes: l'empresa les te totes (v6).
+    CERTIFICATION_ALL_FOUND = "CERTIFICATION_ALL_FOUND"
+    #: Requisit de diverses normes: n'hi falta alguna (v6).
+    CERTIFICATION_SOME_MISSING = "CERTIFICATION_SOME_MISSING"
 
     REGISTRATION_FOUND_VALID = "REGISTRATION_FOUND_VALID"
     REGISTRATION_FOUND_EXPIRED = "REGISTRATION_FOUND_EXPIRED"
@@ -110,8 +150,38 @@ class ExplanationCode:
     REGISTRATION_DATA_INCOMPLETE = "REGISTRATION_DATA_INCOMPLETE"
     REGISTRATION_CLASSIFICATION_REVIEW = "REGISTRATION_CLASSIFICATION_REVIEW"
     #: Documentacio que aporta qui JA es inscrit (RELI/ROLECE): no exigeix
-    #: estar-hi inscrit (v5).
+    #: estar-hi inscrit (v5). La v6 l'avalua amb els dos codis seguents.
     REGISTRATION_DOCUMENTATION_ONLY = "REGISTRATION_DOCUMENTATION_ONLY"
+    #: L'empresa es inscrita al RELI o al ROLECE: pot aportar-ne el certificat (v6).
+    REGISTRATION_DOCUMENTATION_AVAILABLE = "REGISTRATION_DOCUMENTATION_AVAILABLE"
+    #: L'empresa no hi es inscrita (perfil complet): la clausula, que parla de qui
+    #: ja hi es, no li aplica (v6).
+    REGISTRATION_DOCUMENTATION_NOT_APPLICABLE = "REGISTRATION_DOCUMENTATION_NOT_APPLICABLE"
+    #: Consta, pero en tramit o retirada (`lifecycle`): avui no acredita res (v6).
+    REGISTRATION_NOT_CURRENT = "REGISTRATION_NOT_CURRENT"
+
+    # --- Classificacio empresarial (v6) ------------------------------------
+    #: Grup i subgrup exactes i categoria igual o superior.
+    CLASSIFICATION_MET = "CLASSIFICATION_MET"
+    #: L'empresa te el grup i subgrup, en una categoria inferior.
+    CLASSIFICATION_CATEGORY_BELOW = "CLASSIFICATION_CATEGORY_BELOW"
+    #: El plec dona una lletra antiga amb dues equivalencies (RD 773/2015: obres F
+    #: -> 5 o 6, serveis D -> 4 o 5) i la de l'empresa es entre totes dues.
+    CLASSIFICATION_CATEGORY_AMBIGUOUS = "CLASSIFICATION_CATEGORY_AMBIGUOUS"
+    #: Perfil complet i cap classificacio en aquest grup i subgrup.
+    CLASSIFICATION_NOT_HELD = "CLASSIFICATION_NOT_HELD"
+    #: El plec no diu quin grup i subgrup: no es compara pel sol tipus.
+    CLASSIFICATION_NOT_STATED = "CLASSIFICATION_NOT_STATED"
+    #: El plec en dona diverses (per lots, per exemple) i no se sap quina aplica.
+    CLASSIFICATION_AMBIGUOUS = "CLASSIFICATION_AMBIGUOUS"
+    #: Una classificacio del perfil que no es pot llegir (ni nom ni numero).
+    CLASSIFICATION_COMPANY_UNREADABLE = "CLASSIFICATION_COMPANY_UNREADABLE"
+    #: Contracte de serveis: la classificacio acreditada substitueix la solvencia
+    #: economica i tecnica del mateix abast (art. 77.1.b LCSP).
+    CLASSIFICATION_SUBSTITUTES_SOLVENCY = "CLASSIFICATION_SUBSTITUTES_SOLVENCY"
+    #: Contracte de serveis: la classificacio no es exigible; si no s'acredita, la
+    #: solvencia s'acredita pels altres mitjans i no bloqueja.
+    CLASSIFICATION_OPTIONAL_IN_SERVICES = "CLASSIFICATION_OPTIONAL_IN_SERVICES"
 
     INSURANCE_COVERAGE_MET = "INSURANCE_COVERAGE_MET"
     INSURANCE_COVERAGE_NOT_MET = "INSURANCE_COVERAGE_NOT_MET"

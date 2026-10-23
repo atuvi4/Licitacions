@@ -118,11 +118,32 @@ function traceOf(item: AssessmentDisplay["assessment"]): ReviewTrace | null {
     };
   }
   const dropped = item.explanation_params?.review_not_carried as
-    | { reason?: string; reviewed_against?: string; reviewed_result?: string | null; review_note?: string | null }
+    | {
+        reason?: string;
+        reviewed_against?: string;
+        reviewed_result?: string | null;
+        review_note?: string | null;
+        same_run?: boolean;
+      }
     | undefined;
   if (!dropped) return null;
   const reason = dropped.reason ?? "";
   const note = dropped.review_note?.trim() ? ` («${dropped.review_note.trim()}»)` : "";
+  if (reason === "shown_changed") {
+    // El que la persona va revisar només ho mostrava una altra fila (una via
+    // alternativa o la classificació), i el recompte ja no ho mostra (Bloc 1).
+    const settled = SETTLED.includes(item.effective_result);
+    const when = dropped.same_run ? "" : " d'un càlcul anterior";
+    const what = dropped.reviewed_result
+      ? `Una revisió${when} deia «${resultLabel(dropped.reviewed_result)}»${note}`
+      : `Una confirmació${when}`;
+    return {
+      kind: "dropped",
+      reason,
+      actionable: !settled,
+      text: `${what}, quan la fila mostrava «${resultLabel(dropped.reviewed_against)}» per una altra (una via alternativa o la classificació). Ja no ho mostra i la revisió no s'ha conservat: ara el sistema diu «${resultLabel(item.effective_result)}»${settled ? "." : ". Torna a revisar el requisit."}`,
+    };
+  }
   if (reason === "requirement_changed") {
     return {
       kind: "dropped",

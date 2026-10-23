@@ -619,6 +619,37 @@ describe("ComplianceSection · Pas 2: confirmats, possibles i revisions conserva
     expect(groupOfRow("Certificat ISO 9001 en vigor")).toBe("potential");
   });
 
+  it("Bloc 1: un «compleix» que només mostrava una altra fila no es conserva, i ho diu", () => {
+    const value: Compliance = {
+      run: run({ confirmed_blockers_count: 0, potential_blockers_count: 1 }),
+      is_stale: false,
+      assessments: [
+        assessment({
+          automatic_result: "does_not_satisfy",
+          effective_result: "does_not_satisfy",
+          blocker_status: "potential",
+          explanation_params: {
+            review_not_carried: {
+              from_run: "cr1",
+              reviewed_against: "satisfies",
+              reviewed_result: "satisfies",
+              review_note: "Acreditada amb la classificació",
+              reason: "shown_changed",
+              same_run: true,
+            },
+          },
+        }),
+      ],
+    };
+    const { container } = renderSection(value);
+    const notice = container.querySelector("[data-review-not-carried]");
+    expect(notice?.getAttribute("data-review-not-carried")).toBe("shown_changed");
+    expect(notice?.textContent).toContain("Una revisió deia «Compleix» («Acreditada amb la classificació»)");
+    expect(notice?.textContent).toContain("per una altra (una via alternativa o la classificació)");
+    expect(notice?.textContent).not.toContain("càlcul anterior");
+    expect(notice?.textContent).toContain("Torna a revisar el requisit.");
+  });
+
   it("una fila amb avís no queda mai plegada, i el recompte de dalt la compta", () => {
     const req = (id: string, title: string) => ({ ...assessment().requirement!, requirement_id: id, title });
     const value: Compliance = {

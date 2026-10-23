@@ -782,12 +782,12 @@ def test_the_exact_certification_satisfies():
     assert outcome.result == AssessmentResult.SATISFIES
 
 
-def test_a_different_certification_with_equivalence_allowed_needs_review():
-    """"O equivalent" i l'empresa en te una altra: ho decideix una persona.
+def test_a_different_certification_with_equivalence_allowed_is_a_potential_blocker():
+    """"O equivalent" i l'empresa, amb el perfil complet, no te la norma (v6, decisio 2).
 
-    El motor no pot dir que ISO 14001 equival a ISO 9001, i tampoc pot dir que
-    no: sense l'exacta, amb equivalents admesos, no hi ha incompliment
-    demostrat.
+    El motor no pot dir que ISO 14001 equival a ISO 9001: diu «no compleix», pero
+    nomes com a bloqueig POTENCIAL (`potential_only`), i la persona que el revisi el
+    confirma o el desfa. Verificar el requisit no el confirma.
     """
     profile = snapshot(
         certifications=[FakeCertification("ISO 14001")], sections={"certifications": 1.0}
@@ -795,9 +795,10 @@ def test_a_different_certification_with_equivalence_allowed_needs_review():
 
     outcome = assess_certification(certification("ISO 9001", equivalence=True), profile)
 
-    assert outcome.result == AssessmentResult.NEEDS_REVIEW
-    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_EQUIVALENCE_REVIEW
+    assert outcome.result == AssessmentResult.DOES_NOT_SATISFY
+    assert outcome.explanation_code == ExplanationCode.CERTIFICATION_EQUIVALENT_NOT_DECLARED
     assert outcome.params["company_certifications"] == ["ISO 14001"]
+    assert outcome.params["potential_only"] is True
 
 
 def test_without_equivalence_a_complete_profile_still_settles_it():

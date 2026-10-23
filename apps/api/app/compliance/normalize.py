@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -53,7 +53,11 @@ from app.models.enums import (
 )
 
 #: Versio del normalitzador. Va a cada `explanation_params.normalization`.
-NORMALIZER_VERSION = "product-v2-normalizer-v2"
+#: v3 (company-compliance-v6): rutes d'ISO (totes les normes que nomena el plec, i
+#: l'ENS si hi va al costat), de classificacio empresarial (grup, subgrup i
+#: categoria), de «RELI o ROLECE» com a qualsevol dels dos, i la capacitat legal de
+#: prestar serveis de telecomunicacions com el registre d'operadors (CNMC).
+NORMALIZER_VERSION = "product-v2-normalizer-v3"
 
 #: L'UNIC perfil al qual s'aplica.
 NORMALIZED_PROFILE = "product-v2"
@@ -88,6 +92,19 @@ REASON_REGISTRY_NOT_NAMED = "registry_not_named_explicitly"
 REASON_NOT_MANDATORY = "not_mandatory"
 REASON_UNMAPPED_CONDITIONS = "unmapped_conditions"
 REASON_PERCENTAGE_BASE_AMBIGUOUS = "percentage_base_ambiguous"
+#: El text no diu quin grup i subgrup de classificacio (v6).
+REASON_CLASSIFICATION_NOT_STATED = "classification_not_stated"
+#: El text en dona diverses (per lots, per exemple) i no se sap quina aplica (v6).
+REASON_CLASSIFICATION_AMBIGUOUS = "classification_ambiguous"
+#: Les normes no formen una llista clara: «i» i «o» barrejats, textos que no
+#: coincideixen o un separador que no es pot llegir (v6).
+REASON_CERTIFICATION_LIST_AMBIGUOUS = "certification_list_ambiguous"
+#: El text nomena, a mes de normes ISO, un altre esquema (EMAS, OHSAS, UNE...): la
+#: llista que es llegiria seria parcial (v6).
+REASON_CERTIFICATION_OTHER_SCHEME = "certification_other_scheme"
+#: Alguna norma es condicional, opcional o puntuable («i, si escau, ISO 14001»,
+#: «preferentment», «(es valorarà)»): no s'exigeixen totes igual (v6).
+REASON_CERTIFICATION_CONDITIONAL = "certification_conditional"
 
 #: Rutes: el requisit es resol amb una regla diferent de la de la seva categoria
 #: o directament amb revisio (sense reescriure la categoria).
@@ -95,6 +112,12 @@ ROUTE_ENS = "ens_certification"
 ROUTE_REGISTRY_DOCUMENTATION_ONLY = "registry_documentation_only"
 ROUTE_SECTOR_OPERATOR_REGISTRY = "sector_operator_registry"
 ROUTE_NOT_REQUIRED = "not_required"
+#: Normes ISO (i l'ENS si el plec el nomena al costat), totes o qualsevol (v6).
+ROUTE_ISO = "iso_certification"
+#: Classificacio empresarial amb grup, subgrup i categoria (v6).
+ROUTE_CLASSIFICATION = "business_classification"
+#: Un de diversos registres de licitadors (`RELI o ROLECE`) (v6).
+ROUTE_REGISTRY_ANY_OF = "registry_any_of"
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +265,10 @@ def _fold(text: str) -> str:
     """Per comparar paraules: sense accents i en minuscules."""
     decomposed = unicodedata.normalize("NFD", _flat(text))
     return "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn").casefold()
+
+
+#: El mateix plegat per a les regles (`certifications`, `personnel`).
+fold_text = _fold
 
 
 #: Un import en format local (punt de milers, coma decimal) o un enter.
@@ -1285,8 +1312,14 @@ def _ens(sources: _Sources, requirement: Any) -> Normalization | None:
             value.get("equivalents_allowed")
             or value.get("equivalence_allowed")
             or getattr(requirement, "equivalence_allowed", False)
+            # v6: «o equivalent» dit al text, com a la ruta ISO (nomes fa el «no
+            # compleix» potencial: per prudencia, tambe del titol).
+            or sources.find_flag(_EQUIVALENT, "certification.equivalence")
         ),
-        valid_at_deadline=bool(value.get("valid_at_deadline")),
+        # v6: el valor lliure no diu mai si cal vigencia; la llei si (art. 140.4 LCSP:
+        # la capacitat i la solvencia s'han de tenir en acabar el termini). Una
+        # certificacio caducada no acredita res.
+        valid_at_deadline=bool(value.get("valid_at_deadline", True)),
     )
     return Normalization(
         status="routed",
@@ -1301,17 +1334,37 @@ def _ens(sources: _Sources, requirement: Any) -> Normalization | None:
 # Registres i classificacio                                                     #
 # --------------------------------------------------------------------------- #
 
-_RELI_ROLECE = re.compile(r"\breli\b|\brolece\b")
+_RELI_ROLECE = re.compile(r"\brelic?\b|\brolece\b")
+#: Cada registre de licitadors pel seu nom (v6: «RELI o ROLECE» = qualsevol dels dos).
+_RELI = re.compile(r"\brelic?\b|registre electronic d'empreses licitadores")
+_ROLECE = re.compile(r"\brolece\b|registro oficial de licitadores")
 #: «les empreses inscrites», «licitadors inscrits»: la clausula parla de QUI ja hi
 #: es inscrit (que ha d'aportar), no exigeix inscriure-s'hi.
 _REGISTERED_SUBJECT = re.compile(
     r"\b(?:empreses|empresas|licitadors|licitadores|persones licitadores)\s+inscrit(?:e|a|o)?s\b"
     r"|\bque\s+(?:estiguin|esten|estan)\s+inscrit"
 )
+#: El registre d'operadors (CNMC): pel nom o, des de la v6, per la capacitat legal
+#: de prestar serveis de telecomunicacions o de comunicacions electroniques, que
+#: s'acredita amb la inscripcio (o comunicacio) en aquest registre.
 _SECTOR_OPERATOR = re.compile(
     r"\bcnmc\b|comissio nacional dels mercats|comision nacional de los mercados"
     r"|registre d'operadors|registro de operadores"
+    r"|capacitat legal(?: necessaria)? (?:per a |per )?(?:explotar|prestar)"
+    r"(?: o (?:explotar|prestar))?(?: els)? serveis de "
+    r"(?:telecomunicacions|comunicacions electroniques)"
+    r"|capacitat legal d'operador"
+    r"|capacidad legal(?: necesaria)? para (?:explotar|prestar)(?: o (?:explotar|prestar))?"
+    r"(?: los)? servicios de (?:telecomunicaciones|comunicaciones electronicas)"
+    r"|capacidad legal de operador"
+    r"|habilitacio (?:per a |per )?(?:prestar|explotar|la prestacio d)[^.;]{0,60}"
+    r"(?:telecomunicacions|comunicacions electroniques)"
+    r"|habilitacion para (?:prestar|explotar|la prestacion de)[^.;]{0,60}"
+    r"(?:telecomunicaciones|comunicaciones electronicas)"
 )
+#: El registre d'empreses INSTAL·LADORES de telecomunicacions es un altre: mai la CNMC.
+#: Tambe la «habilitacio per a serveis d'instal·lacio»: es la d'instal·lador.
+_INSTALLERS = re.compile(r"instal\W?l?a(?:dor|ci)|instala(?:dor|ci)")
 #: «no és necessari disposar de classificació», «la classificació no s'exigeix».
 _NOT_REQUIRED = re.compile(
     r"\bno es necessari\b|\bno s'exigeix\b|\bno s'exigira\b|\bno es requereix\b"
@@ -1335,18 +1388,46 @@ def _not_required(sources: _Sources, requirement: Any) -> Normalization | None:
     return Normalization(status="routed", route=ROUTE_NOT_REQUIRED, provenance=(origin,))
 
 
+def _sector_operator_flag(sources: _Sources) -> Provenance | None:
+    """El registre d'operadors en el text LITERAL, mai el d'instal·ladors."""
+    for source, text, evidence in sources.literal_texts():
+        folded = _fold(text)
+        if _SECTOR_OPERATOR.search(folded) and not _INSTALLERS.search(folded):
+            return Provenance("registry", source, text, evidence)
+    return None
+
+
 def _registration(sources: _Sources, requirement: Any) -> Normalization | None:
     if sources.find_flag(_RELI_ROLECE, "registry") is not None:
         subject = sources.find_flag(_REGISTERED_SUBJECT, "registry.subject")
         if subject is not None:
             # Documentacio que aporta qui JA hi es inscrit: no es l'exigencia
-            # d'estar-hi. Marca de prudencia (porta a revisio), pot venir del titol.
+            # d'estar-hi. Pot venir del titol; la v6 l'avalua (`engine`), i amb una
+            # marca nomes del titol continua sent prudent.
             return Normalization(
                 status="routed", route=ROUTE_REGISTRY_DOCUMENTATION_ONLY, provenance=(subject,)
             )
-        return None
+        if getattr(requirement, "obligation", None) != RequirementObligation.MANDATORY:
+            return None
+        # v6: el plec exigeix estar inscrit en un dels registres que nomena: «RELI o
+        # ROLECE» es qualsevol dels dos. El nom del registre pot venir del titol.
+        types: list[str] = []
+        provenance: list[Provenance] = []
+        for kind, pattern in (("reli", _RELI), ("rolece", _ROLECE)):
+            flag = sources.find_flag(pattern, f"registry.{kind}")
+            if flag is not None:
+                types.append(kind)
+                provenance.append(flag)
+        if not types:
+            return None
+        return Normalization(
+            status="normalized",
+            route=ROUTE_REGISTRY_ANY_OF,
+            value_json={"type": "registry_any_of", "types": types},
+            provenance=tuple(provenance),
+        )
     # La CNMC nomes compta si ho diu el text LITERAL (mai el titol del model).
-    named = sources.literal_flag(_SECTOR_OPERATOR, "registry")
+    named = _sector_operator_flag(sources)
     if named is not None:
         if getattr(requirement, "obligation", None) != RequirementObligation.MANDATORY:
             return _not_normalized(REASON_NOT_MANDATORY)
@@ -1358,6 +1439,500 @@ def _registration(sources: _Sources, requirement: Any) -> Normalization | None:
             provenance=(named,),
         )
     return _not_normalized(REASON_REGISTRY_NOT_NAMED)
+
+
+# --------------------------------------------------------------------------- #
+# Classificacio empresarial (v6)                                                #
+# --------------------------------------------------------------------------- #
+
+#: Lletres antigues (RD 1098/2001) -> categories actuals, segons les taules del RD
+#: 773/2015: disposicio transitoria segona per a obres (grups A-K) i tercera per a
+#: serveis (grups L-V). Una lletra pot correspondre a dues categories actuals (obres
+#: F -> 5 o 6; serveis D -> 4 o 5): `(minima, maxima)`. Per a l'empresa compta la
+#: minima (la lectura prudent); per al plec, entre les dues cal revisar.
+_OLD_WORKS = {"a": (1, 1), "b": (1, 1), "c": (2, 2), "d": (3, 3), "e": (4, 4), "f": (5, 6)}
+_OLD_SERVICES = {"a": (1, 1), "b": (2, 2), "c": (3, 3), "d": (4, 5)}
+_WORKS_GROUPS = frozenset("abcdefghijk")
+_CATEGORY = r"(?P<category>[1-6]|[a-f])\b"
+#: Un subgrup sense «grup» al davant: «Grup V, subgrup 4, categoria 2 i subgrup 5,
+#: categoria 1». Del grup de la classificacio anterior (o del prefix «V-5»).
+_SUBGROUP_ALONE = re.compile(
+    r"\bsubgrup(?:s|o|os)?\s*:?\s*(?:(?P<group>[a-v])\s*-\s*)?(?P<subgroup>\d{1,2})\b"
+    r"(?:[\s,;:.\-]*(?:i\s+|y\s+)?(?:categor(?:ia|ies|ias)?|cat\.?)\s*:?\s*"
+    r"(?P<category>[1-6]|[a-f])\b)?"
+)
+_GROUP_OR_SUBGROUP = re.compile(r"\bgrup|\bsubgrup")
+#: El text parla de classificacio: sense aixo, «F-2» o «A-1» son referencies.
+_CLASSIFICATION_CONTEXT = re.compile(r"classifica|clasifica|\bgrup|\bsubgrup|\bcategor")
+#: Una forma curta just darrere d'una d'aquestes paraules es una referencia
+#: («l'apartat F-2», «l'annex A-1», «la clausula C-3»), no una classificacio.
+_REFERENCE_BEFORE = re.compile(
+    r"\b(?:annex|anexo|apartat|apartado|clausula|article|articulo|punt|punto|seccio|seccion"
+    r"|quadre|cuadro|taula|tabla|pagina|pag|model|modelo|formulari|formulario|figura"
+    r"|epigraf|epigrafe|capitol|capitulo|document|documento|doc|lot|lote)"
+    r"\.?\s*(?:n\W{0,2}\s*|num\.?\s*)?$"
+)
+#: «Grup V, Subgrup 4, Categoria 1», «grupo V subgrupo 4 categoría C», «Grup: V ...».
+_SUBGROUP_WORD = r"subgrup(?:s|o|os)?"
+#: Un o diversos subgrups: «subgrup 4», «subgrups 2 i 4», «Subgrup 2 i Subgrup 4»,
+#: «subgrups 2, 4 o 6». Cadascun es una classificacio (i, si n'hi ha diverses, el
+#: normalitzador no en tria cap: `REASON_CLASSIFICATION_AMBIGUOUS`).
+_SUBGROUP_LIST = (
+    r"(?P<subgroups>\d{1,2}\b(?:\s*(?:,|\bi\b|\by\b|\bo\b|\bu\b)\s*(?:"
+    + _SUBGROUP_WORD
+    + r"\s*:?\s*)?(?:[a-v]\s*-\s*)?\d{1,2}\b)*)"
+)
+_CLASSIFICATION_LONG = re.compile(
+    r"\bgrup(?:o|s|os)?\s*:?\s*(?P<group>[a-v])\b"
+    r"[\s,;:.\-]*(?:i\s+|y\s+)?" + _SUBGROUP_WORD + r"\s*:?\s*(?:[a-v]\s*-\s*)?"
+    + _SUBGROUP_LIST
+    + r"(?:[\s,;:.\-]*(?:i\s+|y\s+)?(?:categor(?:ia|ies|ias)?|cat\.?)\s*:?\s*"
+    + _CATEGORY
+    + r")?"
+)
+#: «V-4-1», «V-4, categoria 1», «V4-1», «V-4». Nomes en un context de classificacio, i
+#: amb el grup enganxat al subgrup o amb un guio: «i 4, categoria 3» no es el grup I.
+_CLASSIFICATION_SHORT = re.compile(
+    r"(?<![\w-])(?P<group>[a-v])(?:\s*-\s*|(?=\d))(?P<subgroup>\d{1,2})"
+    r"(?:\s*-\s*(?P<category>[1-6]|[a-f])\b"
+    r"|\s*,?\s*(?:i\s+|y\s+)?(?:categor(?:ia)?|cat\.?)\s*:?\s*(?P<category2>[1-6]|[a-f])\b)?"
+    r"(?![\w-])"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Classification:
+    """Una classificacio empresarial: grup (lletra), subgrup i categoria (1-6 o res).
+
+    `category_max` nomes consta quan una lletra antiga equival a dues categories
+    actuals (obres F, serveis D): `category` n'es la minima.
+    """
+
+    group: str
+    subgroup: str
+    category: int | None = None
+    category_max: int | None = None
+    #: La categoria del text no existeix per a aquest grup (p. ex. «E» en serveis).
+    category_invalid: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "group": self.group.upper(),
+            "subgroup": self.subgroup,
+            "category": self.category,
+        }
+        if self.category_max is not None and self.category_max != self.category:
+            data["category_max"] = self.category_max
+        return data
+
+
+def _category(raw: str | None, group: str) -> tuple[int | None, int | None, bool]:
+    """`(minima, maxima, invalida)` de la categoria d'un text, segons el grup."""
+    if not raw:
+        return None, None, False
+    if raw.isdigit():
+        return int(raw), None, False
+    table = _OLD_WORKS if group in _WORKS_GROUPS else _OLD_SERVICES
+    if raw not in table:
+        return None, None, True
+    low, high = table[raw]
+    return low, (high if high != low else None), False
+
+
+def _classification_from(group: str, subgroup: str, raw_category: str | None) -> Classification:
+    low, high, invalid = _category(raw_category, group)
+    return Classification(
+        group=group,
+        subgroup=str(int(subgroup)),
+        category=low,
+        category_max=high,
+        category_invalid=invalid,
+    )
+
+
+def parse_classifications(text: str, *, context_required: bool = True) -> list[Classification]:
+    """Les classificacions que diu un text, en ordre i sense repeticions.
+
+    Grup i subgrup son la identitat; la categoria pot no constar. Les lletres
+    antigues de categoria es converteixen a les noves (RD 773/2015, segons si el grup
+    es d'obres o de serveis). La forma curta («V-4-1») nomes es llegeix si el text
+    parla de classificacio (`context_required`; el nom d'un registre de classificacio
+    de l'empresa ja ho diu pel tipus) i mai darrere d'una referencia («l'apartat F-2»).
+    """
+    folded = _fold(text or "").replace("–", "-")
+    found: list[Classification] = []
+    taken: list[tuple[int, int]] = []
+    groups: list[tuple[int, str]] = []
+    for match in _CLASSIFICATION_LONG.finditer(folded):
+        taken.append(match.span())
+        groups.append((match.start(), match.group("group")))
+        category = match.group("category")
+        for subgroup in re.findall(r"\d{1,2}", match.group("subgroups")):
+            found.append(
+                _without_unread_category(
+                    _classification_from(match.group("group"), subgroup, category),
+                    folded,
+                    match.end(),
+                )
+            )
+    short_allowed = not context_required or bool(_CLASSIFICATION_CONTEXT.search(folded))
+    for match in _CLASSIFICATION_SHORT.finditer(folded) if short_allowed else ():
+        start, end = match.span()
+        if any(start < t_end and end > t_start for t_start, t_end in taken):
+            continue
+        # Sense guio ni categoria («v4») podria ser qualsevol cosa: no es llegeix.
+        if "-" not in match.group(0) and not (
+            match.group("category") or match.group("category2")
+        ):
+            continue
+        if _REFERENCE_BEFORE.search(folded[max(0, start - 30) : start]):
+            continue
+        taken.append(match.span())
+        found.append(
+            _without_unread_category(
+                _classification_from(
+                    match.group("group"),
+                    match.group("subgroup"),
+                    match.group("category") or match.group("category2"),
+                ),
+                folded,
+                end,
+            )
+        )
+    for match in _SUBGROUP_ALONE.finditer(folded):
+        start, end = match.span()
+        if any(start < t_end and end > t_start for t_start, t_end in taken):
+            continue
+        before = [group for position, group in groups if position < start]
+        group = match.group("group") or (before[-1] if before else None)
+        if group is None:
+            continue
+        found.append(_classification_from(group, match.group("subgroup"), match.group("category")))
+    return list(dict.fromkeys(found))
+
+
+def _without_unread_category(item: Classification, folded: str, end: int) -> Classification:
+    """Una classificacio sense categoria quan el text en diu una despres («Subgrup 4
+    (Serveis de telecomunicacions), Categoria 2»): la categoria no s'ha pogut llegir, i
+    sense ella la comparacio seria un «compleix» fals."""
+    if item.category is not None or item.category_invalid:
+        return item
+    tail = folded[end : end + 100]
+    stop = _GROUP_OR_SUBGROUP.search(tail)
+    if re.search(r"\bcategor", tail[: stop.start()] if stop else tail):
+        return replace(item, category_invalid=True)
+    return item
+
+
+def _classification(sources: _Sources, requirement: Any) -> Normalization:
+    """La classificacio que demana el plec: una de sola i dita al text literal."""
+    found: dict[Classification, Provenance] = {}
+    for source, text, evidence in sources.literal_texts():
+        for item in parse_classifications(text):
+            found.setdefault(item, Provenance("classification", source, text, evidence))
+    if not found:
+        return _not_normalized(REASON_CLASSIFICATION_NOT_STATED)
+    by_subgroup: dict[tuple[str, str], set[tuple[int | None, int | None]]] = {}
+    for item in found:
+        by_subgroup.setdefault((item.group, item.subgroup), set()).add(
+            (item.category, item.category_max)
+        )
+    categories = {c for cats in by_subgroup.values() for c in cats if c[0] is not None}
+    if (
+        len(by_subgroup) > 1
+        or len(categories) > 1
+        or any(item.category_invalid for item in found)
+    ):
+        # Per lots o per import, el plec en dona diverses (o una categoria que no
+        # existeix per al grup): quina aplica no ho diu el text.
+        return _not_normalized(
+            REASON_CLASSIFICATION_AMBIGUOUS,
+            found=[item.as_dict() for item in found],
+        )
+    (group, subgroup), _ = next(iter(by_subgroup.items()))
+    category, category_max = next(iter(categories)) if categories else (None, None)
+    chosen = next(
+        prov for item, prov in found.items() if item.category == category or category is None
+    )
+    value: dict[str, Any] = {
+        "type": "business_classification",
+        "group": group.upper(),
+        "subgroup": subgroup,
+        "category": category,
+    }
+    if category_max is not None:
+        # Lletra antiga amb dues equivalencies (RD 773/2015): entre la minima i la
+        # maxima, la comparacio la revisa una persona.
+        value["category_max"] = category_max
+    return Normalization(
+        status="normalized",
+        route=ROUTE_CLASSIFICATION,
+        value_json=value,
+        provenance=(chosen,),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Normes ISO (v6)                                                               #
+# --------------------------------------------------------------------------- #
+
+#: Una norma: `ISO 9001`, `ISO/IEC 27001:2022`, `UNE-EN ISO 14001`, o un numero sol
+#: just darrere d'una altra norma en una llista («ISO 9001 i 14001»).
+_ISO_TOKEN = re.compile(
+    # Mai una part d'un import («91.904,74»): ni un digit ni un «.», o una «,», entre
+    # digits a tocar. Un punt o una coma de puntuacio («ISO 27001.», «14001,») si.
+    r"(?P<prefix>\b(?:une[-\s]?en[-\s]?)?iso(?:/iec)?[-\s]?)?(?<!\d)(?<!\d[.,])(?P<number>\d{4,5})"
+    r"(?!\d)(?![.,]\d)(?:-\d{1,2})?(?:\s*:\s*\d{4})?"
+)
+#: Entre dues normes d'una llista: comes, «i», «o», barres, espais, articles («o la
+#: 14001») i «bé» / «també».
+_LIST_GLUE = re.compile(
+    r"(?:\s|,|;|/|\bi\b|\by\b|\be\b|\band\b|\bo\b|\bor\b|\bu\b|\bla\b|\bel\b|\bles\b"
+    r"|\bels\b|\blas\b|\blos\b|\bbe\b|\bbien\b|\btambe\b|\btambien\b|\bnormes\b|\bnormas\b"
+    r"|\bnorma\b)*"
+)
+#: Un numero sol seguit d'una unitat («5000 hores», «9001 euros») no es cap norma.
+_UNIT_AFTER = re.compile(
+    r"\s*(?:€|%|eur\b|euros?\b|hores?\b|horas?\b|h\b|m2\b|m\b|km\b|metres?\b|metros?\b"
+    r"|unitats?\b|unidades?\b|usuaris?\b|usuarios?\b|linies?\b|lineas?\b|anys?\b|anos?\b"
+    r"|dies?\b|dias?\b|mesos?\b|meses?\b|persones?\b|personas?\b|punts?\b|puntos?\b"
+    r"|extensions?\b|extensiones?\b|places?\b|plazas?\b|minuts?\b|minutos?\b|mbps\b|gbps\b"
+    r"|kw\b|kva\b)"
+)
+#: Una norma condicional, opcional o puntuable: la llista no diu que s'exigeixin totes.
+_CONDITIONAL = re.compile(
+    r"\bsi (?:s')?escau\b|\bquan escaigui\b|\ben el seu cas\b|\ben su caso\b|\bsi procede\b"
+    r"|\bsi cal\b|\bsi correspon\b|\bsi n'es el cas\b|\bsi (?:fuera|es|fos|resulta) necesari[oa]?\b"
+    r"|\bquan correspongui\b|\bcuando corresponda\b|\bopcional(?:ment|mente)?\b"
+    r"|\bvoluntari[oa]?s?\b|\boptati(?:u|va|vo|ves|us|vos|vas)\b|\bno obligatori[oa]?s?\b"
+    r"|\bpotestati(?:u|va|vo)\b|\bfacultati(?:u|va|vo)\b|\bcom a millora\b|\bcomo mejora\b"
+    r"|\bpreferent(?:ment)?\b|\bpreferente(?:mente)?\b|\bvalorar\w*|\bvalorable\b"
+    r"|\bvaloracio\b|\bvaloracion\b|(?<!no )\bpuntuable\b|\bes puntuara\b|\bse puntuara\b"
+    r"|\brecomana\w*|\brecomendable\b|\bdesitjable\b|\bdeseable\b"
+)
+_YEAR = re.compile(r"^(?:19|20)\d\d$")
+_EQUIVALENT = re.compile(r"\bequivalen(?:t|ts|te|tes)\b")
+#: Connectors d'un separador entre dues normes. «i/o» es una disjuncio (n'hi ha prou
+#: amb una) i es llegeix abans que la «i»; «o equivalent» no separa normes.
+_SEP_EITHER = re.compile(r"\b(?:i|y|and)\s*/\s*(?:o|or)\b")
+_SEP_EQUIVALENT = re.compile(
+    r"\b(?:o|u|or)\s+(?:una?\s+|la\s+|el\s+)?(?:altra\s+|otra\s+)?"
+    r"(?:certificacio\s+|certificacion\s+|norma\s+)?equivalen(?:t|ts|te|tes)\b"
+)
+_SEP_OR = re.compile(
+    r"\b(?:o|or|u|be|bien|alternativament|alternativamente|altrament|si no|en cas de no"
+    r"|en caso de no|en (?:el )?seu defecte|en su defecto|en defecte)\b"
+)
+_SEP_AND = re.compile(
+    r"\b(?:i|y|e|and|aixi com|asi como|tambe|tambien|a mes de|ademas de|juntament amb"
+    r"|junto con)\b|[&+]"
+)
+_PARENTHESES = re.compile(r"\([^()]*\)")
+#: Altres esquemes de certificacio. Si el text en nomena algun al costat de normes
+#: ISO, la llista que es llegiria seria parcial: revisio. Es una guarda, no un cataleg.
+_OTHER_SCHEMES = re.compile(
+    r"\b(?:emas|ohsas|pefc|fsc|sa\s?8000|sge\s?21|breeam|leed|iatf)\b"
+    r"|\bune(?:[-\s]?en)?[-\s]?(?!iso)\d{3,6}\b"
+    r"|(?<!iso/)\biec[-\s]?\d{4,5}\b"
+)
+#: «EN 50131», en majuscules: en minuscula, «en» es una preposicio («en 2026»).
+_EN_SCHEME = re.compile(r"\bEN[-\s]?(?P<number>\d{3,5})\b")
+#: Sense `name` ni `names`: si el valor ja porta els noms, la regla de sempre els
+#: llegeix (amb el seu operador) i aquesta ruta no hi toca.
+_ISO_CERTIFICATION_KEYS = frozenset(
+    {"valid_at_deadline", "equivalents_allowed", "equivalence_allowed"}
+)
+
+
+def _mentions(text: str) -> tuple[list[tuple[int, int, str]], list[str], list[str]]:
+    """Normes ISO i l'ENS (amb categoria) d'un text: `(inici, final, nom)`, separadors i
+    els numeros sols que semblen una norma pero no es poden lligar a la llista."""
+    folded = _fold(text or "")
+    mentions: list[tuple[int, int, str]] = []
+    orphans: list[str] = []
+    last_end: int | None = None
+    for match in _ISO_TOKEN.finditer(folded):
+        number = match.group("number")
+        if not match.group("prefix"):
+            # Un numero sol nomes es una norma just darrere d'una altra, en llista, i
+            # mai si porta una unitat al darrere («5000 hores»).
+            if last_end is None or _YEAR.match(number):
+                continue
+            if _UNIT_AFTER.match(folded, match.end()):
+                continue
+            if not _LIST_GLUE.fullmatch(folded[last_end : match.start()]):
+                # «ISO 9001 (qualitat) i 14001 (medi ambient)»: segurament una norma,
+                # pero no se sap: llegir la resta com la llista sencera seria parcial.
+                orphans.append(number)
+                continue
+        mentions.append((match.start(), match.end(), f"ISO {number}"))
+        last_end = match.end()
+    if not mentions:
+        return [], [], []
+    leveled: list[tuple[int, int]] = []
+    for pattern in (_ENS_LEVEL_AFTER, _ENS_LEVEL_BEFORE):
+        for match in pattern.finditer(folded):
+            level = ENS_LEVELS[match.group("level")]
+            tail = folded[match.end() : match.end() + 30]
+            or_higher = bool(_OR_HIGHER_AFTER.search(tail)) or bool(
+                _OR_HIGHER_JOIN.search(match.groupdict().get("join") or "")
+            )
+            leveled.append(match.span())
+            mentions.append(
+                (match.start(), match.end(), f"ENS {level}" + (" o superior" if or_higher else ""))
+            )
+    # L'ENS sense categoria al costat d'una ISO també es una via («ISO 27001 o ENS»).
+    # Es busca en majuscules al text original: «ens» en minuscula es un pronom. El
+    # plegat conserva les posicions (lletres precompostes), prou per als separadors.
+    for match in _ENS_STRICT.finditer(_flat(text or "")):
+        start, end = match.span()
+        if not any(start < l_end and end > l_start for l_start, l_end in leveled):
+            mentions.append((start, end, "ENS"))
+    mentions.sort()
+    separators = [
+        folded[mentions[i][1] : mentions[i + 1][0]] for i in range(len(mentions) - 1)
+    ]
+    return mentions, separators, orphans
+
+
+def _separator_kind(separator: str) -> str:
+    """Que diu el tros de text entre dues normes: `or`, `and`, `list` o `unclear`.
+
+    Els parentesis («ISO 9001 (qualitat)») i «o equivalent» no hi compten. Una coma o
+    un punt sols son `list` (la llista continua); un separador llarg sense cap
+    connector, `unclear`: entre dues normes allunyades no se sap quina relacio hi ha.
+    """
+    text = _SEP_EQUIVALENT.sub(" ", _PARENTHESES.sub(" ", separator))
+    text = _SEP_EITHER.sub(" o ", text)
+    has_or = bool(_SEP_OR.search(text))
+    has_and = bool(_SEP_AND.search(text))
+    if has_or and has_and:
+        return "unclear"
+    if has_or:
+        return "or"
+    if has_and:
+        return "and"
+    if "/" in text:
+        # «ISO 9001 / ISO 14001»: tant pot voler dir l'una com l'altra.
+        return "unclear"
+    return "list" if len(re.findall(r"[a-z0-9]+", text)) <= 3 else "unclear"
+
+
+def _list_kind(separators: list[str]) -> str:
+    """Una llista de normes d'un text: `or` (n'hi ha prou amb una), `and` o `unclear`.
+
+    «A, B o C» es `or` (la coma continua la llista i l'ultim connector la tanca); una
+    llista nomes amb comes, `and`; «A i B o C» no es pot llegir.
+    """
+    kinds = {_separator_kind(separator) for separator in separators}
+    if "unclear" in kinds or {"or", "and"} <= kinds:
+        return "unclear"
+    return "or" if "or" in kinds else "and"
+
+
+def _other_schemes(text: str) -> list[str]:
+    """Esquemes de certificacio que no son ISO ni l'ENS, nomenats en un text."""
+    found = [match.group(0) for match in _OTHER_SCHEMES.finditer(_fold(text or ""))]
+    found += [
+        match.group(0)
+        for match in _EN_SCHEME.finditer(_flat(text or ""))
+        if not _YEAR.match(match.group("number"))
+    ]
+    return found
+
+
+def _family(name: str) -> str:
+    """L'«ENS» sense categoria i l'ENS amb categoria son la mateixa norma."""
+    return "ENS" if name.startswith("ENS") else name
+
+
+def _iso(sources: _Sources, requirement: Any) -> Normalization | None:
+    """Les normes ISO que nomena el plec (i l'ENS si va al costat). `None` = cap ISO.
+
+    Cada text es llegeix pel seu compte: una llista amb «o» (o «A, B o C», «i/o») diu
+    que n'hi ha prou amb una; amb «i» o nomes comes, que calen totes. Entre textos:
+    si tots els que en donen diverses diuen «o» i la mateixa llista (i els d'una sola
+    norma en nomenen una d'aquella llista), n'hi ha prou amb una; si cap no diu «o»,
+    calen totes. Qualsevol altra combinacio, o un altre esquema al costat (EMAS,
+    OHSAS, UNE...), no es llegeix: revisio, mai una llista parcial. El nom d'una
+    norma pot venir del titol; si el text literal en nomena, mana el literal. Si el
+    valor ja porta `name` o `names`, no s'hi toca: la regla de sempre els llegeix
+    amb el seu operador.
+    """
+    if sources.value.get("name") or sources.value.get("names"):
+        return None
+    literal = [(s, t, e) for s, t, e in sources.literal_texts() if t]
+    model = [
+        (source, text, None)
+        for source, text in (("title", sources.title), ("description", sources.description))
+        if text
+    ]
+    for candidates in (literal, model):
+        lists: list[tuple[list[str], str]] = []
+        provenance: list[Provenance] = []
+        for source, text, evidence in candidates:
+            mentions, separators, orphans = _mentions(text)
+            if not mentions:
+                continue
+            provenance.append(Provenance("certification.names", source, text, evidence))
+            names = list(dict.fromkeys(name for _start, _end, name in mentions))
+            if orphans:
+                lists.append((names, "unclear"))
+                continue
+            lists.append((names, _list_kind(separators) if len(names) > 1 else "single"))
+        if lists:
+            break
+    else:
+        return None
+    if getattr(requirement, "obligation", None) != RequirementObligation.MANDATORY:
+        return _not_normalized(REASON_NOT_MANDATORY)
+    # Tots els textos, tambe els que no han donat els noms: una cita amb «EMAS» i un
+    # titol amb «ISO 14001» ja no son una llista d'ISO.
+    texts = [text for _s, text, _e in literal] + [text for _s, text, _e in model]
+    others = sorted({scheme for text in texts for scheme in _other_schemes(text)})
+    if others:
+        return _not_normalized(REASON_CERTIFICATION_OTHER_SCHEME, schemes=others)
+    if any(_CONDITIONAL.search(_fold(text)) for _s, text, _e in candidates):
+        return _not_normalized(REASON_CERTIFICATION_CONDITIONAL)
+    unmapped = _unmapped(sources.value, _ISO_CERTIFICATION_KEYS)
+    if unmapped:
+        return _not_normalized(REASON_UNMAPPED_CONDITIONS, keys=unmapped)
+
+    kinds = {kind for _names, kind in lists}
+    alternatives = [names for names, kind in lists if kind == "or"]
+    if "unclear" in kinds or (alternatives and "and" in kinds):
+        return _not_normalized(REASON_CERTIFICATION_LIST_AMBIGUOUS)
+    names = list(dict.fromkeys(name for found, _kind in lists for name in found))
+    all_of = True
+    if alternatives:
+        families = {frozenset(_family(name) for name in found) for found in alternatives}
+        allowed = next(iter(families))
+        if len(families) > 1 or any(_family(name) not in allowed for name in names):
+            # Dues llistes diferents d'alternatives, o una norma sola que no hi es:
+            # no se sap com es combinen.
+            return _not_normalized(REASON_CERTIFICATION_LIST_AMBIGUOUS)
+        all_of = False
+    if any(name.startswith("ENS ") for name in names):
+        # Si el plec diu la categoria en algun lloc, l'«ENS» sol ja hi es inclos.
+        names = [name for name in names if name != "ENS"]
+    equivalence = bool(
+        getattr(requirement, "equivalence_allowed", False)
+        or sources.value.get("equivalents_allowed")
+        or sources.value.get("equivalence_allowed")
+        or sources.find_flag(_EQUIVALENT, "certification.equivalence")
+    )
+    return Normalization(
+        status="normalized",
+        route=ROUTE_ISO,
+        value_json={
+            "names": names,
+            "all_of": all_of,
+            "equivalents_allowed": equivalence,
+            # Com a l'ENS: el valor lliure no ho diu, la llei si (art. 140.4 LCSP).
+            "valid_at_deadline": bool(sources.value.get("valid_at_deadline", True)),
+        },
+        provenance=tuple(provenance),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1387,6 +1962,11 @@ def normalize_requirement(requirement: Any, profile: str | None) -> Normalizatio
     category = getattr(requirement, "category", None)
     sources = _Sources(requirement)
 
+    if category == RequirementCategory.CERTIFICATION:
+        # v6: les normes ISO (i l'ENS, si va al costat d'una ISO) es llegeixen totes.
+        iso = _iso(sources, requirement)
+        if iso is not None:
+            return iso
     if category in _ENS_CATEGORIES:
         routed = _ens(sources, requirement)
         if routed is not None and (
@@ -1398,6 +1978,8 @@ def normalize_requirement(requirement: Any, profile: str | None) -> Normalizatio
         if not_required is not None:
             return not_required
 
+    if category == RequirementCategory.BUSINESS_CLASSIFICATION:
+        return _classification(sources, requirement)
     if category == RequirementCategory.REGISTRATION:
         return _registration(sources, requirement)
     if category == RequirementCategory.ECONOMIC_SOLVENCY:
@@ -1422,17 +2004,20 @@ __all__ = [
     "is_normalized",
     "NORMALIZED_PROFILE",
     "NORMALIZER_VERSION",
+    "Classification",
     "EnsReading",
     "Normalization",
     "Provenance",
     "applies",
     "canonical",
     "ens_level",
+    "fold_text",
     "limit_kinds",
     "names_ens",
     "normalize_requirement",
     "parse_aggregation",
     "parse_amount",
+    "parse_classifications",
     "parse_years",
     "quote_amounts",
 ]

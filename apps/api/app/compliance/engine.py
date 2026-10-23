@@ -30,7 +30,12 @@ from app.compliance.certifications import assess_certification, assess_ens
 from app.compliance.economic import assess_economic_solvency
 from app.compliance.experience import assess_experience
 from app.compliance.insurance import assess_insurance
-from app.compliance.personnel import assess_personnel, assess_qualification, assess_registration
+from app.compliance.personnel import (
+    assess_personnel,
+    assess_qualification,
+    assess_registration,
+    assess_registry_documentation,
+)
 from app.compliance.profile import ProfileSnapshot
 from app.compliance.rules import ExplanationCode, RuleCode, RuleOutcome, needs_review
 from app.compliance.specs import is_effectively_mandatory
@@ -48,6 +53,10 @@ from app.models.enums import (
 
 #: Pre-fit a partir del qual una licitacio elegible es candidata de veritat.
 GO_CANDIDATE_PREFIT_THRESHOLD = 60
+#: Estats del pre-fit que no fan mai candidata una licitacio elegible, sigui quina
+#: sigui la puntuacio (v6, D2): `metadata-match-v3` pot donar `low_fit` amb 60 o mes
+#: punts (el factor CPV per sota del minim de candidat).
+LOW_FIT_PREFIT_STATUSES = frozenset({"low_fit", "excluded"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +75,9 @@ class _AdaptedRequirement:
     value_schema: str | None = None
     #: `normalize.NORMALIZED_ATTRIBUTE`: nomes aquest embolcall el porta a cert.
     _v5_normalized: bool = True
+    #: `personnel.TITLE_IS_MODEL_ATTRIBUTE` (v6): el titol l'ha escrit el model
+    #: (`product-v2`) i una classificacio no se'n llegeix mai.
+    _title_is_model: bool = False
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._wrapped, name)
@@ -111,11 +123,15 @@ def assess_requirement_traced(
         # diu (`assess_ens`).
         outcome = assess_ens(normalization.ens, snapshot, deadline)
     elif normalization.route == normalize.ROUTE_REGISTRY_DOCUMENTATION_ONLY:
-        # Sembla documentacio que aporta qui JA es inscrit al RELI/ROLECE:
-        # avaluar-la com a exigencia d'estar-hi demanaria un registre que potser el
-        # plec no demana. Revisio.
-        outcome = needs_review(
-            RuleCode.REGISTRATION_EXACT, ExplanationCode.REGISTRATION_DOCUMENTATION_ONLY
+        # Documentacio que aporta qui JA es inscrit al RELI/ROLECE: no exigeix
+        # estar-hi (v5). La v6 l'avalua: inscrita -> en pot aportar el certificat;
+        # no inscrita (perfil complet, marca del text literal) -> no li aplica.
+        outcome = assess_registry_documentation(
+            snapshot,
+            deadline,
+            literal_subject=any(
+                item.source in ("value_json", "quote") for item in normalization.provenance
+            ),
         )
     elif normalization.route == normalize.ROUTE_NOT_REQUIRED:
         # El plec diu literalment que no s'exigeix (p. ex. «no és necessari
@@ -131,6 +147,7 @@ def assess_requirement_traced(
             requirement,
             value_json=normalization.value_json,
             value_schema=normalization.value_schema,
+            _title_is_model=True,
         )
         outcome = _dispatch(adapted, snapshot, deadline=deadline, tender=tender)
     elif (
@@ -143,8 +160,25 @@ def assess_requirement_traced(
         outcome = needs_review(
             RuleCode.INSURANCE_LIMITS, ExplanationCode.INSURANCE_LIMIT_KIND_AMBIGUOUS
         )
+    elif normalization.reason == normalize.REASON_CLASSIFICATION_AMBIGUOUS:
+        # El plec en dona diverses (per lots, subgrups coordinats o una categoria que no
+        # es pot llegir): revisio, i dient-ho, no «el plec no diu quina».
+        outcome = needs_review(
+            RuleCode.BUSINESS_CLASSIFICATION_GTE,
+            ExplanationCode.CLASSIFICATION_AMBIGUOUS,
+            found=list((normalization.detail or {}).get("found") or []),
+        )
     else:
-        outcome = _dispatch(requirement, snapshot, deadline=deadline, tender=tender)
+        # Sense lectura complementaria: la regla de sempre, amb el valor de sempre, pero
+        # sabent que el titol es del model (v6: cap classificacio no se'n llegeix).
+        raw = _AdaptedRequirement(
+            requirement,
+            value_json=requirement.value_json,
+            value_schema=getattr(requirement, "value_schema", None),
+            _v5_normalized=False,
+            _title_is_model=True,
+        )
+        outcome = _dispatch(raw, snapshot, deadline=deadline, tender=tender)
 
     return (
         replace(
@@ -259,6 +293,8 @@ def derive_blocker_status(
     requirement_review_status: ReviewStatus,
     assessment_reviewed: bool,
     modality: Any = None,
+    group_blocks: bool = False,
+    confirmable_by_source: bool = True,
 ) -> BlockerStatus:
     """Quan un incompliment es un bloqueig, i de quina classe.
 
@@ -269,18 +305,27 @@ def derive_blocker_status(
     "Efectivament obligatoria" exclou el que la v2 sap distingir i la v1 no: una
     via alternativa i una condicio no avaluada no obliguen per si soles, per molt
     que l'obligatorietat digui `mandatory`. El que obliga es la disjuncio
-    sencera, i qui la resol es `alternatives.resolve_group`.
+    sencera, i qui la resol es `alternatives.resolve_group`. Quan la disjuncio
+    sencera NO s'acredita (`group_blocks`, v6), la seva via canonica porta l'unic
+    bloqueig del grup: l'obligatorietat que hi arriba ja es la del grup.
 
     Es `CONFIRMED` quan algu ha validat la font: o be el requisit esta verificat,
-    o be una persona ha revisat aquest mateix assessment. Si no, `POTENTIAL`.
+    o be una persona ha revisat aquest mateix assessment. Si no, `POTENTIAL`. Un
+    «no compleix» amb el dubte del costat de l'empresa (`confirmable_by_source`
+    fals: «o equivalent» sense la norma) nomes el confirma una revisio humana.
     """
-    if not is_effectively_mandatory(
+    if group_blocks:
+        if obligation != RequirementObligation.MANDATORY:
+            return BlockerStatus.NONE
+    elif not is_effectively_mandatory(
         _ObligationView(obligation=obligation, modality=modality)
     ):
         return BlockerStatus.NONE
     if effective_result != AssessmentResult.DOES_NOT_SATISFY:
         return BlockerStatus.NONE
-    if requirement_review_status == ReviewStatus.VERIFIED or assessment_reviewed:
+    if assessment_reviewed or (
+        requirement_review_status == ReviewStatus.VERIFIED and confirmable_by_source
+    ):
         return BlockerStatus.CONFIRMED
     return BlockerStatus.POTENTIAL
 
@@ -316,6 +361,7 @@ def summarise(
     rows: list[tuple[RequirementObligation, AssessmentResult, BlockerStatus]],
     *,
     prefit_score: int | None = None,
+    prefit_status: str | None = None,
 ) -> EligibilitySummary:
     """Agrega els assessments en elegibilitat i recomanacio.
 
@@ -361,9 +407,12 @@ def summarise(
         recommendation = RecommendationResult.NO_GO
     elif eligibility == EligibilityResult.REVIEW_REQUIRED:
         recommendation = RecommendationResult.REVIEW
-    elif prefit_score is not None and prefit_score < GO_CANDIDATE_PREFIT_THRESHOLD:
+    elif str(prefit_status or "") in LOW_FIT_PREFIT_STATUSES or (
+        prefit_score is not None and prefit_score < GO_CANDIDATE_PREFIT_THRESHOLD
+    ):
         # Legal no vol dir interessant: son dimensions diferents i es mostren
-        # per separat.
+        # per separat. Mana la classificacio del pre-fit (D2): un `low_fit` amb
+        # 60 punts o mes no es candidat.
         recommendation = RecommendationResult.ELIGIBLE_LOW_FIT
     else:
         recommendation = RecommendationResult.GO_CANDIDATE

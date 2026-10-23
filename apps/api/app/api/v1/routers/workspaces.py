@@ -20,10 +20,10 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response, status
 
 from app.api.deps import CompanyCtx, SessionDep
-from app.core.errors import NotFoundError
+from app.core.errors import NotFoundError, PermissionDeniedError
 from app.models.compliance import CompanyComplianceRun
 from app.models.enums import (
     AnalysisBasis,
@@ -54,6 +54,7 @@ from app.schemas.workspace import (
     DossierCoverageRead,
     NoteCreateRequest,
     NoteRead,
+    NoteUpdateRequest,
     PersonRead,
     TaskCreateRequest,
     TaskRead,
@@ -65,6 +66,7 @@ from app.schemas.workspace import (
 )
 from app.services import audit, workspace_dossier, workspace_readiness
 from app.services import bid_workspace as service
+from app.services.issues import ISSUE_EDIT_ROLES
 from app.services.workspace_gate import assert_workspace_go, assert_workspace_study_open
 from app.tenders.visibility import visible_to_company
 from app.workspace.decision import nothing_to_do_reason
@@ -735,3 +737,93 @@ async def list_notes(workspace_id: uuid.UUID, session: SessionDep, ctx: CompanyC
     notes = await service.workspace_notes(session, workspace_id)
     names = await _people_names(session, {note.author_id for note in notes})
     return [_note_read(note, names) for note in notes]
+
+
+def _assert_can_edit_notes(ctx: CompanyCtx) -> None:
+    """Corregir o esborrar una nota: els mateixos rols que obren i editen dubtes."""
+    if ctx.membership.role not in ISSUE_EDIT_ROLES:
+        raise PermissionDeniedError("El teu rol no pot corregir ni esborrar notes.")
+
+
+async def _load_note(
+    session: SessionDep, company_id: uuid.UUID, workspace_id: uuid.UUID, note_id: uuid.UUID
+) -> WorkspaceNote:
+    """La nota d'AQUESTA candidatura de l'empresa; si no, 404 (mai la d'una altra)."""
+    note = await session.scalar(
+        sa.select(WorkspaceNote).where(
+            WorkspaceNote.id == note_id,
+            WorkspaceNote.company_id == company_id,
+            WorkspaceNote.workspace_id == workspace_id,
+        )
+    )
+    if note is None:
+        raise NotFoundError("Aquesta nota no existeix.")
+    return note
+
+
+@router.patch(
+    "/{workspace_id}/notes/{note_id}", response_model=NoteRead, summary="Corregeix una nota"
+)
+async def update_note(
+    workspace_id: uuid.UUID,
+    note_id: uuid.UUID,
+    payload: NoteUpdateRequest,
+    session: SessionDep,
+    ctx: CompanyCtx,
+):
+    """Corregeix el text d'una nota (Bloc 1), amb la mateixa guarda que escriure-la:
+    oberta en l'analisi, ajornada o amb GO; nomes un NO-GO vigent la tanca. La data de
+    l'edicio queda a `updated_at`, i qui l'ha feta, al registre d'auditoria (sense el
+    text)."""
+    _assert_can_edit_notes(ctx)
+    workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_study_open(session, workspace)
+    note = await _load_note(session, ctx.company_id, workspace.id, note_id)
+    note.text = payload.text
+    note.updated_at = datetime.now(UTC)
+    await audit.record(
+        session,
+        company_id=ctx.company_id,
+        user_id=ctx.user.id,
+        action=AuditAction.UPDATE,
+        entity_type="workspace_note",
+        entity_id=note.id,
+        summary=f"candidatura={workspace.id}",
+    )
+    await session.commit()
+    await session.refresh(note)
+    names = await _people_names(session, {note.author_id})
+    return _note_read(note, names)
+
+
+@router.delete(
+    "/{workspace_id}/notes/{note_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Esborra una nota",
+)
+async def delete_note(
+    workspace_id: uuid.UUID,
+    note_id: uuid.UUID,
+    session: SessionDep,
+    ctx: CompanyCtx,
+) -> Response:
+    """Esborra una nota de manera definitiva (Bloc 1), amb la mateixa guarda que
+    escriure-la. Qui l'ha esborrada i quan queda al registre d'auditoria (sense el
+    text)."""
+    _assert_can_edit_notes(ctx)
+    workspace = await service.get_workspace(session, ctx.company_id, workspace_id)
+    await assert_workspace_study_open(session, workspace)
+    note = await _load_note(session, ctx.company_id, workspace.id, note_id)
+    deleted_id = note.id
+    await session.delete(note)
+    await audit.record(
+        session,
+        company_id=ctx.company_id,
+        user_id=ctx.user.id,
+        action=AuditAction.DELETE,
+        entity_type="workspace_note",
+        entity_id=deleted_id,
+        summary=f"candidatura={workspace.id}",
+    )
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -267,6 +267,11 @@ async def compliance_counters(
     if run is None:
         return ComplianceCounters()
 
+    # Les files desades son les que compta el run: el calcul i cada recompte d'un run v6
+    # hi deixen el resultat, l'obligatorietat i el bloqueig resolts (disjuncions,
+    # substitucio per classificacio, classificacio no exigible en serveis; vegeu
+    # `app.compliance.resolution`). Es llegeixen tal com son, sense tornar a resoldre
+    # res amb dades d'ara: els comptadors no poden dir una cosa i el run una altra.
     # `effective_result` es una propietat de Python; a SQL es el revisat si n'hi
     # ha i si no l'automatic. Ha de coincidir amb el model, no aproximar-lo.
     effective = sa.func.coalesce(

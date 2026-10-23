@@ -174,6 +174,8 @@ class ComplianceRunRead(ORMModel):
     recommendation: RecommendationResult
     #: Pre-fit del moment del calcul. Es mostra al costat, no fusionat.
     prefit_score: int | None = None
+    #: Classificacio del pre-fit del moment del calcul (0064); nul en runs anteriors.
+    prefit_status: str | None = None
 
     error_code: str | None = None
     error_message: str | None = None

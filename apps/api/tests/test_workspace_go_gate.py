@@ -138,8 +138,11 @@ PREPARE_MUTATORS: list[tuple[str, str, dict | None]] = [
 #: 404 per un id inventat...); nomes un NO-GO vigent hi respon 403
 #: `decision_required` (`app.services.workspace_gate.assert_workspace_study_open`).
 STUDY_MUTATORS: list[tuple[str, str, dict | None]] = [
-    # Notes (routers/workspaces.py)
+    # Notes (routers/workspaces.py). Corregir-les i esborrar-les (Bloc 1) porten la
+    # mateixa guarda que escriure-les.
     ("POST", "notes", {"text": "Nota d'estudi"}),
+    ("PATCH", "notes/{id}", {"text": "Nota corregida"}),
+    ("DELETE", "notes/{id}", None),
     # Dubtes i discrepancies (routers/issues.py)
     ("POST", "issues", {"issue_type": "internal_question", "title": "Dubte"}),
     ("PATCH", "issues/{id}", {"title": "Dubte"}),

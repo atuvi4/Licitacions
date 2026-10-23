@@ -24,7 +24,7 @@ from app.compliance.experience import assess_experience
 from app.compliance.insurance import assess_insurance
 from app.compliance.personnel import assess_qualification, assess_registration
 from app.compliance.profile import ProfileSnapshot
-from app.compliance.rules import ExplanationCode
+from app.compliance.rules import ExplanationCode, RuleCode
 from app.models.enums import (
     AssessmentMode,
     AssessmentResult,
@@ -703,8 +703,9 @@ def test_a_present_registration_satisfies():
     assert outcome.result == AssessmentResult.SATISFIES
 
 
-def test_a_business_classification_with_group_needs_review():
-    """Grup i subgrup no es poden comparar amb text lliure."""
+def test_a_business_classification_with_group_is_compared():
+    """v6: grup i subgrup exactes i categoria >= (la «B» antiga es la 2). Sense cap
+    classificacio al perfil, «no compleix» amb el perfil complet."""
     profile = snapshot(registrations=[])
     requirement = FakeRequirement(
         category=RequirementCategory.BUSINESS_CLASSIFICATION,
@@ -713,5 +714,9 @@ def test_a_business_classification_with_group_needs_review():
 
     outcome = assess_registration(requirement, profile, DEADLINE)
 
-    assert outcome.result == AssessmentResult.NEEDS_REVIEW
-    assert outcome.explanation_code == ExplanationCode.REGISTRATION_CLASSIFICATION_REVIEW
+    assert outcome.rule_code == RuleCode.BUSINESS_CLASSIFICATION_GTE
+    assert outcome.params["required"] == {"group": "U", "subgroup": "1", "category": 2}
+    # `snapshot()` dona el perfil complet: l'absencia es informacio.
+    assert profile.is_section_complete("registrations")
+    assert outcome.result == AssessmentResult.DOES_NOT_SATISFY
+    assert outcome.explanation_code == ExplanationCode.CLASSIFICATION_NOT_HELD

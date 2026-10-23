@@ -325,6 +325,14 @@ export const EXPLANATION_LABELS: Record<string, string> = {
   CERTIFICATION_LEVEL_BELOW: "La categoria de l'ENS de l'empresa és inferior a la que exigeix el plec.",
   CERTIFICATION_LEVEL_HIGHER_REVIEW:
     "L'empresa té l'ENS en una categoria superior a la demanada i el plec no diu «o superior»: cal revisar-ho.",
+  CERTIFICATION_LEVEL_HIGHER_MET:
+    "L'empresa té l'ENS en una categoria superior a la que exigeix el plec: la compleix.",
+  CERTIFICATION_NOT_CURRENT:
+    "La certificació consta al perfil, però en tràmit o retirada: avui no acredita res.",
+  CERTIFICATION_EQUIVALENT_NOT_DECLARED:
+    "El plec admet equivalents i el perfil no té aquesta norma. Bloqueig potencial: confirma'l o desfés-lo si una altra certificació hi equival.",
+  CERTIFICATION_ALL_FOUND: "Totes les normes que demana el plec consten al perfil.",
+  CERTIFICATION_SOME_MISSING: "Falta alguna de les normes que demana el plec.",
   CERTIFICATION_EQUIVALENCE_REVIEW:
     "El plec admet equivalents: quina certificació hi equival ho ha de decidir una persona.",
   REGISTRATION_FOUND_VALID: "El registre consta al perfil i és vigent.",
@@ -336,6 +344,33 @@ export const EXPLANATION_LABELS: Record<string, string> = {
     "La classificació empresarial (grup, subgrup, categoria) s'ha de revisar a mà.",
   REGISTRATION_DOCUMENTATION_ONLY:
     "Sembla documentació per a qui ja és inscrit al RELI/ROLECE; comprova al plec si cal estar-hi inscrit.",
+  REGISTRATION_DOCUMENTATION_AVAILABLE:
+    "L'empresa és inscrita al RELI o al ROLECE: en pot aportar el certificat d'inscripció.",
+  REGISTRATION_DOCUMENTATION_NOT_APPLICABLE:
+    "La clàusula parla de qui ja és inscrit al RELI/ROLECE i l'empresa no ho és: no li aplica.",
+  REGISTRATION_NOT_CURRENT:
+    "El registre consta al perfil, però en tràmit o retirat: avui no acredita res.",
+  CLASSIFICATION_MET: "La classificació de l'empresa és del mateix grup i subgrup i d'una categoria igual o superior.",
+  CLASSIFICATION_CATEGORY_BELOW:
+    "L'empresa té el grup i el subgrup, però en una categoria inferior a l'exigida.",
+  CLASSIFICATION_CATEGORY_AMBIGUOUS:
+    "El plec dona una categoria antiga que equival a dues d'actuals (RD 773/2015) i la de l'empresa és entre totes dues: cal revisar-ho.",
+  CLASSIFICATION_NOT_HELD: "L'empresa no té cap classificació en aquest grup i subgrup.",
+  CLASSIFICATION_NOT_STATED:
+    "El plec no diu quin grup i subgrup de classificació demana: cal revisar-ho.",
+  CLASSIFICATION_AMBIGUOUS:
+    "El plec dona diverses classificacions (per lots o per import) i no se sap quina aplica: cal revisar-ho.",
+  CLASSIFICATION_COMPANY_UNREADABLE:
+    "Hi ha una classificació al perfil que no es pot llegir (grup, subgrup o categoria): cal revisar-la.",
+  CLASSIFICATION_SUBSTITUTES_SOLVENCY:
+    "Contracte de serveis: la classificació acreditada substitueix aquesta solvència (art. 77.1.b LCSP).",
+  CLASSIFICATION_OPTIONAL_IN_SERVICES:
+    "Contracte de serveis: la classificació no és exigible. Si no s'acredita, la solvència s'acredita pels altres mitjans i no bloqueja.",
+  ALTERNATIVE_GROUP_SATISFIED: "Una altra via de la mateixa exigència ja l'acredita.",
+  ALTERNATIVE_GROUP_NOT_SATISFIED:
+    "Cap de les vies alternatives no acredita l'exigència: n'hi ha un sol bloqueig per a tot el grup.",
+  ALTERNATIVE_GROUP_INCOMPLETE:
+    "Alguna via alternativa no s'ha pogut resoldre, o no consta que hi siguin totes: cal revisar-ho.",
   ECONOMIC_PERIOD_INCOMPLETE: "Falten exercicis del període que demana el plec per poder-ho afirmar.",
   PERCENTAGE_BASE_UNAVAILABLE:
     "El llindar és un percentatge d'una base que no consta a l'expedient: cal revisar-ho.",
