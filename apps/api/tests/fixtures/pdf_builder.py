@@ -39,11 +39,14 @@ def _content_stream(text: str) -> bytes:
     return bytes(body)
 
 
-def build_pdf(pages: Sequence[str]) -> bytes:
+def build_pdf(pages: Sequence[str], *, jbig2_pages: frozenset[int] = frozenset()) -> bytes:
     """Genera un PDF amb una pagina per element.
 
     Una cadena buida genera una pagina SENSE stream de continguts: es la manera
     honesta de simular una pagina escanejada, de la qual no es pot extreure text.
+
+    `jbig2_pages` (index des de 0): pagines amb el flux de continguts declarat
+    `/JBIG2Decode`, com un PDF malformat. Llegir-les demana el programa `jbig2dec`.
     """
     if not pages:
         raise ValueError("Un PDF necessita com a minim una pagina.")
@@ -52,7 +55,7 @@ def build_pdf(pages: Sequence[str]) -> bytes:
     page_ids: list[int] = []
     next_id = 4  # 1=Catalog, 2=Pages, 3=Font
 
-    for text in pages:
+    for index, text in enumerate(pages):
         page_id = next_id
         next_id += 1
         contents = b""
@@ -60,8 +63,10 @@ def build_pdf(pages: Sequence[str]) -> bytes:
             stream_id = next_id
             next_id += 1
             data = _content_stream(text)
+            jbig2 = b" /Filter /JBIG2Decode" if index in jbig2_pages else b""
             objects[stream_id] = (
-                b"<< /Length " + str(len(data)).encode() + b" >>\nstream\n" + data + b"endstream"
+                b"<< /Length " + str(len(data)).encode() + jbig2 + b" >>\nstream\n" + data
+                + b"endstream"
             )
             contents = b" /Contents " + str(stream_id).encode() + b" 0 R"
         objects[page_id] = (
@@ -101,3 +106,50 @@ def build_pdf(pages: Sequence[str]) -> bytes:
 def build_corrupt_pdf() -> bytes:
     """Capcalera valida i cos truncat: passa el sniffing pero no el parser."""
     return build_pdf(["Contingut que no arriba a acabar"])[:150]
+
+
+def encrypt_pdf(
+    data: bytes,
+    *,
+    algorithm: str,
+    user_password: str = "",
+    owner_password: str = "propietari",
+    permissions=None,
+) -> bytes:
+    """El mateix PDF, xifrat amb el gestor estandard.
+
+    Amb el mateix pypdf del producte (cap biblioteca nova): `AES-128` dona V4/R4 com el model
+    oficial del DEUC, `AES-256` V5/R6 i `RC4-128` V2/R3. Sense `user_password`, el PDF s'obre
+    sense contrasenya i nomes restringeix permisos (`permissions`).
+    """
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(data)))
+    options = {} if permissions is None else {"permissions_flag": permissions}
+    writer.encrypt(
+        user_password=user_password,
+        owner_password=owner_password,
+        algorithm=algorithm,
+        **options,
+    )
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def use_pypdf_without_aes(monkeypatch) -> None:
+    """pypdf com si no hi hagues `cryptography`: el proveidor de reserva fa RC4 pero no AES.
+
+    Es el proveidor que pypdf tria en importar-se quan no troba cap biblioteca: aqui es posa
+    a mitja execucio, nomes on pypdf el fa servir per desxifrar.
+    """
+    from pypdf import _crypt_providers, _encryption
+    from pypdf._crypt_providers import _fallback
+
+    for name in ("CryptAES", "aes_cbc_decrypt", "aes_cbc_encrypt", "aes_ecb_decrypt",
+                 "aes_ecb_encrypt"):
+        if hasattr(_encryption, name):
+            monkeypatch.setattr(_encryption, name, getattr(_fallback, name))
+    monkeypatch.setattr(_crypt_providers, "crypt_provider", _fallback.crypt_provider)

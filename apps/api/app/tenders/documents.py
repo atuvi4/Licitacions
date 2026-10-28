@@ -32,14 +32,20 @@ from app.models.tenders import TenderDocument
 ACTIVE_DOCUMENT: sa.ColumnElement[bool] = TenderDocument.removed_at.is_(None)
 
 
-#: Documents que poden entrar a l'analisi (3B-2 §2.3): vigents, no alies, i del
-#: feed, d'una pujada propia o aportats per l'operador i VERIFICATS. Un
+#: Origens que no passen per la verificacio de l'operador: el feed i el portal oficial
+#: (cadascun el governa el seu connector) i la pujada propia d'una licitacio manual.
+TRUSTED_ORIGINS: frozenset[TenderDocumentOrigin] = frozenset(
+    {TenderDocumentOrigin.FEED, TenderDocumentOrigin.OWNER_UPLOAD, TenderDocumentOrigin.PORTAL}
+)
+
+#: Documents que poden entrar a l'analisi (3B-2 §2.3): vigents, no alies, i d'un origen
+#: de confianca (`TRUSTED_ORIGINS`) o aportats per l'operador i VERIFICATS. Un
 #: `pending_verification` o `rejected` es veu als llistats pero no es llegeix mai.
 ANALYZABLE_DOCUMENT: sa.ColumnElement[bool] = sa.and_(
     ACTIVE_DOCUMENT,
     TenderDocument.duplicate_of_document_id.is_(None),
     sa.or_(
-        TenderDocument.origin.in_([TenderDocumentOrigin.FEED, TenderDocumentOrigin.OWNER_UPLOAD]),
+        TenderDocument.origin.in_(sorted(TRUSTED_ORIGINS)),
         TenderDocument.contribution_status == DocumentContributionStatus.VERIFIED,
     ),
 )
@@ -76,7 +82,7 @@ def is_analyzable_document(document: TenderDocument) -> bool:
         is_active_document(document)
         and document.duplicate_of_document_id is None
         and (
-            document.origin in (TenderDocumentOrigin.FEED, TenderDocumentOrigin.OWNER_UPLOAD)
+            document.origin in TRUSTED_ORIGINS
             or document.contribution_status == DocumentContributionStatus.VERIFIED
         )
     )

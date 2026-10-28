@@ -59,6 +59,7 @@ def test_els_valors_dels_enums_son_els_de_l_especificacio():
         "owner_upload",
         "operator_url",
         "operator_upload",
+        "portal",
     }
     assert {m.value for m in DocumentContributionStatus} == {
         "not_applicable",
@@ -194,6 +195,32 @@ async def test_un_owner_upload_no_te_font_governant(session):
     session.add(document)
     await session.commit()
     assert document.contribution_status == DocumentContributionStatus.NOT_APPLICABLE
+
+
+async def test_un_document_del_portal_el_governa_una_font_i_no_es_verifica(session):
+    """0065: el connector del portal oficial es com el feed. Te font i no passa per l'operador."""
+    from app.tenders.documents import is_analyzable_document
+
+    tender = await _tender(session)
+    document = _document(tender, origin=TenderDocumentOrigin.PORTAL)
+    session.add(document)
+    await session.commit()
+    assert document.contribution_status == DocumentContributionStatus.NOT_APPLICABLE
+    assert document.governing_source_id == tender.source_id
+    assert is_analyzable_document(document)
+    assert await _ids(session, tender) == {document.id}
+
+
+async def test_un_document_del_portal_sense_font_es_rebutja(session):
+    await _rejected(session, origin=TenderDocumentOrigin.PORTAL, governing_source_id=None)
+
+
+async def test_un_document_del_portal_no_passa_per_la_verificacio(session):
+    await _rejected(
+        session,
+        origin=TenderDocumentOrigin.PORTAL,
+        contribution_status=DocumentContributionStatus.PENDING_VERIFICATION,
+    )
 
 
 async def _ids(session, tender: Tender) -> set[uuid.UUID]:

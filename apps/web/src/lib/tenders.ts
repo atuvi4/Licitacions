@@ -289,10 +289,10 @@ export function analysisStatusOf(
   return "extracted";
 }
 
-/** D'on surt un document del paquet (3B-2 §2.1). */
-export type TenderDocumentOrigin = "feed" | "owner_upload" | "operator_url" | "operator_upload";
+/** D'on surt un document del paquet (3B-2 §2.1). `portal`: el connector del portal oficial (0065). */
+export type TenderDocumentOrigin = "feed" | "owner_upload" | "operator_url" | "operator_upload" | "portal";
 
-/** Verificació d'una aportació de l'operador. `not_applicable` = feed o pujada pròpia. */
+/** Verificació d'una aportació de l'operador. `not_applicable` = feed, portal o pujada pròpia. */
 export type DocumentContributionStatus = "not_applicable" | "pending_verification" | "verified" | "rejected";
 
 export interface TenderDocumentMeta {
@@ -684,6 +684,7 @@ export const DOCUMENT_ROLE_LABELS: Record<string, string> = {
   administrative_form: "formulari administratiu",
   notice: "anunci de licitació",
   other: "document",
+  clarification: "document de preguntes i respostes",
 };
 
 export function documentRoleLabel(value: unknown): string {

@@ -2110,9 +2110,9 @@ def test_0056_es_reversible_i_mai_esborra_l_extensio():
     assert "pg_trgm" not in sql
 
 
-def test_0064_es_l_unic_cap_i_penja_de_0063():
-    """0063 (imports d'una font externa, F-06a) penjava de 0062; 0064 (compliment v6,
-    notes editables, ISO 20000) es el nou cap unic."""
+def test_0065_es_l_unic_cap_i_penja_de_0064():
+    """0064 (compliment v6, notes editables, ISO 20000) penjava de 0063; 0065 (origen
+    `portal` i rol `clarification`, Bloc 2) es el nou cap unic."""
     from app.db.revision import SCHEMA_REVISION
 
     result = subprocess.run(
@@ -2124,13 +2124,17 @@ def test_0064_es_l_unic_cap_i_penja_de_0063():
     )
     assert result.returncode == 0, result.stderr[-1000:]
     assert [line.split()[0] for line in result.stdout.splitlines() if line.strip()] == [
-        "0064_compliance_v6_notes"
+        "0065_portal_origin_roles"
     ]
-    assert SCHEMA_REVISION == "0064_compliance_v6_notes"
+    assert SCHEMA_REVISION == "0065_portal_origin_roles"
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(API_ROOT / "alembic.ini")))
+    assert (
+        script.get_revision("0065_portal_origin_roles").down_revision
+        == "0064_compliance_v6_notes"
+    )
     assert (
         script.get_revision("0064_compliance_v6_notes").down_revision
         == "0063_tender_amount_observations"
@@ -4470,3 +4474,219 @@ async def test_0064_round_trip_real_a_postgres(engine):
     async with engine.begin() as conn:
         assert await schema(conn) == from_migration
         assert await has_iso_20000(conn)
+
+
+# --------------------------------------------------------------------------- #
+# 0065: origen `portal` dels documents i rol `clarification` (Bloc 2, etapa 1)   #
+# --------------------------------------------------------------------------- #
+
+_PORTAL_UP = "0064_compliance_v6_notes:0065_portal_origin_roles"
+_PORTAL_DOWN = "0065_portal_origin_roles:0064_compliance_v6_notes"
+_PORTAL_DOCUMENT_CHECKS = (
+    "origin_valid",
+    "contribution_matches_origin",
+    "feed_has_governing_source",
+)
+_ROLE_TABLES = (
+    "tender_document_role_suggestions",
+    "tender_document_role_decisions",
+    "global_document_role_suggestions",
+    "document_role_reviews",
+)
+
+
+def _migration_0065():
+    import importlib.util
+
+    path = API_ROOT / "alembic" / "versions" / "0065_portal_origin_roles.py"
+    spec = importlib.util.spec_from_file_location("mig_0065_portal_origin_roles", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_0065_nomes_canvia_set_check_i_cap_fila():
+    sql = _offline_sql("upgrade", _PORTAL_UP)
+    for name in _PORTAL_DOCUMENT_CHECKS:
+        assert f"ALTER TABLE tender_documents DROP CONSTRAINT ck_tender_documents_{name}" in sql
+    assert (
+        "ADD CONSTRAINT ck_tender_documents_origin_valid CHECK (origin IN ('feed', "
+        "'owner_upload', 'operator_url', 'operator_upload', 'portal'))"
+    ) in sql
+    assert (
+        "CHECK ((contribution_status = 'not_applicable') = "
+        "(origin IN ('feed', 'owner_upload', 'portal')))"
+    ) in sql
+    assert "CHECK ((origin IN ('feed', 'portal')) = (governing_source_id IS NOT NULL))" in sql
+    for table in _ROLE_TABLES:
+        assert f"ALTER TABLE {table} DROP CONSTRAINT ck_{table}_role_valid" in sql
+        assert f"ALTER TABLE {table} ADD CONSTRAINT ck_{table}_role_valid CHECK (role IN (" in sql
+    assert sql.count("'clarification'") == len(_ROLE_TABLES)
+    body = sql.replace("UPDATE alembic_version", "")
+    for statement in ("UPDATE ", "DELETE ", "INSERT ", "ADD COLUMN", "DROP COLUMN"):
+        assert statement not in body, statement
+
+
+def test_0065_downgrade_refusa_abans_de_cap_drop_i_torna_els_check_d_abans():
+    sql = _offline_sql("downgrade", _PORTAL_DOWN)
+    guard = sql.index("DO $$")
+    assert guard < sql.index("0065: hi ha documents amb origen portal")
+    for table in _ROLE_TABLES:
+        assert guard < sql.index(f"0065: hi ha rols clarification a {table}")
+    first_drop = sql.index("DROP CONSTRAINT")
+    assert guard < first_drop
+    restored = sql[first_drop:]
+    assert "CHECK ((origin = 'feed') = (governing_source_id IS NOT NULL))" in restored
+    assert (
+        "CHECK ((contribution_status = 'not_applicable') = (origin IN ('feed', 'owner_upload')))"
+        in restored
+    )
+    assert "'portal'" not in restored and "'clarification'" not in restored
+
+
+def test_0065_a_sqlite_no_fa_res():
+    up = _offline_sql_sqlite("upgrade", _PORTAL_UP).replace("alembic_version", "")
+    down = _offline_sql_sqlite("downgrade", _PORTAL_DOWN).replace("alembic_version", "")
+    for sql in (up, down):
+        assert "CONSTRAINT" not in sql and "RAISE" not in sql
+
+
+def test_0065_al_model():
+    """El model i la migracio diuen el mateix: origens, rols i el text dels set CHECK."""
+    from app.models.classification import (
+        TenderDocumentRoleDecision,
+        TenderDocumentRoleSuggestion,
+    )
+    from app.models.enums import DocumentRole, TenderDocumentOrigin
+    from app.models.global_classification import DocumentRoleReview, GlobalDocumentRoleSuggestion
+    from app.models.tenders import TenderDocument
+
+    m65 = _migration_0065()
+    assert m65._ORIGINS == tuple(origin.value for origin in TenderDocumentOrigin)
+    assert m65._ROLES == tuple(role.value for role in DocumentRole)
+    assert m65._ROLE_TABLES == _ROLE_TABLES
+
+    def checks(model) -> dict[str, str]:
+        return {
+            c.name: str(c.sqltext)
+            for c in model.__table__.constraints
+            if isinstance(c, sa.CheckConstraint)
+        }
+
+    documents = checks(TenderDocument)
+    for name, condition in m65._document_checks(portal=True):
+        assert documents[f"ck_tender_documents_{name}"] == condition
+    for model in (
+        TenderDocumentRoleSuggestion,
+        TenderDocumentRoleDecision,
+        GlobalDocumentRoleSuggestion,
+        DocumentRoleReview,
+    ):
+        table = model.__tablename__
+        assert checks(model)[f"ck_{table}_role_valid"] == m65._in_list("role", m65._ROLES)
+
+
+@pytest.mark.postgres
+async def test_0065_round_trip_real_a_postgres(engine):
+    """0065 -> 0064 -> 0065 sense dades: els set CHECK de la migracio son els dels models; abans
+    no hi ha ni `portal` ni `clarification`. Amb un document `portal`, el downgrade refusa i no
+    toca res. Els CHECK nous es compleixen: un `portal` sense font o pendent de verificar no hi
+    cap."""
+    import uuid as uuid_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import DBAPIError, IntegrityError
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.models.enums import (
+        DocumentContributionStatus,
+        TenderDocumentOrigin,
+        TenderDocumentType,
+    )
+    from app.models.sources import Source
+    from app.models.tenders import Tender, TenderDocument
+
+    m65 = _migration_0065()
+    names = [f"ck_tender_documents_{name}" for name in _PORTAL_DOCUMENT_CHECKS] + [
+        f"ck_{table}_role_valid" for table in _ROLE_TABLES
+    ]
+
+    def run(connection, step):
+        with Operations.context(MigrationContext.configure(connection)):
+            step()
+
+    async def checks(conn) -> dict[str, str]:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT conname, pg_get_constraintdef(c.oid) FROM pg_constraint c "
+                "JOIN pg_namespace n ON n.oid = c.connamespace "
+                "WHERE n.nspname = current_schema() AND conname = ANY(:names)"
+            ),
+            {"names": names},
+        )
+        return dict(rows.all())
+
+    async with engine.begin() as conn:
+        from_models = await checks(conn)
+        await conn.run_sync(run, m65.downgrade)  # -> 0064, sense dades
+        before = await checks(conn)
+        await conn.run_sync(run, m65.upgrade)  # -> 0065
+        from_migration = await checks(conn)
+    assert len(from_models) == len(names) == 7
+    assert from_migration == from_models
+    assert before.keys() == from_models.keys()
+    assert "portal" not in "".join(before.values())
+    assert "clarification" not in "".join(before.values())
+    assert all(
+        "portal" in from_migration[f"ck_tender_documents_{name}"]
+        for name in _PORTAL_DOCUMENT_CHECKS
+    )
+
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        source = Source(code=f"m65-{uuid_module.uuid4().hex[:8]}", name="Portal")
+        session.add(source)
+        await session.flush()
+        tender = Tender(source_id=source.id, external_id="m65", title="T")
+        session.add(tender)
+        await session.flush()
+        source_id, tender_id = source.id, tender.id
+
+        def portal(url: str, **overrides) -> TenderDocument:
+            fields = {
+                "tender_id": tender_id,
+                "name": "Preguntes i respostes",
+                "document_type": TenderDocumentType.ADDITIONAL,
+                "url": url,
+                "origin": TenderDocumentOrigin.PORTAL,
+                "governing_source_id": source_id,
+                "contribution_status": DocumentContributionStatus.NOT_APPLICABLE,
+            }
+            return TenderDocument(**(fields | overrides))
+
+        session.add(portal("https://contractaciopublica.cat/portal-api/respostes/m65"))
+        await session.commit()
+
+    for overrides in (
+        {"governing_source_id": None},
+        {"contribution_status": DocumentContributionStatus.PENDING_VERIFICATION},
+    ):
+        async with factory() as session:
+            url = f"https://contractaciopublica.cat/x/{uuid_module.uuid4()}"
+            session.add(portal(url, **overrides))
+            with pytest.raises(IntegrityError):
+                await session.commit()
+
+    # Amb un document `portal`, el downgrade refusa i no toca res.
+    with pytest.raises(DBAPIError) as caught:
+        async with engine.begin() as conn:
+            await conn.run_sync(run, m65.downgrade)
+    assert "0065: hi ha documents amb origen portal" in str(caught.value)
+    async with engine.begin() as conn:
+        assert await checks(conn) == from_migration
+        assert (
+            await conn.execute(
+                sa.text("SELECT count(*) FROM tender_documents WHERE origin = 'portal'")
+            )
+        ).scalar_one() == 1

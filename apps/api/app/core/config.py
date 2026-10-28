@@ -108,13 +108,15 @@ class Settings(BaseSettings):
     # Dels quals SI que se n'extreu text. El text pla hi es perque llegir-lo no
     # demana cap dependencia nova ni cap model: es descodificar-lo.
     #: Formats dels quals s'extreu text per a l'analisi. DOCX, XLSX i XML amb parsers
-    #: deterministes propis (`app/services/office_text.py`); la resta (ZIP, OLE2...)
-    #: es conserva sense text (`skipped_unsupported`).
+    #: deterministes propis (`app/services/office_text.py`) i el .doc de Word 97-2003
+    #: (`app/services/doc_text.py`); la resta (ZIP, un OLE2 generic...) es conserva sense
+    #: text (`skipped_unsupported`).
     DOCUMENT_TEXT_EXTRACTION_MIME_TYPES: str = (
         "application/pdf,text/plain,"
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
-        "application/xml,text/xml"
+        "application/xml,text/xml,"
+        "application/msword"
     )
     DOCUMENT_MAX_PAGES: int = 2000
     # Per sota d'aquesta mitjana de caracters per pagina, l'extraccio es "low_text".

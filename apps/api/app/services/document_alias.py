@@ -8,11 +8,14 @@ continua als llistats i conserva els seus fitxers.
 
 Qui es el canonic d'un grup (mateix sha), per ordre:
 
-1. un document que es pot analitzar (feed, pujada propia o aportacio verificada)
-   abans que un que no (pendent o rebutjat): si el canonic no es pogues llegir,
-   el contingut quedaria fora de l'analisi encara que un alies verificat el tingues;
-2. l'origen: feed > operator_url > operator_upload (`owner_upload` compta com el
-   feed: nomes existeix en licitacions manuals, on no hi ha feed);
+1. un document que es pot analitzar (feed, portal, pujada propia o aportacio
+   verificada) abans que un que no (pendent o rebutjat): si el canonic no es pogues
+   llegir, el contingut quedaria fora de l'analisi encara que un alies verificat el
+   tingues;
+2. l'origen: feed > portal > operator_url > operator_upload (`owner_upload` compta com
+   el feed: nomes existeix en licitacions manuals, on no hi ha feed). El portal oficial
+   va darrere del feed perque el feed es la font de la licitacio, i davant de l'operador
+   perque el verifica l'origen;
 3. el tipus: un plec o annex (`administrative_terms`, `technical_terms`,
    `additional`) abans que un anunci, una acta o `other`. Si el feed publica els
    mateixos bytes com a PCAP i com a OTHER, la seleccio per tipus de l'analisi
@@ -43,14 +46,15 @@ from app.models.enums import (
 from app.models.tender_documents import TenderDocumentContent, TenderDocumentFile
 from app.models.tenders import Tender, TenderDocument
 from app.services.tender_lifecycle import DOCUMENT_INTAKE_TRIGGER, record_revision
-from app.tenders.documents import ACTIVE_DOCUMENT
+from app.tenders.documents import ACTIVE_DOCUMENT, TRUSTED_ORIGINS
 
 #: Prioritat d'origen (menor = mana). `owner_upload` mai conviu amb el feed.
 ORIGIN_PRIORITY: dict[TenderDocumentOrigin, int] = {
     TenderDocumentOrigin.FEED: 0,
     TenderDocumentOrigin.OWNER_UPLOAD: 0,
-    TenderDocumentOrigin.OPERATOR_URL: 1,
-    TenderDocumentOrigin.OPERATOR_UPLOAD: 2,
+    TenderDocumentOrigin.PORTAL: 1,
+    TenderDocumentOrigin.OPERATOR_URL: 2,
+    TenderDocumentOrigin.OPERATOR_UPLOAD: 3,
 }
 
 
@@ -67,7 +71,7 @@ PREFERRED_DOCUMENT_TYPES: frozenset[TenderDocumentType] = frozenset(
 def _can_be_analyzed(document: TenderDocument) -> bool:
     """La part d'`ANALYZABLE_DOCUMENT` que depen de l'origen i la verificacio."""
     return (
-        document.origin in (TenderDocumentOrigin.FEED, TenderDocumentOrigin.OWNER_UPLOAD)
+        document.origin in TRUSTED_ORIGINS
         or document.contribution_status == DocumentContributionStatus.VERIFIED
     )
 

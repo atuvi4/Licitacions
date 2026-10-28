@@ -24,7 +24,7 @@ from app.models.tender_documents import (
 from app.services.document_download import OLE2_MAGIC
 from app.services.pdf_text import PARSER_VERSION, ExtractionResult
 from app.services.tender_document_processing import process_tender_document
-from tests.fixtures.pdf_builder import build_pdf
+from tests.fixtures.pdf_builder import build_corrupt_pdf, build_pdf
 
 PUBLIC_IP = "93.184.216.34"
 PCAP = build_pdf(["Plec de clausules administratives particulars. " * 8] * 3)
@@ -330,6 +330,270 @@ async def test_a_failed_reextraction_does_not_dethrone_the_working_one(
         .where(TenderDocumentPage.extraction_id == good_id)
     )
     assert pages == 3
+
+
+async def test_a_pdf_that_failed_for_lack_of_the_aes_library_is_read_once_it_is_there(
+    session, tender_document, monkeypatch
+):
+    """`pdf_crypto_unavailable` no es definitiva. Sense la biblioteca no s'hi torna (no
+    s'acumulen revisions fallides); quan el proces ja la te, el seguent processat el llegeix
+    sense tornar-lo a baixar."""
+    from tests.fixtures.pdf_builder import encrypt_pdf, use_pypdf_without_aes
+
+    data = encrypt_pdf(PCAP, algorithm="AES-128")
+    with monkeypatch.context() as without_aes:
+        use_pypdf_without_aes(without_aes)
+        first = await process(session, tender_document, payload=data)
+        again = await process(session, tender_document, payload=data)
+
+    content_id = first.file.content_id
+    extractions = (
+        await session.scalars(
+            sa.select(TenderDocumentExtraction).where(
+                TenderDocumentExtraction.content_id == content_id
+            )
+        )
+    ).all()
+    assert [(e.status, e.error_code) for e in extractions] == [
+        (ExtractionStatus.FAILED, "pdf_crypto_unavailable")
+    ]
+    assert again.reused is True
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, content=data, headers={"content-type": "application/pdf"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=False
+    ) as client:
+        third = await process_tender_document(
+            session, tender_document, client=client, resolver=resolver
+        )
+
+    assert calls == []
+    assert third.reused is False
+    current = await session.scalar(
+        sa.select(TenderDocumentExtraction).where(
+            TenderDocumentExtraction.content_id == content_id,
+            TenderDocumentExtraction.is_current.is_(True),
+        )
+    )
+    assert current.status == ExtractionStatus.EXTRACTED
+    assert current.error_code is None
+    assert current.page_count == 3
+    assert current.revision_number == 2
+
+
+async def _revisions(session, content_id) -> list[TenderDocumentExtraction]:
+    return (
+        await session.scalars(
+            sa.select(TenderDocumentExtraction)
+            .where(TenderDocumentExtraction.content_id == content_id)
+            .order_by(TenderDocumentExtraction.revision_number)
+        )
+    ).all()
+
+
+async def test_a_retry_that_fails_again_replaces_the_failure_and_stops(
+    session, tender_document, monkeypatch
+):
+    """Un AES-256 amb contrasenya d'obertura desat sense l'AES. Amb l'AES, el reintent falla
+    pel motiu real (`encrypted_pdf`) i, com que la vigent tampoc no tenia text, la substitueix:
+    no es torna a provar a cada processat (abans, una revisio fallida mes cada vegada)."""
+    from tests.fixtures.pdf_builder import encrypt_pdf, use_pypdf_without_aes
+
+    data = encrypt_pdf(PCAP, algorithm="AES-256", user_password="secret")
+    with monkeypatch.context() as without_aes:
+        use_pypdf_without_aes(without_aes)
+        first = await process(session, tender_document, payload=data)
+    retried = await process(session, tender_document, payload=data)
+    later = [await process(session, tender_document, payload=data) for _ in range(3)]
+
+    revisions = await _revisions(session, first.file.content_id)
+    assert [(r.error_code, r.is_current) for r in revisions] == [
+        ("pdf_crypto_unavailable", False),
+        ("encrypted_pdf", True),
+    ]
+    assert retried.reused is False
+    assert all(outcome.reused for outcome in later)
+
+
+async def test_an_unencrypted_jbig2_pdf_is_not_mistaken_for_a_missing_aes(
+    session, tender_document, monkeypatch
+):
+    """El `DependencyError` del `jbig2dec` no es la falta de l'AES: una sola revisio (amb la
+    pagina fallida), i els processats seguents la reaprofiten."""
+    import pypdf.filters
+
+    monkeypatch.setattr(pypdf.filters, "JBIG2DEC_BINARY", None)
+    data = build_pdf(["Plec de clausules administratives particulars. " * 8] * 3,
+                     jbig2_pages=frozenset({2}))
+    first = await process(session, tender_document, payload=data)
+    later = [await process(session, tender_document, payload=data) for _ in range(3)]
+
+    revisions = await _revisions(session, first.file.content_id)
+    assert [(r.status, r.error_code, r.extracted_page_count) for r in revisions] == [
+        (ExtractionStatus.EXTRACTED, None, 2)
+    ]
+    assert all(outcome.reused for outcome in later)
+
+
+async def test_a_deuc_stored_by_the_old_code_is_read_once_the_aes_is_there(
+    session, tender_document, second_tender_document, monkeypatch
+):
+    """Abans de `pdf_crypto_unavailable`, un PDF AES sense la biblioteca quedava `corrupt_pdf`
+    amb el `DependencyError` de l'AES al missatge (els DEUC del pilot). Aquesta forma tambe es
+    torna a llegir sola, sense baixar-la; un `corrupt_pdf` de debo, no."""
+    from tests.fixtures.pdf_builder import encrypt_pdf, use_pypdf_without_aes
+
+    data = encrypt_pdf(PCAP, algorithm="AES-128")
+    with monkeypatch.context() as without_aes:
+        use_pypdf_without_aes(without_aes)
+        first = await process(session, tender_document, payload=data)
+    content_id = first.file.content_id
+    await session.execute(
+        sa.update(TenderDocumentExtraction)
+        .where(TenderDocumentExtraction.content_id == content_id)
+        .values(
+            error_code="corrupt_pdf",
+            error_message="DependencyError: cryptography>=3.1 is required for AES algorithm",
+        )
+    )
+    await session.commit()
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, content=data, headers={"content-type": "application/pdf"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=False
+    ) as client:
+        again = await process_tender_document(
+            session, tender_document, client=client, resolver=resolver
+        )
+
+    assert calls == []
+    assert again.reused is False
+    revisions = await _revisions(session, content_id)
+    assert [(r.status, r.is_current) for r in revisions] == [
+        (ExtractionStatus.FAILED, False),
+        (ExtractionStatus.EXTRACTED, True),
+    ]
+
+    # Un `corrupt_pdf` amb un altre motiu continua sent definitiu.
+    broken = build_corrupt_pdf()
+    stored = await process(session, second_tender_document, payload=broken)
+    assert [r.error_code for r in await _revisions(session, stored.file.content_id)] == [
+        "corrupt_pdf"
+    ]
+    assert (await process(session, second_tender_document, payload=broken)).reused is True
+
+
+async def _doc_stored_before_doc_v1(session, tender_document, monkeypatch, body: bytes):
+    """Un .doc desat quan encara no es llegia: `skipped_unsupported`, amb la versio del PDF."""
+    from app.core.config import settings
+    from app.models.enums import TenderDocumentType
+    from app.models.tenders import TenderDocument
+    from app.services import document_parsers
+
+    doc = TenderDocument(
+        tender_id=tender_document.tender_id,
+        name="ANNEX III.doc",
+        document_type=TenderDocumentType.OTHER,
+        url="https://example.com/annex_iii.doc",
+    )
+    session.add(doc)
+    await session.commit()
+    await session.refresh(doc)
+
+    with monkeypatch.context() as before_doc_v1:
+        before_doc_v1.setattr(
+            settings,
+            "DOCUMENT_TEXT_EXTRACTION_MIME_TYPES",
+            settings.DOCUMENT_TEXT_EXTRACTION_MIME_TYPES.replace(",application/msword", ""),
+        )
+        versions = dict(document_parsers._OFFICE_VERSIONS)
+        versions.pop("application/msword")
+        before_doc_v1.setattr(document_parsers, "_OFFICE_VERSIONS", versions)
+        async with serving(body, "application/msword") as client:
+            first = await process_tender_document(session, doc, client=client, resolver=resolver)
+
+    old = await session.scalar(
+        sa.select(TenderDocumentExtraction).where(
+            TenderDocumentExtraction.content_id == first.file.content_id
+        )
+    )
+    assert first.file.content.mime_type == "application/msword"
+    assert old.status == ExtractionStatus.SKIPPED_UNSUPPORTED
+    assert old.parser_version == PARSER_VERSION
+    return doc, first
+
+
+async def test_an_old_doc_without_text_is_read_with_doc_v1_without_downloading_it_again(
+    session, tender_document, monkeypatch
+):
+    """El cas de Parc Taulí: .doc desats quan encara no es llegien (`skipped_unsupported`,
+    versio del PDF). Amb `doc-v1`, el seguent processat els llegeix sense baixar-los."""
+    from tests.fixtures.doc_builder import build_doc
+
+    body = build_doc("MODEL D'OFERTA ECONOMICA\r")
+    doc, first = await _doc_stored_before_doc_v1(session, tender_document, monkeypatch, body)
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, content=body, headers={"content-type": "application/msword"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=False
+    ) as client:
+        second = await process_tender_document(session, doc, client=client, resolver=resolver)
+
+    assert calls == []
+    assert second.reused is False
+    current = await session.scalar(
+        sa.select(TenderDocumentExtraction).where(
+            TenderDocumentExtraction.content_id == first.file.content_id,
+            TenderDocumentExtraction.is_current.is_(True),
+        )
+    )
+    assert (current.status, current.parser_version) == (ExtractionStatus.EXTRACTED, "doc-v1")
+    page = await session.scalar(
+        sa.select(TenderDocumentPage).where(TenderDocumentPage.extraction_id == current.id)
+    )
+    assert page.text == "MODEL D'OFERTA ECONOMICA"
+
+
+async def test_an_old_doc_that_doc_v1_cannot_read_fails_once(
+    session, tender_document, monkeypatch
+):
+    """Si `doc-v1` no el pot llegir, la fallada substitueix el «no suportat» antic (cap dels
+    dos no tenia text) i es la vigent: no es torna a provar a cada processat."""
+    from tests.fixtures.doc_builder import build_doc
+
+    body = build_doc("MODEL D'OFERTA ECONOMICA\r")[:1024]  # OLE2 truncat
+    doc, first = await _doc_stored_before_doc_v1(session, tender_document, monkeypatch, body)
+
+    async with serving(body, "application/msword") as client:
+        read = await process_tender_document(session, doc, client=client, resolver=resolver)
+        later = [
+            await process_tender_document(session, doc, client=client, resolver=resolver)
+            for _ in range(3)
+        ]
+
+    revisions = await _revisions(session, first.file.content_id)
+    assert [(r.status, r.parser_version, r.is_current) for r in revisions] == [
+        (ExtractionStatus.SKIPPED_UNSUPPORTED, PARSER_VERSION, False),
+        (ExtractionStatus.FAILED, "doc-v1", True),
+    ]
+    assert revisions[1].error_code == "doc_unreadable"
+    assert read.reused is False
+    assert all(outcome.reused for outcome in later)
 
 
 async def test_force_reextract_without_content_is_refused(session, tender_document):

@@ -26,8 +26,15 @@ dependencies = [
     "defusedxml>=0.7.1",
     # Extraccio de text de PDF. BSD-3-Clause: a diferencia de PyMuPDF (AGPL),
     # no obliga a publicar el codi d'un servei SaaS. Python pur, sense
-    # dependencies de sistema.
-    "pypdf>=5.1",
+    # dependencies de sistema. L'extra `crypto` porta `cryptography`
+    # (Apache-2.0/BSD, wheels per a Windows i Linux): sense, pypdf no obre els
+    # PDF xifrats amb AES, com els models oficials del DEUC, encara que no
+    # tinguin contrasenya d'obertura.
+    "pypdf[crypto]>=5.1",
+    # Contenidor OLE2 dels .doc de Word 97-2003 (`doc_text`). BSD-2, Python pur.
+    # El text (FIB, taula de peces i propietats) el llegeix el nostre parser, no
+    # cap eina externa.
+    "olefile>=0.47",
     # Zones horaries a Windows (a Linux les aporta el sistema).
     "tzdata>=2024.1",
     # SDK del proveidor d'inferencia real. Nomes l'importa

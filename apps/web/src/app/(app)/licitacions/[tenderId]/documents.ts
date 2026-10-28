@@ -21,7 +21,7 @@ import {
 
 const NUMBER = new Intl.NumberFormat("ca-ES");
 
-/** Codis reals de `document_download.py` i `pdf_text.py`, en llenguatge humà. */
+/** Codis reals de `document_download.py`, `pdf_text.py` i `doc_text.py`, en llenguatge humà. */
 export const FILE_ERROR_MESSAGES: Record<string, string> = {
   http_error: "La font ha respost amb un error en demanar el document.",
   too_large: "El document supera la mida màxima que es pot descarregar.",
@@ -31,6 +31,13 @@ export const FILE_ERROR_MESSAGES: Record<string, string> = {
   unsupported_for_text_extraction: "Aquest format no permet extreure'n el text.",
   corrupt_pdf: "El PDF no es pot llegir: sembla malmès.",
   encrypted_pdf: "El PDF està protegit amb contrasenya i no se'n pot extreure el text.",
+  pdf_crypto_unavailable:
+    "El PDF està xifrat i el servidor encara no el pot obrir: es tornarà a provar en el pròxim processament.",
+  doc_encrypted: "El document de Word està protegit amb contrasenya i no se'n pot extreure el text.",
+  doc_unsupported_version: "És un document de Word 6/95 o anterior: d'aquesta versió no se n'extreu el text.",
+  doc_unreadable: "El document de Word no es pot llegir: sembla malmès.",
+  doc_too_large: "El document de Word té més text del que es pot extreure d'un sol document.",
+  too_many_pages: "El document supera el nombre màxim de pàgines que es poden extreure.",
   stale: "El document ha canviat des que es va processar: cal reprocessar-lo.",
 };
 

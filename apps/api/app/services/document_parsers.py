@@ -1,8 +1,8 @@
 """Quin parser toca a cada tipus de document, i el de text pla.
 
 La `parser_version` forma part de la identitat d'una extraccio: `pypdf-v1`,
-`plaintext-v1`, `docx-v1`, `xlsx-v2` i `xml-v1` (`office_text`) son maneres
-diferents de llegir, i una cita a una pagina ha
+`plaintext-v1`, `docx-v1`, `xlsx-v2` i `xml-v1` (`office_text`) i `doc-v1`
+(`doc_text`, Word 97-2003) son maneres diferents de llegir, i una cita a una pagina ha
 de poder dir amb quina es va llegir. Per aixo aqui no hi ha una constant global
 de versio, sino una per parser i una funcio que diu quina toca.
 
@@ -18,7 +18,7 @@ import asyncio
 import time
 
 from app.models.enums import ExtractionQuality, ExtractionStatus, PageExtractionStatus
-from app.services import office_text
+from app.services import doc_text, office_text
 from app.services.pdf_text import (
     PARSER_VERSION as PDF_PARSER_VERSION,
 )
@@ -40,6 +40,11 @@ PLAIN_TEXT_MIME = "text/plain"
 
 _ENCODINGS = ("utf-8", "cp1252", "latin-1")
 
+#: Els parsers de fitxers d'oficina, amb la seva versio: DOCX, XLSX i XML (`office_text`) i
+#: DOC (`doc_text`).
+_OFFICE_VERSIONS = {**office_text.PARSER_VERSIONS, **doc_text.PARSER_VERSIONS}
+_OFFICE_EXTRACTORS = {**office_text.EXTRACTORS, **doc_text.EXTRACTORS}
+
 
 def parser_version_for(mime_type: str) -> str:
     """La versio de parser vigent per a aquest tipus.
@@ -50,11 +55,11 @@ def parser_version_for(mime_type: str) -> str:
     """
     if mime_type == PLAIN_TEXT_MIME:
         return PLAIN_TEXT_PARSER_VERSION
-    # DOCX, XLSX i XML (`docx-v1`, `xlsx-v2`, `xml-v1`): un parser propi cadascun.
-    # Una extraccio antiga `skipped_unsupported` d'aquests tipus porta la versio del
-    # PDF i, per tant, ja no es al dia: el seguent processat la torna a llegir.
-    if mime_type in office_text.PARSER_VERSIONS:
-        return office_text.PARSER_VERSIONS[mime_type]
+    # DOCX, XLSX, XML i DOC (`docx-v1`, `xlsx-v2`, `xml-v1`, `doc-v1`): un parser propi
+    # cadascun. Una extraccio antiga `skipped_unsupported` d'aquests tipus porta la versio
+    # del PDF i, per tant, ja no es al dia: el seguent processat la torna a llegir.
+    if mime_type in _OFFICE_VERSIONS:
+        return _OFFICE_VERSIONS[mime_type]
     return PDF_PARSER_VERSION
 
 
@@ -117,7 +122,7 @@ async def extract_text_async(mime_type: str, data: bytes) -> ExtractionResult:
         return await asyncio.to_thread(extract_plain_text, data)
     if mime_type == "application/pdf":
         return await extract_pdf_text_async(data)
-    extractor = office_text.EXTRACTORS.get(mime_type)
+    extractor = _OFFICE_EXTRACTORS.get(mime_type)
     if extractor is not None:
         return await asyncio.to_thread(extractor, data)
     return unsupported_result(mime_type)  # pragma: no cover - el gate es abans

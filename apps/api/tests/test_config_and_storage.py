@@ -104,8 +104,9 @@ def test_document_settings_expose_derived_limits():
     assert "application/pdf" in settings.document_allowed_mime_types
     # El text pla hi entra des d'S3-S2: llegir-lo es descodificar-lo, sense cap
     # dependencia nova. DOCX, XLSX i XML, amb els parsers deterministes de
-    # `office_text`. De la resta de formats admesos (ZIP, OLE2...) se'n guarda
-    # l'original i no se'n llegeix el text.
+    # `office_text`, i el .doc de Word 97-2003 amb `doc_text` (Bloc 2). De la resta
+    # de formats admesos (ZIP, un OLE2 generic...) se'n guarda l'original i no se'n
+    # llegeix el text.
     assert settings.document_text_extraction_mime_types == {
         "application/pdf",
         "text/plain",
@@ -113,6 +114,7 @@ def test_document_settings_expose_derived_limits():
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/xml",
         "text/xml",
+        "application/msword",
     }
     assert settings.document_text_extraction_mime_types <= settings.document_allowed_mime_types
     assert settings.document_allowed_ports == {80, 443}

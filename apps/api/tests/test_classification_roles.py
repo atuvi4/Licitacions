@@ -201,7 +201,10 @@ def test_a_docx_read_only_to_classify_has_no_text_for_the_analysis():
     assert found[0].detail["read_for_classification"] is True
 
 
-@pytest.mark.parametrize("mime", [ooxml_text.DOCX, ooxml_text.XLSX, "application/xml", "text/xml"])
+@pytest.mark.parametrize(
+    "mime",
+    [ooxml_text.DOCX, ooxml_text.XLSX, "application/xml", "text/xml", "application/msword"],
+)
 def test_an_extracted_office_or_xml_document_has_no_format_finding(mime):
     result = classify_documents([facts(0, "Annex", "Text llegit pel parser", mime=mime)])
     assert not [
@@ -210,6 +213,24 @@ def test_an_extracted_office_or_xml_document_has_no_format_finding(mime):
         if code
         in (ClassificationFindingCode.FORMAT_NOT_ANALYZABLE, ClassificationFindingCode.NO_TEXT)
     ]
+
+
+def test_a_doc_without_text_is_no_text_not_an_unreadable_format():
+    """Des de `doc-v1` (Bloc 2) un .doc es llegeix: si no en surt text (xifrat, malmes),
+    es processabilitat, no un format que no sabem llegir."""
+    doc = facts(0, "Annex III.doc", mime="application/msword")  # extraccio fallida: sense pagines
+    result = classify_documents([doc])
+    found = [(f.code, f.severity) for f in result.findings if f.key == "m0"]
+    assert (ClassificationFindingCode.NO_TEXT, FindingSeverity.MEDIUM) in found
+    assert ClassificationFindingCode.FORMAT_NOT_ANALYZABLE not in [code for code, _ in found]
+
+
+def test_every_role_has_a_document_type():
+    """Una revisio o una decisio de rol el tradueix a tipus de document: cap rol sense."""
+    from app.classification.roles import ROLE_TO_DOCUMENT_TYPE
+
+    assert set(ROLE_TO_DOCUMENT_TYPE) == set(DocumentRole)
+    assert ROLE_TO_DOCUMENT_TYPE[DocumentRole.CLARIFICATION] is TenderDocumentType.ADDITIONAL
 
 
 # --------------------------------------------------------------------------- #

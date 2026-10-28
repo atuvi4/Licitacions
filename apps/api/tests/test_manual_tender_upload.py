@@ -29,6 +29,7 @@ from app.models.tender_documents import (
     TenderDocumentPage,
 )
 from app.models.tenders import TenderDocument
+from tests.fixtures.doc_builder import build_doc
 from tests.fixtures.pdf_builder import build_pdf
 from tests.test_office_text import _docx, _p, _xlsx
 
@@ -44,8 +45,10 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 #: Un DOCX i un XLSX son ZIP: els magic bytes nomes diuen "PK", i el tipus fi
 #: surt del que declara qui el puja. Es la mateixa regla que la descarrega.
 ZIP_BYTES = b"PK\x03\x04" + b"\x00" * 64
-#: Un .doc antic (OLE2): format que es guarda pero del qual no s'extreu text.
+#: Un .doc antic (OLE2): des del Bloc 2 se'n llegeix el text (`doc-v1`).
 MSWORD = "application/msword"
+#: Un .xls antic (OLE2): format que es guarda pero del qual no s'extreu text.
+MSEXCEL = "application/vnd.ms-excel"
 OLE2_BYTES = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64
 XLSX_ROW = '<row r="1"><c r="A1" t="s"><v>0</v></c></row>'
 
@@ -350,14 +353,24 @@ async def test_a_text_file_is_read_without_any_model(client_a, db, tenant_a):
 
 
 @pytest.mark.parametrize(
-    "name,mime,data",
+    "name,mime,data,parser",
     [
-        ("plec.docx", DOCX, _docx(_p("Objecte del contracte."))),
-        ("preus.xlsx", XLSX, _xlsx([("Preus", XLSX_ROW)], shared=["Objecte del contracte."])),
+        ("plec.docx", DOCX, _docx(_p("Objecte del contracte.")), "docx-v1"),
+        (
+            "preus.xlsx",
+            XLSX,
+            _xlsx([("Preus", XLSX_ROW)], shared=["Objecte del contracte."]),
+            "xlsx-v2",
+        ),
+        ("annex.doc", MSWORD, build_doc("Objecte del contracte.\r"), "doc-v1"),
     ],
+    # Sense ids, el nom del test portaria els bytes: a Windows, massa llarg per a l'entorn.
+    ids=["docx", "xlsx", "doc"],
 )
-async def test_an_office_file_is_stored_and_read(client_a, db, tenant_a, name, mime, data):
-    """DOCX i XLSX es llegeixen amb el seu parser (`docx-v1`, `xlsx-v2`)."""
+async def test_an_office_file_is_stored_and_read(
+    client_a, db, tenant_a, name, mime, data, parser
+):
+    """DOCX, XLSX i DOC es llegeixen amb el seu parser (`docx-v1`, `xlsx-v2`, `doc-v1`)."""
     _, company = tenant_a
     tender = await _tender(client_a, company)
 
@@ -367,7 +380,7 @@ async def test_an_office_file_is_stored_and_read(client_a, db, tenant_a, name, m
     assert body["file"]["text_extraction_supported"] is True
     assert body["file"]["analysis_status"] == "extracted"
     extraction = await db.get(TenderDocumentExtraction, uuid.UUID(body["file"]["extraction_id"]))
-    assert extraction.parser_version == ("docx-v1" if name.endswith(".docx") else "xlsx-v2")
+    assert extraction.parser_version == parser
     pages = (
         await db.execute(
             sa.select(TenderDocumentPage).where(
@@ -395,7 +408,7 @@ async def test_an_old_office_file_is_stored_but_not_read(client_a, db, tenant_a)
     tender = await _tender(client_a, company)
 
     body = await _ok(
-        client_a, company, tender["id"], name="plec.doc", data=OLE2_BYTES, mime=MSWORD
+        client_a, company, tender["id"], name="preus.xls", data=OLE2_BYTES, mime=MSEXCEL
     )
 
     assert body["stored"] is True
@@ -420,7 +433,9 @@ async def test_an_old_office_file_is_stored_but_not_read(client_a, db, tenant_a)
 async def test_an_unsupported_format_is_not_a_failed_extraction(client_a, db, tenant_a):
     _, company = tenant_a
     tender = await _tender(client_a, company)
-    body = await _ok(client_a, company, tender["id"], name="p.doc", data=OLE2_BYTES, mime=MSWORD)
+    body = await _ok(
+        client_a, company, tender["id"], name="p.xls", data=OLE2_BYTES, mime=MSEXCEL
+    )
 
     extraction = (
         await db.execute(

@@ -352,6 +352,8 @@ class DocumentRole(StrEnum):
     ADMINISTRATIVE_FORM = "administrative_form"
     NOTICE = "notice"
     OTHER = "other"
+    #: Aclariments oficials de l'organ: les preguntes i respostes publicades (0065, Bloc 2).
+    CLARIFICATION = "clarification"
 
 
 class RoleConfidence(StrEnum):
@@ -1827,12 +1829,15 @@ class TenderDocumentOrigin(StrEnum):
     OWNER_UPLOAD = "owner_upload"  # pujada/ZIP en una licitacio manual propia
     OPERATOR_URL = "operator_url"  # obtingut per l'operador d'una URL oficial
     OPERATOR_UPLOAD = "operator_upload"  # pujat per l'operador
+    #: Baixat pel connector del portal oficial (PSCP), que el governa, i verificat a
+    #: l'origen: l'MD5 del fitxer es el que publica el portal (0065, Bloc 2).
+    PORTAL = "portal"
 
 
 class DocumentContributionStatus(StrEnum):
     """Verificacio d'un document aportat per l'operador."""
 
-    NOT_APPLICABLE = "not_applicable"  # feed o owner_upload: no es verifica
+    NOT_APPLICABLE = "not_applicable"  # feed, owner_upload o portal: no es verifica
     PENDING_VERIFICATION = "pending_verification"
     VERIFIED = "verified"
     REJECTED = "rejected"

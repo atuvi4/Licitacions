@@ -51,7 +51,7 @@ from app.services.document_download import DownloadError, DownloadResult, downlo
 from app.services.document_parsers import extract_text_async, parser_version_for
 from app.services.extraction_qa import PageInput as QaPageInput
 from app.services.extraction_qa import analyse as analyse_extraction_quality
-from app.services.pdf_text import ExtractionResult, unsupported_result
+from app.services.pdf_text import ExtractionResult, should_retry, unsupported_result
 from app.services.storage import build_tender_document_key, get_storage
 from app.services.tender_lifecycle import record_revision
 from app.services.url_guard import Resolver
@@ -270,9 +270,11 @@ async def _store_extraction(
     dient el mateix demà. Repetir el mateix parser genera una revisio nova, no
     una sobreescriptura.
 
-    La revisio nova nomes passa a `is_current` si ha acabat be. Si falla i ja hi
-    havia una extraccio vigent, aquella es queda: una reextraccio fallida no pot
-    deixar un document sense text que abans en tenia.
+    La revisio nova passa a `is_current` si ha acabat be. Si falla i la vigent tenia
+    text, aquella es queda: una reextraccio fallida no pot deixar un document sense
+    text que abans en tenia. Si la vigent no en tenia (fallida, no suportada o buida),
+    la nova la substitueix i en diu la causa real: si no, un reintent (`should_retry`)
+    o un parser nou que tornes a fallar ho tornaria a provar a cada processat.
     """
     previous = await current_extraction_for(session, content.id)
 
@@ -281,7 +283,11 @@ async def _store_extraction(
             TenderDocumentExtraction.content_id == content.id
         )
     )
-    promote = result.status != ExtractionStatus.FAILED or previous is None
+    promote = (
+        result.status != ExtractionStatus.FAILED
+        or previous is None
+        or not previous.text_char_count
+    )
 
     if promote and previous is not None:
         # L'index unic parcial nomes admet una vigent per contingut: cal
@@ -405,8 +411,11 @@ async def _ensure_current_extraction(
     """Retorna l'extraccio vigent i si s'ha hagut de fer feina.
 
     Es reextreu quan es demana explicitament, quan no n'hi ha cap, quan la que
-    hi ha no va acabar, o quan la `parser_version` vigent ha canviat. Amb
-    `commit=False` nomes fa flush: la transaccio es de qui crida.
+    hi ha no va acabar, quan la `parser_version` vigent ha canviat, o quan la que
+    hi ha va fallar per l'entorn i no pel document i l'entorn ja ho permet
+    (`should_retry`: un PDF xifrat llegit sense la biblioteca de l'AES, tambe en la
+    forma antiga `corrupt_pdf`). Amb `commit=False` nomes fa flush: la transaccio es
+    de qui crida.
     """
     current = await current_extraction_for(session, content.id)
     up_to_date = (
@@ -416,6 +425,7 @@ async def _ensure_current_extraction(
         # de PDF.
         and current.parser_version == parser_version_for(content.mime_type)
         and current.status in TERMINAL_EXTRACTION_STATES
+        and not should_retry(current.error_code, current.error_message)
     )
     if up_to_date and not force:
         return current, False

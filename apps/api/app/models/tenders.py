@@ -340,14 +340,17 @@ class TenderDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         sa.UniqueConstraint("tender_id", "url", name="uq_tender_documents_tender_url"),
         sa.Index("ix_tender_documents_tender_id", "tender_id"),
-        # Paquet documental public (0058). La coherencia la imposa la base.
+        # Paquet documental public (0058). La coherencia la imposa la base. Des de 0065,
+        # `portal` (el connector del portal oficial) es com el feed: el governa una font i no
+        # passa per la verificacio de l'operador.
         sa.CheckConstraint(in_values("origin", TenderDocumentOrigin), name="origin_valid"),
         sa.CheckConstraint(
             in_values("contribution_status", DocumentContributionStatus),
             name="contribution_status_valid",
         ),
         sa.CheckConstraint(
-            "(contribution_status = 'not_applicable') = (origin IN ('feed', 'owner_upload'))",
+            "(contribution_status = 'not_applicable') = "
+            "(origin IN ('feed', 'owner_upload', 'portal'))",
             name="contribution_matches_origin",
         ),
         sa.CheckConstraint(
@@ -355,7 +358,7 @@ class TenderDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="verified_at_matches_status",
         ),
         sa.CheckConstraint(
-            "(origin = 'feed') = (governing_source_id IS NOT NULL)",
+            "(origin IN ('feed', 'portal')) = (governing_source_id IS NOT NULL)",
             name="feed_has_governing_source",
         ),
     )
@@ -393,8 +396,8 @@ class TenderDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=TenderDocumentOrigin.FEED,
         server_default=TenderDocumentOrigin.FEED.value,
     )
-    #: Source ownership: el connector que governa el document. NOMES els `feed`
-    #: en tenen; la sincronitzacio d'una font nomes toca els seus.
+    #: Source ownership: el connector que governa el document. NOMES els `feed` i
+    #: els `portal` en tenen (0065); la sincronitzacio d'una font nomes toca els seus.
     governing_source_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("sources.id", ondelete="RESTRICT")
     )

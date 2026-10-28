@@ -10,4 +10,4 @@ falla: un error determinista (dades, integritat, parseig) nomes es torna a
 provar si la revisio o el `parser_version` han canviat.
 """
 
-SCHEMA_REVISION = "0064_compliance_v6_notes"
+SCHEMA_REVISION = "0065_portal_origin_roles"

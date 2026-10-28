@@ -73,6 +73,7 @@ describe("badges d'origen i de contribució", () => {
     expect(removedLabel(doc({ origin: "operator_url", removed_at: "2026-09-30T10:00:00Z" }))).toMatch(/^Retirat per l'operador \(des del .+\)$/);
     expect(removedLabel(doc({ origin: "operator_upload", removed_at: "2026-09-30T10:00:00Z" }))).toMatch(/^Retirat per l'operador/);
     expect(removedLabel(doc({ origin: "owner_upload", removed_at: "2026-09-30T10:00:00Z" }))).toMatch(/^Retirat per l'empresa/);
+    expect(removedLabel(doc({ origin: "portal", removed_at: "2026-09-30T10:00:00Z" }))).toMatch(/^Retirat del portal oficial \(des del .+\)$/);
     expect(removedLabel(doc({ removed_at: null }))).toBeNull();
   });
 });

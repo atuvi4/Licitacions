@@ -76,6 +76,8 @@ ROLE_TO_DOCUMENT_TYPE: dict[DocumentRole, TenderDocumentType] = {
     DocumentRole.APPROVAL_RESOLUTION: TenderDocumentType.OTHER,
     DocumentRole.ADMINISTRATIVE_FORM: TenderDocumentType.OTHER,
     DocumentRole.OTHER: TenderDocumentType.OTHER,
+    # Les respostes oficials poden aclarir o corregir el plec: s'analitzen amb ell.
+    DocumentRole.CLARIFICATION: TenderDocumentType.ADDITIONAL,
 }
 
 #: Rols que el conjunt de documents d'una licitacio ha de tenir.
@@ -86,7 +88,7 @@ REQUIRED_ROLES: tuple[DocumentRole, ...] = (DocumentRole.PCAP, DocumentRole.PPT)
 _COMPATIBLE = frozenset({frozenset({DocumentRole.PCAP, DocumentRole.CHARACTERISTICS_TABLE})})
 
 #: Formats dels quals la capa documental extreu text per a l'analisi (els parsers de
-#: `document_parsers`: PDF, text pla, DOCX, XLSX i XML).
+#: `document_parsers`: PDF, text pla, DOCX, XLSX, XML i DOC de Word 97-2003).
 ANALYZABLE_MIME_TYPES = frozenset(
     {
         "application/pdf",
@@ -95,6 +97,7 @@ ANALYZABLE_MIME_TYPES = frozenset(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/xml",
         "text/xml",
+        "application/msword",
     }
 )
 _SPREADSHEETS = frozenset(

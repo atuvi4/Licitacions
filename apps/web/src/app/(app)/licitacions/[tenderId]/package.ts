@@ -21,6 +21,7 @@ export const DOCUMENT_ORIGIN_BADGES: Record<TenderDocumentOrigin, string> = {
   operator_url: "aportat per l'operador",
   operator_upload: "pujat per l'operador",
   owner_upload: "pujat per l'empresa",
+  portal: "portal oficial",
 };
 
 export function originBadge(document: TenderDocumentMeta): string {
@@ -47,14 +48,16 @@ export function contributionBadge(document: TenderDocumentMeta): Badge | null {
 }
 
 /**
- * Qui ha retirat el document i des de quan (M3). Només un document governat pel
- * feed el retira la font; un d'aportat o pujat l'ha retirat l'operador (o
- * l'empresa, si era seu): atribuir-ho a la font seria una afirmació falsa.
+ * Qui ha retirat el document i des de quan (M3). Un document governat pel feed el
+ * retira la font, i un del portal oficial, el portal (el seu connector); un
+ * d'aportat o pujat l'ha retirat l'operador (o l'empresa, si era seu): atribuir-ho
+ * a qui no ha estat seria una afirmació falsa.
  */
 export function removedLabel(document: TenderDocumentMeta): string | null {
   if (!document.removed_at) return null;
   const since = `(des del ${formatDate(document.removed_at)})`;
   if (document.origin === "feed") return `Retirat de la font ${since}`;
+  if (document.origin === "portal") return `Retirat del portal oficial ${since}`;
   if (document.origin === "owner_upload") return `Retirat per l'empresa ${since}`;
   return `Retirat per l'operador ${since}`;
 }

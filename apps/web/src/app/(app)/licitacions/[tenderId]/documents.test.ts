@@ -78,7 +78,11 @@ describe("text extret", () => {
 
 describe("errors de fitxer en llenguatge humà", () => {
   it("els codis reals de descàrrega i extracció tenen frase; un de desconegut cau al genèric", () => {
-    for (const code of ["http_error", "too_large", "timeout", "network_error", "not_found", "unsupported_for_text_extraction", "stale"]) {
+    for (const code of [
+      "http_error", "too_large", "timeout", "network_error", "not_found", "unsupported_for_text_extraction", "stale",
+      "corrupt_pdf", "encrypted_pdf", "pdf_crypto_unavailable", "too_many_pages",
+      "doc_encrypted", "doc_unsupported_version", "doc_unreadable", "doc_too_large",
+    ]) {
       expect(FILE_ERROR_MESSAGES[code], code).toBeTruthy();
       expect(fileErrorText(code)).toBe(FILE_ERROR_MESSAGES[code]);
       expect(fileErrorText(code)).not.toContain(code);

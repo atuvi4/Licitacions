@@ -194,6 +194,52 @@ async def test_operator_url_mana_sobre_operator_upload(session, tender_document)
     assert (await reload(session, upload)).duplicate_of_document_id == by_url.id
 
 
+async def portal_document(session, tender_document, *, created_at: datetime) -> TenderDocument:
+    """Un document del portal oficial (0065): governat per una font, sense verificacio."""
+    suffix = uuid.uuid4().hex[:8]
+    document = TenderDocument(
+        tender_id=tender_document.tender_id,
+        name=f"portal-{suffix}.pdf",
+        document_type=TenderDocumentType.OTHER,
+        url=f"https://contractaciopublica.cat/portal-api/descarrega-document/{suffix}/x",
+        origin=TenderDocumentOrigin.PORTAL,
+        governing_source_id=tender_document.governing_source_id,
+        contribution_status=DocumentContributionStatus.NOT_APPLICABLE,
+    )
+    document.created_at = created_at
+    session.add(document)
+    await session.commit()
+    await session.refresh(document)
+    return document
+
+
+async def test_el_portal_mana_sobre_l_operador_encara_que_sigui_mes_nou(
+    session, tender_document
+):
+    """Prioritat portal > operator_url: el portal el verifica l'origen, no una persona."""
+    operator = await operator_document(session, tender_document.tender_id, created_at=T0)
+    portal = await portal_document(session, tender_document, created_at=T0 + timedelta(days=1))
+    await process(session, operator)
+    await process(session, portal)
+
+    assert (await reload(session, portal)).duplicate_of_document_id is None
+    assert (await reload(session, operator)).duplicate_of_document_id == portal.id
+    selected = {d.id for d in await analyzable_documents(session, tender_document.tender_id)}
+    assert portal.id in selected and operator.id not in selected
+
+
+async def test_el_feed_mana_sobre_el_portal(session, tender_document):
+    """Prioritat feed > portal: el feed es la font de la licitacio."""
+    tender_document.created_at = T0 + timedelta(days=1)
+    await session.commit()
+    portal = await portal_document(session, tender_document, created_at=T0)
+    await process(session, portal)
+    await process(session, tender_document)
+
+    assert (await reload(session, tender_document)).duplicate_of_document_id is None
+    assert (await reload(session, portal)).duplicate_of_document_id == tender_document.id
+
+
 async def test_empat_de_prioritat_mana_el_mes_antic(session, tender_document):
     tender_id = tender_document.tender_id
     newer = await operator_document(session, tender_id, created_at=T0 + timedelta(days=2))
