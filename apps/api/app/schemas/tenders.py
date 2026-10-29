@@ -408,19 +408,18 @@ class BudgetWithTaxObservations(ORMModel):
     source_updated_at: datetime | None = None
 
 
-class TenderPortalSyncRead(APIModel):
+class TenderPortalSyncRead(BaseModel):
     """La sincronitzacio amb el portal de la PSCP vista des de la fitxa (Bloc 2, etapa 3).
 
     Global, com la licitacio: no depen de l'empresa ni del rol (`analysis-limits` diu si
     l'empresa la pot demanar). `available` diu si la licitacio es pot sincronitzar; que
-    calgui esperar ho diu `retry_after_seconds`.
+    calgui esperar ho diu `retry_after_seconds`. Cap data: diria quan hi va treballar una
+    altra empresa (la seva ultima sincronitzacio, cadascuna la llegeix de les seves peticions).
     """
 
     available: bool
     #: Per que no es pot (`no_pscp_publication`, `pscp_id_mismatch`, `portal_sync_disabled`).
     reason: str | None = None
-    #: Quan va acabar be l'ultima sincronitzacio, o `None` si encara no n'hi ha cap.
-    last_synced_at: datetime | None = None
     #: Segons que falten, quan s'ha llegit la fitxa, per poder-la tornar a demanar; 0 = ja es pot.
     retry_after_seconds: int = 0
 

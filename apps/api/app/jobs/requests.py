@@ -590,14 +590,13 @@ class PortalSyncStatus:
     """Si una licitacio es pot sincronitzar amb el portal de la PSCP, i quan.
 
     Una sola regla per a la fitxa (que ho ensenya abans de demanar res, Bloc 2 etapa 3) i
-    per a `submit_portal_sync_request` (que la fa complir).
+    per a `submit_portal_sync_request` (que la fa complir). Tenant-safe: ni qui la va
+    demanar ni quan, nomes quant falta (el mateix que diu el 429, i nomes durant l'espera).
     """
 
     #: Per que no es pot sincronitzar (`private_tender`, `no_pscp_publication`,
     #: `pscp_id_mismatch`, `portal_sync_disabled`), o `None` si es pot.
     reason: str | None
-    #: Quan va acabar be l'ultima sincronitzacio (UTC), o `None` si no n'hi ha cap.
-    last_synced_at: datetime | None
     #: Segons que falten per poder-la tornar a demanar; 0 = ja es pot.
     retry_after_seconds: int
 
@@ -626,7 +625,7 @@ async def portal_sync_status(session: AsyncSession, tender: Tender) -> PortalSyn
             last_finished = last_finished.replace(tzinfo=UTC)
         elapsed = (utcnow() - last_finished).total_seconds()
         wait = max(0, math.ceil(settings.PSCP_PORTAL_MIN_INTERVAL_SECONDS - elapsed))
-    return PortalSyncStatus(reason=reason, last_synced_at=last_finished, retry_after_seconds=wait)
+    return PortalSyncStatus(reason=reason, retry_after_seconds=wait)
 
 
 async def submit_portal_sync_request(

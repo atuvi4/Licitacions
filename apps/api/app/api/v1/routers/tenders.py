@@ -678,7 +678,6 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
         portal_sync = TenderPortalSyncRead(
             available=state.reason is None,
             reason=state.reason,
-            last_synced_at=state.last_synced_at,
             retry_after_seconds=state.retry_after_seconds,
         )
 

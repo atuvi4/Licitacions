@@ -23,11 +23,21 @@ vi.mock("next/navigation", () => ({
 const requestProcessing = vi.fn();
 const track = vi.fn();
 let jobRequest: import("@/lib/jobs").JobRequest | null = null;
+/** L'`onFinished` de cada tipus de feina, per fer-la acabar des del test. */
+const finishers: Record<string, (request: import("@/lib/jobs").JobRequest) => void | Promise<void>> = {};
 vi.mock("@/lib/jobs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/jobs")>();
   return {
     ...actual,
-    useJobRequest: () => ({ request: jobRequest, active: jobRequest?.status === "accepted", track }),
+    useJobRequest: (
+      _companyId: string | null,
+      _tenderId: string,
+      kind: string,
+      onFinished: (request: import("@/lib/jobs").JobRequest) => void | Promise<void>,
+    ) => {
+      finishers[kind] = onFinished;
+      return { request: jobRequest, active: jobRequest?.status === "accepted", track };
+    },
     requestProcessing: (...args: unknown[]) => requestProcessing(...args),
   };
 });
@@ -109,6 +119,7 @@ function base(extra: Record<string, unknown> = {}) {
     "/companies/c1/tenders/t1/compliance": { run: complianceRun, assessments: [], is_stale: false },
     "/companies/c1/tenders/t1/workspace": workspace,
     "/companies/c1/analysis-limits": { can_process_documents: true, can_confirm: true, active_now: 0 },
+    "/companies/c1/tenders/t1/job-requests": [],
     ...extra,
   };
 }
@@ -287,7 +298,7 @@ describe("Fitxa de licitació", () => {
 
   it("Plecs: una licitació de la PSCP porta «Actualitza documents de la PSCP»; una altra no", async () => {
     search = "tab=plecs";
-    respondWith(base({ "/tenders/t1": { ...detail, portal_sync: { available: true, reason: null, last_synced_at: null, retry_after_seconds: 0 } } }));
+    respondWith(base({ "/tenders/t1": { ...detail, portal_sync: { available: true, reason: null, retry_after_seconds: 0 } } }));
     const first = render(<TenderDetailPage />);
     await screen.findByText("Plec tècnic.pdf");
     expect(first.container.querySelector("[data-portal-sync]")).not.toBeNull();
@@ -301,9 +312,44 @@ describe("Fitxa de licitació", () => {
     expect(screen.queryByRole("button", { name: /Actualitza documents de la PSCP/ })).toBeNull();
   });
 
+  it("Plecs: en acabar la sincronització es rellegeixen la fitxa, l'anàlisi i el compliment, sense esquelet", async () => {
+    search = "tab=plecs";
+    const pscp = { ...detail, portal_sync: { available: true, reason: null, retry_after_seconds: 0 } };
+    respondWith(base({ "/tenders/t1": pscp }));
+    const { container } = render(<TenderDetailPage />);
+    await screen.findByText("Plec tècnic.pdf");
+
+    const pending: Deferred = { resolve: () => undefined, reject: () => undefined };
+    respondWith(base({ "/tenders/t1": pending }));
+    const before = get.mock.calls.length;
+    await act(async () => {
+      void finishers.sync_portal_documents({ id: "j9", job_type: "sync_portal_documents", tender_id: "t1", status: "succeeded", outcome: "executed", reused_existing: false, result_run_id: null, error_code: null, requested_at: "2026-10-29T16:42:58Z", finished_at: "2026-10-29T16:43:09Z", progress: null });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // Mentre es torna a llegir, la fitxa continua a la pantalla (cap esquelet, la barra hi és).
+    expect(container.querySelectorAll(".animate-skeleton").length).toBe(0);
+    expect(container.querySelector("[data-portal-sync]")).not.toBeNull();
+
+    await act(async () => {
+      pending.resolve({
+        ...pscp,
+        documents: [...pscp.documents, { id: "d4", name: "Preguntes i respostes (PSCP)", document_type: "other", url: "pscp-portal://qa", latest_file: null }],
+        portal_sync: { available: true, reason: null, retry_after_seconds: 300 },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.getByText("Preguntes i respostes (PSCP)")).toBeTruthy();
+    expect(container.querySelector("[data-portal-sync-wait]")?.textContent).toContain("d'aquí a 5 minuts.");
+    expect((screen.getByRole("button", { name: "Actualitza documents de la PSCP" }) as HTMLButtonElement).disabled).toBe(true);
+    const paths = get.mock.calls.slice(before).map((call) => call[0] as string);
+    expect(paths).toContain("/tenders/t1/analysis/requirements?company_id=c1");
+    expect(paths).toContain("/companies/c1/tenders/t1/compliance");
+    expect(paths).toContain("/tenders/t1/history");
+  });
+
   it("Plecs: amb 0 documents, una licitació de la PSCP continua oferint el botó", async () => {
     search = "tab=plecs";
-    respondWith(base({ "/tenders/t1": { ...detail, documents: [], portal_sync: { available: true, reason: null, last_synced_at: null, retry_after_seconds: 0 } } }));
+    respondWith(base({ "/tenders/t1": { ...detail, documents: [], portal_sync: { available: true, reason: null, retry_after_seconds: 0 } } }));
     render(<TenderDetailPage />);
     expect(await screen.findByRole("heading", { name: "Sense documents publicats" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Actualitza documents de la PSCP" })).toBeTruthy();

@@ -518,15 +518,14 @@ export interface TenderDetail {
 
 /**
  * La sincronització amb el portal de la PSCP, tal com la veu la fitxa (global, com la
- * licitació: si l'empresa la pot demanar ho diu `analysis-limits`).
+ * licitació: si l'empresa la pot demanar ho diu `analysis-limits`). Cap data: diria quan
+ * hi va treballar una altra empresa; la de l'empresa surt de les seves peticions.
  */
 export interface TenderPortalSync {
   /** Si la licitació es pot sincronitzar (potser després d'esperar: `retry_after_seconds`). */
   available: boolean;
   /** Per què no: `no_pscp_publication`, `pscp_id_mismatch` o `portal_sync_disabled`. */
   reason: string | null;
-  /** Quan va acabar bé l'última sincronització; `null` si encara no n'hi ha cap. */
-  last_synced_at: string | null;
   /** Segons que faltaven, en llegir la fitxa, per poder-la tornar a demanar; 0 = ja es pot. */
   retry_after_seconds: number;
 }

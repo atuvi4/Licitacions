@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JobRequest } from "@/lib/jobs";
-import type { TenderPortalSync } from "@/lib/tenders";
+import { formatDateTime, type TenderPortalSync } from "@/lib/tenders";
 
 const get = vi.fn();
 const post = vi.fn();
@@ -18,8 +18,9 @@ import { portalSyncOutcome, portalSyncWaitText } from "./portalSyncText";
 
 const ENDPOINT = "/companies/c1/tenders/t1/job-requests/sync-portal-documents";
 const ACTIVE = "/companies/c1/tenders/t1/job-requests?job_type=sync_portal_documents&active=true&limit=1";
+const OWN = "/companies/c1/tenders/t1/job-requests?job_type=sync_portal_documents&limit=20";
 
-const fresh: TenderPortalSync = { available: true, reason: null, last_synced_at: null, retry_after_seconds: 0 };
+const fresh: TenderPortalSync = { available: true, reason: null, retry_after_seconds: 0 };
 
 function job(extra: Partial<JobRequest> = {}): JobRequest {
   return {
@@ -40,7 +41,8 @@ function job(extra: Partial<JobRequest> = {}): JobRequest {
 }
 
 function respond(map: Record<string, unknown>) {
-  get.mockImplementation((path: string) => Promise.resolve(path in map ? map[path] : []));
+  const all: Record<string, unknown> = { [ACTIVE]: [], [OWN]: [], ...map };
+  get.mockImplementation((path: string) => Promise.resolve(path in all ? all[path] : []));
 }
 
 const settle = () =>
@@ -52,18 +54,18 @@ interface HarnessProps {
   portalSync: TenderPortalSync;
   canRequest: boolean;
   permissionKnown: boolean;
-  /** Fals = la fitxa es torna a carregar (esquelet): la barra es desmunta, el hook no. */
+  /** Fals = s'ha canviat de pestanya: la barra es desmunta, el hook (a la fitxa) no. */
   showBar: boolean;
   onChanged: () => Promise<unknown>;
 }
 
-/** Com la fitxa: el hook sempre, la barra només quan hi ha la pestanya. */
+/** Com la fitxa: el hook sempre, la barra només quan hi ha la pestanya Plecs. */
 function Harness({ portalSync, canRequest, permissionKnown, showBar, onChanged }: HarnessProps) {
   const state = usePortalSync("c1", "t1", portalSync, onChanged);
   return showBar ? (
     <PortalSyncBar companyId="c1" portalSync={portalSync} state={state} canRequest={canRequest} permissionKnown={permissionKnown} />
   ) : (
-    <p>esquelet</p>
+    <p>una altra pestanya</p>
   );
 }
 
@@ -76,29 +78,46 @@ function renderBar(props: Partial<Omit<HarnessProps, "onChanged">> = {}) {
 }
 
 const button = () => screen.getByRole("button", { name: /Actualitza documents de la PSCP/ }) as HTMLButtonElement;
+const result = (container: HTMLElement) => container.querySelector("[data-portal-sync-result]")!;
 
 describe("Actualitza documents de la PSCP", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     get.mockReset();
     post.mockReset();
-    respond({ [ACTIVE]: [] });
+    respond({});
   });
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("sense cap sincronització: el botó es pot prémer i diu què fa", async () => {
+  it("sense cap sincronització de l'empresa: el botó es pot prémer i diu què fa", async () => {
     const { container } = renderBar();
     await settle();
     expect(container.querySelector("[data-portal-sync]")?.textContent).toContain("Portal de la PSCP");
-    expect(screen.getByText("Encara no s'ha sincronitzat amb el portal.")).toBeTruthy();
+    expect(screen.getByText("La vostra empresa encara no n'ha demanat cap actualització.")).toBeTruthy();
+    expect(container.textContent).not.toMatch(/\bfeed\b/);
     expect(button().disabled).toBe(false);
   });
 
-  it("prémer-lo demana la feina, en segueix l'estat i, en acabar, torna a carregar la fitxa", async () => {
+  it("la data és la de l'última que ha acabat bé de L'EMPRESA (les seves peticions)", async () => {
+    respond({
+      [OWN]: [
+        job({ id: "j3", status: "failed", error_code: "portal_unavailable", finished_at: "2026-10-29T10:00:00Z" }),
+        job({ id: "j2", status: "succeeded", outcome: "executed", finished_at: "2026-10-28T09:30:00Z" }),
+      ],
+    });
+    renderBar();
+    await settle();
+    expect(get).toHaveBeenCalledWith(OWN);
+    expect(
+      screen.getByText(`Última actualització demanada per la vostra empresa: ${formatDateTime("2026-10-28T09:30:00Z")}.`),
+    ).toBeTruthy();
+  });
+
+  it("prémer-lo demana la feina, en segueix l'estat i, en acabar, torna a carregar la fitxa i ho anuncia", async () => {
     post.mockResolvedValue(job());
-    const { onChanged } = renderBar();
+    const { container, onChanged } = renderBar();
     await settle();
 
     fireEvent.click(button());
@@ -109,43 +128,50 @@ describe("Actualitza documents de la PSCP", () => {
     expect(button().disabled).toBe(true);
     expect(onChanged).not.toHaveBeenCalled();
 
-    respond({ [ACTIVE]: [], "/companies/c1/job-requests/j1": job({ status: "succeeded", outcome: "executed", finished_at: "2026-10-29T16:43:09Z" }) });
+    respond({ "/companies/c1/job-requests/j1": job({ status: "succeeded", outcome: "executed", finished_at: "2026-10-29T16:43:09Z" }) });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2600);
     });
     expect(onChanged).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Documents actualitzats amb el que publica el portal de la PSCP.")).toBeTruthy();
+    const region = result(container);
+    expect(region.getAttribute("role")).toBe("status");
+    expect(region.textContent).toContain("Documents actualitzats amb el que publica el portal de la PSCP.");
+    expect(
+      screen.getByText(`Última actualització demanada per la vostra empresa: ${formatDateTime("2026-10-29T16:43:09Z")}.`),
+    ).toBeTruthy();
   });
 
-  it("el resultat i l'espera nova es veuen encara que la fitxa s'hagi tornat a carregar (la barra es desmunta)", async () => {
+  it("el resultat es conserva si es canvia de pestanya mentre corre, i torna amb l'espera nova", async () => {
     post.mockResolvedValue(job({ started: true }));
-    respond({ [ACTIVE]: [], "/companies/c1/job-requests/j1": job({ status: "succeeded", outcome: "executed" }) });
+    respond({ "/companies/c1/job-requests/j1": job({ status: "succeeded", outcome: "executed", finished_at: "2026-10-29T16:43:09Z" }) });
     const { container, rerender } = renderBar();
     await settle();
     fireEvent.click(button());
     await settle();
+    rerender({ showBar: false });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2600);
     });
-    // La fitxa es torna a carregar: esquelet un moment i després la fitxa nova, amb l'espera del servidor.
-    rerender({ showBar: false });
     expect(container.querySelector("[data-portal-sync]")).toBeNull();
-    rerender({ showBar: true, portalSync: { ...fresh, last_synced_at: "2026-10-29T16:43:09Z", retry_after_seconds: 299 } });
+    // Torna a Plecs amb la fitxa nova, que porta l'espera del servidor.
+    rerender({ showBar: true, portalSync: { ...fresh, retry_after_seconds: 299 } });
     await settle();
-    expect(screen.getByText("Documents actualitzats amb el que publica el portal de la PSCP.")).toBeTruthy();
+    expect(result(container).textContent).toContain("Documents actualitzats amb el que publica el portal de la PSCP.");
     expect(container.querySelector("[data-portal-sync-wait]")?.textContent).toContain("d'aquí a 5 minuts.");
     expect(button().disabled).toBe(true);
   });
 
-  it("acabada fa poc segons la fitxa: no demana res, diu quant falta i es torna a obrir quan passa l'espera", async () => {
-    const { container } = renderBar({
-      portalSync: { ...fresh, last_synced_at: "2026-10-29T16:43:09Z", retry_after_seconds: 240 },
-    });
+  it("acabada fa poc segons la fitxa: desactivat des del primer instant, sense dir quan ni qui, i es torna a obrir", async () => {
+    const { container } = renderBar({ portalSync: { ...fresh, retry_after_seconds: 240 } });
+    // Cap fotograma amb el botó actiu: ja ho és abans de cap efecte.
+    expect(button().disabled).toBe(true);
     await settle();
     const wait = container.querySelector("[data-portal-sync-wait]")!;
-    expect(wait.textContent).toContain("S'ha sincronitzat amb el portal fa poc");
-    expect(wait.textContent).toContain("Es podrà tornar a demanar d'aquí a 4 minuts.");
-    expect(button().disabled).toBe(true);
+    expect(wait.textContent).toBe(
+      "Aquesta licitació s'ha sincronitzat amb el portal fa poc. Es podrà tornar a demanar d'aquí a 4 minuts.",
+    );
+    // El compte enrere no és a la regió que s'anuncia.
+    expect(result(container).contains(wait)).toBe(false);
     fireEvent.click(button());
     expect(post).not.toHaveBeenCalled();
 
@@ -158,21 +184,19 @@ describe("Actualitza documents de la PSCP", () => {
       await vi.advanceTimersByTimeAsync(61_000);
     });
     expect(container.querySelector("[data-portal-sync-wait]")).toBeNull();
-    expect(screen.getByText(/^Última sincronització amb el portal: /)).toBeTruthy();
+    expect(screen.getByText("La vostra empresa encara no n'ha demanat cap actualització.")).toBeTruthy();
     expect(button().disabled).toBe(false);
   });
 
-  it("si una altra sessió s'hi ha avançat (429), espera el que diu el servidor i porta la llista nova", async () => {
-    post.mockRejectedValue(
-      new ApiError(429, "portal_sync_too_soon", "fa molt poc", [], { retry_after_seconds: 90 }),
-    );
+  it("si una altra sessió s'hi ha avançat (429), porta la llista nova, ho diu i espera el que diu el servidor", async () => {
+    post.mockRejectedValue(new ApiError(429, "portal_sync_too_soon", "fa molt poc", [], { retry_after_seconds: 90 }));
     const { container, onChanged } = renderBar();
     await settle();
 
     fireEvent.click(button());
     await settle();
     expect(onChanged).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/ja s'ha sincronitzat amb el portal fa poc: s'ha tornat a carregar la llista/)).toBeTruthy();
+    expect(result(container).textContent).toMatch(/ja s'ha sincronitzat amb el portal fa poc: s'ha tornat a carregar la llista/);
     expect(container.querySelector("[data-portal-sync-wait]")?.textContent).toContain("d'aquí a 2 minuts.");
     expect(button().disabled).toBe(true);
     fireEvent.click(button());
@@ -183,7 +207,7 @@ describe("Actualitza documents de la PSCP", () => {
 
   it("una feina fallada ho diu en català i es pot tornar a demanar de seguida", async () => {
     post.mockResolvedValue(job({ started: true }));
-    respond({ [ACTIVE]: [], "/companies/c1/job-requests/j1": job({ status: "failed", error_code: "portal_unavailable" }) });
+    respond({ "/companies/c1/job-requests/j1": job({ status: "failed", error_code: "portal_unavailable" }) });
     const { container, onChanged } = renderBar();
     await settle();
     fireEvent.click(button());
@@ -193,7 +217,7 @@ describe("Actualitza documents de la PSCP", () => {
       await vi.advanceTimersByTimeAsync(2600);
     });
     expect(onChanged).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("El portal de la PSCP no ha respost. No s'ha canviat cap document.")).toBeTruthy();
+    expect(result(container).textContent).toContain("El portal de la PSCP no ha respost. No s'ha canviat cap document.");
     expect(container.textContent).not.toContain("portal_unavailable");
     expect(button().disabled).toBe(false);
   });

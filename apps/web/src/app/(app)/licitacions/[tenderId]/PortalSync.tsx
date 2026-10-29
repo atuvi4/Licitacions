@@ -9,14 +9,17 @@
  * servidor: la fitxa porta quant en falta (`retry_after_seconds`) i, si una altra sessió
  * s'hi ha avançat, el 429 de la petició també. Mentre dura, el botó no demana res.
  *
- * L'estat viu a `usePortalSync`, que la fitxa crida sempre: tornar-la a carregar la pinta
- * un moment com a esquelet i desmunta la barra, i el resultat de la feina no s'ha de perdre.
+ * Tenant-safe: de la sincronització d'una altra empresa no se'n diu ni quan ni qui; la
+ * data que s'ensenya és la de l'última que ha demanat aquesta empresa (les seves peticions).
+ *
+ * L'estat viu a `usePortalSync`, que la fitxa crida sempre: el resultat no es perd si es
+ * canvia de pestanya mentre la feina corre.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button, ErrorNotice, PermissionNote, ResultNotice, StatusPill } from "@/components/ui";
-import { ApiError } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { type JobRequest, requestPortalSync, useJobRequest } from "@/lib/jobs";
 import { formatDateTime, type TenderPortalSync } from "@/lib/tenders";
 
@@ -31,6 +34,8 @@ import {
 
 /** Cada quant es torna a dir quants minuts falten. */
 const TICK_MS = 15_000;
+/** Quantes peticions pròpies es miren per trobar l'última acabada bé. */
+const OWN_HISTORY = 20;
 
 export interface PortalSyncState {
   /** La petició seguida (la d'aquesta sessió, o l'activa que s'ha trobat en carregar). */
@@ -39,9 +44,10 @@ export interface PortalSyncState {
   submitting: boolean;
   error: string | null;
   notice: string | null;
-  /** Fins quan (ms) no es pot tornar a demanar; `null` si ja es pot. */
-  waitUntil: number | null;
-  now: number;
+  /** Quan va acabar bé l'última sincronització que ha demanat aquesta empresa, o `null`. */
+  lastOwnSyncAt: string | null;
+  /** Quant falta (ms) per poder-la tornar a demanar; `null` si ja es pot. */
+  remainingMs: number | null;
   sync: () => Promise<void>;
 }
 
@@ -58,32 +64,62 @@ export function usePortalSync(
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [waitUntil, setWaitUntil] = useState<number | null>(null);
-  const [now, setNow] = useState(() => Date.now());
+  const [tooSoonUntil, setTooSoonUntil] = useState<number | null>(null);
+  const [lastOwnSyncAt, setLastOwnSyncAt] = useState<string | null>(null);
+  const [, setTick] = useState(0);
+  const company = portalSync ? companyId : null;
 
   // Ha acabat, bé o malament: la fitxa nova porta els documents i l'espera nova.
-  const job = useJobRequest(portalSync ? companyId : null, tenderId, "sync_portal_documents", async () => {
+  const job = useJobRequest(company, tenderId, "sync_portal_documents", async (done) => {
+    if (done.status === "succeeded" && done.finished_at) setLastOwnSyncAt(done.finished_at);
     await onChanged();
   });
 
-  // L'espera que diu la fitxa, comptada des que s'ha llegit.
-  const retryAfter = portalSync?.retry_after_seconds ?? 0;
-  const lastSyncedAt = portalSync?.last_synced_at ?? null;
+  // L'última que ha demanat aquesta empresa: les seves peticions, mai les d'una altra.
   useEffect(() => {
-    const at = Date.now();
-    setNow(at);
-    setWaitUntil(retryAfter > 0 ? at + retryAfter * 1000 : null);
-  }, [retryAfter, lastSyncedAt]);
-
-  useEffect(() => {
-    if (waitUntil === null) return;
-    const tick = setInterval(() => setNow(Date.now()), TICK_MS);
-    const end = setTimeout(() => setWaitUntil(null), Math.max(0, waitUntil - Date.now()));
+    if (!company) return;
+    let cancelled = false;
+    api
+      .get<JobRequest[]>(
+        `/companies/${company}/tenders/${tenderId}/job-requests?job_type=sync_portal_documents&limit=${OWN_HISTORY}`,
+      )
+      .then((requests) => {
+        if (cancelled) return;
+        const last = requests.find((request) => request.status === "succeeded" && request.finished_at);
+        setLastOwnSyncAt((current) => current ?? last?.finished_at ?? null);
+      })
+      .catch(() => undefined);
     return () => {
-      clearInterval(tick);
-      clearTimeout(end);
+      cancelled = true;
     };
-  }, [waitUntil]);
+  }, [company, tenderId]);
+
+  // L'espera que diu la fitxa, comptada des que s'ha llegit (cada lectura és un objecte nou).
+  // Es calcula en pintar: el botó no queda mai actiu ni un instant amb una espera vigent.
+  const serverUntil = useMemo(
+    () =>
+      portalSync && portalSync.retry_after_seconds > 0 ? Date.now() + portalSync.retry_after_seconds * 1000 : null,
+    [portalSync],
+  );
+  const until = Math.max(serverUntil ?? 0, tooSoonUntil ?? 0) || null;
+  const now = Date.now();
+  const remainingMs = until !== null && until > now ? until - now : null;
+
+  // Torna a pintar cada `TICK_MS` mentre dura l'espera, i just quan s'acaba.
+  useEffect(() => {
+    if (until === null) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      const left = until - Date.now();
+      if (left <= 0) return;
+      timer = setTimeout(() => {
+        setTick((count) => count + 1);
+        schedule();
+      }, Math.min(TICK_MS, left + 50));
+    };
+    schedule();
+    return () => clearTimeout(timer);
+  }, [until]);
 
   const { track } = job;
   const sync = useCallback(async () => {
@@ -99,11 +135,9 @@ export function usePortalSync(
         // Una altra sessió (o una altra empresa) l'acaba de sincronitzar: s'espera el que
         // diu el servidor i es porta el que ha trobat.
         const seconds = Number(caught.details.retry_after_seconds);
-        const at = Date.now();
-        setNow(at);
-        setWaitUntil(at + (Number.isFinite(seconds) && seconds > 0 ? seconds : 60) * 1000);
-        setNotice("Aquesta licitació ja s'ha sincronitzat amb el portal fa poc: s'ha tornat a carregar la llista de documents.");
+        setTooSoonUntil(Date.now() + (Number.isFinite(seconds) && seconds > 0 ? seconds : 60) * 1000);
         await onChanged();
+        setNotice("Aquesta licitació ja s'ha sincronitzat amb el portal fa poc: s'ha tornat a carregar la llista de documents.");
       } else {
         setError(portalSyncRequestErrorText(code));
         // El servidor diu que ara no es pot: la fitxa nova en dirà el motiu.
@@ -114,7 +148,7 @@ export function usePortalSync(
     }
   }, [companyId, tenderId, track, onChanged]);
 
-  return { request: job.request, active: job.active, submitting, error, notice, waitUntil, now, sync };
+  return { request: job.request, active: job.active, submitting, error, notice, lastOwnSyncAt, remainingMs, sync };
 }
 
 export function PortalSyncBar({
@@ -132,9 +166,8 @@ export function PortalSyncBar({
   /** `analysis-limits` ja ha respost: fins llavors no es diu res del permís. */
   permissionKnown: boolean;
 }) {
-  const { request, active, submitting, error, notice, waitUntil, now } = state;
-  const lastSyncedAt = portalSync.last_synced_at;
-  const waiting = waitUntil !== null;
+  const { request, active, submitting, error, notice, lastOwnSyncAt, remainingMs } = state;
+  const waiting = remainingMs !== null;
   const outcome = portalSyncOutcome(request);
   const disabled = !companyId || !portalSync.available || !canRequest || submitting || active || waiting;
 
@@ -151,16 +184,16 @@ export function PortalSyncBar({
   } else if (waiting) {
     status = (
       <p className="text-[13px] text-ink" data-portal-sync-wait>
-        S&apos;ha sincronitzat amb el portal fa poc{lastSyncedAt ? ` (${formatDateTime(lastSyncedAt)})` : ""}. Es podrà
-        tornar a demanar {portalSyncWaitText(waitUntil - now)}.
+        Aquesta licitació s&apos;ha sincronitzat amb el portal fa poc. Es podrà tornar a demanar{" "}
+        {portalSyncWaitText(remainingMs ?? 0)}.
       </p>
     );
   } else {
     status = (
       <p className="text-[13px] text-muted">
-        {lastSyncedAt
-          ? `Última sincronització amb el portal: ${formatDateTime(lastSyncedAt)}.`
-          : "Encara no s'ha sincronitzat amb el portal."}
+        {lastOwnSyncAt
+          ? `Última actualització demanada per la vostra empresa: ${formatDateTime(lastOwnSyncAt)}.`
+          : "La vostra empresa encara no n'ha demanat cap actualització."}
       </p>
     );
   }
@@ -181,11 +214,11 @@ export function PortalSyncBar({
   return (
     <div data-portal-sync className="space-y-2 border-b border-border px-5 py-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 space-y-1" aria-live="polite">
+        <div className="min-w-0 space-y-1">
           <p className="text-[13px] font-medium text-ink">Portal de la PSCP</p>
           <p className="text-caption text-muted">
-            Hi afegeix els annexos, les esmenes i les preguntes i respostes que l&apos;òrgan publica al portal i que el feed
-            no porta.
+            Afegeix a la llista els annexos, les esmenes i les preguntes i respostes que l&apos;òrgan publica al portal i
+            que la font no inclou.
           </p>
           {status}
         </div>
@@ -203,18 +236,21 @@ export function PortalSyncBar({
           )}
         </div>
       </div>
-      {error ? (
-        <ErrorNotice message={error} />
-      ) : notice ? (
-        <ResultNotice message={notice} />
-      ) : (
-        outcome &&
-        (outcome.tone === "error" ? (
-          <ErrorNotice message={outcome.message} />
+      {/* Només els canvis d'estat s'anuncien: el compte enrere queda fora d'aquesta regió. */}
+      <div role="status" aria-live="polite" data-portal-sync-result className="empty:hidden">
+        {error ? (
+          <ErrorNotice message={error} />
+        ) : notice ? (
+          <ResultNotice message={notice} />
         ) : (
-          <ResultNotice tone={outcome.tone} message={outcome.message} detail={outcome.detail} />
-        ))
-      )}
+          outcome &&
+          (outcome.tone === "error" ? (
+            <ErrorNotice message={outcome.message} />
+          ) : (
+            <ResultNotice tone={outcome.tone} message={outcome.message} detail={outcome.detail} />
+          ))
+        )}
+      </div>
     </div>
   );
 }

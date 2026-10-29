@@ -257,7 +257,6 @@ async def test_a_failed_sync_can_be_asked_again_at_once(db, session_factory, cli
     view, _ = await _run_one(db, session_factory, client_a, company, tender, fake)
     assert view["error_code"] == "portal_unavailable"
     detail = await client_a.get(f"/api/v1/tenders/{tender.id}")
-    assert detail.json()["portal_sync"]["last_synced_at"] is None
     assert detail.json()["portal_sync"]["retry_after_seconds"] == 0
 
     again = await client_a.post(endpoint(company.id, tender.id))
@@ -282,14 +281,13 @@ async def test_the_detail_says_a_pscp_tender_can_be_synced_and_how_long_to_wait(
     assert before.json()["portal_sync"] == {
         "available": True,
         "reason": None,
-        "last_synced_at": None,
         "retry_after_seconds": 0,
     }
 
     await _run_one(db, session_factory, client_a, company, tender, fake)
 
     after = (await client_a.get(f"/api/v1/tenders/{tender.id}")).json()["portal_sync"]
-    assert after["available"] is True and after["last_synced_at"] is not None
+    assert after["available"] is True
     assert 0 < after["retry_after_seconds"] <= settings.PSCP_PORTAL_MIN_INTERVAL_SECONDS
     # La peticio aplica la mateixa espera i la diu tambe amb la capcalera estandard.
     too_soon = await client_a.post(endpoint(company.id, tender.id))
@@ -299,32 +297,70 @@ async def test_the_detail_says_a_pscp_tender_can_be_synced_and_how_long_to_wait(
 
     job = await db.scalar(
         sa.select(WorkJob)
-        .where(WorkJob.tender_id == tender.id)
+        .where(
+            WorkJob.tender_id == tender.id,
+            WorkJob.job_type == WorkJobType.SYNC_PORTAL_DOCUMENTS,
+        )
         .execution_options(populate_existing=True)
     )
     job.finished_at = job.finished_at - timedelta(seconds=settings.PSCP_PORTAL_MIN_INTERVAL_SECONDS)
     await db.commit()
     later = (await client_a.get(f"/api/v1/tenders/{tender.id}")).json()["portal_sync"]
-    assert later["retry_after_seconds"] == 0 and later["last_synced_at"] is not None
+    assert later == {"available": True, "reason": None, "retry_after_seconds": 0}
+
+
+async def test_another_company_learns_only_the_wait_never_when_or_who(
+    db, session_factory, client_a, client_b, tenant_a, tenant_b
+):
+    """Tenant-safe: la fitxa no diu quan va sincronitzar una altra empresa (ni que ho fes).
+    Durant l'espera en diu el mateix que el 429 que rebria en demanar-la; despres, res."""
+    _, company = tenant_a
+    _, other = tenant_b
+    fake = pineda()
+    tender = await pineda_with_feed(db, fake)
+    await _run_one(db, session_factory, client_a, company, tender, fake)
+
+    seen = (await client_b.get(f"/api/v1/tenders/{tender.id}")).json()["portal_sync"]
+    assert set(seen) == {"available", "reason", "retry_after_seconds"}
+    assert 0 < seen["retry_after_seconds"] <= settings.PSCP_PORTAL_MIN_INTERVAL_SECONDS
+    mine = await client_b.get(
+        f"/api/v1/companies/{other.id}/tenders/{tender.id}/job-requests",
+        params={"job_type": "sync_portal_documents"},
+    )
+    assert mine.status_code == 200 and mine.json() == []
+
+    job = await db.scalar(
+        sa.select(WorkJob)
+        .where(
+            WorkJob.tender_id == tender.id,
+            WorkJob.job_type == WorkJobType.SYNC_PORTAL_DOCUMENTS,
+        )
+        .execution_options(populate_existing=True)
+    )
+    job.finished_at = job.finished_at - timedelta(seconds=settings.PSCP_PORTAL_MIN_INTERVAL_SECONDS)
+    await db.commit()
+    later = (await client_b.get(f"/api/v1/tenders/{tender.id}")).json()["portal_sync"]
+    assert later == {"available": True, "reason": None, "retry_after_seconds": 0}
 
 
 async def test_the_detail_says_why_a_pscp_tender_cannot_be_synced(db, client_a, monkeypatch):
     tender = await public_tender(db, PINEDA, PINEDA_CURRENT)
     tender.source_url = "https://contrataciondelestado.es/wps/poc?uri=deeplink:detalle_licitacion"
     await db.commit()
-
     other = (await client_a.get(f"/api/v1/tenders/{tender.id}")).json()["portal_sync"]
-    assert other == {
-        "available": False,
-        "reason": "no_pscp_publication",
-        "last_synced_at": None,
-        "retry_after_seconds": 0,
-    }
+    assert other == {"available": False, "reason": "no_pscp_publication", "retry_after_seconds": 0}
+
+    # La fitxa de la PSCP es d'un altre expedient que el del `pscp_id_intern`.
+    mismatch = await public_tender(db, PINEDA, PINEDA_CURRENT)
+    mismatch.source_metadata = {"pscp_id_intern": "00000000-0000-0000-0000-000000000000"}
+    await db.commit()
+    wrong = (await client_a.get(f"/api/v1/tenders/{mismatch.id}")).json()["portal_sync"]
+    assert wrong == {"available": False, "reason": "pscp_id_mismatch", "retry_after_seconds": 0}
 
     monkeypatch.setattr(settings, "PSCP_PORTAL_ENABLED", False)
     pscp = await public_tender(db, PINEDA, PINEDA_CURRENT)
     off = (await client_a.get(f"/api/v1/tenders/{pscp.id}")).json()["portal_sync"]
-    assert off["available"] is False and off["reason"] == "portal_sync_disabled"
+    assert off == {"available": False, "reason": "portal_sync_disabled", "retry_after_seconds": 0}
 
 
 async def test_the_detail_has_no_portal_sync_outside_the_pscp(db, client_a, tenant_a):

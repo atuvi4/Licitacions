@@ -157,7 +157,7 @@ function TenderDetail() {
   }, [urlTab]);
 
   const { companyId } = useSession();
-  const { data, loading, error, status, reload } = useResource<TenderDetail>(`/tenders/${tenderId}`);
+  const { data, error, status, reload } = useResource<TenderDetail>(`/tenders/${tenderId}`);
   const revisions = useResource<TenderRevision[]>(`/tenders/${tenderId}/revisions`);
   const history = useResource<TenderHistoryRevision[]>(`/tenders/${tenderId}/history`);
   // Pot no existir (404) si encara no s'ha calculat: el Resum ho explica.
@@ -238,9 +238,12 @@ function TenderDetail() {
     }
     await reloadLifecycle();
   });
-  // Aquí i no a la pestanya: tornar a carregar la fitxa desmunta Plecs un moment, i el
-  // resultat de la sincronització s'ha de continuar veient després.
-  const portalSync = usePortalSync(companyId, tenderId, data?.portal_sync ?? null, reloadLifecycle);
+  // Aquí i no a la pestanya: el resultat de la sincronització no es perd si es canvia de
+  // pestanya. Uns documents nous poden deixar endarrerides l'anàlisi i el compliment.
+  const reloadAfterPortalSync = useCallback(async () => {
+    await Promise.all([reloadLifecycle(), reloadAnalysis()]);
+  }, [reloadLifecycle, reloadAnalysis]);
+  const portalSync = usePortalSync(companyId, tenderId, data?.portal_sync ?? null, reloadAfterPortalSync);
   const limits = useResource<AnalysisLimits>(companyId ? `/companies/${companyId}/analysis-limits` : null);
   const canProcess = limits.data?.can_process_documents ?? false;
   const processing = submittingProcess || processJob.active || !canProcess;
@@ -300,7 +303,9 @@ function TenderDetail() {
     );
   }
 
-  if (loading || !data) {
+  // L'esquelet només fins a tenir la fitxa d'AQUESTA licitació: tornar-la a llegir (després
+  // de processar o de sincronitzar) no buida la pantalla ni fa perdre la posició ni els avisos.
+  if (!data || data.id !== tenderId) {
     return <PageSkeleton variant="detail" context="carregant la licitació…" />;
   }
 
