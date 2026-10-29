@@ -585,6 +585,50 @@ async def submit_process_request(
     raise OperationBusyError("No s'ha pogut registrar la peticio ara mateix. Torna-ho a provar.")
 
 
+@dataclass(frozen=True, slots=True)
+class PortalSyncStatus:
+    """Si una licitacio es pot sincronitzar amb el portal de la PSCP, i quan.
+
+    Una sola regla per a la fitxa (que ho ensenya abans de demanar res, Bloc 2 etapa 3) i
+    per a `submit_portal_sync_request` (que la fa complir).
+    """
+
+    #: Per que no es pot sincronitzar (`private_tender`, `no_pscp_publication`,
+    #: `pscp_id_mismatch`, `portal_sync_disabled`), o `None` si es pot.
+    reason: str | None
+    #: Quan va acabar be l'ultima sincronitzacio (UTC), o `None` si no n'hi ha cap.
+    last_synced_at: datetime | None
+    #: Segons que falten per poder-la tornar a demanar; 0 = ja es pot.
+    retry_after_seconds: int
+
+
+async def portal_sync_status(session: AsyncSession, tender: Tender) -> PortalSyncStatus:
+    """L'estat de la sincronitzacio d'una licitacio (lectura). No mira qui la demana."""
+    _ref, reason = sync_target(
+        tender.owner_company_id,
+        tender.source_url,
+        (tender.source_metadata or {}).get("pscp_id_intern"),
+    )
+    if reason is None and not settings.PSCP_PORTAL_ENABLED:
+        reason = "portal_sync_disabled"
+    # Nomes una sincronitzacio acabada be: una de fallada (portal caigut, conflicte, connector
+    # apagat) es pot tornar a demanar de seguida.
+    last_finished = await session.scalar(
+        sa.select(sa.func.max(WorkJob.finished_at)).where(
+            WorkJob.tender_id == tender.id,
+            WorkJob.job_type == WorkJobType.SYNC_PORTAL_DOCUMENTS,
+            WorkJob.status == WorkJobStatus.SUCCEEDED,
+        )
+    )
+    wait = 0
+    if last_finished is not None:
+        if last_finished.tzinfo is None:
+            last_finished = last_finished.replace(tzinfo=UTC)
+        elapsed = (utcnow() - last_finished).total_seconds()
+        wait = max(0, math.ceil(settings.PSCP_PORTAL_MIN_INTERVAL_SECONDS - elapsed))
+    return PortalSyncStatus(reason=reason, last_synced_at=last_finished, retry_after_seconds=wait)
+
+
 async def submit_portal_sync_request(
     session: AsyncSession,
     *,
@@ -602,35 +646,17 @@ async def submit_portal_sync_request(
     tender = await _load_tender(session, tender_id, company_id)
     if not settings.PSCP_PORTAL_ENABLED:
         raise PortalSyncDisabledError("La sincronitzacio amb el portal de la PSCP no es activa.")
-    _ref, reason = sync_target(
-        tender.owner_company_id,
-        tender.source_url,
-        (tender.source_metadata or {}).get("pscp_id_intern"),
-    )
-    if reason is not None:
+    state = await portal_sync_status(session, tender)
+    if state.reason is not None:
         raise PortalSyncNotAvailableError(
             "Aquesta licitacio no te cap publicacio de la PSCP per sincronitzar.",
-            details={"reason": reason},
+            details={"reason": state.reason},
         )
-    # Nomes una sincronitzacio acabada be: una de fallada (portal caigut, conflicte, connector
-    # apagat) es pot tornar a demanar de seguida.
-    last_finished = await session.scalar(
-        sa.select(sa.func.max(WorkJob.finished_at)).where(
-            WorkJob.tender_id == tender_id,
-            WorkJob.job_type == WorkJobType.SYNC_PORTAL_DOCUMENTS,
-            WorkJob.status == WorkJobStatus.SUCCEEDED,
+    if state.retry_after_seconds > 0:
+        raise PortalSyncTooSoonError(
+            "Aquesta licitacio s'ha sincronitzat amb el portal fa molt poc.",
+            details={"retry_after_seconds": state.retry_after_seconds},
         )
-    )
-    if last_finished is not None:
-        if last_finished.tzinfo is None:
-            last_finished = last_finished.replace(tzinfo=UTC)
-        elapsed = (utcnow() - last_finished).total_seconds()
-        wait = settings.PSCP_PORTAL_MIN_INTERVAL_SECONDS - elapsed
-        if wait > 0:
-            raise PortalSyncTooSoonError(
-                "Aquesta licitacio s'ha sincronitzat amb el portal fa molt poc.",
-                details={"retry_after_seconds": math.ceil(wait)},
-            )
 
     parameters = PortalSyncParams().model_dump(mode="json")
     dedupe_key = portal_sync_dedupe_key(tender_id=tender_id)

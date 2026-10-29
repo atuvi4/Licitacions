@@ -65,6 +65,7 @@ import { extractedText, fileErrorText, isQueued, jobPill, originHref, readingLab
 import { topLevelDocuments } from "./package";
 import { LotAmountValue, LotsPscpNote, PscpAttribution, PscpBudgetValue } from "./BudgetWithTax";
 import { DocumentBadges, PackageNotice, PlecsReadingLine, RemovedDocuments } from "./PlecsOverview";
+import { PortalSyncBar, usePortalSync } from "./PortalSync";
 import {
   amountFact,
   amountMeta,
@@ -237,6 +238,9 @@ function TenderDetail() {
     }
     await reloadLifecycle();
   });
+  // Aquí i no a la pestanya: tornar a carregar la fitxa desmunta Plecs un moment, i el
+  // resultat de la sincronització s'ha de continuar veient després.
+  const portalSync = usePortalSync(companyId, tenderId, data?.portal_sync ?? null, reloadLifecycle);
   const limits = useResource<AnalysisLimits>(companyId ? `/companies/${companyId}/analysis-limits` : null);
   const canProcess = limits.data?.can_process_documents ?? false;
   const processing = submittingProcess || processJob.active || !canProcess;
@@ -898,6 +902,16 @@ function TenderDetail() {
               description="Processa un plec per descarregar-ne l'original i extreure'n el text per pàgina. La selecció només governa el processament; no limita quins documents utilitza l'anàlisi de requisits."
               action={jobStatus ? <StatusPill level={jobStatus.level}>{jobStatus.label}</StatusPill> : undefined}
             />
+            {/* Bloc 2, etapa 3: només a una licitació de la PSCP (també amb 0 documents). */}
+            {data.portal_sync && (
+              <PortalSyncBar
+                companyId={companyId}
+                portalSync={data.portal_sync}
+                state={portalSync}
+                canRequest={canProcess}
+                permissionKnown={Boolean(limits.data)}
+              />
+            )}
             {/* També amb 0 documents vigents (N4): «Cap document analitzable» i l'estat del paquet. */}
             <div className="space-y-2 border-b border-border px-5 py-3">
               <PlecsReadingLine documents={data.documents} />

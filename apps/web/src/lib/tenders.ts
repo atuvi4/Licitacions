@@ -512,6 +512,23 @@ export interface TenderDetail {
   traceability: TenderTraceability | null;
   /** F-06a: el PBL amb IVA segons la PSCP (i, F-06e, el PBL sense IVA i el VEC de cada lot); vegeu `lib/pscpAmounts`. */
   budget_with_tax_observations?: BudgetWithTaxObservations | null;
+  /** Bloc 2, etapa 3: només a una licitació pública de la PSCP; absent o `null` a qualsevol altra. */
+  portal_sync?: TenderPortalSync | null;
+}
+
+/**
+ * La sincronització amb el portal de la PSCP, tal com la veu la fitxa (global, com la
+ * licitació: si l'empresa la pot demanar ho diu `analysis-limits`).
+ */
+export interface TenderPortalSync {
+  /** Si la licitació es pot sincronitzar (potser després d'esperar: `retry_after_seconds`). */
+  available: boolean;
+  /** Per què no: `no_pscp_publication`, `pscp_id_mismatch` o `portal_sync_disabled`. */
+  reason: string | null;
+  /** Quan va acabar bé l'última sincronització; `null` si encara no n'hi ha cap. */
+  last_synced_at: string | null;
+  /** Segons que faltaven, en llegir la fitxa, per poder-la tornar a demanar; 0 = ja es pot. */
+  retry_after_seconds: number;
 }
 
 /**

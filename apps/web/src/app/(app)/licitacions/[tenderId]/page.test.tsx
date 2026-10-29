@@ -285,6 +285,30 @@ describe("Fitxa de licitació", () => {
     for (const button of buttons) expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("Plecs: una licitació de la PSCP porta «Actualitza documents de la PSCP»; una altra no", async () => {
+    search = "tab=plecs";
+    respondWith(base({ "/tenders/t1": { ...detail, portal_sync: { available: true, reason: null, last_synced_at: null, retry_after_seconds: 0 } } }));
+    const first = render(<TenderDetailPage />);
+    await screen.findByText("Plec tècnic.pdf");
+    expect(first.container.querySelector("[data-portal-sync]")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "Actualitza documents de la PSCP" }) as HTMLButtonElement).disabled).toBe(false);
+    first.unmount();
+
+    respondWith(base());
+    const other = render(<TenderDetailPage />);
+    await screen.findByText("Plec tècnic.pdf");
+    expect(other.container.querySelector("[data-portal-sync]")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Actualitza documents de la PSCP/ })).toBeNull();
+  });
+
+  it("Plecs: amb 0 documents, una licitació de la PSCP continua oferint el botó", async () => {
+    search = "tab=plecs";
+    respondWith(base({ "/tenders/t1": { ...detail, documents: [], portal_sync: { available: true, reason: null, last_synced_at: null, retry_after_seconds: 0 } } }));
+    render(<TenderDetailPage />);
+    expect(await screen.findByRole("heading", { name: "Sense documents publicats" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Actualitza documents de la PSCP" })).toBeTruthy();
+  });
+
   it("Plecs: sense documents → buit amb sortida a la font", async () => {
     search = "tab=plecs";
     respondWith(base({ "/tenders/t1": { ...detail, documents: [] } }));

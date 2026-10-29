@@ -33,6 +33,7 @@ from app.api.v1.tender_filters import (
 )
 from app.core.config import settings
 from app.core.errors import NotFoundError, PayloadTooLargeError
+from app.jobs.requests import portal_sync_status
 from app.matching.service import MatchingService
 from app.models.audit import AuditAction
 from app.models.cpv import CPVCode
@@ -69,6 +70,7 @@ from app.schemas.tenders import (
     TenderLotRead,
     TenderPackageGapRead,
     TenderPackageRead,
+    TenderPortalSyncRead,
     TenderRevisionRead,
     TenderTraceability,
     analysis_status_for,
@@ -668,6 +670,17 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
     budget_observations = await amount_observations.load(
         session, tender.id, {lot.id for lot in tender.lots if lot.removed_at is None}
     )
+    # Bloc 2, etapa 3: nomes una licitacio publica de la PSCP porta l'estat de la
+    # sincronitzacio amb el portal (la mateixa regla que aplica la peticio).
+    portal_sync = None
+    if tender.owner_company_id is None and (tender.source_metadata or {}).get("pscp_id_intern"):
+        state = await portal_sync_status(session, tender)
+        portal_sync = TenderPortalSyncRead(
+            available=state.reason is None,
+            reason=state.reason,
+            last_synced_at=state.last_synced_at,
+            retry_after_seconds=state.retry_after_seconds,
+        )
 
     return TenderDetail(
         id=tender.id,
@@ -763,6 +776,7 @@ async def _tender_detail(session, tender_id: uuid.UUID, user_id: uuid.UUID) -> T
         blocks=[TenderBlockRead.model_validate(block) for block in tender.blocks],
         sites=[TenderSiteRead.model_validate(site) for site in tender.sites],
         budget_with_tax_observations=budget_observations,
+        portal_sync=portal_sync,
     )
 
 

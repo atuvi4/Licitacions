@@ -408,6 +408,23 @@ class BudgetWithTaxObservations(ORMModel):
     source_updated_at: datetime | None = None
 
 
+class TenderPortalSyncRead(APIModel):
+    """La sincronitzacio amb el portal de la PSCP vista des de la fitxa (Bloc 2, etapa 3).
+
+    Global, com la licitacio: no depen de l'empresa ni del rol (`analysis-limits` diu si
+    l'empresa la pot demanar). `available` diu si la licitacio es pot sincronitzar; que
+    calgui esperar ho diu `retry_after_seconds`.
+    """
+
+    available: bool
+    #: Per que no es pot (`no_pscp_publication`, `pscp_id_mismatch`, `portal_sync_disabled`).
+    reason: str | None = None
+    #: Quan va acabar be l'ultima sincronitzacio, o `None` si encara no n'hi ha cap.
+    last_synced_at: datetime | None = None
+    #: Segons que falten, quan s'ha llegit la fitxa, per poder-la tornar a demanar; 0 = ja es pot.
+    retry_after_seconds: int = 0
+
+
 class TenderDetail(ORMModel):
     id: uuid.UUID
     external_id: str
@@ -463,6 +480,9 @@ class TenderDetail(ORMModel):
     budget_with_tax_observations: BudgetWithTaxObservations = Field(
         default_factory=BudgetWithTaxObservations
     )
+    #: Nomes a una licitacio publica de la PSCP (amb `pscp_id_intern`): la fitxa hi ensenya
+    #: el boto «Actualitza documents de la PSCP». `None` a qualsevol altra.
+    portal_sync: TenderPortalSyncRead | None = None
 
 
 class IngestionRunRead(ORMModel):

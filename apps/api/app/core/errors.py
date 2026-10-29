@@ -287,9 +287,17 @@ _STATUS_CODE_NAMES = {
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error_handler(_: Request, exc: AppError) -> JSONResponse:
+        # Un 429 que sap quant cal esperar ho diu tambe amb la capcalera estandard.
+        retry_after = exc.details.get("retry_after_seconds")
+        headers = (
+            {"Retry-After": str(retry_after)}
+            if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS and isinstance(retry_after, int)
+            else None
+        )
         return JSONResponse(
             status_code=exc.status_code,
             content=error_payload(exc.code, exc.message, exc.details),
+            headers=headers,
         )
 
     @app.exception_handler(StarletteHTTPException)

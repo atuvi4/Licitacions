@@ -286,6 +286,11 @@ export function requestProcessing(companyId: string, tenderId: string, documentI
   );
 }
 
+/** Demana la sincronització de la licitació amb el portal de la PSCP (Bloc 2, etapes 2-3). */
+export function requestPortalSync(companyId: string, tenderId: string) {
+  return api.post<JobRequest>(`/companies/${companyId}/tenders/${tenderId}/job-requests/sync-portal-documents`, {});
+}
+
 /**
  * Segueix una petició fins que acaba. `onFinished` es crida un sol cop, amb la
  * petició final (també si ha fallat).
