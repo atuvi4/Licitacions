@@ -34,8 +34,8 @@ import {
 
 /** Cada quant es torna a dir quants minuts falten. */
 const TICK_MS = 15_000;
-/** Quantes peticions pròpies es miren per trobar l'última acabada bé. */
-const OWN_HISTORY = 20;
+/** Quantes peticions pròpies es miren per trobar l'última acabada bé (el màxim de l'API). */
+const OWN_HISTORY = 100;
 
 export interface PortalSyncState {
   /** La petició seguida (la d'aquesta sessió, o l'activa que s'ha trobat en carregar). */
@@ -169,6 +169,7 @@ export function PortalSyncBar({
   const { request, active, submitting, error, notice, lastOwnSyncAt, remainingMs } = state;
   const waiting = remainingMs !== null;
   const outcome = portalSyncOutcome(request);
+  const hasResult = Boolean(error || notice || outcome);
   const disabled = !companyId || !portalSync.available || !canRequest || submitting || active || waiting;
 
   let status: React.ReactNode;
@@ -193,7 +194,7 @@ export function PortalSyncBar({
       <p className="text-[13px] text-muted">
         {lastOwnSyncAt
           ? `Última actualització demanada per la vostra empresa: ${formatDateTime(lastOwnSyncAt)}.`
-          : "La vostra empresa encara no n'ha demanat cap actualització."}
+          : "Encara no consta cap actualització de la vostra empresa que hagi acabat bé."}
       </p>
     );
   }
@@ -212,7 +213,7 @@ export function PortalSyncBar({
   );
 
   return (
-    <div data-portal-sync className="space-y-2 border-b border-border px-5 py-3">
+    <div data-portal-sync className="border-b border-border px-5 py-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 space-y-1">
           <p className="text-[13px] font-medium text-ink">Portal de la PSCP</p>
@@ -236,8 +237,9 @@ export function PortalSyncBar({
           )}
         </div>
       </div>
-      {/* Només els canvis d'estat s'anuncien: el compte enrere queda fora d'aquesta regió. */}
-      <div role="status" aria-live="polite" data-portal-sync-result className="empty:hidden">
+      {/* Només els canvis d'estat s'anuncien: el compte enrere queda fora d'aquesta regió. La regió
+          hi és sempre (buida, sense alçada): una que apareix amb el missatge no s'anuncia. */}
+      <div role="status" aria-live="polite" data-portal-sync-result className={hasResult ? "mt-2" : undefined}>
         {error ? (
           <ErrorNotice message={error} />
         ) : notice ? (

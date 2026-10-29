@@ -18,7 +18,7 @@ import { portalSyncOutcome, portalSyncWaitText } from "./portalSyncText";
 
 const ENDPOINT = "/companies/c1/tenders/t1/job-requests/sync-portal-documents";
 const ACTIVE = "/companies/c1/tenders/t1/job-requests?job_type=sync_portal_documents&active=true&limit=1";
-const OWN = "/companies/c1/tenders/t1/job-requests?job_type=sync_portal_documents&limit=20";
+const OWN = "/companies/c1/tenders/t1/job-requests?job_type=sync_portal_documents&limit=100";
 
 const fresh: TenderPortalSync = { available: true, reason: null, retry_after_seconds: 0 };
 
@@ -95,7 +95,10 @@ describe("Actualitza documents de la PSCP", () => {
     const { container } = renderBar();
     await settle();
     expect(container.querySelector("[data-portal-sync]")?.textContent).toContain("Portal de la PSCP");
-    expect(screen.getByText("La vostra empresa encara no n'ha demanat cap actualització.")).toBeTruthy();
+    // La regió que s'anuncia hi és des del principi (buida), no apareix amb el missatge.
+    expect(result(container).getAttribute("role")).toBe("status");
+    expect(result(container).textContent).toBe("");
+    expect(screen.getByText("Encara no consta cap actualització de la vostra empresa que hagi acabat bé.")).toBeTruthy();
     expect(container.textContent).not.toMatch(/\bfeed\b/);
     expect(button().disabled).toBe(false);
   });
@@ -184,7 +187,7 @@ describe("Actualitza documents de la PSCP", () => {
       await vi.advanceTimersByTimeAsync(61_000);
     });
     expect(container.querySelector("[data-portal-sync-wait]")).toBeNull();
-    expect(screen.getByText("La vostra empresa encara no n'ha demanat cap actualització.")).toBeTruthy();
+    expect(screen.getByText("Encara no consta cap actualització de la vostra empresa que hagi acabat bé.")).toBeTruthy();
     expect(button().disabled).toBe(false);
   });
 

@@ -9,13 +9,14 @@ const post = vi.fn();
 const push = vi.fn();
 const replace = vi.fn();
 let search = "";
+let tenderParam = "t1";
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: { ...actual.api, get: (...args: unknown[]) => get(...args), post: (...args: unknown[]) => post(...args) } };
 });
 vi.mock("@/components/SessionProvider", () => ({ useSession: () => ({ companyId: "c1" }) }));
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ tenderId: "t1" }),
+  useParams: () => ({ tenderId: tenderParam }),
   useRouter: () => ({ push, replace, refresh: vi.fn() }),
   usePathname: () => "/licitacions/t1",
   useSearchParams: () => new URLSearchParams(search),
@@ -137,6 +138,7 @@ describe("Fitxa de licitació", () => {
     track.mockReset();
     jobRequest = null;
     search = "";
+    tenderParam = "t1";
   });
 
   it("mentre carrega pinta l'esquelet de detall amb context real", async () => {
@@ -345,6 +347,16 @@ describe("Fitxa de licitació", () => {
     expect(paths).toContain("/tenders/t1/analysis/requirements?company_id=c1");
     expect(paths).toContain("/companies/c1/tenders/t1/compliance");
     expect(paths).toContain("/tenders/t1/history");
+  });
+
+  it("un enllaç amb el UUID escrit d'una altra manera (majúscules) mostra la fitxa, no l'esquelet per sempre", async () => {
+    tenderParam = "T1";
+    respondWith(base());
+    const inner = get.getMockImplementation()!;
+    get.mockImplementation((path: string) => inner(path.replace("/tenders/T1", "/tenders/t1")));
+    const { container } = render(<TenderDetailPage />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Desplegament de xarxa de fibra òptica" })).toBeTruthy();
+    expect(container.querySelectorAll(".animate-skeleton").length).toBe(0);
   });
 
   it("Plecs: amb 0 documents, una licitació de la PSCP continua oferint el botó", async () => {

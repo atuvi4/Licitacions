@@ -31,6 +31,15 @@ export const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "historial", label: "Historial" },
 ];
 
+/**
+ * La mateixa licitació, encara que l'enllaç escrigui el UUID d'una altra manera (majúscules,
+ * sense guions o entre claus): l'API l'accepta i torna sempre la forma canònica.
+ */
+export function sameTender(a: string, b: string): boolean {
+  const canonical = (id: string) => id.toLowerCase().replace(/^urn:uuid:/, "").replace(/[{}-]/g, "");
+  return canonical(a) === canonical(b);
+}
+
 export function tabFromParam(value: string | null): TabKey {
   return TABS.some((tab) => tab.key === value) ? (value as TabKey) : "resum";
 }

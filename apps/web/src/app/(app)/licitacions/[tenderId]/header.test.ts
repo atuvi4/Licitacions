@@ -13,6 +13,7 @@ import {
   candidatureMeta,
   deadlineMeta,
   requirementsLine,
+  sameTender,
   tabFromParam,
   tabItems,
 } from "./header";
@@ -216,5 +217,16 @@ describe("termini, import i candidatura", () => {
     expect(candidatureMeta(coverage("absent"))?.status.label).toBe("Pendent d'anàlisi");
     expect(candidatureMeta(coverage("stale"))?.status.label).toBe("Anàlisi obsoleta");
     expect(candidatureMeta(coverage("current"))?.status.label).toBe("En anàlisi");
+  });
+});
+
+describe("sameTender", () => {
+  it("el mateix UUID escrit d'una altra manera és la mateixa licitació; un altre, no", () => {
+    const id = "738acb6b-e035-45c4-8e27-9a3b8b9ee4f2";
+    expect(sameTender(id, id)).toBe(true);
+    expect(sameTender(id, id.toUpperCase())).toBe(true);
+    expect(sameTender(id, id.replace(/-/g, ""))).toBe(true);
+    expect(sameTender(id, `{${id}}`)).toBe(true);
+    expect(sameTender(id, "fa687c23-f80d-45b6-8e5e-cf74374b6d70")).toBe(false);
   });
 });

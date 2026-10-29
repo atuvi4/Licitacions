@@ -72,6 +72,7 @@ import {
   candidatureMeta,
   deadlineMeta,
   requirementsLine,
+  sameTender,
   tabFromParam,
   tabItems,
   type TabKey,
@@ -275,7 +276,9 @@ function TenderDetail() {
     setSelected(new Set());
   }
 
-  if (error && !data) {
+  // La fitxa que hi ha és d'una altra licitació (s'ha canviat d'enllaç i la lectura ha fallat):
+  // no se'n pinta res, es diu l'error.
+  if (error && (!data || !sameTender(data.id, tenderId))) {
     if (status === 404) {
       return (
         <ErrorState
@@ -305,7 +308,7 @@ function TenderDetail() {
 
   // L'esquelet només fins a tenir la fitxa d'AQUESTA licitació: tornar-la a llegir (després
   // de processar o de sincronitzar) no buida la pantalla ni fa perdre la posició ni els avisos.
-  if (!data || data.id !== tenderId) {
+  if (!data || !sameTender(data.id, tenderId)) {
     return <PageSkeleton variant="detail" context="carregant la licitació…" />;
   }
 
