@@ -12,7 +12,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { PACKAGE_COVERAGE_TEXT, type PackageStatus } from "@/lib/tenders";
 
-export type JobType = "process_tender_documents" | "analyze_tender_requirements";
+export type JobType =
+  | "process_tender_documents"
+  | "analyze_tender_requirements"
+  | "sync_portal_documents";
 export type JobRequestStatus = "accepted" | "succeeded" | "failed" | "cancelled";
 export type JobOutcome = "executed" | "reused" | "reused_existing" | "partial";
 
@@ -50,6 +53,15 @@ const JOB_ERROR_MESSAGES: Record<string, string> = {
   company_active_limit: "L'empresa ja té el màxim d'anàlisis en marxa. Espera que n'acabi alguna.",
   permission_denied: "El teu rol no pot llançar anàlisis.",
   no_documents: "No hi ha cap document per processar.",
+  portal_sync_disabled: "La sincronització amb el portal de la PSCP no està activa.",
+  portal_sync_not_available: "Aquesta licitació no té cap publicació de la PSCP per sincronitzar.",
+  portal_unavailable: "El portal de la PSCP no ha respost. No s'ha canviat cap document.",
+  portal_incomplete:
+    "La lectura del portal de la PSCP no ha estat completa. No s'ha canviat cap document.",
+  portal_request_budget: "La lectura del portal supera el límit de peticions d'una sincronització.",
+  portal_sync_conflict: "Els documents han canviat mentre es sincronitzaven. Torna-ho a demanar.",
+  portal_not_found: "El portal de la PSCP no troba una publicació que ell mateix llista. No s'ha canviat cap document.",
+  portal_sync_too_soon: "Aquesta licitació s'ha sincronitzat amb el portal fa molt poc. Torna-ho a provar d'aquí a uns minuts.",
   internal_error: "Error intern en executar la feina.",
   public_tender_canonical_only:
     "En una licitació pública l'anàlisi és la canònica: no es poden triar documents, perfil ni forçar-la.",

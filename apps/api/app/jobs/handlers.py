@@ -6,6 +6,9 @@
 * `analyze_tender_requirements` crida `analyze_tender_requirements` amb les
   costures del worker: `work_job_id`, empremta confirmada, progres i guarda del
   lease. La cache, el fingerprint i el tancament del run son els del servei.
+* `sync_portal_documents` crida `pscp_portal.service.sync_tender`: llegeix sencer el
+  que el portal de la PSCP publica per a la licitacio, ho reconcilia, en baixa els
+  fitxers amb l'MD5 comprovat i deixa la classificacio global al dia.
 
 Un handler torna `JobCompletion`, o `None` si l'execucio s'ha interromput i no
 s'ha de tancar (el worker ha perdut el lease, o el run ja l'ha reclamat la
@@ -39,7 +42,20 @@ from app.core.errors import (
     ProcessingInProgressError,
     ResumeNotAllowedError,
 )
-from app.jobs.params import AnalyzeParams, ProcessParams
+from app.ingestion.pscp_portal.client import (
+    PortalClient,
+    PortalDisabledError,
+    PortalFetchError,
+    PortalNotFoundError,
+    RequestBudgetExceeded,
+)
+from app.ingestion.pscp_portal.parser import PortalParseError
+from app.ingestion.pscp_portal.service import (
+    PortalSyncConflictError,
+    PortalSyncNotAvailableError,
+    sync_tender,
+)
+from app.jobs.params import AnalyzeParams, PortalSyncParams, ProcessParams
 from app.jobs.queue import JobCompletion
 from app.models.enums import (
     AnalysisRunStatus,
@@ -249,8 +265,64 @@ async def analyze_requirements(ctx: JobContext) -> JobCompletion | None:
     return JobCompletion.failed(run.error_code or "run_failed", result_run_id=run.id)
 
 
+async def sync_portal_documents(ctx: JobContext) -> JobCompletion | None:
+    PortalSyncParams.model_validate(ctx.job.parameters)
+    portal = PortalClient(client=ctx.download_client)
+
+    def failed(code: str, message: str) -> JobCompletion:
+        # La traça de les consultes fetes (camins publics, estats, mides) ajuda a saber que
+        # ha fallat; no porta cap dada de cap empresa ni arriba mai a l'API dels tenants.
+        return JobCompletion.failed(code, message, result={"request_log": list(portal.log)})
+
+    try:
+        async with portal:
+            result = await sync_tender(
+                ctx.session_factory,
+                ctx.job.tender_id,
+                portal=portal,
+                resolver=ctx.resolver,
+                should_continue=ctx.should_continue,
+                report_progress=ctx.report_progress,
+            )
+    except PortalDisabledError:
+        return JobCompletion.failed(
+            "portal_sync_disabled", "El connector del portal de la PSCP es apagat."
+        )
+    except PortalSyncNotAvailableError as exc:
+        return failed("portal_sync_not_available", exc.reason)
+    except RequestBudgetExceeded:
+        return failed(
+            "portal_request_budget", "La lectura del portal supera el limit de peticions."
+        )
+    except PortalNotFoundError as exc:
+        # El portal respon, pero no troba una publicacio o un detall que ell mateix llista.
+        return failed("portal_not_found", f"El portal no troba {exc.path}.")
+    except PortalFetchError:
+        # Res desat: la lectura es fa sencera abans de tocar cap document.
+        return failed("portal_unavailable", "El portal de la PSCP no ha respost.")
+    except PortalParseError as exc:
+        # Els missatges del parser son textos propis, sense dades de la resposta.
+        return failed("portal_incomplete", str(exc))
+    except PortalSyncConflictError:
+        return failed(
+            "portal_sync_conflict",
+            "Els documents de la licitacio han canviat mentre es sincronitzaven.",
+        )
+    if result is None:
+        return None
+    if result.partial:
+        # Algun fitxer del portal no te bytes (fallat ara, abans o encara no reintentat).
+        outcome = JobOutcome.PARTIAL
+    elif result.changed:
+        outcome = JobOutcome.EXECUTED
+    else:
+        outcome = JobOutcome.REUSED
+    return JobCompletion.succeeded(outcome, result=result.as_dict())
+
+
 #: Registre tancat. Afegir-hi un tipus es una decisio explicita.
 HANDLERS: dict[WorkJobType, Handler] = {
     WorkJobType.PROCESS_TENDER_DOCUMENTS: process_tender_documents,
     WorkJobType.ANALYZE_TENDER_REQUIREMENTS: analyze_requirements,
+    WorkJobType.SYNC_PORTAL_DOCUMENTS: sync_portal_documents,
 }

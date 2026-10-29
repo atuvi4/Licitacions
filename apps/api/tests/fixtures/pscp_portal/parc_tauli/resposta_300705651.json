@@ -1,0 +1,24 @@
+{
+ "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+ "publicacioAntiga": null,
+ "codiExpedient": "27SER0812P",
+ "idUltimaPublicacio": 300899451,
+ "dataPublicacio": "2026-02-26T09:36:07.444Z",
+ "despublicat": null,
+ "tipusAvis": 1008176,
+ "navegacioEsmenes": [
+  {
+   "publicacioId": 300705651,
+   "dataPublicacio": "2026-02-26T09:36:07.444Z",
+   "tipusEsmena": null
+  }
+ ],
+ "dades": {
+  "titol": "Bon dia,\nPregunta de prova 10: quin abast té l'apartat 10 del plec tècnic?",
+  "descripcio": "Resposta oficial de prova 10: l'abast és el que descriu el plec, sense canvis.",
+  "linkInteres": [],
+  "documents": [],
+  "tipusEsmena": null,
+  "descripcioEsmena": null
+ }
+}

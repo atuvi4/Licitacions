@@ -1,0 +1,32 @@
+{
+ "expedientId": "7224a2cc-30a6-4234-b023-66744c2ea6f3",
+ "publicacioAntiga": null,
+ "codiExpedient": "5125/2026",
+ "idUltimaPublicacio": 300907178,
+ "dataPublicacio": "2026-10-14T11:12:16.890Z",
+ "despublicat": null,
+ "tipusAvis": 1008176,
+ "navegacioEsmenes": [
+  {
+   "publicacioId": 300908253,
+   "dataPublicacio": "2026-10-14T11:12:16.890Z",
+   "tipusEsmena": null
+  }
+ ],
+ "dades": {
+  "titol": "Bon dia,\nPregunta de prova 1: quin abast té l'apartat 1 del plec tècnic?",
+  "descripcio": "Resposta oficial de prova 1: l'abast és el que descriu el plec, sense canvis.",
+  "linkInteres": [],
+  "documents": [
+   {
+    "id": 302678096,
+    "titol": "Volumetria_voz_Ajuntament_Pineda_de_Mar.xlsx",
+    "hash": "24D930AC837AC5AC48AD959A6D1C0D5C",
+    "mida": 20883,
+    "idioma": "ca"
+   }
+  ],
+  "tipusEsmena": null,
+  "descripcioEsmena": null
+ }
+}

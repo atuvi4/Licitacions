@@ -61,7 +61,7 @@ import {
 import { DocumentReviewPanel, NewVersionButton } from "@/components/DocumentReviewPanel";
 import type { WorkspaceDetail } from "@/lib/workspace";
 
-import { extractedText, fileErrorText, isQueued, jobPill, readingLabel, readingSubtext, selectionLabel, versionText } from "./documents";
+import { extractedText, fileErrorText, isQueued, jobPill, originHref, readingLabel, readingSubtext, selectionLabel, versionText } from "./documents";
 import { topLevelDocuments } from "./package";
 import { LotAmountValue, LotsPscpNote, PscpAttribution, PscpBudgetValue } from "./BudgetWithTax";
 import { DocumentBadges, PackageNotice, PlecsReadingLine, RemovedDocuments } from "./PlecsOverview";
@@ -440,6 +440,7 @@ function TenderDetail() {
       align: "right",
       cell: (document) => {
         const file = document.latest_file;
+        const origin = originHref(document.url, data.source_url);
         return (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 md:justify-end">
             {file?.extraction_id && (
@@ -447,9 +448,11 @@ function TenderDetail() {
                 Obre el text
               </Link>
             )}
-            <a href={document.url} target="_blank" rel="noopener noreferrer" className={LINK}>
-              Origen ↗
-            </a>
+            {origin && (
+              <a href={origin} target="_blank" rel="noopener noreferrer" className={LINK}>
+                Origen ↗
+              </a>
+            )}
             <Button
               variant="secondary"
               size="sm"

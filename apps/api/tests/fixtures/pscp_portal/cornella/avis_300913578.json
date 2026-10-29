@@ -1,0 +1,25 @@
+{
+ "expedientId": "2c72bffe-9ba0-47ee-8687-57ffa72c8451",
+ "codiExpedient": "26-089",
+ "idUltimaPublicacio": 300894911,
+ "dataPublicacio": "2026-10-20T10:24:12.154Z",
+ "despublicat": null,
+ "publicacioAntiga": null,
+ "tipusAvis": 1008176,
+ "navegacioEsmenes": [
+  {
+   "publicacioId": 300913578,
+   "dataPublicacio": "2026-10-20T10:24:12.154Z",
+   "tipusEsmena": null
+  }
+ ],
+ "dades": {
+  "titol": "CONVOCATÒRIA OBERTURA SOBRE B JUDICI DE VALOR",
+  "descripcio": "Text de prova de l'avís 3: el publica l'òrgan al tauler.",
+  "linkInteres": [],
+  "documents": [],
+  "tipusAvis": 1008175,
+  "tipusEsmena": null,
+  "descripcioEsmena": null
+ }
+}

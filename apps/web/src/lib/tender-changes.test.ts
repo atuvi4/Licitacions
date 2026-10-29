@@ -7,6 +7,7 @@ import {
   revisionOriginLabel,
   revisionsByOrigin,
   sourceVersionNumbers,
+  triggerLabel,
   unclassifiedRevisions,
   type TenderChangeEvent,
   type TenderHistoryRevision,
@@ -191,5 +192,12 @@ describe("origen de les revisions (M6) i numeració de versions (A3)", () => {
     expect(revisionOriginLabel(rows[0], versions)).toBe("Versió 3");
     expect(revisionOriginLabel(rows[1], versions)).toBe("Processament intern");
     expect(revisionOriginLabel(rows[3], versions)).toBe("Editat a mà");
+  });
+});
+
+describe("triggerLabel", () => {
+  it("diu en paraules la sincronització amb el portal de la PSCP", () => {
+    expect(triggerLabel("portal_sync")).toBe("Actualització del portal de la PSCP");
+    expect(triggerLabel("un_disparador_nou")).toBe("Revisió de l'estat");
   });
 });

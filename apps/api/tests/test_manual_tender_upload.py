@@ -45,7 +45,7 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 #: Un DOCX i un XLSX son ZIP: els magic bytes nomes diuen "PK", i el tipus fi
 #: surt del que declara qui el puja. Es la mateixa regla que la descarrega.
 ZIP_BYTES = b"PK\x03\x04" + b"\x00" * 64
-#: Un .doc antic (OLE2): des del Bloc 2 se'n llegeix el text (`doc-v1`).
+#: Un .doc antic (OLE2): des del Bloc 2 se'n llegeix el text (`doc-v2`).
 MSWORD = "application/msword"
 #: Un .xls antic (OLE2): format que es guarda pero del qual no s'extreu text.
 MSEXCEL = "application/vnd.ms-excel"
@@ -362,7 +362,7 @@ async def test_a_text_file_is_read_without_any_model(client_a, db, tenant_a):
             _xlsx([("Preus", XLSX_ROW)], shared=["Objecte del contracte."]),
             "xlsx-v2",
         ),
-        ("annex.doc", MSWORD, build_doc("Objecte del contracte.\r"), "doc-v1"),
+        ("annex.doc", MSWORD, build_doc("Objecte del contracte.\r"), "doc-v2"),
     ],
     # Sense ids, el nom del test portaria els bytes: a Windows, massa llarg per a l'entorn.
     ids=["docx", "xlsx", "doc"],
@@ -370,7 +370,7 @@ async def test_a_text_file_is_read_without_any_model(client_a, db, tenant_a):
 async def test_an_office_file_is_stored_and_read(
     client_a, db, tenant_a, name, mime, data, parser
 ):
-    """DOCX, XLSX i DOC es llegeixen amb el seu parser (`docx-v1`, `xlsx-v2`, `doc-v1`)."""
+    """DOCX, XLSX i DOC es llegeixen amb el seu parser (`docx-v1`, `xlsx-v2`, `doc-v2`)."""
     _, company = tenant_a
     tender = await _tender(client_a, company)
 
@@ -389,6 +389,37 @@ async def test_an_office_file_is_stored_and_read(
         )
     ).scalars().all()
     assert "Objecte del contracte." in pages[0].text
+
+
+async def test_a_doc_sent_as_a_generic_type_is_stored_as_a_doc_and_read(client_a, db, tenant_a):
+    """Un .doc que el navegador envia com a `application/octet-stream` (Bloc 2): els magic
+    bytes diuen OLE2 i el flux `WordDocument` diu .doc. Es desa i es llegeix com a tal."""
+    _, company = tenant_a
+    tender = await _tender(client_a, company)
+
+    body = await _ok(
+        client_a, company, tender["id"], name="annex",
+        data=build_doc("Objecte del contracte.\r"), mime="application/octet-stream",
+    )
+
+    assert body["file"]["mime_type"] == MSWORD
+    assert body["file"]["analysis_status"] == "extracted"
+    extraction = await db.get(TenderDocumentExtraction, uuid.UUID(body["file"]["extraction_id"]))
+    assert extraction.parser_version == "doc-v2"
+
+
+async def test_only_an_ole2_with_a_word_stream_becomes_a_doc_on_upload():
+    from app.services.tender_document_upload import resolve_upload_mime_type
+    from tests.fixtures.doc_builder import build_cfb
+
+    word = build_doc("Hola\r")
+    assert resolve_upload_mime_type(word, None) == MSWORD
+    assert resolve_upload_mime_type(word, "application/octet-stream") == MSWORD
+    # Una declaracio concreta de la familia OLE2 mana, com sempre.
+    assert resolve_upload_mime_type(word, MSEXCEL) == MSEXCEL
+    sheet = build_cfb({"Workbook": b"\x09\x08" + b"\x00" * 4094})
+    assert resolve_upload_mime_type(sheet, None) == "application/x-ole-storage"
+    assert resolve_upload_mime_type(OLE2_BYTES, None) == "application/x-ole-storage"
 
 
 async def test_a_broken_office_file_is_stored_and_its_reading_fails(client_a, db, tenant_a):

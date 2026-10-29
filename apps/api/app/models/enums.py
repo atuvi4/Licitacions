@@ -1164,6 +1164,8 @@ class AwardCriterionType(StrEnum):
 class WorkJobType(StrEnum):
     PROCESS_TENDER_DOCUMENTS = "process_tender_documents"
     ANALYZE_TENDER_REQUIREMENTS = "analyze_tender_requirements"
+    #: Documents, preguntes i respostes i avisos del portal de la PSCP (Bloc 2, etapa 2).
+    SYNC_PORTAL_DOCUMENTS = "sync_portal_documents"
 
 
 class WorkJobStatus(StrEnum):

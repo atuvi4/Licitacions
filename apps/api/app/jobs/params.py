@@ -36,6 +36,10 @@ class ProcessParams(_StrictParams):
     force_reextract: bool = False
 
 
+class PortalSyncParams(_StrictParams):
+    """Sense opcions: la sincronitzacio amb el portal sempre es la mateixa per licitacio."""
+
+
 def _digest(*parts: object) -> str:
     joined = "\x1f".join(str(part) for part in parts)
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
@@ -81,3 +85,8 @@ def canonical_analysis_dedupe_key(*, tender_id: uuid.UUID, analysis_identity: st
 def process_dedupe_key(*, tender_id: uuid.UUID, params: ProcessParams) -> str:
     digest = _digest(_ids(params.document_ids), params.force_download, params.force_reextract)
     return f"process:{tender_id}:{digest}"
+
+
+def portal_sync_dedupe_key(*, tender_id: uuid.UUID) -> str:
+    """Una sola sincronitzacio activa per licitacio: qui la demana mentre corre s'hi vincula."""
+    return f"portal:{tender_id}"

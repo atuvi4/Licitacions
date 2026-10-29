@@ -1,4 +1,4 @@
-"""`doc-v1`: el text dels .doc de Word 97-2003, sense Word ni cap programa extern.
+"""`doc-v2`: el text dels .doc de Word 97-2003, sense Word ni cap programa extern.
 
 Els .doc es generen al test (`tests/fixtures/doc_builder.py`): contenidor OLE2, FIB, taula de
 peces i propietats de paragraf i de caracter escrits a ma. Fixen el que costa mes de recuperar si
@@ -52,7 +52,7 @@ def test_reads_an_8_bit_piece_with_catalan_characters():
     result = extract_doc(build_doc(f"{ACCENTS}\r"))
 
     assert result.status == ExtractionStatus.EXTRACTED
-    assert result.parser_version == DOC_PARSER_VERSION == "doc-v1"
+    assert result.parser_version == DOC_PARSER_VERSION == "doc-v2"
     assert result.error_code is None
     assert result.pages[0].text == ACCENTS
     assert result.quality == ExtractionQuality.GOOD
@@ -175,10 +175,59 @@ def test_page_breaks_are_the_page_boundaries():
     assert result.page_count == 3
 
 
-def test_without_page_breaks_it_is_a_single_page():
+def test_a_short_document_without_page_breaks_is_a_single_page():
     result = extract_doc(build_doc("U.\rDos.\rTres.\r" * 50))
 
     assert result.page_count == 1
+
+
+def _paragraphs(count: int, width: int = 60) -> list[str]:
+    return [f"Clausula {index:04d} " + "x" * (width - 15) for index in range(count)]
+
+
+def test_a_long_document_without_page_breaks_gets_virtual_pages():
+    """`doc-v2`: sense cap salt, pagines d'uns 3.000 caracters entre paragrafs. No es perd ni
+    es reordena res, i cap paragraf no queda partit entre dues pagines."""
+    paragraphs = _paragraphs(200)
+    result = extract_doc(build_doc("".join(f"{p}\r" for p in paragraphs)))
+
+    assert result.status == ExtractionStatus.EXTRACTED
+    assert result.page_count == len(result.pages) > 1
+    assert [page.page_number for page in result.pages] == list(range(1, result.page_count + 1))
+    assert all(page.char_count <= doc_text.VIRTUAL_PAGE_CHARS for page in result.pages)
+    lines = [line for page in result.pages for line in page.text.split("\n")]
+    assert lines == paragraphs
+    # Plenes: la seguent linia no hi cabia.
+    for page, following in zip(result.pages, result.pages[1:], strict=False):
+        first = following.text.split("\n")[0]
+        assert page.char_count + 1 + len(first) > doc_text.VIRTUAL_PAGE_CHARS
+
+
+def test_a_paragraph_longer_than_a_virtual_page_is_a_page_on_its_own():
+    long = "Paragraf molt llarg " + "y" * 5000
+    text = "Abans.\r" + long + "\r" + "Despres.\r"
+    result = extract_doc(build_doc(text))
+
+    assert [page.text for page in result.pages] == ["Abans.", long, "Despres."]
+
+
+def test_table_rows_are_never_cut_by_virtual_pages():
+    text = "".join(row(f"Lot {index}", "z" * 70, "12,50 €") for index in range(120))
+    result = extract_doc(build_doc(text))
+
+    assert result.page_count > 1
+    lines = [line for page in result.pages for line in page.text.split("\n")]
+    assert lines == [f"| Lot {index} | {'z' * 70} | 12,50 € |" for index in range(120)]
+
+
+def test_explicit_page_breaks_are_the_pages_even_if_they_are_long():
+    """Amb salts explicits manen les pagines del document: no se'n fan de virtuals."""
+    first, second = _paragraphs(80), _paragraphs(70)
+    text = "".join(f"{p}\r" for p in first) + "\x0c" + "".join(f"{p}\r" for p in second)
+    result = extract_doc(build_doc(text))
+
+    assert [page.text.split("\n") for page in result.pages] == [first, second]
+    assert result.pages[0].char_count > doc_text.VIRTUAL_PAGE_CHARS
 
 
 def test_an_empty_document_is_one_empty_page():
@@ -467,7 +516,7 @@ _FUZZ_VALUES = [
 
 
 def test_never_raises_when_the_streams_are_damaged():
-    """El contenidor sempre es valid i el que es muta son les estructures que llegeix `doc-v1`
+    """El contenidor sempre es valid i el que es muta son les estructures que llegeix `doc-v2`
     (FIB, CLX, PlcBte, FKP de paragraf i de caracter, flux `Data`): 300 variants (llavor fixa),
     sempre un resultat, i cap de lenta."""
     base = word_streams(_FUZZ_BASE, scramble=True, prc=True, huge_rows=True)
@@ -662,8 +711,10 @@ def test_a_large_fragmented_document_is_read_in_linear_time(properties):
 
     assert result.status == ExtractionStatus.EXTRACTED
     assert result.text_char_count > 1_100_000
+    # Sense salts: pagines virtuals (`doc-v2`), i el darrer lot a la darrera.
+    assert result.page_count > 300
     expected = "| Lot 999 |  | 12,50 € |" if properties else "| Lot 999 |"
-    assert expected in result.pages[0].text
+    assert expected in result.pages[-1].text
     assert elapsed < 5, f"{elapsed:.2f} s per a {result.text_char_count} caracters"
 
 
@@ -677,9 +728,9 @@ def test_the_dispatcher_reads_msword_with_doc_v1():
 
     from app.services.document_parsers import extract_text_async, parser_version_for
 
-    assert parser_version_for(DOC) == "doc-v1"
+    assert parser_version_for(DOC) == "doc-v2"
     result = asyncio.run(extract_text_async(DOC, build_doc("Hola\r")))
-    assert result.parser_version == "doc-v1"
+    assert result.parser_version == "doc-v2"
     assert result.pages[0].text == "Hola"
     assert doc_text.EXTRACTORS == {DOC: extract_doc}
 

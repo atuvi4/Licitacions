@@ -14,9 +14,12 @@ import pytest
 
 from app.core.config import settings
 from app.services.document_download import (
+    CHECKSUM_MISMATCH,
+    IMAGE_MIME_TYPES,
     OLE2_MAGIC,
     DownloadError,
     download_document,
+    refine_ole2,
     resolve_mime_type,
     sniff_mime_type,
 )
@@ -352,6 +355,62 @@ async def test_a_declared_legacy_office_type_refines_the_generic_ole2_sniff():
     assert result.detected_extension == "doc"
 
 
+async def test_an_unrefined_ole2_with_a_word_stream_is_a_doc():
+    """El mateix cas real amb un .doc de debo: el contenidor porta `WordDocument` i, com que
+    cap declaracio no l'ha afinat, s'hi llegeix el tipus (Bloc 2): es un .doc."""
+    from tests.fixtures.doc_builder import build_doc
+
+    declared = "application/vnd.openxmlformatsofficedocument.wordprocessingml.document"
+    body = build_doc("ANNEX I\r")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body, headers={"content-type": declared})
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/servlet/GetDocumentByIdServlet?id=42",
+            client=client,
+            resolver=resolver_returning(),
+        )
+
+    assert result.mime_type == "application/msword"
+    assert result.detected_extension == "doc"
+    assert result.declared_mime_type == declared
+
+
+async def test_an_unrefined_ole2_without_a_word_stream_stays_generic():
+    """Un full de calcul OLE2 (`Workbook`) no es cap .doc: es queda generic."""
+    from tests.fixtures.doc_builder import build_cfb
+
+    body = build_cfb({"Workbook": b"\x09\x08" + b"\x00" * 4094})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=body, headers={"content-type": "application/octet-stream"}
+        )
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/annex", client=client, resolver=resolver_returning()
+        )
+
+    assert result.mime_type == "application/x-ole-storage"
+
+
+def test_refine_ole2_only_refines_the_generic_type():
+    from tests.fixtures.doc_builder import build_doc
+
+    word = build_doc("Hola\r")
+    assert refine_ole2("application/x-ole-storage", word) == "application/msword"
+    # Una declaracio concreta mana (ja no es el generic): no es toca.
+    assert refine_ole2("application/vnd.ms-excel", word) == "application/vnd.ms-excel"
+    assert refine_ole2("application/pdf", word) == "application/pdf"
+    # Un contenidor que no es pot llegir es queda generic.
+    assert refine_ole2("application/x-ole-storage", OLE2_MAGIC + b"\x00" * 64) == (
+        "application/x-ole-storage"
+    )
+
+
 async def test_an_ole2_body_on_a_pdf_url_is_still_invalid_content():
     """La guarda del PDF no s'ha relaxat: una URL .pdf que retorna OLE2 menteix."""
 
@@ -430,3 +489,67 @@ async def test_aborts_a_real_stream_that_exceeds_the_limit(monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_sniffing_recognises_images():
+    assert sniff_mime_type(b"\x89PNG\r\n\x1a\nrest") == "image/png"
+    assert sniff_mime_type(b"\xff\xd8\xff\xe0rest") == "image/jpeg"
+    assert sniff_mime_type(b"GIF89arest") == "image/gif"
+    assert sniff_mime_type(b"II*\x00rest") == "image/tiff"
+    assert sniff_mime_type(b"RIFF\x00\x00\x00\x00WEBPrest") == "image/webp"
+
+
+async def test_the_expected_md5_is_checked_before_the_type_and_the_size():
+    """Amb `expected_md5`, uns bytes que no son els publicats son `checksum_mismatch`, encara
+    que siguin buits o d'un tipus no admes: no es una propietat del fitxer publicat."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"", headers={"content-type": "application/pdf"})
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as raised:
+            await download_document(
+                "https://example.com/doc",
+                client=client,
+                resolver=resolver_returning(),
+                expected_md5=hashlib.md5(PDF_BYTES).hexdigest(),
+            )
+
+    assert raised.value.code == CHECKSUM_MISMATCH
+
+
+async def test_the_published_bytes_with_the_right_md5_are_returned():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=PDF_BYTES, headers={"content-type": "application/pdf"})
+
+    async with client_for(handler) as client:
+        result = await download_document(
+            "https://example.com/doc",
+            client=client,
+            resolver=resolver_returning(),
+            expected_md5=hashlib.md5(PDF_BYTES).hexdigest().lower(),
+        )
+
+    assert result.sha256 == hashlib.sha256(PDF_BYTES).hexdigest()
+
+
+async def test_images_are_only_admitted_when_asked_for():
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=png, headers={"content-type": "image/png"})
+
+    async with client_for(handler) as client:
+        with pytest.raises(DownloadError) as raised:
+            await download_document(
+                "https://example.com/grafic", client=client, resolver=resolver_returning()
+            )
+        result = await download_document(
+            "https://example.com/grafic",
+            client=client,
+            resolver=resolver_returning(),
+            extra_mime_types=IMAGE_MIME_TYPES,
+        )
+
+    assert raised.value.code == "invalid_content"
+    assert result.mime_type == "image/png" and result.detected_extension == "png"

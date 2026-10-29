@@ -1,0 +1,101 @@
+{
+ "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+ "publicacioId": 300899451,
+ "fase": 1000040,
+ "navegacioFases": [
+  {
+   "fase": 1000040,
+   "numeroLotsActius": 2,
+   "publicacioId": 300899451,
+   "dataPublicacio": "2026-10-06T02:32:11.430Z",
+   "faseActiva": true
+  },
+  {
+   "fase": 1000038,
+   "numeroLotsActius": 0,
+   "publicacioId": 300789814,
+   "dataPublicacio": "2026-05-29T09:42:34.060Z",
+   "faseActiva": false
+  }
+ ],
+ "navegacioEsmenes": [
+  {
+   "publicacioId": 300899451,
+   "dataPublicacio": "2026-10-06T02:32:11.430Z",
+   "tipusEsmena": null
+  }
+ ],
+ "titol": "Serveis de comunicacions telefòniques i call center_27SER0812P",
+ "motiuEsmena": null,
+ "codiExpedient": "27SER0812P",
+ "dades": {
+  "codiExpedient": "27SER0812P",
+  "idExpedient": "32b20054-4b92-4c38-a406-a087426de02a",
+  "dataPublicacioReal": "2026-10-06T02:32:11.430Z",
+  "publicacio": {
+   "fase": {
+    "id": 1000040,
+    "text": "Anunci de licitació"
+   },
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dadesPublicacio": {
+    "dataTerminiPresentacioOSolicitud": "2026-11-03T12:00:00.000Z",
+    "plecsDeClausulesAdministratives": {
+     "docs": [
+      {
+       "id": 302646404,
+       "titol": "PCA_SERVEIS_OBERT_CSPT_2024_CATSALUT.pdf",
+       "hash": "BC5D3FEC0A91503A16BD9C5122BABC0C",
+       "mida": 4312908,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "plecsDePrescripcionsTecniques": {
+     "docs": [
+      {
+       "id": 302646405,
+       "titol": "PPT_27SER0812P.pdf",
+       "hash": "EB4D4E206465177384992BDC889E3780",
+       "mida": 1985468,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "memoriaJustificativaContracte": {
+     "docs": [
+      {
+       "id": 302646409,
+       "titol": "27SER0812P_INEC DEF-Servei Comunicacions telefoniques i Call Center.pdf",
+       "hash": "496223946F63FFED50F53011B0247499",
+       "mida": 3761243,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "documentsAprovacio": {
+     "docs": [
+      {
+       "id": 302646410,
+       "titol": "27SER0812P_Resolució inici procediment obert.pdf",
+       "hash": "11F53E70D1FEE7F10A29719662ECED97",
+       "mida": 395455,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "altresDocuments": {
+     "docs": [
+      {
+       "id": 302646806,
+       "titol": "AA_27SER0812P.zip",
+       "hash": "1B8590CED7A7F0297B2933B251BCA704",
+       "mida": 58804181,
+       "idioma": "ca"
+      }
+     ]
+    }
+   }
+  }
+ }
+}

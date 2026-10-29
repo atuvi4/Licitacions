@@ -61,6 +61,7 @@ from app.services.document_download import (
     OLE2_REFINEMENTS,
     ZIP_REFINEMENTS,
     extension_for,
+    refine_ole2,
     sniff_mime_type,
 )
 from app.services.files import compute_sha256, sanitize_filename
@@ -108,7 +109,8 @@ def resolve_upload_mime_type(data: bytes, declared: str | None) -> str:
     if sniffed == OLE2_GENERIC and declared in OLE2_REFINEMENTS:
         return declared
     if sniffed:
-        return sniffed
+        # Un OLE2 que cap declaracio no afina es un .doc si porta `WordDocument`.
+        return refine_ole2(sniffed, data)
     if declared:
         return declared
     raise ValidationError("No s'ha pogut determinar el tipus del fitxer.")

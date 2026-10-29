@@ -1044,3 +1044,36 @@ async def test_una_revisio_segueix_el_contingut_quan_el_feed_canvia_l_url(
     snapshot = await build_snapshot(db, await one_tender(db))
     entry = next(d for d in snapshot["documents"] if d["url"] == new_url)
     assert entry["reviewed_role"] == "characteristics_table"
+
+
+async def test_una_url_que_governava_el_portal_passa_al_feed_quan_el_feed_la_publica(
+    db, run_fixture
+):
+    """Prioritat feed > portal (Bloc 2, etapa 2): el portal pot haver vist la URL primer
+    (PLACSP agrega amb retard), o haver-la retirat. Quan el feed la publica, el feed se'n
+    queda el govern, amb auditoria i sense actor: entre dues fonts no hi ha cap decisio humana."""
+    from app.ingestion.pscp_portal.service import portal_source
+    from app.models.audit import AuditLog
+
+    await run_fixture("entry_lots.atom")
+    await run_fixture("entry_lots_doc_removed.atom")
+    ppt = await _by_url(db, PPT_URL)
+    feed_source_id = ppt.governing_source_id
+    portal = await portal_source(db)
+    ppt.origin = TenderDocumentOrigin.PORTAL
+    ppt.governing_source_id = portal.id
+    ppt.removed_at = None
+    await db.commit()
+    n_docs = await count(db, TenderDocument)
+
+    await run_fixture("entry_lots_republished.atom")
+
+    after = await _by_url(db, PPT_URL)
+    assert after.origin == TenderDocumentOrigin.FEED
+    assert after.governing_source_id == feed_source_id
+    assert after.removed_at is None
+    assert after.contribution_status == DocumentContributionStatus.NOT_APPLICABLE
+    assert await count(db, TenderDocument) == n_docs
+    audit = await db.scalar(sa.select(AuditLog).where(AuditLog.entity_id == after.id))
+    assert audit.user_id is None and audit.company_id is None
+    assert audit.summary.startswith("cedit al feed")

@@ -9,6 +9,7 @@ import {
   fileErrorText,
   isQueued,
   jobPill,
+  originHref,
   readingSubtext,
   selectionLabel,
   versionText,
@@ -120,5 +121,26 @@ describe("peu de selecció", () => {
   it("compta els triats en singular i plural", () => {
     expect(selectionLabel(1)).toEqual({ count: "1 triat", action: "Processa 1 document" });
     expect(selectionLabel(3)).toEqual({ count: "3 triats", action: "Processa 3 documents" });
+  });
+});
+
+describe("originHref", () => {
+  const SOURCE = "https://contractaciopublica.cat/ca/detall-publicacio/x/1";
+
+  it("enllaça la fitxa de la PSCP per als documents generats pel connector del portal", () => {
+    expect(originHref("pscp-portal://x/preguntes-respostes", SOURCE)).toBe(SOURCE);
+    expect(originHref("pscp-portal://x/avis/7", null)).toBeNull();
+  });
+
+  it("deixa les URL web tal com són i no enllaça cap pujada", () => {
+    const url = "https://contractaciopublica.cat/portal-api/descarrega-document/1/ABC";
+    expect(originHref(url, SOURCE)).toBe(url);
+    expect(originHref("operator-upload://123", SOURCE)).toBeNull();
+    expect(originHref("upload://456", SOURCE)).toBeNull();
+  });
+
+  it("té un missatge per als codis nous de la descàrrega", () => {
+    expect(FILE_ERROR_MESSAGES.checksum_mismatch).toContain("MD5");
+    expect(FILE_ERROR_MESSAGES.invalid_content).toBeTruthy();
   });
 });

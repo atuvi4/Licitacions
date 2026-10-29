@@ -96,6 +96,30 @@ async def request_document_processing(
     return await _submission_response(session, response, submission)
 
 
+@router.post(
+    "/tenders/{tender_id}/job-requests/sync-portal-documents",
+    response_model=JobSubmissionRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Demana la sincronitzacio amb el portal de la PSCP",
+)
+async def request_portal_sync(
+    tender_id: uuid.UUID,
+    ctx: CompanyCtx,
+    session: SessionDep,
+    response: Response,
+):
+    # Mateix permis que el processat: nomes hi afegeix el que l'organ publica al portal.
+    if not analysis_quotes.can_process_documents(ctx.membership.role):
+        raise PermissionDeniedError("El teu rol no pot demanar la sincronitzacio amb el portal.")
+    submission = await job_requests.submit_portal_sync_request(
+        session,
+        company_id=ctx.company_id,
+        user_id=ctx.user_id,
+        tender_id=tender_id,
+    )
+    return await _submission_response(session, response, submission)
+
+
 @router.get(
     "/job-requests/{request_id}",
     response_model=JobRequestRead,

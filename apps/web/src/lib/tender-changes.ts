@@ -197,6 +197,7 @@ const TRIGGER_LABELS: Record<string, string> = {
   tombstone: "La font ha retirat l'entrada",
   document_processing: "En descarregar un document",
   document_intake: "En incorporar o revisar documents del paquet",
+  portal_sync: "Actualització del portal de la PSCP",
   normalization: "Correcció interna de dades ja desades",
   manual_create: "Alta manual",
   manual_edit: "Edició manual",

@@ -1,0 +1,141 @@
+{
+ "expedientId": "7224a2cc-30a6-4234-b023-66744c2ea6f3",
+ "publicacioId": 300907178,
+ "fase": 1000040,
+ "navegacioFases": [
+  {
+   "fase": 1000040,
+   "numeroLotsActius": null,
+   "publicacioId": 300907178,
+   "dataPublicacio": "2026-10-13T13:42:05.757Z",
+   "faseActiva": true
+  }
+ ],
+ "navegacioEsmenes": [
+  {
+   "publicacioId": 300866869,
+   "dataPublicacio": "2026-09-14T02:12:07.899Z",
+   "tipusEsmena": null
+  },
+  {
+   "publicacioId": 300907178,
+   "dataPublicacio": "2026-10-13T13:42:05.757Z",
+   "tipusEsmena": 1008173
+  }
+ ],
+ "titol": "Contrato de los servicios de comunicaciones del Ayuntamiento de Pineda de Mar.",
+ "motiuEsmena": "Ampliació termini presentació ofertes.",
+ "codiExpedient": "5125/2026",
+ "dades": {
+  "codiExpedient": "5125/2026",
+  "idExpedient": "7224a2cc-30a6-4234-b023-66744c2ea6f3",
+  "dataPublicacioReal": "2026-10-13T13:42:05.757Z",
+  "publicacio": {
+   "fase": {
+    "id": 1000040,
+    "text": "Anunci de licitació"
+   },
+   "expedientId": "7224a2cc-30a6-4234-b023-66744c2ea6f3",
+   "dadesPublicacio": {
+    "dataTerminiPresentacioOSolicitud": "2026-11-04T22:59:59.000Z",
+    "plecsDeClausulesAdministratives": {
+     "docs": [
+      {
+       "id": 302674550,
+       "titol": "PCAP segellat.pdf",
+       "hash": "E4639365A4DC1E0A61335A121F885D16",
+       "mida": 1920548,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "plecsDePrescripcionsTecniques": {
+     "docs": [
+      {
+       "id": 302674551,
+       "titol": "PPT.pdf",
+       "hash": "7F85D5CD4D92D66315654C0D4C293BBD",
+       "mida": 379798,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "memoriaJustificativaContracte": {
+     "docs": [
+      {
+       "id": 302674549,
+       "titol": "Memoria.pdf",
+       "hash": "569D19D71349057178AB282B6315EA54",
+       "mida": 426610,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "documentsAprovacio": {
+     "docs": [
+      {
+       "id": 302674548,
+       "titol": "Decret.pdf",
+       "hash": "09B4D8BC83DD5E71B58BF0037884D46C",
+       "mida": 168337,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "altresDocuments": {
+     "docs": [
+      {
+       "id": 302674758,
+       "titol": "Resolucio_ampliacio_termini.pdf",
+       "hash": "0B3F1963C5B9CF12DC605C06F3120CCF",
+       "mida": 133716,
+       "idioma": "ca"
+      },
+      {
+       "id": 302674542,
+       "titol": "Memoria castellano.pdf",
+       "hash": "D41D8CD98F00B204E9800998ECF8427E",
+       "mida": 0,
+       "idioma": "ca"
+      },
+      {
+       "id": 302674543,
+       "titol": "PCAP castellano.pdf",
+       "hash": "042A44BB1460E831D5CF231597430992",
+       "mida": 1075714,
+       "idioma": "ca"
+      },
+      {
+       "id": 302674544,
+       "titol": "PPT castellano.pdf",
+       "hash": "4CA00D3778DAE6F32E0D0291BB4F95F2",
+       "mida": 407082,
+       "idioma": "ca"
+      },
+      {
+       "id": 302674545,
+       "titol": "Annex I Serveis externs de telefonia fixa i internet.pdf",
+       "hash": "93A6A7B9269BD535FB6875C7E0DCBC83",
+       "mida": 302071,
+       "idioma": "ca"
+      },
+      {
+       "id": 302674546,
+       "titol": "Annex II Serveis externs de telefonia mòbil.pdf",
+       "hash": "228F1E6E4A7F4182D7188618EB3C3D34",
+       "mida": 195462,
+       "idioma": "ca"
+      },
+      {
+       "id": 302674547,
+       "titol": "Annex III del plec tècnic_Acords a nivell de servei.pdf",
+       "hash": "88B8AA95ED564C4E196A7EFA61ECA0D5",
+       "mida": 140753,
+       "idioma": "ca"
+      }
+     ]
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,32 @@
+{
+ "expedientId": "2c72bffe-9ba0-47ee-8687-57ffa72c8451",
+ "publicacioAntiga": null,
+ "codiExpedient": "26-089",
+ "idUltimaPublicacio": 300894911,
+ "dataPublicacio": "2026-09-24T08:02:05.513Z",
+ "despublicat": null,
+ "tipusAvis": 1008176,
+ "navegacioEsmenes": [
+  {
+   "publicacioId": 300891136,
+   "dataPublicacio": "2026-09-24T08:02:05.513Z",
+   "tipusEsmena": null
+  }
+ ],
+ "dades": {
+  "titol": "Bon dia,\nPregunta de prova 6: quin abast té l'apartat 6 del plec tècnic?",
+  "descripcio": "Resposta oficial de prova 6: l'abast és el que descriu el plec, sense canvis.",
+  "linkInteres": [],
+  "documents": [
+   {
+    "id": 302618549,
+    "titol": "resposta 4.pdf",
+    "hash": "03DAB16E1D013C1380232AF2886B49AB",
+    "mida": 285326,
+    "idioma": "ca"
+   }
+  ],
+  "tipusEsmena": null,
+  "descripcioEsmena": null
+ }
+}

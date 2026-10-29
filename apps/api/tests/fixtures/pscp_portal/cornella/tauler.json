@@ -1,0 +1,34 @@
+{
+ "comptadorPreguntesRespostes": 9,
+ "urlResposta": null,
+ "comptadorAvisos": 1,
+ "urlAvis": {
+  "idPublicacio": 300894146,
+  "tipusPublicacio": 2,
+  "tipusAvis": 1008176
+ },
+ "comptadorRecursos": 0,
+ "urlRecurs": null,
+ "comptadorEsmenes": 1,
+ "urlAvisEsmena": {
+  "idPublicacio": 300894878,
+  "tipusPublicacio": 2,
+  "tipusAvis": 1008195
+ },
+ "comptadorAvisosRelacionatsMesa": 1,
+ "urlAvisRelacionatMesa": {
+  "idPublicacio": 300913578,
+  "tipusPublicacio": 2,
+  "tipusAvis": 1008175
+ },
+ "comptadorAnuncisEmpresesLicitadores": 0,
+ "urlAvisPerEmpresesLicitadores": null,
+ "comptadorEmpresesAdmesesAlSistema": 0,
+ "urlAvisEmpresesAdmesesAlSistema": null,
+ "comptadorAvisosRelacionatsFaseExecucio": 0,
+ "urlAvisRelacionatFaseExecucio": null,
+ "comptadorMantenimentEfecteContracte": 0,
+ "urlAvisMantenimentEfecteContracte": null,
+ "comptadorAnuncisRelacionatsConsultesPreliminars": 0,
+ "urlAvisRelacionatConsultaPreliminar": null
+}

@@ -18,6 +18,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 
+from app.ingestion.pscp_portal.parser import download_url
 from app.models.enums import (
     DocumentContributionStatus,
     DownloadStatus,
@@ -195,13 +196,17 @@ async def test_operator_url_mana_sobre_operator_upload(session, tender_document)
 
 
 async def portal_document(session, tender_document, *, created_at: datetime) -> TenderDocument:
-    """Un document del portal oficial (0065): governat per una font, sense verificacio."""
-    suffix = uuid.uuid4().hex[:8]
+    """Un document del portal oficial (0065): governat per una font, sense verificacio.
+
+    La URL es la de descarrega del portal, amb l'MD5 dels bytes que serveix `process`: el
+    processat d'un document `portal` el comprova (Bloc 2, etapa 2).
+    """
+    suffix = uuid.uuid4().int % 10**9
     document = TenderDocument(
         tender_id=tender_document.tender_id,
         name=f"portal-{suffix}.pdf",
         document_type=TenderDocumentType.OTHER,
-        url=f"https://contractaciopublica.cat/portal-api/descarrega-document/{suffix}/x",
+        url=download_url(suffix, hashlib.md5(PCAP).hexdigest()),
         origin=TenderDocumentOrigin.PORTAL,
         governing_source_id=tender_document.governing_source_id,
         contribution_status=DocumentContributionStatus.NOT_APPLICABLE,

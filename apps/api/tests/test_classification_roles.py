@@ -121,6 +121,40 @@ def test_filenames():
     assert filename_role("06_Plantilla_Formules_Licitacio.xlsx") is None
 
 
+def test_answers_and_board_notices_have_their_own_roles():
+    """`document-roles-v2`: preguntes i respostes i aclariments (`clarification`) i els avisos
+    del tauler de la PSCP (`notice`), pel titol i pel nom."""
+    qa = "Preguntes i respostes (PSCP)\nExpedient 5125/2026\nPregunta 1 · " + FILLER
+    role, position, confidence, title = content_role(qa)
+    assert (role, position, confidence) == (DocumentRole.CLARIFICATION, 0, RoleConfidence.HIGH)
+    assert title == "Preguntes i respostes (PSCP)"
+    assert content_role("ACLARIMENTS AL PLEC DE CLAUSULES\n" + FILLER)[0] is (
+        DocumentRole.CLARIFICATION
+    )
+    assert content_role("PREGUNTAS Y RESPUESTAS\n" + FILLER)[0] is DocumentRole.CLARIFICATION
+    notice = "Avís del tauler (PSCP): Convocatòria d'obertura del sobre B\n" + FILLER
+    assert content_role(notice)[:3] == (DocumentRole.NOTICE, 0, RoleConfidence.HIGH)
+    assert filename_role("Preguntes i respostes (PSCP)") is DocumentRole.CLARIFICATION
+    assert filename_role("PSCP_preguntes_respostes_5125-2026.txt") is DocumentRole.CLARIFICATION
+    assert filename_role("Aclariments.pdf") is DocumentRole.CLARIFICATION
+    assert filename_role("Avís del tauler (PSCP) - Darrer dia consultes") is DocumentRole.NOTICE
+    # El primer titol mana: un PCAP que despres cita les preguntes i respostes es un PCAP.
+    pcap = PCAP_PAGE + "\nClausula 18. Preguntes i respostes dels licitadors."
+    assert content_role(pcap)[0] is DocumentRole.PCAP
+
+
+def test_official_answers_reach_the_analysis_with_the_plecs():
+    """Les respostes oficials poden aclarir o corregir el plec: amb confianca alta, el rol les
+    porta a l'analisi com a documentacio addicional."""
+    qa = facts(0, "Preguntes i respostes (PSCP)", "Preguntes i respostes (PSCP)\n" + FILLER,
+               mime="text/plain")
+    decision = classify_documents([qa]).decisions["m0"]
+    assert (decision.role, decision.confidence) == (
+        DocumentRole.CLARIFICATION, RoleConfidence.HIGH
+    )
+    assert decision.document_type is TenderDocumentType.ADDITIONAL
+
+
 def test_declared_code_is_read_from_the_control_block_only():
     assert declared_code(PPT_PAGE) == "DOC-02"
     assert declared_code("Estat: inventaris vinculats al DOC-04") is None

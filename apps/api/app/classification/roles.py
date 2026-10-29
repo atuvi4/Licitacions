@@ -53,7 +53,9 @@ from app.models.enums import (
     TenderDocumentType,
 )
 
-CLASSIFIER_VERSION = "document-roles-v1"
+#: `document-roles-v2` (Bloc 2, etapa 2): preguntes i respostes i aclariments
+#: (`clarification`), i els avisos del tauler de la PSCP (`notice`).
+CLASSIFIER_VERSION = "document-roles-v2"
 
 #: Caracters de la primera pagina on es busca el titol.
 TITLE_ZONE_CHARS = 1500
@@ -161,7 +163,17 @@ CONTENT_PATTERNS = _patterns(
         r"document europeu unic de contractacio|documento europeo unico de contratacion"
         r"|declaracio responsable|declaracion responsable",
     ),
-    (DocumentRole.NOTICE, r"anunci de licitacio|anuncio de licitacion"),
+    # Un sol patro per rol: `_title_line` els llegeix amb `dict(CONTENT_PATTERNS)`.
+    (
+        DocumentRole.NOTICE,
+        r"anunci de licitacio|anuncio de licitacion|avis del tauler|aviso del tablon",
+    ),
+    (
+        DocumentRole.CLARIFICATION,
+        r"preguntes i respostes|preguntas y respuestas"
+        r"|aclariments (al|als|del|dels|sobre el|sobre els) plecs?"
+        r"|aclaraciones (al|a los|del|de los|sobre el|sobre los) pliegos?",
+    ),
 )
 
 #: Noms de fitxer. Sobre el nom normalitzat, amb separadors convertits en espais.
@@ -198,7 +210,12 @@ FILENAME_PATTERNS = _patterns(
         DocumentRole.ADMINISTRATIVE_FORM,
         r"\bdeuc\b|declaracio responsable|declaracion responsable",
     ),
-    (DocumentRole.NOTICE, r"\banunci\b|\banuncio\b"),
+    (DocumentRole.NOTICE, r"\banunci\b|\banuncio\b|\bavis del tauler\b"),
+    (
+        DocumentRole.CLARIFICATION,
+        r"preguntes (i )?respostes|preguntas (y )?respuestas|\baclariments?\b"
+        r"|\baclaracion(es)?\b",
+    ),
 )
 
 _OFFER_WORDS = re.compile(r"\b(baixa|oferta|puntuacio|punts|preu|pressupost|baja|precio|puntos)\b")

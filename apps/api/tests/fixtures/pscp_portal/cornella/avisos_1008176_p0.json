@@ -1,0 +1,20 @@
+{
+ "content": [
+  {
+   "id": 300894146,
+   "titol": "DARRER DIA CONSULTES ",
+   "descripcio": "Text de prova.",
+   "expedientId": "2c72bffe-9ba0-47ee-8687-57ffa72c8451",
+   "dataPublicacio": "2026-09-29T06:54:13.287Z",
+   "esEsmena": false
+  }
+ ],
+ "totalPages": 1,
+ "totalElements": 1,
+ "last": true,
+ "numberOfElements": 1,
+ "size": 20,
+ "number": 0,
+ "first": true,
+ "empty": false
+}

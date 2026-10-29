@@ -1,4 +1,4 @@
-"""Lectura determinista dels .doc de Word 97-2003 (`doc-v1`) per a l'analisi de requisits.
+"""Lectura determinista dels .doc de Word 97-2003 (`doc-v2`) per a l'analisi de requisits.
 
 Germa de `docx-v1` (`office_text`): llegeix els bytes desats, no els modifica mai (l'original
 i el seu SHA es conserven tal com van arribar) i torna pagines amb text citable. Cap OCR, cap
@@ -29,12 +29,15 @@ Limitacions conegudes de v1, que no fan fallar el document:
 * un simbol d'una font de simbols (`sprmCSymbol`: les caselles de Wingdings, per exemple) surt
   com el caracter que li guarda el lloc, no com el simbol;
 * les propietats que un desat rapid de Word 97/2000 deixa al `Prm` de cada peca no es llegeixen:
-  si hi hagues les de taula, les files sortirien amb la regla de reserva;
-* un .doc no desa les pagines que veu Word: sense salts, tot el document es una pagina (i, per a
-  l'analisi, un sol tros).
+  si hi hagues les de taula, les files sortirien amb la regla de reserva.
 
-**Que es una pagina.** Un salt de pagina o de seccio desat al text (0x0C). Sense cap salt, una
-sola pagina. Mai se'n tallen per llargada.
+**Que es una pagina.** Un salt de pagina o de seccio desat al text (0x0C). Un .doc, pero, no desa
+les pagines que veu Word: si no porta cap salt, el text sencer seria una sola pagina (i, per a
+l'analisi, un sol tros). `doc-v2` el parteix aleshores en **pagines virtuals** d'uns
+`VIRTUAL_PAGE_CHARS` (3.000) caracters, sempre entre paragrafs o files de taula, mai dins: una
+pagina s'omple de linies senceres fins que la seguent la passaria, i una linia mes llarga que el
+limit es una pagina tota sola. Amb salts explicits, les pagines son les del document i prou.
+`doc-v1` deixava el document sense salts en una sola pagina.
 
 **Taules.** Cada cel·la de la taula de fora acaba amb una marca 0x07, i cada fila amb una altra
 que les propietats de paragraf diuen que es de fila. La fila surt com a `docx-v1`,
@@ -52,8 +55,9 @@ anterior: una FIB d'una altra forma), `doc_unreadable` (l'estructura no quadra),
 (mes text del que es llegeix d'un sol document) i `too_many_pages` (mes pagines que
 `DOCUMENT_MAX_PAGES`, com els PDF). Uns bytes que no son cap contenidor OLE2, o un OLE2 sense flux
 `WordDocument` (un RTF, un HTML o un full de calcul desats com a «.doc»), no son un .doc malmes:
-tornen `SKIPPED_UNSUPPORTED`, com qualsevol format que no es llegeix. Un contenidor OLE2 generic
-(`application/x-ole-storage`) no passa per aqui: el tipus es decideix en rebre'l.
+tornen `SKIPPED_UNSUPPORTED`, com qualsevol format que no es llegeix. El tipus es decideix en
+rebre'l: un OLE2 generic amb flux `WordDocument` entra com a `application/msword`
+(`document_download.refine_ole2`), i els altres OLE2 (un .xls, un .msg) no passen per aqui.
 """
 
 from __future__ import annotations
@@ -74,7 +78,8 @@ from app.services.office_text import _failed, _Pages, _result
 from app.services.pdf_text import ExtractionResult, unsupported_result
 
 DOC = "application/msword"
-DOC_PARSER_VERSION = "doc-v1"
+#: `doc-v2`: pagines virtuals quan el document no porta cap salt de pagina (`doc-v1`: una sola).
+DOC_PARSER_VERSION = "doc-v2"
 
 PARSER_VERSIONS: dict[str, str] = {DOC: DOC_PARSER_VERSION}
 
@@ -117,6 +122,8 @@ _MAX_PROPERTY_WORK = 1_000_000
 _MAX_DELETED_RANGES = 50_000
 #: Profunditat de taules niades que es representa (Word en permet 63).
 _MAX_DEPTH = 16
+#: Mida aproximada d'una pagina virtual (`doc-v2`), en caracters, per a un document sense salts.
+VIRTUAL_PAGE_CHARS = 3_000
 
 #: Sprm de paragraf que es llegeixen: operand d'un byte (0 o 1)...
 _SPRM_IN_TABLE = 0x2416
@@ -836,6 +843,28 @@ def _render(
     return layout.result()
 
 
+def _virtual_pages(page: str) -> list[str]:
+    """Una pagina sense salts, partida entre linies en trossos d'uns `VIRTUAL_PAGE_CHARS`.
+
+    Cada linia (un paragraf o una fila de taula) va sencera a una sola pagina: s'hi afegeixen
+    linies mentre la pagina no passi del limit, i una linia mes llarga que el limit es una pagina
+    tota sola. Mateix text, mateixes pagines.
+    """
+    pages: list[str] = []
+    lines: list[str] = []
+    size = 0
+    for line in page.split("\n"):
+        extra = len(line) + (1 if lines else 0)
+        if lines and size + extra > VIRTUAL_PAGE_CHARS:
+            pages.append("\n".join(lines))
+            lines, size, extra = [], 0, len(line)
+        lines.append(line)
+        size += extra
+    if lines:
+        pages.append("\n".join(lines))
+    return pages
+
+
 # --------------------------------------------------------------------------- #
 # Entrada                                                                       #
 # --------------------------------------------------------------------------- #
@@ -867,6 +896,9 @@ def _read_doc(data: bytes) -> list[str]:
         pages = _render(text, segments, paragraphs)
     finally:
         ole.close()
+    if len(pages) == 1 and len(pages[0]) > VIRTUAL_PAGE_CHARS:
+        # Cap salt de pagina: pagines virtuals, sempre entre linies (`doc-v2`).
+        pages = _virtual_pages(pages[0])
     if len(pages) > settings.DOCUMENT_MAX_PAGES:
         raise _DocError(
             TOO_MANY_PAGES,

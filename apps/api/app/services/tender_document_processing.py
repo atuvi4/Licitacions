@@ -15,6 +15,14 @@ fa de lock. El segon request rep 409 en comptes de duplicar la feina.
 Transaccions: cap peticio HTTP dins d'una transaccio oberta. Es reclama el
 document en una transaccio curta, es descarrega i es parseja fora, i es tanca
 amb una altra transaccio curta.
+
+Documents del portal de la PSCP (`origin = portal`, Bloc 2): la URL de descarrega porta
+l'MD5 que publica el portal, i els bytes baixats l'han de tenir (`checksum_mismatch` si
+no, comprovat abans del tipus); ni la URL ni cap redireccio no poden sortir del host del
+portal; i se n'admeten tambe les imatges (es desen sense extreure'n text). Una fallada
+que depen del fitxer publicat i no de la descarrega (`PERMANENT_DOWNLOAD_ERRORS`) no es
+repeteix mentre la URL no canvii. Els documents que el connector genera (`pscp-portal://`)
+no es baixen mai.
 """
 
 from __future__ import annotations
@@ -32,6 +40,8 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.errors import NoContentToExtractError, ProcessingInProgressError
+from app.ingestion.pscp_portal import PORTAL_HOST
+from app.ingestion.pscp_portal.parser import expected_md5, is_generated_url
 from app.models.enums import (
     DownloadStatus,
     ExtractionStatus,
@@ -47,12 +57,21 @@ from app.models.tender_documents import (
 )
 from app.models.tenders import Tender, TenderDocument
 from app.services.document_alias import assign_duplicate_alias
-from app.services.document_download import DownloadError, DownloadResult, download_document
+from app.services.document_download import (
+    CHECKSUM_MISMATCH,
+    IMAGE_MIME_TYPES,
+    MSWORD,
+    OLE2_GENERIC,
+    DownloadError,
+    DownloadResult,
+    download_document,
+    refine_ole2,
+)
 from app.services.document_parsers import extract_text_async, parser_version_for
 from app.services.extraction_qa import PageInput as QaPageInput
 from app.services.extraction_qa import analyse as analyse_extraction_quality
 from app.services.pdf_text import ExtractionResult, should_retry, unsupported_result
-from app.services.storage import build_tender_document_key, get_storage
+from app.services.storage import StorageError, build_tender_document_key, get_storage
 from app.services.tender_lifecycle import record_revision
 from app.services.url_guard import Resolver
 
@@ -61,6 +80,11 @@ logger = logging.getLogger(__name__)
 TERMINAL_EXTRACTION_STATES = frozenset(
     {ExtractionStatus.EXTRACTED, ExtractionStatus.SKIPPED_UNSUPPORTED, ExtractionStatus.FAILED}
 )
+
+#: Fallades d'un document del portal que son del fitxer publicat i no de la descarrega:
+#: l'MD5 dels bytes era el publicat (`invalid_content`: tipus no admes o buit a l'origen)
+#: o el fitxer supera la mida maxima. `checksum_mismatch` no hi es: pot ser transitori.
+PERMANENT_DOWNLOAD_ERRORS = frozenset({"too_large", "invalid_content"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +208,16 @@ async def get_or_create_content(
         sa.select(TenderDocumentContent).where(TenderDocumentContent.sha256 == sha256)
     )
     if existing is not None:
+        if existing.mime_type == OLE2_GENERIC and refine_ole2(OLE2_GENERIC, data) == MSWORD:
+            # Bytes desats abans de `refine_ole2` com a OLE2 generic: porten el flux
+            # `WordDocument`, son un .doc. El tipus es una propietat dels bytes (mai de la
+            # capcalera de qui els torna a enviar): es corregeix aqui.
+            existing.mime_type = MSWORD
+            existing.is_text_extractable = MSWORD in settings.document_text_extraction_mime_types
+            if commit:
+                await session.commit()
+            else:
+                await session.flush()
         return existing, False
 
     key = build_tender_document_key(sha256, detected_extension)
@@ -405,6 +439,24 @@ def is_text_extractable_mime(mime_type: str | None) -> bool:
     return bool(mime_type) and mime_type in settings.document_text_extraction_mime_types
 
 
+async def _refine_stored_ole2(
+    session: AsyncSession, content: TenderDocumentContent, *, commit: bool
+) -> None:
+    """Corregeix a .doc un contingut desat com a OLE2 generic si els bytes ho son."""
+    try:
+        data = await get_storage().download(content.storage_key)
+    except StorageError:
+        return
+    if refine_ole2(OLE2_GENERIC, data) != MSWORD:
+        return
+    content.mime_type = MSWORD
+    content.is_text_extractable = MSWORD in settings.document_text_extraction_mime_types
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
+
+
 async def _ensure_current_extraction(
     session: AsyncSession, content: TenderDocumentContent, *, force: bool, commit: bool = True
 ) -> tuple[TenderDocumentExtraction, bool]:
@@ -416,7 +468,12 @@ async def _ensure_current_extraction(
     (`should_retry`: un PDF xifrat llegit sense la biblioteca de l'AES, tambe en la
     forma antiga `corrupt_pdf`). Amb `commit=False` nomes fa flush: la transaccio es
     de qui crida.
+
+    Uns bytes desats com a OLE2 generic abans de `refine_ole2` es tornen a mirar: si porten
+    el flux `WordDocument`, el contingut passa a .doc i es llegeix amb el seu parser.
     """
+    if content.mime_type == OLE2_GENERIC:
+        await _refine_stored_ole2(session, content, commit=commit)
     current = await current_extraction_for(session, content.id)
     up_to_date = (
         current is not None
@@ -432,6 +489,56 @@ async def _ensure_current_extraction(
     return await _extract(session, content, commit=commit), True
 
 
+async def _download(
+    document: TenderDocument, client: httpx.AsyncClient | None, resolver: Resolver | None
+) -> DownloadResult:
+    """La descarrega del document. Un del portal es verifica a l'origen: el host del portal
+    a cada salt, l'MD5 publicat (abans del tipus) i les imatges admeses."""
+    if document.origin != TenderDocumentOrigin.PORTAL:
+        return await download_document(document.url, client=client, resolver=resolver)
+    expected = expected_md5(document.url)
+    if expected is None:
+        raise DownloadError(
+            "La URL del document del portal no porta l'MD5 publicat.", CHECKSUM_MISMATCH
+        )
+    return await download_document(
+        document.url,
+        client=client,
+        resolver=resolver,
+        allowed_hosts=(PORTAL_HOST,),
+        expected_md5=expected,
+        extra_mime_types=IMAGE_MIME_TYPES,
+    )
+
+
+def permanently_failed(
+    document: TenderDocument,
+    current: TenderDocumentFile | None,
+    now: datetime | None = None,
+) -> bool:
+    """Un document del portal la descarrega vigent del qual ha fallat per una propietat del
+    fitxer publicat (els bytes eren els de l'MD5, o es massa gran): mentre la URL (i per
+    tant l'MD5) sigui la mateixa, tornar-lo a baixar donaria el mateix. Nomes fins a
+    `PSCP_PORTAL_RETRY_PERMANENT_SECONDS`: la configuracio (tipus admesos, mida maxima) pot
+    haver canviat, i llavors es torna a provar."""
+    if not (
+        document.origin == TenderDocumentOrigin.PORTAL
+        and current is not None
+        and current.content_id is None
+        and current.download_status == DownloadStatus.FAILED
+        and current.error_code in PERMANENT_DOWNLOAD_ERRORS
+        and current.source_url == document.url
+    ):
+        return False
+    if current.started_at is None:
+        return True
+    started = current.started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    elapsed = (now or datetime.now(UTC)) - started
+    return elapsed < timedelta(seconds=settings.PSCP_PORTAL_RETRY_PERMANENT_SECONDS)
+
+
 async def process_tender_document(
     session: AsyncSession,
     document: TenderDocument,
@@ -440,6 +547,7 @@ async def process_tender_document(
     force_reextract: bool = False,
     client: httpx.AsyncClient | None = None,
     resolver: Resolver | None = None,
+    record: bool = True,
 ) -> ProcessOutcome:
     """Descarrega, guarda i extreu el text d'un document de licitacio.
 
@@ -448,9 +556,15 @@ async def process_tender_document(
 
     Un document pujat per l'operador (`operator_upload`, 3B-2 §2.2) no te cap URL
     d'on tornar-lo a baixar: els seus bytes son els pujats. `force_download` no hi
-    fa res (la re-extraccio, si).
+    fa res (la re-extraccio, si). Igual per als documents que genera el connector del
+    portal (`pscp-portal://`): els seus bytes son el text generat.
+
+    Amb `record=False` no deixa la revisio de la licitacio: la sincronitzacio del portal
+    en deixa una sola al final, per a tots els documents que ha baixat.
     """
-    if force_download and document.origin == TenderDocumentOrigin.OPERATOR_UPLOAD:
+    if force_download and (
+        document.origin == TenderDocumentOrigin.OPERATOR_UPLOAD or is_generated_url(document.url)
+    ):
         logger.info(
             "document.process.force_download_ignored",
             extra={"document_id": str(document.id), "origin": str(document.origin)},
@@ -477,11 +591,16 @@ async def process_tender_document(
         await session.refresh(current)
         return ProcessOutcome(file=current, reused=not worked)
 
+    # Un fitxer del portal que no es pot desar (tipus no admes amb l'MD5 bo, massa gran)
+    # no es torna a baixar mentre la URL no canvii: nomes si es demana explicitament.
+    if not force_download and permanently_failed(document, current):
+        return ProcessOutcome(file=current, reused=True)
+
     previous = current if has_content else None
     file = await _claim(session, document)
 
     try:
-        result = await download_document(document.url, client=client, resolver=resolver)
+        result = await _download(document, client, resolver)
     except DownloadError as exc:
         file.download_status = DownloadStatus.FAILED
         # Una fallada no destrona una versio bona; si no n'hi ha cap, la fallada
@@ -549,7 +668,8 @@ async def process_tender_document(
     # modificacio de la licitacio, encara que el feed no digui res: es
     # exactament el cas "mateixa URL, SHA nou". Si el SHA es el mateix, aixo no
     # crea cap revisio.
-    await _record_tender_revision(session, document.tender_id)
+    if record:
+        await _record_tender_revision(session, document.tender_id)
 
     logger.info(
         "document.process.ok",

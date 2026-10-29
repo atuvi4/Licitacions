@@ -28,6 +28,10 @@ export const FILE_ERROR_MESSAGES: Record<string, string> = {
   timeout: "La descàrrega ha esgotat el temps d'espera.",
   network_error: "No s'ha pogut connectar amb la font del document.",
   not_found: "El document ja no existeix a la font.",
+  checksum_mismatch:
+    "Els bytes baixats no coincideixen amb l'MD5 que publica el portal de la PSCP: es tornarà a provar més endavant.",
+  host_not_official: "La descàrrega ha intentat sortir del lloc oficial de la font.",
+  invalid_content: "El fitxer publicat és buit o d'un tipus que no es pot desar.",
   unsupported_for_text_extraction: "Aquest format no permet extreure'n el text.",
   corrupt_pdf: "El PDF no es pot llegir: sembla malmès.",
   encrypted_pdf: "El PDF està protegit amb contrasenya i no se'n pot extreure el text.",
@@ -45,6 +49,16 @@ const UNKNOWN_FILE_ERROR = "No s'ha pogut processar aquest document.";
 
 export function fileErrorText(code: string | null | undefined): string {
   return (code && FILE_ERROR_MESSAGES[code]) || UNKNOWN_FILE_ERROR;
+}
+
+/**
+ * On porta «Origen ↗». Un document generat pel connector del portal (`pscp-portal://`) no té
+ * cap fitxer a l'origen: l'enllaç és la fitxa de la licitació a la PSCP. Una pujada
+ * (`upload://`, `operator-upload://`) no té origen web: cap enllaç.
+ */
+export function originHref(url: string, tenderSourceUrl: string | null | undefined): string | null {
+  if (url.startsWith("pscp-portal://")) return tenderSourceUrl || null;
+  return /^https?:\/\//i.test(url) ? url : null;
 }
 
 /** «12 pàg. · 34.567 caràcters», o «—» si no hi ha cap extracció. */

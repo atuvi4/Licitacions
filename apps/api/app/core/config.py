@@ -76,6 +76,28 @@ class Settings(BaseSettings):
     # Pausa de cortesia entre pagines consecutives d'un feed.
     INGESTION_PAGE_PAUSE_SECONDS: float = 1.0
 
+    # --- Connector del portal de la PSCP (Bloc 2, etapa 2: `app/ingestion/pscp_portal`) ---
+    # Interruptor: apagat, cap feina de sincronitzacio no s'encua ni consulta el portal. Els
+    # documents ja incorporats es continuen processant com qualsevol altre.
+    PSCP_PORTAL_ENABLED: bool = False
+    # Pausa minima entre dues peticions consecutives al portal (JSON o descarrega).
+    PSCP_PORTAL_PAUSE_SECONDS: float = 1.0
+    # Limit dur de peticions JSON d'una sincronitzacio, a mes de les que el tauler diu que
+    # caldran: si s'hi arriba, s'atura sense canviar res.
+    PSCP_PORTAL_MAX_REQUESTS: int = 300
+    # Intents d'una peticio JSON davant de 429, 5xx o errors de xarxa (amb espera creixent).
+    PSCP_PORTAL_MAX_ATTEMPTS: int = 4
+    # Temps d'una lectura de xarxa; una resposta sencera en pot trigar com a molt el doble.
+    PSCP_PORTAL_TIMEOUT_SECONDS: float = 30.0
+    # Espera minima entre dues sincronitzacions de la mateixa licitacio (bon us del portal).
+    PSCP_PORTAL_MIN_INTERVAL_SECONDS: int = 300
+    # Una descarrega del portal fallada per la xarxa o per l'MD5 es torna a provar al cap
+    # d'aquest temps (no a cada sincronitzacio: cada intent deixa una fila nova).
+    PSCP_PORTAL_RETRY_FAILED_SECONDS: int = 3600
+    # Una fallada del fitxer publicat (tipus no admes amb l'MD5 bo, massa gran) no es repeteix
+    # fins al cap d'aquest temps: pot haver canviat la configuracio dels tipus o de la mida.
+    PSCP_PORTAL_RETRY_PERMANENT_SECONDS: int = 7 * 24 * 3600
+
     # --- Descarrega de plecs de licitacio ---
     # Aquests limits son l'unica autoritat: cap altre modul defineix numeros.
     DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS: float = 30.0

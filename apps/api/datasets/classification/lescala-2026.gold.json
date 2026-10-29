@@ -3,7 +3,7 @@
   "description": "Ajuntament de l'Escala, Telecomunicacions 2027 (servei integral de telecomunicacions, telefonia IP, electronica de xarxa i fibra municipal). Documents tal com son a la carpeta de licitacio (arrel + 'Resta Documentació/'), rebuts com un paquet ZIP. Gold de la classificacio documental (fase 1 del motor d'analisi): el resultat no ha de dependre del canal.",
   "reviewed_by": "analisi manual del 2026-09-29 (pilot_lescala_2026.md)",
   "revision_note": "2026-10-11: el DOCX i l'XLSX ja es llegeixen per a l'analisi (parsers docx-v1 i xlsx-v1): les dues troballes format_not_analyzable desapareixen; rols i resta de troballes sense canvis.",
-  "classifier_version": "document-roles-v1",
+  "classifier_version": "document-roles-v2",
   "archive": {
     "default_location": "var/gold/lescala-2026.zip",
     "env": "CLASSIFICATION_GOLD_LESCALA_ZIP",

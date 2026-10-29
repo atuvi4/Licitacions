@@ -20,7 +20,7 @@ Cap crida a cap proveidor: la deteccio de canvis es purament determinista.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -1827,6 +1827,12 @@ class TestMateixInstant:
         assert snapshot_hash({"deadline_at": canonical_instant(self.MADRID_HIVERN)}) == (
             snapshot_hash({"deadline_at": canonical_instant(self.UTC_HIVERN)})
         )
+
+    def test_una_data_sense_hora_es_la_seva_forma_iso(self):
+        """`TenderDocument.published_at` es una data (el portal de la PSCP l'omple): es
+        canonicalitza igual que el seu text ISO i no fa petar la fotografia."""
+        assert canonical_instant(date(2026, 9, 14)) == canonical_instant("2026-09-14")
+        assert canonical_instant(date(2026, 9, 14)) == "2026-09-14T00:00:00+00:00"
 
     def test_un_instant_realment_diferent_si_que_es_un_canvi(self):
         """La correccio no pot fer-nos cecs al canvi que si que compta."""

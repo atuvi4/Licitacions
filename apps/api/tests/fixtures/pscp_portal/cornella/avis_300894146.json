@@ -1,0 +1,25 @@
+{
+ "expedientId": "2c72bffe-9ba0-47ee-8687-57ffa72c8451",
+ "codiExpedient": "26-089",
+ "idUltimaPublicacio": 300894911,
+ "dataPublicacio": "2026-09-29T06:54:13.287Z",
+ "despublicat": null,
+ "publicacioAntiga": null,
+ "tipusAvis": 1008176,
+ "navegacioEsmenes": [
+  {
+   "publicacioId": 300894146,
+   "dataPublicacio": "2026-09-29T06:54:13.287Z",
+   "tipusEsmena": null
+  }
+ ],
+ "dades": {
+  "titol": "DARRER DIA CONSULTES ",
+  "descripcio": "Text de prova de l'avís 1: el publica l'òrgan al tauler.",
+  "linkInteres": [],
+  "documents": [],
+  "tipusAvis": 1008176,
+  "tipusEsmena": null,
+  "descripcioEsmena": null
+ }
+}

@@ -27,7 +27,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from app.models.enums import StrEnum
@@ -35,7 +35,7 @@ from app.models.enums import StrEnum
 logger = logging.getLogger(__name__)
 
 
-def canonical_instant(value: datetime | str | None) -> str | None:
+def canonical_instant(value: datetime | date | str | None) -> str | None:
     """Un instant, sempre escrit igual: en UTC.
 
     `2026-11-28T19:00:00+01:00` i `2026-11-28T18:00:00+00:00` son el MATEIX
@@ -62,6 +62,10 @@ def canonical_instant(value: datetime | str | None) -> str | None:
         except ValueError:
             # No es un instant: es retorna tal qual i es compara com a text.
             return value
+    if not isinstance(value, datetime):
+        # Una data sense hora (`TenderDocument.published_at`, que omple el portal de la
+        # PSCP): el mateix que la seva forma ISO, es a dir, la mitjanit en UTC.
+        value = datetime(value.year, value.month, value.day)
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).isoformat()
@@ -113,6 +117,8 @@ REVISION_ORIGINS: dict[str, str] = {
     "tombstone": "source",
     "document_processing": "internal",
     "document_intake": "internal",
+    #: El connector del portal de la PSCP: ho ha publicat l'organ al seu perfil.
+    "portal_sync": "source",
     #: Correccions de normalitzacio sobre dades ja desades (backfills).
     "normalization": "internal",
     "manual_create": "manual",
@@ -804,11 +810,17 @@ def _document_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Cha
 
     old_by_sha = {entry["sha256"]: entry for entry in present_before if entry.get("sha256")}
     new_by_sha = {entry["sha256"]: entry for entry in present_after if entry.get("sha256")}
+    # L'MD5 publicat (nomes als documents del portal): la identitat de contingut quan no se
+    # n'han baixat els bytes.
+    old_by_md5 = {entry["md5"]: entry for entry in present_before if entry.get("md5")}
+    new_by_md5 = {entry["md5"]: entry for entry in present_after if entry.get("md5")}
 
     for url in sorted(set(new) - set(old)):
         entry = new[url]
         sha = entry.get("sha256")
         previous = old_by_sha.get(sha) if sha else None
+        if previous is None and entry.get("md5"):
+            previous = old_by_md5.get(entry["md5"])
         if previous is not None and previous["url"] not in new:
             # URL nova amb contingut ja conegut: s'ha mogut, no ha canviat.
             changes.append(
@@ -820,7 +832,7 @@ def _document_changes(before: dict[str, Any], after: dict[str, Any]) -> list[Cha
     for url in sorted(set(old) - set(new)):
         entry = old[url]
         sha = entry.get("sha256")
-        if sha and sha in new_by_sha:
+        if (sha and sha in new_by_sha) or (entry.get("md5") and entry["md5"] in new_by_md5):
             # Ja s'ha reportat com a canvi d'adreça al bucle anterior. Tambe es el
             # cas d'un canonic retirat que conserva un alies amb els mateixos bytes
             # (3B-2 §2.1): el contingut continua al tender, aixi que NO es

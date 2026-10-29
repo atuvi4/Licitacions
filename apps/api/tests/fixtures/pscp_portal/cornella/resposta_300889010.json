@@ -1,0 +1,32 @@
+{
+ "expedientId": "2c72bffe-9ba0-47ee-8687-57ffa72c8451",
+ "publicacioAntiga": null,
+ "codiExpedient": "26-089",
+ "idUltimaPublicacio": 300894911,
+ "dataPublicacio": "2026-09-22T09:44:12.853Z",
+ "despublicat": null,
+ "tipusAvis": 1008176,
+ "navegacioEsmenes": [
+  {
+   "publicacioId": 300889010,
+   "dataPublicacio": "2026-09-22T09:44:12.853Z",
+   "tipusEsmena": null
+  }
+ ],
+ "dades": {
+  "titol": "Bon dia,\nPregunta de prova 8: quin abast té l'apartat 8 del plec tècnic?",
+  "descripcio": "Resposta oficial de prova 8: l'abast és el que descriu el plec, sense canvis.",
+  "linkInteres": [],
+  "documents": [
+   {
+    "id": 302612671,
+    "titol": "resposta 2.pdf",
+    "hash": "EDE092DA9CFD9650A138809C3DC97D07",
+    "mida": 263122,
+    "idioma": "ca"
+   }
+  ],
+  "tipusEsmena": null,
+  "descripcioEsmena": null
+ }
+}

@@ -186,6 +186,26 @@ class QuoteNotOpenError(ConflictError):
     code = "quote_not_open"
 
 
+class PortalSyncDisabledError(AppError):
+    """El connector del portal de la PSCP es apagat (`PSCP_PORTAL_ENABLED`)."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "portal_sync_disabled"
+
+
+class PortalSyncNotAvailableError(ValidationError):
+    """La licitacio no te cap publicacio de la PSCP que es pugui sincronitzar."""
+
+    code = "portal_sync_not_available"
+
+
+class PortalSyncTooSoonError(AppError):
+    """La licitacio s'ha sincronitzat fa massa poc (`PSCP_PORTAL_MIN_INTERVAL_SECONDS`)."""
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    code = "portal_sync_too_soon"
+
+
 class EndpointMovedError(AppError):
     """L'operacio llarga ja no s'executa en una peticio HTTP."""
 

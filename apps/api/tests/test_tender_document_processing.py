@@ -533,11 +533,11 @@ async def _doc_stored_before_doc_v1(session, tender_document, monkeypatch, body:
     return doc, first
 
 
-async def test_an_old_doc_without_text_is_read_with_doc_v1_without_downloading_it_again(
+async def test_an_old_doc_without_text_is_read_with_the_doc_parser_without_downloading_it_again(
     session, tender_document, monkeypatch
 ):
     """El cas de Parc Taulí: .doc desats quan encara no es llegien (`skipped_unsupported`,
-    versio del PDF). Amb `doc-v1`, el seguent processat els llegeix sense baixar-los."""
+    versio del PDF). Amb el parser dels .doc, el seguent processat els llegeix sense baixar-los."""
     from tests.fixtures.doc_builder import build_doc
 
     body = build_doc("MODEL D'OFERTA ECONOMICA\r")
@@ -562,7 +562,7 @@ async def test_an_old_doc_without_text_is_read_with_doc_v1_without_downloading_i
             TenderDocumentExtraction.is_current.is_(True),
         )
     )
-    assert (current.status, current.parser_version) == (ExtractionStatus.EXTRACTED, "doc-v1")
+    assert (current.status, current.parser_version) == (ExtractionStatus.EXTRACTED, "doc-v2")
     page = await session.scalar(
         sa.select(TenderDocumentPage).where(TenderDocumentPage.extraction_id == current.id)
     )
@@ -572,8 +572,8 @@ async def test_an_old_doc_without_text_is_read_with_doc_v1_without_downloading_i
 async def test_an_old_doc_that_doc_v1_cannot_read_fails_once(
     session, tender_document, monkeypatch
 ):
-    """Si `doc-v1` no el pot llegir, la fallada substitueix el «no suportat» antic (cap dels
-    dos no tenia text) i es la vigent: no es torna a provar a cada processat."""
+    """Si el parser dels .doc no el pot llegir, la fallada substitueix el «no suportat» antic
+    (cap dels dos no tenia text) i es la vigent: no es torna a provar a cada processat."""
     from tests.fixtures.doc_builder import build_doc
 
     body = build_doc("MODEL D'OFERTA ECONOMICA\r")[:1024]  # OLE2 truncat
@@ -589,7 +589,7 @@ async def test_an_old_doc_that_doc_v1_cannot_read_fails_once(
     revisions = await _revisions(session, first.file.content_id)
     assert [(r.status, r.parser_version, r.is_current) for r in revisions] == [
         (ExtractionStatus.SKIPPED_UNSUPPORTED, PARSER_VERSION, False),
-        (ExtractionStatus.FAILED, "doc-v1", True),
+        (ExtractionStatus.FAILED, "doc-v2", True),
     ]
     assert revisions[1].error_code == "doc_unreadable"
     assert read.reused is False

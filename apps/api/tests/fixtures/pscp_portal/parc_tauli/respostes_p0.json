@@ -1,0 +1,92 @@
+{
+ "content": [
+  {
+   "id": 300914414,
+   "titol": "Bon dia,\nPregunta de prova 1: quin abast té l'apartat 1 del plec tècnic?",
+   "descripcio": "Resposta oficial de prova 1: l'abast és el que descriu el plec, sense canvis.",
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dataPublicacio": "2026-10-21T10:14:08.346Z",
+   "esEsmena": false
+  },
+  {
+   "id": 300914933,
+   "titol": "Bon dia,\nPregunta de prova 2: quin abast té l'apartat 2 del plec tècnic?",
+   "descripcio": "Resposta oficial de prova 2: l'abast és el que descriu el plec, sense canvis.",
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dataPublicacio": "2026-10-21T10:02:35.460Z",
+   "esEsmena": false
+  },
+  {
+   "id": 300908791,
+   "titol": "Bon dia,\nPregunta de prova 3: quin abast té l'apartat 3 del plec tècnic?",
+   "descripcio": "Resposta oficial de prova 3: l'abast és el que descriu el plec, sense canvis.",
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dataPublicacio": "2026-10-15T05:28:05.448Z",
+   "esEsmena": false
+  },
+  {
+   "id": 300908790,
+   "titol": "Bon dia,\nPregunta de prova 4: quin abast té l'apartat 4 del plec tècnic?",
+   "descripcio": "Resposta oficial de prova 4: l'abast és el que descriu el plec, sense canvis.",
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dataPublicacio": "2026-10-15T05:26:05.388Z",
+   "esEsmena": false
+  },
+  {
+   "id": 300718198,
+   "titol": "Bon dia,\nPregunta de prova 5: quin abast té l'apartat 5 del plec tècnic?",
+   "descripcio": "Resposta oficial de prova 5: l'abast és el que descriu el plec, sense canvis.",
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dataPublicacio": "2026-03-11T07:02:10.691Z",
+   "esEsmena": false
+  },
+  {
+   "id": 300716741,
+   "titol": "Bon dia,\nPregunta de prova 6: quin abast té l'apartat 6 del plec tècnic?",
+   "descripcio": "Resposta oficial de prova 6: l'abast és el que descriu el plec, sense canvis.",
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dataPublicacio": "2026-03-09T15:52:05.461Z",
+   "esEsmena": false
+  },
+  {
+   "id": 300716737,
+   "titol": "Bon dia,\nPregunta de prova 7: quin abast té l'apartat 7 del plec tècnic?",
+   "descripcio": "Resposta oficial de prova 7: l'abast és el que descriu el plec, sense canvis.",
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dataPublicacio": "2026-03-09T15:50:07.082Z",
+   "esEsmena": false
+  },
+  {
+   "id": 300712206,
+   "titol": "Bon dia,\nPregunta de prova 8: quin abast té l'apartat 8 del plec tècnic?",
+   "descripcio": "Resposta oficial de prova 8: l'abast és el que descriu el plec, sense canvis.",
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dataPublicacio": "2026-03-05T06:16:06.583Z",
+   "esEsmena": false
+  },
+  {
+   "id": 300707481,
+   "titol": "Bon dia,\nPregunta de prova 9: quin abast té l'apartat 9 del plec tècnic?",
+   "descripcio": "Resposta oficial de prova 9: l'abast és el que descriu el plec, sense canvis.",
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dataPublicacio": "2026-02-27T13:18:15.912Z",
+   "esEsmena": false
+  },
+  {
+   "id": 300705651,
+   "titol": "Bon dia,\nPregunta de prova 10: quin abast té l'apartat 10 del plec tècnic?",
+   "descripcio": "Resposta oficial de prova 10: l'abast és el que descriu el plec, sense canvis.",
+   "expedientId": "32b20054-4b92-4c38-a406-a087426de02a",
+   "dataPublicacio": "2026-02-26T09:36:07.444Z",
+   "esEsmena": false
+  }
+ ],
+ "totalPages": 1,
+ "totalElements": 10,
+ "last": true,
+ "numberOfElements": 10,
+ "size": 100,
+ "number": 0,
+ "first": true,
+ "empty": false
+}

@@ -27,7 +27,8 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import DocumentContributionStatus, SourceType
+from app.ingestion.pscp_portal.parser import expected_md5
+from app.models.enums import DocumentContributionStatus, SourceType, TenderDocumentOrigin
 from app.models.global_classification import review_heads, tender_reviews_query
 from app.models.sources import Source
 from app.models.tender_documents import TenderDocumentContent, TenderDocumentFile
@@ -232,6 +233,15 @@ def _document_entry(
         "published_at": canonical_instant(document.published_at),
         "sha256": shas.get(document.id),
     }
+    # Document del portal de la PSCP (0065): l'MD5 que la URL de descarrega publica es una
+    # identitat de contingut encara que no se n'hagin baixat els bytes (un fitxer que no es
+    # pot desar). Amb ell, una esmena que el torna a publicar amb un altre identificador es
+    # un canvi d'adreca i no una retirada i una alta. Nomes hi es en aquests documents: cap
+    # fotografia d'abans canvia.
+    if document.origin == TenderDocumentOrigin.PORTAL:
+        md5 = expected_md5(document.url)
+        if md5 is not None:
+            entry["md5"] = md5
     # Un document absent de la publicacio completa vigent es queda a la
     # fotografia marcat (no s'esborra mai); el present no porta la marca.
     if document.removed_at is not None:

@@ -22,6 +22,7 @@ el resultat per reaprofitar.
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -42,14 +43,20 @@ from app.core.errors import (
     NotFoundError,
     NothingAnalyzableError,
     OperationBusyError,
+    PortalSyncDisabledError,
+    PortalSyncNotAvailableError,
+    PortalSyncTooSoonError,
     PublicTenderCanonicalOnlyError,
     ValidationError,
 )
+from app.ingestion.pscp_portal.parser import sync_target
 from app.jobs.params import (
     AnalyzeParams,
+    PortalSyncParams,
     ProcessParams,
     analysis_dedupe_key,
     canonical_analysis_dedupe_key,
+    portal_sync_dedupe_key,
     process_dedupe_key,
 )
 from app.jobs.queue import is_postgres, utcnow
@@ -566,6 +573,92 @@ async def submit_process_request(
             user_id=user_id,
             tender_id=tender_id,
             job_type=WorkJobType.PROCESS_TENDER_DOCUMENTS,
+            parameters=parameters,
+        )
+        if submission is None:
+            await session.rollback()
+            continue
+        if not await _commit_or_retry(session):
+            continue
+        return submission
+
+    raise OperationBusyError("No s'ha pogut registrar la peticio ara mateix. Torna-ho a provar.")
+
+
+async def submit_portal_sync_request(
+    session: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    tender_id: uuid.UUID,
+) -> Submission:
+    """Demana la sincronitzacio de la licitacio amb el portal de la PSCP (Bloc 2, etapa 2).
+
+    Com el processat idempotent, oberta a qualsevol empresa que vegi la licitacio: nomes
+    hi afegeix el que l'organ publica al portal, i una sola execucio activa per licitacio
+    (les peticions que arriben mentre corre s'hi vinculen). Bon us del portal: una
+    sincronitzacio acabada fa menys de `PSCP_PORTAL_MIN_INTERVAL_SECONDS` no es repeteix.
+    """
+    tender = await _load_tender(session, tender_id, company_id)
+    if not settings.PSCP_PORTAL_ENABLED:
+        raise PortalSyncDisabledError("La sincronitzacio amb el portal de la PSCP no es activa.")
+    _ref, reason = sync_target(
+        tender.owner_company_id,
+        tender.source_url,
+        (tender.source_metadata or {}).get("pscp_id_intern"),
+    )
+    if reason is not None:
+        raise PortalSyncNotAvailableError(
+            "Aquesta licitacio no te cap publicacio de la PSCP per sincronitzar.",
+            details={"reason": reason},
+        )
+    # Nomes una sincronitzacio acabada be: una de fallada (portal caigut, conflicte, connector
+    # apagat) es pot tornar a demanar de seguida.
+    last_finished = await session.scalar(
+        sa.select(sa.func.max(WorkJob.finished_at)).where(
+            WorkJob.tender_id == tender_id,
+            WorkJob.job_type == WorkJobType.SYNC_PORTAL_DOCUMENTS,
+            WorkJob.status == WorkJobStatus.SUCCEEDED,
+        )
+    )
+    if last_finished is not None:
+        if last_finished.tzinfo is None:
+            last_finished = last_finished.replace(tzinfo=UTC)
+        elapsed = (utcnow() - last_finished).total_seconds()
+        wait = settings.PSCP_PORTAL_MIN_INTERVAL_SECONDS - elapsed
+        if wait > 0:
+            raise PortalSyncTooSoonError(
+                "Aquesta licitacio s'ha sincronitzat amb el portal fa molt poc.",
+                details={"retry_after_seconds": math.ceil(wait)},
+            )
+
+    parameters = PortalSyncParams().model_dump(mode="json")
+    dedupe_key = portal_sync_dedupe_key(tender_id=tender_id)
+    for _ in range(_MAX_LINK_ATTEMPTS):
+        job_id, created = await _insert_or_get_job(
+            session,
+            {
+                "id": uuid.uuid4(),
+                "job_type": WorkJobType.SYNC_PORTAL_DOCUMENTS,
+                "status": WorkJobStatus.QUEUED,
+                "tender_id": tender_id,
+                "parameters": parameters,
+                "dedupe_key": dedupe_key,
+                "attempts": 0,
+                "max_attempts": settings.JOB_DOCUMENT_MAX_ATTEMPTS,
+            },
+        )
+        if job_id is None:
+            await session.rollback()
+            continue
+        submission = await _link(
+            session,
+            job_id=job_id,
+            created=created,
+            company_id=company_id,
+            user_id=user_id,
+            tender_id=tender_id,
+            job_type=WorkJobType.SYNC_PORTAL_DOCUMENTS,
             parameters=parameters,
         )
         if submission is None:

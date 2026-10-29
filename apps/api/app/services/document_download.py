@@ -14,12 +14,18 @@ Tres decisions que val la pena explicitar:
 * **Els magic bytes manen.** L'ordre de confianca es magic bytes > Content-Type
   > extensio de la URL. Una URL que acaba en `.pdf` i retorna HTML es un error,
   no un PDF estrany.
+
+Amb `expected_md5` (documents del portal de la PSCP, la URL porta l'MD5 publicat) l'MD5
+es comprova ABANS del tipus: si els bytes no son els publicats es `checksum_mismatch`
+(pot ser transitori: una pagina de manteniment, un cos buit, una memoria cau antiga), i
+nomes si ho son una fallada de tipus o de mida es una propietat del fitxer publicat.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import logging
 import re
 import time
@@ -28,6 +34,7 @@ from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
 
 import httpx
+import olefile
 
 from app.core.config import settings
 from app.core.http import user_agent
@@ -66,12 +73,29 @@ OLE2_REFINEMENTS = frozenset(
         "application/vnd.ms-powerpoint",
     }
 )
+MSWORD = "application/msword"
+
+#: Els bytes baixats no tenen l'MD5 que publica l'origen (portal de la PSCP).
+CHECKSUM_MISMATCH = "checksum_mismatch"
+
+#: Imatges: el portal de la PSCP en publica com a adjunts de respostes. Es desen (no se
+#: n'extreu text) quan qui baixa les admet (`extra_mime_types`).
+IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/tiff", "image/webp"})
+_IMAGE_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"II*\x00", "image/tiff"),
+    (b"MM\x00*", "image/tiff"),
+)
 
 EXTRA_EXTENSIONS = {
     "application/xml": "xml",
     "text/xml": "xml",
     "text/html": "html",
     OLE2_GENERIC: "ole",
+    "image/gif": "gif",
 }
 
 _FILENAME_RE = re.compile(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)\"?", re.IGNORECASE)
@@ -130,6 +154,11 @@ def sniff_mime_type(head: bytes) -> str | None:
         return "application/zip"
     if head.startswith(OLE2_MAGIC):
         return OLE2_GENERIC
+    for magic, mime_type in _IMAGE_MAGIC:
+        if head.startswith(magic):
+            return mime_type
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
     stripped = head.lstrip()[:512].lower()
     if stripped.startswith(b"<!doctype html") or stripped.startswith(b"<html"):
         return "text/html"
@@ -156,6 +185,29 @@ def resolve_mime_type(sniffed: str | None, declared: str | None, url: str) -> st
     if declared:
         return declared
     raise DownloadError("No s'ha pogut determinar el tipus del document.", "invalid_content")
+
+
+def refine_ole2(mime_type: str, data: bytes) -> str:
+    """Un OLE2 que ningu no ha afinat es un .doc si porta el flux `WordDocument` (Bloc 2).
+
+    Els magic bytes nomes diuen «OLE2». Si cap declaracio no n'ha dit el tipus concret,
+    el contenidor mateix ho diu: el flux `WordDocument` nomes el te un document de Word
+    binari (un .xls te `Workbook`, un .ppt `PowerPoint Document`). Un OLE2 que no es pot
+    llegir es queda generic. Nomes afina, mai contradiu: un tipus que ja no es el generic
+    no es toca.
+    """
+    if mime_type != OLE2_GENERIC:
+        return mime_type
+    try:
+        ole = olefile.OleFileIO(io.BytesIO(data))
+    except Exception:  # noqa: BLE001 - un contenidor malmes es queda generic
+        return mime_type
+    try:
+        return MSWORD if ole.exists("WordDocument") else mime_type
+    except Exception:  # noqa: BLE001
+        return mime_type
+    finally:
+        ole.close()
 
 
 def extension_for(mime_type: str) -> str:
@@ -257,12 +309,18 @@ async def download_document(
     client: httpx.AsyncClient | None = None,
     resolver: Resolver | None = None,
     allowed_hosts: Iterable[str] | None = None,
+    expected_md5: str | None = None,
+    extra_mime_types: Iterable[str] = (),
 ) -> DownloadResult:
     """Descarrega i valida un document. Llanca `DownloadError` amb un codi estable.
 
     Amb `allowed_hosts` (allowlist de l'operador, 3B-2 §2.2), la URL i cada
     salt de redireccio han de ser d'un host oficial (`is_official_host`); si no,
     `host_not_official` abans de demanar-hi res. Sense, el comportament de sempre.
+
+    Amb `expected_md5`, els bytes l'han de tenir (`checksum_mismatch`), i es comprova
+    abans del tipus i de si es buit. `extra_mime_types` amplia els tipus admesos per a
+    aquesta descarrega (les imatges dels documents del portal).
     """
     allowed = list(allowed_hosts) if allowed_hosts is not None else None
     started = time.monotonic()
@@ -317,12 +375,23 @@ async def download_document(
             )
 
         body = attempt.body or b""
+        if expected_md5 is not None:
+            actual = hashlib.md5(body, usedforsecurity=False).hexdigest().upper()
+            if actual != expected_md5.upper():
+                raise DownloadError(
+                    "Els bytes baixats no tenen l'MD5 que publica l'origen.",
+                    CHECKSUM_MISMATCH,
+                    http_status=attempt.status,
+                )
         if not body:
             raise DownloadError("El document descarregat es buit.", "invalid_content")
 
         declared = (attempt.headers.get("content-type") or "").split(";")[0].strip().lower() or None
-        mime_type = resolve_mime_type(sniff_mime_type(body[:2048]), declared, current)
-        if mime_type not in settings.document_allowed_mime_types:
+        mime_type = refine_ole2(
+            resolve_mime_type(sniff_mime_type(body[:2048]), declared, current), body
+        )
+        allowed_types = settings.document_allowed_mime_types | set(extra_mime_types)
+        if mime_type not in allowed_types:
             raise DownloadError(f"Tipus de document no admes: {mime_type}.", "invalid_content")
 
         download_ms = int((time.monotonic() - started) * 1000)

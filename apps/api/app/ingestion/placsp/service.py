@@ -77,6 +77,7 @@ from app.ingestion.placsp.normalizer import NormalizedTender, normalize
 from app.ingestion.sources import SOURCES
 from app.models.cpv import CPVCode
 from app.models.enums import (
+    AuditAction,
     DocumentContributionStatus,
     IngestionStatus,
     ProcessingStatus,
@@ -91,6 +92,7 @@ from app.models.tenders import (
     TenderLot,
     TenderLotCPV,
 )
+from app.services import audit
 from app.services.document_alias import (
     assign_duplicate_alias,
     promote_alias_if_canonical_retired,
@@ -338,10 +340,12 @@ class ApplyOutcome:
 
 @dataclass(slots=True)
 class DocumentSync:
-    """Documents governats per la font que aquest sync ha retirat o restaurat."""
+    """Documents governats per la font que aquest sync ha retirat, restaurat o adoptat."""
 
     removed: list[TenderDocument] = field(default_factory=list)
     restored: list[TenderDocument] = field(default_factory=list)
+    #: Documents del portal de la PSCP que el feed ha comencat a publicar (feed > portal).
+    adopted: list[TenderDocument] = field(default_factory=list)
 
 
 def raw_storage_key(record_id: uuid.UUID, moment: datetime | None = None) -> str:
@@ -1351,10 +1355,10 @@ class PlacspIngestionService:
         # propia (`document_intake`): un canonic retirat pel feed cedeix el lloc al
         # seu alies, i un document que torna recupera el seu. Res d'aixo ho ha
         # publicat la font; si no hi havia alies, la revisio no canvia (no crea res).
-        if documents.removed or documents.restored:
+        if documents.removed or documents.restored or documents.adopted:
             for document in documents.removed:
                 await promote_alias_if_canonical_retired(self.session, document, record=False)
-            for document in documents.restored:
+            for document in documents.restored + documents.adopted:
                 await assign_duplicate_alias(self.session, tender.id, document)
             await record_revision(self.session, tender, trigger=DOCUMENT_INTAKE_TRIGGER)
         return ApplyOutcome(
@@ -1528,6 +1532,11 @@ class PlacspIngestionService:
         linia d'avis segura. Adoptar-lo en silenci canviaria l'origen d'una
         aportacio verificada sense cap decisio humana; crear-ne un altre no es
         pot (mateixa URL).
+
+        L'excepcio es un document del portal de la PSCP (`origin = portal`): el
+        governa un altre connector, sense cap decisio humana a protegir, i entre
+        tots dos mana el feed. El feed l'adopta (amb auditoria, sense actor), tant
+        si el portal el va veure primer com si el portal l'havia retirat.
         """
         existing = {
             document.url: document
@@ -1565,6 +1574,20 @@ class PlacspIngestionService:
                     contribution_status=DocumentContributionStatus.NOT_APPLICABLE,
                 )
                 self.session.add(document)
+            elif document.origin == TenderDocumentOrigin.PORTAL:
+                document.origin = TenderDocumentOrigin.FEED
+                document.governing_source_id = source.id
+                outcome.adopted.append(document)
+                await audit.record(
+                    self.session,
+                    action=AuditAction.UPDATE,
+                    company_id=None,
+                    user_id=None,
+                    entity_type="tender_document",
+                    entity_id=document.id,
+                    summary=f"cedit al feed: la font {source.code} publica la URL que "
+                    "governava el portal de la PSCP",
+                )
             elif info.url not in governed:
                 logger.warning(
                     "placsp.document.not_governed",

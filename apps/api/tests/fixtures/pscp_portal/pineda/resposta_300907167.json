@@ -1,0 +1,24 @@
+{
+ "expedientId": "7224a2cc-30a6-4234-b023-66744c2ea6f3",
+ "publicacioAntiga": null,
+ "codiExpedient": "5125/2026",
+ "idUltimaPublicacio": 300907178,
+ "dataPublicacio": "2026-10-13T12:48:12.022Z",
+ "despublicat": null,
+ "tipusAvis": 1008176,
+ "navegacioEsmenes": [
+  {
+   "publicacioId": 300907167,
+   "dataPublicacio": "2026-10-13T12:48:12.022Z",
+   "tipusEsmena": null
+  }
+ ],
+ "dades": {
+  "titol": "Bon dia,\nPregunta de prova 2: quin abast té l'apartat 2 del plec tècnic?",
+  "descripcio": "Resposta oficial de prova 2: l'abast és el que descriu el plec, sense canvis.",
+  "linkInteres": [],
+  "documents": [],
+  "tipusEsmena": null,
+  "descripcioEsmena": null
+ }
+}

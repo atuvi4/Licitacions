@@ -1,0 +1,22 @@
+{
+ "comptadorPreguntesRespostes": 5,
+ "urlResposta": null,
+ "comptadorAvisos": 0,
+ "urlAvis": null,
+ "comptadorRecursos": 0,
+ "urlRecurs": null,
+ "comptadorEsmenes": 0,
+ "urlAvisEsmena": null,
+ "comptadorAvisosRelacionatsMesa": 0,
+ "urlAvisRelacionatMesa": null,
+ "comptadorAnuncisEmpresesLicitadores": 0,
+ "urlAvisPerEmpresesLicitadores": null,
+ "comptadorEmpresesAdmesesAlSistema": 0,
+ "urlAvisEmpresesAdmesesAlSistema": null,
+ "comptadorAvisosRelacionatsFaseExecucio": 0,
+ "urlAvisRelacionatFaseExecucio": null,
+ "comptadorMantenimentEfecteContracte": 0,
+ "urlAvisMantenimentEfecteContracte": null,
+ "comptadorAnuncisRelacionatsConsultesPreliminars": 0,
+ "urlAvisRelacionatConsultaPreliminar": null
+}

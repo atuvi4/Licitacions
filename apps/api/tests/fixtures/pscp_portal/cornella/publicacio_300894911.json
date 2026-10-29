@@ -1,0 +1,113 @@
+{
+ "expedientId": "2c72bffe-9ba0-47ee-8687-57ffa72c8451",
+ "publicacioId": 300894911,
+ "fase": 1000040,
+ "navegacioFases": [
+  {
+   "fase": 1000040,
+   "numeroLotsActius": null,
+   "publicacioId": 300894911,
+   "dataPublicacio": "2026-09-29T11:46:08.275Z",
+   "faseActiva": true
+  }
+ ],
+ "navegacioEsmenes": [
+  {
+   "publicacioId": 300880876,
+   "dataPublicacio": "2026-09-14T09:52:10.837Z",
+   "tipusEsmena": null
+  },
+  {
+   "publicacioId": 300894911,
+   "dataPublicacio": "2026-09-29T11:46:08.275Z",
+   "tipusEsmena": 1008172
+  }
+ ],
+ "titol": "26-089 SUBMINISTRAMENT I SUBSTITUCIÓ DE SETANTA CINC (75) CÀMERES DE VIDEOVIGILÀNCIA, SEGURETAT CIUTADANA I CONTROL DEL TRÀNSIT, AL MUNICIPI DE CORNELLÀ DE LLOBREGAT.",
+ "motiuEsmena": "ERROR MATERIAL ALS ANNEXOS DEL PCAP",
+ "codiExpedient": "26-089",
+ "dades": {
+  "codiExpedient": "26-089",
+  "idExpedient": "2c72bffe-9ba0-47ee-8687-57ffa72c8451",
+  "dataPublicacioReal": "2026-09-29T11:46:08.275Z",
+  "publicacio": {
+   "fase": {
+    "id": 1000040,
+    "text": "Anunci de licitació"
+   },
+   "expedientId": "2c72bffe-9ba0-47ee-8687-57ffa72c8451",
+   "dadesPublicacio": {
+    "dataTerminiPresentacioOSolicitud": "2026-10-15T12:00:59.000Z",
+    "plecsDeClausulesAdministratives": {
+     "docs": [
+      {
+       "id": 302631024,
+       "titol": "26-089 PCAP HASH.PDF",
+       "hash": "B18057DEA88391E1927A0970B04A5834",
+       "mida": 920819,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "plecsDePrescripcionsTecniques": {
+     "docs": [
+      {
+       "id": 302631025,
+       "titol": "26-089 PPT HASH.PDF",
+       "hash": "96398E72656DD59C4E6AE205389C71DB",
+       "mida": 142659,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "memoriaJustificativaContracte": {
+     "docs": [
+      {
+       "id": 302631023,
+       "titol": "26-089 Memòria justificativa SIGNADA.PDF",
+       "hash": "4FA0C3E63B859F96A774A3A9C5CECDA7",
+       "mida": 450962,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "documentsAprovacio": {
+     "docs": [
+      {
+       "id": 302631022,
+       "titol": "26-089 ACORD INICI DILIGENCIAT.PDF",
+       "hash": "44B6207B6920DDCCE46DFEB75912418B",
+       "mida": 84182,
+       "idioma": "ca"
+      }
+     ]
+    },
+    "altresDocuments": {
+     "docs": [
+      {
+       "id": 302631079,
+       "titol": "Decret Núm. 2026_4988 - Aprovació 26-089 DECRET ERROR MATERIAL.PDF",
+       "hash": "D1C88D15E018DE6C260B4DFE2559F7B6",
+       "mida": 108494,
+       "idioma": "ca"
+      },
+      {
+       "id": 302631080,
+       "titol": "NOU ANNEX III.docx",
+       "hash": "CAEE4CC272D0BF369365B9B5040B5F4A",
+       "mida": 12981,
+       "idioma": "ca"
+      },
+      {
+       "id": 302631082,
+       "titol": "NOU ANNEX IV.docx",
+       "hash": "A8AA3017976724FFD653C8C18981D3D3",
+       "mida": 58299,
+       "idioma": "ca"
+      }
+     ]
+    }
+   }
+  }
+ }
+}
