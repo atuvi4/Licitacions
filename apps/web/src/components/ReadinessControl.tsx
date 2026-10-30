@@ -12,6 +12,7 @@ import {
   UNKNOWN_FINDING_LABEL,
   blockerCount,
   blockerCountLabel,
+  destinationHref,
   findingCopy,
   groupFindings,
   type FinalReadiness,
@@ -230,24 +231,9 @@ function useDestinationHref(
   const pathname = usePathname();
   const searchParams = useSearchParams();
   if (!destination) return null;
-
-  const next = new URLSearchParams(searchParams?.toString() ?? "");
-  if (destination.kind === "tender") {
-    // Els plecs són de la licitació, no de la candidatura: l'enllaç surt de
-    // Preparar i porta a la fitxa, que és on es poden mirar i marcar.
-    return `/licitacions/${tenderId}?tab=${destination.tab}`;
-  }
-  if (destination.kind === "step") {
-    next.set("pas", destination.step);
-    next.delete("area");
-    next.delete("entity");
-  } else {
-    next.set("pas", "preparar");
-    next.set("area", destination.area);
-    if (entityId) next.set("entity", entityId);
-    else next.delete("entity");
-  }
-  return `${pathname}?${next.toString()}`;
+  // Els plecs són de la licitació, no de la candidatura: l'enllaç surt de
+  // Preparar i porta a la fitxa, que és on es poden mirar i marcar.
+  return destinationHref(destination, { pathname, search: searchParams?.toString() ?? "", tenderId, entityId });
 }
 
 function DrawerFooter({ readiness }: { readiness: FinalReadiness | null }) {

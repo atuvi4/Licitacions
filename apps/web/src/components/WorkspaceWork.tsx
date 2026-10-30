@@ -1,7 +1,8 @@
 "use client";
 
+import { AlertTriangle, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import {
   Attribution,
@@ -16,11 +17,38 @@ import {
   Select,
   StatusPill,
   Textarea,
+  cn,
   type DataTableColumn,
+  type Level,
 } from "@/components/ui";
 import { api } from "@/lib/api";
-import { useMutation } from "@/lib/hooks";
+import type { Compliance } from "@/lib/compliance";
+import {
+  LIMIT_VERDICT_LABEL,
+  formatAmount,
+  formatDecimal,
+  formatPercent,
+  type EconomicOffer,
+} from "@/lib/economic";
+import {
+  ENVELOPE_LABELS,
+  documentsSummary,
+  folderSummary,
+  groupChecklist,
+  nextActions,
+  offerSummary,
+  personnelPending,
+  solvencyTopics,
+  technicalSummary,
+  type ChecklistFolder,
+  type EnvelopeKey,
+  type NextAction,
+  type TopicTone,
+} from "@/lib/envelopes";
+import { useMutation, useResource, type Resource } from "@/lib/hooks";
 import { CHECKLIST_LEVEL, TASK_LEVEL } from "@/lib/labels";
+import { destinationHref, type ReadinessFinding } from "@/lib/readiness";
+import type { TechnicalSolution } from "@/lib/technical";
 import { formatDateTime } from "@/lib/tenders";
 import {
   CHECKLIST_STATUS_LABELS,
@@ -29,6 +57,7 @@ import {
   type ChecklistItem,
   type ChecklistItemStatus,
   type ChecklistRegenerateResult,
+  type Dossier,
   type TaskStatus,
   type WorkspaceDetail,
   type WorkspaceNote,
@@ -60,6 +89,412 @@ const TASK_OPTIONS = (Object.keys(TASK_STATUS_LABELS) as TaskStatus[]).map((valu
   label: TASK_STATUS_LABELS[value],
 }));
 const CONTROL = "min-h-11 w-full md:min-h-0";
+
+/* ------------------------------------------------------------------------- */
+/* Tauler dels tres sobres                                                     */
+/* ------------------------------------------------------------------------- */
+
+const TONE_LEVEL: Record<TopicTone, Level> = {
+  ready: "ready",
+  attention: "attention",
+  blocking: "blocking",
+  neutral: "neutral",
+};
+
+/**
+ * Enllaç relatiu a la mateixa candidatura: només canvia el pas i l'àrea. Sense dependre de la ruta actual, el
+ * tauler es pot pintar (i provar) igual a qualsevol lloc; la licitació, en canvi, és una altra pàgina.
+ */
+function areaHref(area: "solucio" | "oferta" | "dossier" | "pla"): string {
+  return destinationHref({ kind: "area", area }, { pathname: "", search: "", tenderId: null });
+}
+
+function EnvelopeCard({
+  envelope,
+  title,
+  subtitle,
+  href,
+  linkLabel,
+  children,
+}: {
+  envelope: EnvelopeKey;
+  title: string;
+  subtitle: string;
+  href: string;
+  linkLabel: string;
+  children: ReactNode;
+}) {
+  return (
+    <Card className="flex flex-col">
+      <section data-envelope-card={envelope} aria-label={`${title} · ${subtitle}`} className="flex h-full flex-col">
+        <header className="flex items-start gap-2.5 border-b border-border px-4 py-3">
+          <Folder size={18} strokeWidth={1.75} className="mt-0.5 shrink-0 text-brand" aria-hidden />
+          <div className="min-w-0">
+            <h3 className="font-heading text-[15px] leading-tight font-semibold text-ink">{title}</h3>
+            <p className="mt-0.5 text-[12.5px] text-muted">{subtitle}</p>
+          </div>
+        </header>
+        <div className="flex-1 space-y-3 px-4 py-3 text-[13.5px] text-ink">{children}</div>
+        <footer className="border-t border-border px-4 py-2.5 text-[13px]">
+          <Link href={href} className="font-medium text-brand hover:underline">
+            {linkLabel} →
+          </Link>
+        </footer>
+      </section>
+    </Card>
+  );
+}
+
+/** Una lectura que no ha arribat (carregant o error) no és mai un «tot bé». */
+function ResourceNote({
+  resource,
+  missing,
+  failed,
+}: {
+  resource: Pick<Resource<unknown>, "data" | "loading" | "status">;
+  missing: string;
+  failed: string;
+}) {
+  if (resource.loading && !resource.data) return <p className="text-muted">Carregant…</p>;
+  if (resource.status === 404) return <p className="text-muted">{missing}</p>;
+  return <p className="text-muted">{failed}</p>;
+}
+
+function EnvelopeACard({ compliance, dossier }: { compliance: Resource<Compliance>; dossier: Resource<Dossier> }) {
+  const run = compliance.data?.run ?? null;
+  const topics = run && Array.isArray(compliance.data?.assessments) ? solvencyTopics(compliance.data) : [];
+  const documents = dossier.data?.coverage ? documentsSummary(dossier.data.coverage) : null;
+  return (
+    <EnvelopeCard
+      envelope="A"
+      title="Sobre A"
+      subtitle="Requisits i documentació administrativa"
+      href={areaHref("dossier")}
+      linkLabel="Obre el dossier"
+    >
+      {run ? (
+        <dl className="space-y-2">
+          {topics.map((topic) => (
+            <div key={topic.key} className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+              <dt className="text-muted">{topic.label}</dt>
+              <dd className="text-right">
+                <StatusPill level={TONE_LEVEL[topic.tone]} size="sm">
+                  {topic.text}
+                </StatusPill>
+                {topic.companyHas && (
+                  <span className="mt-0.5 block text-[12px] text-muted">L&apos;empresa declara: {topic.companyHas}</span>
+                )}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : compliance.data && !compliance.loading ? (
+        <p className="text-muted">Encara no s&apos;ha calculat el compliment d&apos;aquesta licitació.</p>
+      ) : (
+        <ResourceNote resource={compliance} missing="Encara no s'ha calculat el compliment." failed="No s'ha pogut llegir el compliment." />
+      )}
+      <div className="border-t border-border pt-2.5">
+        <p className="text-[12.5px] font-medium text-muted">Documents obligatoris</p>
+        {documents ? (
+          <p className="mt-1">
+            <StatusPill level={TONE_LEVEL[documents.tone]} size="sm">
+              {documents.text}
+            </StatusPill>
+          </p>
+        ) : dossier.data ? (
+          <p className="mt-1 text-muted">Sense anàlisi del plec no se sap quins documents són obligatoris.</p>
+        ) : (
+          <ResourceNote resource={dossier} missing="Encara no hi ha dossier." failed="No s'ha pogut llegir el dossier." />
+        )}
+      </div>
+    </EnvelopeCard>
+  );
+}
+
+function pointsText(points: number): string {
+  return `${Number.isInteger(points) ? points : String(points).replace(".", ",")} punts`;
+}
+
+function EnvelopeBCard({ solutions, compliance }: { solutions: Resource<TechnicalSolution[]>; compliance: Compliance | null }) {
+  const list = Array.isArray(solutions.data) ? solutions.data : null;
+  const summary = list ? technicalSummary(list) : null;
+  const personnel = personnelPending(compliance);
+  const alerts: string[] = [];
+  for (const title of personnel.titles) alerts.push(`Personal per confirmar: «${title}»`);
+  if (personnel.total > personnel.titles.length) {
+    alerts.push(`i ${personnel.total - personnel.titles.length} requisits de personal més per revisar`);
+  }
+  if (summary && summary.confirmations > 0) {
+    alerts.push(
+      `${summary.confirmations} ${summary.confirmations === 1 ? "punt marcat" : "punts marcats"} «Cal confirmar» als capítols`,
+    );
+  }
+  if (summary && summary.stale > 0) {
+    alerts.push(`${summary.stale} ${summary.stale === 1 ? "validació ha" : "validacions han"} deixat de valer`);
+  }
+  return (
+    <EnvelopeCard
+      envelope="B"
+      title="Sobre B"
+      subtitle="Proposta tècnica (judici de valor)"
+      href={areaHref("solucio")}
+      linkLabel="Obre la solució tècnica"
+    >
+      {summary ? (
+        summary.total === 0 ? (
+          <p className="text-muted">Encara no hi ha cap capítol de la memòria tècnica.</p>
+        ) : (
+          <>
+            <p className="font-heading text-[18px] leading-tight font-semibold">
+              {summary.drafted} de {summary.total} capítols redactats
+              {summary.points !== null && <span className="text-[14px] font-normal text-muted"> · {pointsText(summary.points)}</span>}
+            </p>
+            <p className="flex flex-wrap gap-1.5">
+              <StatusPill level={summary.validated === summary.total ? "ready" : "neutral"} size="sm">
+                {summary.validated} {summary.validated === 1 ? "validat" : "validats"}
+              </StatusPill>
+              {summary.awaitingValidation > 0 && (
+                <StatusPill level="attention" size="sm">
+                  {summary.awaitingValidation} pendents de validar
+                </StatusPill>
+              )}
+            </p>
+          </>
+        )
+      ) : (
+        <ResourceNote resource={solutions} missing="Encara no hi ha cap capítol." failed="No s'han pogut llegir les solucions tècniques." />
+      )}
+      {alerts.length > 0 && (
+        <div className="border-t border-border pt-2.5">
+          <p className="text-[12.5px] font-medium text-muted">Requereix atenció</p>
+          <ul className="mt-1 space-y-1">
+            {alerts.map((alert) => (
+              <li key={alert} className="flex gap-1.5 text-[13px]">
+                <span aria-hidden className="text-warning">●</span>
+                <span>{alert}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </EnvelopeCard>
+  );
+}
+
+function Figure({ label, value, detail }: { label: string; value: string; detail?: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[12px] text-muted">{label}</dt>
+      <dd className="font-heading text-[17px] leading-tight font-semibold tabular-nums">{value}</dd>
+      {detail && <dd className="text-[12px] text-muted">{detail}</dd>}
+    </div>
+  );
+}
+
+function EnvelopeCCard({ offer }: { offer: Resource<EconomicOffer> }) {
+  const summary = offer.data && offer.data.totals ? offerSummary(offer.data) : null;
+  const discount = summary?.discountPct ? formatDecimal(summary.discountPct, 2) : null;
+  return (
+    <EnvelopeCard
+      envelope="C"
+      title="Sobre C"
+      subtitle="Oferta econòmica"
+      href={areaHref("oferta")}
+      linkLabel="Obre l'oferta econòmica"
+    >
+      {summary ? (
+        <>
+          <dl className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+            <Figure label="Preu ofert (sense IVA)" value={formatAmount(summary.revenue)} />
+            <Figure label="Baixa sobre el PBL" value={discount ? `${discount} %` : "—"} />
+            <Figure label="PBL màxim (sense IVA)" value={formatAmount(summary.tenderMax)} />
+            {summary.margin !== null && (
+              <Figure
+                label="Marge de la cistella"
+                value={formatAmount(summary.margin)}
+                detail={summary.marginPct !== null ? `${formatPercent(summary.marginPct)} sobre vendes` : undefined}
+              />
+            )}
+          </dl>
+          <p className="flex flex-wrap items-center gap-1.5">
+            {summary.verdict && (
+              <StatusPill level={summary.verdict === "within" ? "ready" : summary.verdict === "exceeds" ? "blocking" : "neutral"} size="sm">
+                {LIMIT_VERDICT_LABEL[summary.verdict]}
+              </StatusPill>
+            )}
+            <span className="text-[12.5px] text-muted">
+              {summary.lines} {summary.lines === 1 ? "línia" : "línies"}
+              {summary.incompleteLines > 0 && ` · ${summary.incompleteLines} incompletes`}
+            </span>
+          </p>
+          {summary.margin !== null && (
+            <p className="text-[12px] leading-snug text-muted" data-margin-note>
+              El marge de la cistella surt de les línies de l&apos;oferta (quantitats i costos que hi ha escrits), no de la
+              facturació real.
+              {summary.hasNotes && " El marge net previst de l'escandall és a les notes de l'oferta."}
+            </p>
+          )}
+        </>
+      ) : (
+        <ResourceNote resource={offer} missing="Encara no hi ha oferta econòmica." failed="No s'ha pogut llegir l'oferta econòmica." />
+      )}
+    </EnvelopeCard>
+  );
+}
+
+function NextActionsBox({
+  actions,
+  loading,
+  tenderId,
+}: {
+  actions: NextAction[] | null;
+  loading: boolean;
+  tenderId: string;
+}) {
+  return (
+    <Card className="border-l-4 border-l-brand">
+      <section aria-label="Què et falta per tancar l'oferta?" data-next-actions>
+        <CardHeader
+          title="Què et falta per tancar l'oferta?"
+          description="Només el que impedeix passar a la revisió final, agrupat. El detall és a cada àrea."
+        />
+        {actions === null ? (
+          <p className="px-5 py-3 text-[13.5px] text-muted">
+            {loading ? "Comprovant la preparació final…" : "No s'ha pogut llegir la preparació final: no es pot dir què falta."}
+          </p>
+        ) : actions.length === 0 ? (
+          <p className="px-5 py-3 text-[13.5px] text-ink">Res no impedeix passar a la revisió final.</p>
+        ) : (
+          <ol className="divide-y divide-border">
+            {actions.map((action) => (
+              <li key={action.key} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1.5 px-5 py-3">
+                <div className="flex min-w-0 items-start gap-2.5">
+                  {action.countable ? (
+                    <StatusPill level="blocking" size="sm" className="mt-0.5 shrink-0 tabular-nums">
+                      {action.count}
+                    </StatusPill>
+                  ) : (
+                    <AlertTriangle size={16} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0 text-danger" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-[14px] leading-5 font-medium text-ink">{action.label}</p>
+                    {action.hint && <p className="mt-0.5 text-[12.5px] text-muted">{action.hint}</p>}
+                  </div>
+                </div>
+                {action.destination && action.action && (
+                  <Link
+                    href={destinationHref(action.destination, { pathname: "", search: "", tenderId })}
+                    className="shrink-0 text-[13px] font-medium text-brand hover:underline"
+                  >
+                    {action.action} →
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+    </Card>
+  );
+}
+
+/**
+ * El tauler executiu del pas Preparar: els tres sobres (A, B i C) i el que falta per tancar l'oferta.
+ *
+ * Només llegeix. Cap xifra no es calcula aquí que el servidor no hagi calculat abans: el compliment, les
+ * solucions, l'oferta i la preparació final són els mateixos recursos que pinten les àrees.
+ */
+export function PrepareOverview({
+  workspace,
+  findings,
+  readinessLoading = false,
+}: {
+  workspace: WorkspaceDetail;
+  findings: ReadinessFinding[] | null;
+  readinessLoading?: boolean;
+}) {
+  const compliance = useResource<Compliance>(`/companies/${workspace.company_id}/tenders/${workspace.tender_id}/compliance`);
+  const solutions = useResource<TechnicalSolution[]>(`${base(workspace)}/technical-solutions`);
+  const offer = useResource<EconomicOffer>(`${base(workspace)}/economic-offer`);
+  const dossier = useResource<Dossier>(`${base(workspace)}/dossier`);
+  const complianceData = compliance.data?.run && Array.isArray(compliance.data.assessments) ? compliance.data : null;
+  const technical = Array.isArray(solutions.data) ? technicalSummary(solutions.data) : null;
+  const actions = Array.isArray(findings) ? nextActions(findings, complianceData, technical) : null;
+  return (
+    <div className="space-y-4" data-prepare-overview>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <EnvelopeACard compliance={compliance} dossier={dossier} />
+        <EnvelopeBCard solutions={solutions} compliance={complianceData} />
+        <EnvelopeCCard offer={offer} />
+      </div>
+      <NextActionsBox actions={actions} loading={readinessLoading} tenderId={workspace.tender_id} />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Checklist                                                                   */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Una carpeta de la checklist, plegada per defecte. Un `details` i no un botó: dins d'un `fieldset`
+ * desactivat (Preparar sense GO) un botó no es pot prémer, i la checklist s'ha de poder consultar igual.
+ * La taula només es munta en obrir-la: 256 files amb dos selectors cadascuna no s'han de pintar per res.
+ */
+function ChecklistFolderView({
+  folder,
+  columns,
+}: {
+  folder: ChecklistFolder;
+  columns: Array<DataTableColumn<ChecklistItem>>;
+}) {
+  const [open, setOpen] = useState(false);
+  const label = ENVELOPE_LABELS[folder.key];
+  const Icon = open ? FolderOpen : Folder;
+  return (
+    <details
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      data-checklist-folder={folder.key}
+      className="group border-b border-border last:border-b-0"
+    >
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2.5 px-3.5 py-3 hover:bg-subtle [&::-webkit-details-marker]:hidden">
+        <ChevronRight size={16} aria-hidden className={cn("shrink-0 text-muted transition-transform", open && "rotate-90")} />
+        <Icon size={18} strokeWidth={1.75} aria-hidden className="shrink-0 text-brand" />
+        <span className="min-w-0 flex-1">
+          <span className="text-[14px] font-medium text-ink">{label.title}</span>
+          <span className="text-[13px] text-muted"> · {label.subtitle}</span>
+          <span className="mt-0.5 block text-[12.5px] text-muted" data-folder-summary>
+            {folderSummary(folder)}
+          </span>
+        </span>
+        {folder.mandatoryOpen > 0 && (
+          <StatusPill level="attention" size="sm" outline className="shrink-0">
+            {folder.mandatoryOpen} {folder.mandatoryOpen === 1 ? "obligatori" : "obligatoris"}
+          </StatusPill>
+        )}
+      </summary>
+      {open &&
+        (folder.total > 0 ? (
+          <DataTable columns={columns} rows={folder.items} rowKey={(item) => item.id} stackBelow="md" />
+        ) : (
+          <p className="px-3.5 pb-3 text-[13px] text-muted">
+            {folder.key === "C" ? (
+              <>
+                La proposta econòmica no surt de la checklist: es prepara a{" "}
+                <Link href={areaHref("oferta")} className="font-medium text-brand hover:underline">
+                  l&apos;oferta econòmica
+                </Link>
+                .
+              </>
+            ) : (
+              "Cap ítem en aquesta carpeta."
+            )}
+          </p>
+        ))}
+    </details>
+  );
+}
 
 /**
  * Checklist derivada dels requisits.
@@ -180,11 +615,13 @@ export function ChecklistSection({
     },
   ];
 
+  const folders = groupChecklist(workspace.checklist);
+
   return (
     <Card>
       <CardHeader
         title="Checklist"
-        description={`${done} de ${workspace.checklist.length} completats · derivada dels requisits del plec`}
+        description={`${done} de ${workspace.checklist.length} completats · derivada dels requisits del plec · agrupada per sobres`}
         action={
           <Button size="sm" variant="secondary" onClick={() => void regenerate()} loading={mutation.saving}>
             Reconcilia amb l&apos;anàlisi
@@ -207,7 +644,11 @@ export function ChecklistSection({
           }
         />
       ) : (
-        <DataTable columns={columns} rows={workspace.checklist} rowKey={(item) => item.id} stackBelow="md" />
+        <div data-checklist-folders>
+          {folders.map((folder) => (
+            <ChecklistFolderView key={folder.key} folder={folder} columns={columns} />
+          ))}
+        </div>
       )}
       <div className="flex flex-wrap items-end gap-2 border-t border-border px-3.5 py-3">
         <Field label="Afegeix un item manual" className="min-w-64 flex-1">

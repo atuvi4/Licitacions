@@ -13,7 +13,7 @@ import { WorkPlanDeadlines } from "@/components/WorkPlanDeadlines";
 import { DecisionHistory, DecisionPanel } from "@/components/WorkspaceDecision";
 import { DossierSection } from "@/components/WorkspaceDossier";
 import { DecisionAnalysisCard } from "@/components/tender-analysis/DecisionAnalysisCard";
-import { ChecklistSection, NotesSection, TasksSection } from "@/components/WorkspaceWork";
+import { ChecklistSection, NotesSection, PrepareOverview, TasksSection } from "@/components/WorkspaceWork";
 import {
   Banner,
   Button,
@@ -565,6 +565,14 @@ function WorkspaceView() {
 
         {step === "preparar" && (
           <>
+            {/* El tauler dels tres sobres i el que falta per tancar: a dalt de tot i a totes les àrees. Només
+                llegeix, i per això va fora de `PrepareArea`: sense GO també s'ha de poder consultar. */}
+            <PrepareOverview
+              workspace={data}
+              findings={readiness.data && Array.isArray(readiness.data.findings) ? readiness.data.findings : null}
+              readinessLoading={readiness.loading}
+            />
+
             {/* Subordinada als tres passos: la mateixa barra que la fitxa de
                 licitació, no una segona navegació principal. */}
             <div className="flex flex-wrap items-center justify-between gap-2">

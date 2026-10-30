@@ -91,6 +91,9 @@ vi.mock("@/components/WorkspaceWork", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/WorkspaceWork")>();
   return {
     ...actual,
+    // El tauler dels sobres fa les seves lectures (compliment, solucions, oferta, dossier): aquí només compta
+    // que hi sigui, i els recomptes de lectures d'aquest fitxer continuen parlant de la candidatura.
+    PrepareOverview: () => <div data-testid="prepare-overview">Tauler dels sobres</div>,
     ChecklistSection: () => <div data-testid="checklist">Checklist (secció actual)</div>,
     TasksSection: () => <div data-testid="tasks">Tasques (secció actual)</div>,
     NotesSection: () => <div data-testid="notes">Notes (secció actual)</div>,

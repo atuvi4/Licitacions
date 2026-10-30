@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, api } from "@/lib/api";
 
-interface Resource<T> {
+export interface Resource<T> {
   data: T | null;
   loading: boolean;
   error: string | null;

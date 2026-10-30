@@ -300,6 +300,29 @@ export function findingCopy(code: string): FindingCopy | null {
   return FINDING_COPY[code] ?? null;
 }
 
+/**
+ * L'enllaç d'una destinació. Els plecs i l'anàlisi són de la licitació: porten a la fitxa. Un pas o una àrea
+ * es queden a la candidatura, conservant la resta de la URL. Sense entitat, l'enllaç porta a l'àrea i prou.
+ */
+export function destinationHref(
+  destination: FindingDestination,
+  { pathname, search, tenderId, entityId = null }: { pathname: string; search: string; tenderId: string | null; entityId?: string | null },
+): string {
+  if (destination.kind === "tender") return `/licitacions/${tenderId}?tab=${destination.tab}`;
+  const next = new URLSearchParams(search);
+  if (destination.kind === "step") {
+    next.set("pas", destination.step);
+    next.delete("area");
+    next.delete("entity");
+  } else {
+    next.set("pas", "preparar");
+    next.set("area", destination.area);
+    if (entityId) next.set("entity", entityId);
+    else next.delete("entity");
+  }
+  return `${pathname}?${next.toString()}`;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Agrupació                                                                  */
 /* ------------------------------------------------------------------------- */

@@ -1,8 +1,9 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { workspaceFixture } from "@/test/workspace-fixture";
+import { dossierFixture, workspaceFixture } from "@/test/workspace-fixture";
 
+const get = vi.fn();
 const post = vi.fn();
 const patch = vi.fn();
 const del = vi.fn();
@@ -12,6 +13,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
+      get: (...args: unknown[]) => get(...args),
       post: (...args: unknown[]) => post(...args),
       patch: (...args: unknown[]) => patch(...args),
       delete: (...args: unknown[]) => del(...args),
@@ -19,9 +21,20 @@ vi.mock("@/lib/api", async (importOriginal) => {
   };
 });
 
-import { ChecklistSection, NotesSection, TasksSection } from "./WorkspaceWork";
+import { ApiError } from "@/lib/api";
+import { lotFixture, offerFixture, totalsFixture } from "@/test/economic-fixture";
+import { solutionFixture } from "@/test/technical-fixture";
+
+import { ChecklistSection, NotesSection, PrepareOverview, TasksSection } from "./WorkspaceWork";
 
 const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+/** Obre una carpeta de la checklist com ho fa el navegador: `open` i l'esdeveniment `toggle`. */
+function openFolder(container: HTMLElement, key: string) {
+  const folder = container.querySelector(`[data-checklist-folder="${key}"]`) as HTMLDetailsElement;
+  folder.open = true;
+  fireEvent(folder, new Event("toggle"));
+  return folder;
+}
 const onChange = vi.fn(async () => undefined);
 const members = [
   { id: "u1", email: "anna@example.org", full_name: "Anna Puig" },
@@ -47,6 +60,10 @@ describe("Checklist · Tasques · Notes (restil sense canviar la lògica)", () =
       ],
     });
     const { container } = render(<ChecklistSection workspace={workspace} onChange={onChange} />);
+    // Plegada per defecte: cap fila a la vista fins que s'obre la carpeta.
+    expect(screen.queryByText("Aportar comptes anuals")).toBeNull();
+    openFolder(container, "A");
+    openFolder(container, "execucio");
     const blocked = screen.getByText("Aportar comptes anuals").closest("tr")!;
     expect([...blocked.querySelectorAll("[data-level]")].map((p) => p.getAttribute("data-level"))).toContain("blocking");
     expect(blocked.textContent).toContain("Obligatori");
@@ -72,6 +89,39 @@ describe("Checklist · Tasques · Notes (restil sense canviar la lògica)", () =
     fireEvent.click(screen.getByRole("button", { name: "Afegeix" }));
     await flush();
     expect(post).toHaveBeenLastCalledWith("/companies/c1/workspaces/w1/checklist", { title: "Signar la declaració" });
+  });
+
+  it("checklist en quatre carpetes plegades amb el resum a la capçalera; el Sobre C porta a l'oferta", () => {
+    const at = "2026-10-30T09:00:00Z";
+    const base = { workspace_id: "w1", status: "pending" as const, source: "requirement" as const, assigned_to: null, assigned_to_name: null, due_at: null, note: null, completed_at: null, created_at: at };
+    const workspace = workspaceFixture({
+      members,
+      checklist: [
+        { ...base, id: "a1", requirement_id: "r1", title: "DEUC signat", category: "administrative_documentation", mandatory: true, status: "completed" },
+        { ...base, id: "a2", requirement_id: "r2", title: "Certificat ENS", category: "certification", mandatory: true },
+        { ...base, id: "b1", requirement_id: "r3", title: "SIP Trunk de 20+20 canals", category: "technical_requirement", mandatory: true, status: "blocked" },
+        { ...base, id: "x1", requirement_id: "r4", title: "Facturació mensual electrònica", category: "contract_condition", mandatory: true },
+      ],
+    });
+    const { container } = render(<ChecklistSection workspace={workspace} onChange={onChange} />);
+    const folders = [...container.querySelectorAll("[data-checklist-folder]")] as HTMLDetailsElement[];
+    expect(folders.map((folder) => folder.getAttribute("data-checklist-folder"))).toEqual(["A", "B", "C", "execucio"]);
+    expect(folders.every((folder) => !folder.open)).toBe(true);
+    const summaries = folders.map((folder) => folder.querySelector("summary")!.textContent);
+    expect(summaries[0]).toContain("Sobre A · Documentació administrativa per presentar");
+    expect(summaries[0]).toContain("1 de 2 a punt · 1 obligatori pendent");
+    expect(summaries[1]).toContain("Sobre B · Proposta tècnica");
+    expect(summaries[1]).toContain("0 de 1 a punt · 1 obligatori pendent · 1 bloquejat");
+    expect(summaries[2]).toContain("Cap ítem");
+    expect(summaries[3]).toContain("Condicions d'execució · Obligacions contractuals post-adjudicació; no van a cap sobre");
+    expect(container.querySelectorAll("tbody tr").length).toBe(0);
+
+    openFolder(container, "B");
+    expect(screen.getByText("SIP Trunk de 20+20 canals")).toBeTruthy();
+    expect(screen.queryByText("DEUC signat")).toBeNull();
+    openFolder(container, "C");
+    const offerLink = within(folders[2]).getByRole("link", { name: "l'oferta econòmica" });
+    expect(offerLink.getAttribute("href")).toBe("?pas=preparar&area=oferta");
   });
 
   it("checklist buida: sortida cap a la reconciliació", () => {
@@ -212,5 +262,121 @@ describe("Checklist · Tasques · Notes (restil sense canviar la lògica)", () =
     fireEvent.click(screen.getByRole("button", { name: "Cancel·la" }));
     expect(screen.queryByText("No s'ha pogut desar")).toBeNull();
     expect(screen.getByText("Abans.")).not.toBeNull();
+  });
+});
+
+describe("Tauler dels tres sobres i «Què et falta per tancar l'oferta?»", () => {
+  const requirement = (id: string, category: string, title: string) => ({
+    requirement_id: id, title, category, review_status: "unreviewed", tender_document_id: null, extraction_id: null,
+    extraction_revision: null, page_number: null, quote: null, document_name: null,
+  });
+  const assessment = (id: string, category: string, result: string, title: string, params: Record<string, unknown> | null = null) => ({
+    id, assessment_run_id: "run1", requirement_id: id, tender_id: "t1", tender_lot_id: null, automatic_result: result,
+    reviewed_result: null, effective_result: result, assessment_mode: "automatic", rule_code: "r", explanation_code: "C",
+    explanation_params: params, company_value_json: null, requirement_value_json: null, obligation: "mandatory",
+    blocker_status: result === "does_not_satisfy" ? "potential" : "none", evidence_strength: "missing",
+    review_status: "unreviewed", review_note: null, reviewed_at: null, reviewed_by: null, reviewed_by_name: null,
+    calculated_at: "2026-10-30T09:00:00Z", evidence: [], requirement: requirement(id, category, title),
+  });
+  const compliance = {
+    run: { id: "run1", status: "completed", potential_blockers_count: 1, confirmed_blockers_count: 0 },
+    assessments: [
+      assessment("e1", "economic_solvency", "satisfies", "Volum anual de negocis mínim"),
+      assessment("c1", "certification", "needs_review", "Certificat ENS categoria mitjana", { company_certifications: ["ENS categoria Mitjana"] }),
+      assessment("p1", "personnel", "needs_review", "Cap de projecte: enginyer de telecomunicacions"),
+    ],
+    groups: [],
+    is_stale: false,
+  };
+  const solutions = [
+    solutionFixture({ id: "s1", title: "1.b · Comunicacions fixes (8 punts)", status: "needs_validation", proposed_solution: "SIP Trunk. [Cal confirmar: les centrals.]" }),
+    solutionFixture({ id: "s2", title: "1.c · Dades i Internet (8 punts)", status: "needs_validation", proposed_solution: "FTTH majorista." }),
+  ];
+  const offer = offerFixture({
+    notes: "Marge net previst de l'escandall a les notes.",
+    totals: totalsFixture({ total_revenue: "122914.41", line_count: 113 }),
+    internal_economics: { total_cost: "55476.83", margin_amount: "67437.58", margin_on_sales_pct: "54.8655", markup_on_cost_pct: "121.5599", incomplete_cost_lines: 0 },
+    lots: [lotFixture({ limit: { tender_max: "175000.00", difference_to_maximum: "52085.59", exceeds_lot_max: false } })],
+  });
+  const finding = (code: string, domain: string) => ({ code, severity: "blocker" as const, domain: domain as "technical", entity_id: null, context: {} });
+
+  function respond(overrides: Record<string, unknown> = {}) {
+    const routes: Record<string, unknown> = {
+      "/companies/c1/tenders/t1/compliance": compliance,
+      "/companies/c1/workspaces/w1/technical-solutions": solutions,
+      "/companies/c1/workspaces/w1/economic-offer": offer,
+      "/companies/c1/workspaces/w1/dossier": dossierFixture(),
+      ...overrides,
+    };
+    get.mockImplementation(async (path: string) => {
+      const value = routes[path];
+      if (value instanceof ApiError) throw value;
+      if (value === undefined) throw new ApiError(404, "not_found", "No trobat");
+      return value;
+    });
+  }
+
+  beforeEach(() => {
+    get.mockReset();
+  });
+
+  it("les tres targetes llegeixen el compliment, les solucions, l'oferta i el dossier; la caixa agrupa el que falta", async () => {
+    respond();
+    const { container } = render(
+      <PrepareOverview
+        workspace={workspaceFixture()}
+        findings={[
+          finding("technical_solution_unvalidated", "technical"),
+          finding("technical_solution_unvalidated", "technical"),
+          finding("mandatory_evidence_missing", "dossier"),
+        ]}
+      />,
+    );
+    await flush();
+    const card = (key: string) => container.querySelector(`[data-envelope-card="${key}"]`) as HTMLElement;
+
+    const a = card("A").textContent ?? "";
+    expect(a).toContain("Solvència econòmica");
+    expect(a).toContain("Compleix");
+    expect(a).toContain("L'empresa declara: ENS categoria Mitjana");
+    expect(a).toContain("20 de 24 obligatoris coberts · 2 sense document · 2 per revisar · 1 caducats");
+    expect(within(card("A")).getByRole("link", { name: /Obre el dossier/ }).getAttribute("href")).toBe("?pas=preparar&area=dossier");
+
+    const b = card("B").textContent ?? "";
+    expect(b).toContain("2 de 2 capítols redactats");
+    expect(b).toContain("16 punts");
+    expect(b).toContain("2 pendents de validar");
+    expect(b).toContain("Personal per confirmar: «Cap de projecte: enginyer de telecomunicacions»");
+    expect(b).toContain("1 punt marcat «Cal confirmar» als capítols");
+
+    const c = card("C").textContent ?? "";
+    expect(c).toContain("122.914,41 €");
+    expect(c).toContain("29,76 %");
+    expect(c).toContain("175.000,00 €");
+    expect(c).toContain("67.437,58 €");
+    expect(c).toContain("54,9 % sobre vendes");
+    expect(c).toContain("Sota el màxim");
+    expect(container.querySelector("[data-margin-note]")!.textContent).toContain("El marge net previst de l'escandall és a les notes de l'oferta.");
+
+    const box = container.querySelector("[data-next-actions]") as HTMLElement;
+    expect(box.textContent).toContain("Què et falta per tancar l'oferta?");
+    const rows = [...box.querySelectorAll("li")].map((li) => li.textContent);
+    expect(rows[0]).toContain("Falten documents obligatoris");
+    // Avís agregat del dossier: cap número (el servidor no diu quants documents falten).
+    expect(rows[0]).not.toMatch(/^\s*\d/);
+    expect(rows[1]).toMatch(/^2.*Hi ha una solució tècnica sense validar/);
+    expect(rows[2]).toContain("Hi ha punts marcats «Cal confirmar» a la memòria tècnica");
+    expect(rows[3]).toContain("El compliment té un possible bloqueig per revisar");
+    expect(within(box).getByRole("link", { name: /Obre el compliment/ }).getAttribute("href")).toBe("/licitacions/t1?tab=requisits");
+  });
+
+  it("sense oferta ni preparació final: ho diu, no s'inventa cap xifra ni cap «tot a punt»", async () => {
+    respond({ "/companies/c1/workspaces/w1/economic-offer": new ApiError(404, "not_found", "No trobat"), "/companies/c1/tenders/t1/compliance": { run: null, assessments: [], is_stale: false } });
+    const { container } = render(<PrepareOverview workspace={workspaceFixture()} findings={null} />);
+    await flush();
+    expect(container.querySelector('[data-envelope-card="C"]')!.textContent).toContain("Encara no hi ha oferta econòmica.");
+    expect(container.querySelector('[data-envelope-card="A"]')!.textContent).toContain("Encara no s'ha calculat el compliment");
+    expect(container.querySelector("[data-next-actions]")!.textContent).toContain("No s'ha pogut llegir la preparació final");
+    expect(container.textContent).not.toContain("Res no impedeix");
   });
 });
