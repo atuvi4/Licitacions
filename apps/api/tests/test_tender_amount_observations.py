@@ -544,7 +544,9 @@ def test_pujar_a_0063_nomes_reintenta_registres_fallits():
             failed_schema_revision=revision,
         )
 
-    assert SCHEMA_REVISION == "0063_tender_amount_observations"
+    # La revisio vigent la fixa tests/test_migrations.py (aquesta prova es va escriure amb la
+    # 0063): aqui nomes cal que sigui posterior a la 0062 dels registres fallits.
+    assert int(SCHEMA_REVISION.split("_", 1)[0]) > 62
     # Processat (com tots els del pilot): mai no es reintenta, sigui quina sigui la revisio.
     assert _existing_verdict(record(ProcessingStatus.PROCESSED)) == UNCHANGED
     assert (
@@ -553,17 +555,17 @@ def test_pujar_a_0063_nomes_reintenta_registres_fallits():
         )
         == UNCHANGED
     )
-    # Fallit determinista amb 0062: es reintenta una vegada amb 0063.
+    # Fallit determinista amb 0062: es reintenta una vegada amb la revisio vigent.
     failed_62 = record(
         ProcessingStatus.FAILED,
         error="db_data: StringDataRightTruncationError (22001) tender_lots.title",
         revision="0062_requirement_uncertainties",
     )
     assert _existing_verdict(failed_62) == RETRY
-    # Fallit determinista ja amb 0063: fallada coneguda, no es reintenta.
-    failed_63 = record(
+    # Fallit determinista ja amb la revisio vigent: fallada coneguda, no es reintenta.
+    failed_now = record(
         ProcessingStatus.FAILED,
         error="db_data: StringDataRightTruncationError (22001) tender_lots.title",
         revision=SCHEMA_REVISION,
     )
-    assert _existing_verdict(failed_63) == KNOWN_FAILURE
+    assert _existing_verdict(failed_now) == KNOWN_FAILURE

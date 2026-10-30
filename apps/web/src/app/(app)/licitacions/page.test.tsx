@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MatchSummary, TenderMatchListItem } from "@/lib/matching";
 import type { TenderFacets } from "@/lib/tenders";
@@ -115,6 +115,18 @@ function base(items: TenderMatchListItem[], total?: number, extra: Record<string
     ...extra,
   };
 }
+
+// Dates fixes a les licitacions de prova (termini el 30-10-2026 a les 12:00Z): es congela només
+// `Date`, abans del termini, perquè «En termini» no depengui del dia que es passen les proves.
+const NOW = new Date("2026-10-21T12:00:00Z");
+
+beforeEach(() => {
+  vi.setSystemTime(NOW);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("Oportunitats · Per revisar (la vista del pre-fit, intacta)", () => {
   beforeEach(() => {
